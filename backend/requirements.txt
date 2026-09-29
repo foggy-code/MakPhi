@@ -1,0 +1,8 @@
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.5
+python-multipart>=0.0.9
+httpx>=0.27
+biopython>=1.83
+numpy>=1.24
+psutil>=5.9

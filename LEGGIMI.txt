@@ -1,0 +1,45 @@
+BioLoom v4 - copia portatile
+=============================
+
+Serve solo Docker (Docker Desktop su Windows e macOS, Docker Engine su Linux).
+
+AVVIO
+  Windows   doppio clic su "Avvia BioLoom.bat"
+  macOS     doppio clic su "Avvia BioLoom.command"
+  Linux     ./avvia-bioloom.sh
+
+Si apre il browser su http://127.0.0.1:8765. Per chiudere: "Arresta BioLoom" oppure il tasto S
+nella finestra dell'avviatore.
+
+AL PRIMO AVVIO SU UN COMPUTER
+  - le immagini Docker vengono caricate dalla cartella "immagini" (qualche minuto, senza internet);
+  - se non trovi la chiave MODELLER gia' inserita, aggiungila in Impostazioni > Licenze;
+  - la ricerca MMseqs2 funziona subito; per renderla piu' veloce crea l'indice locale
+    (Impostazioni > Database > Crea indice veloce).
+
+QMEAN LOCALE
+  Collega il disco con UniClust30/UniRef30 prima di avviare BioLoom: l'avviatore lo trova
+  da solo, anche se cambia la lettera di unita'. Se lo colleghi dopo, usa R (Riavvia) nella
+  finestra dell'avviatore; con U indichi a mano la cartella.
+  Va bene qualunque versione, anche piu' d'una sullo stesso disco: scegli quale usare in
+  Impostazioni > Database. Le versioni vecchie (uniclust30 2016-2017) si convertono una
+  volta dallo stesso pannello.
+  Su Windows e macOS premi una volta, su ogni computer, "Copia indici" nello stesso pannello:
+  porta sul computer solo indici e cs219 (qualche GB), che dal disco esterno si leggono lentamente.
+  QMEAN locale richiede molta memoria per Docker (circa 12 GB con UniRef30_2020_06): se non
+  basta, BioLoom lo segnala in Impostazioni > Database e spiega come aumentarla.
+  Se il disco non c'e', puoi attivare il fallback su SWISS-MODEL in Impostazioni > Generale
+  (invia il modello al servizio online: serve il tuo consenso e la tua email).
+
+FILE
+  Sequenze, allineamenti, strutture, vincoli e licenze si possono caricare anche da file
+  (pulsanti "Da file" / "Carica da file"): FASTA, GenBank, UniProt, PIR, Clustal, Stockholm,
+  PDB, mmCIF, anche compressi .gz.
+
+DATI
+  Progetti, risultati, template, licenze e database stanno nella cartella "data" e
+  viaggiano con la chiavetta. Non staccare la chiavetta mentre BioLoom e' in funzione.
+
+LICENZE
+  MODELLER, ProSA II e PROCHECK sono concessi con licenza accademica personale a chi li ha
+  registrati: questa copia e' per uso personale e non va distribuita ad altri.

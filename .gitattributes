@@ -1,0 +1,8 @@
+# Gli script eseguiti in Linux/macOS e nei container devono avere fine riga LF anche se modificati su Windows.
+*.sh text eol=lf
+*.command text eol=lf
+docker/**/* text=auto eol=lf
+launcher/*.yml text eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.tar.gz binary

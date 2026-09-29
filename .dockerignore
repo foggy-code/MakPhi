@@ -1,0 +1,13 @@
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+**/*.pyc
+frontend/dist
+data
+immagini
+.venv
+.claude
+.env.locale
+*.env
+launcher
+docs

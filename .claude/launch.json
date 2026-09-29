@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "bioloom",
+      "runtimeExecutable": "docker",
+      "runtimeArgs": ["compose", "-f", "launcher/compose.yml", "--env-file", ".env.locale", "up"],
+      "port": 8765
+    }
+  ]
+}

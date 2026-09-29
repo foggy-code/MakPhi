@@ -1,0 +1,29 @@
+# dati locali, licenze e configurazione della macchina (generata dall'avviatore)
+/data/
+/.env.locale
+/server.env
+immagini/*.tar
+
+# pacchetti con licenza (vedi docker/vendor/README.md)
+docker/vendor/**/*.tar.gz
+docker/vendor/**/*.tar
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# frontend
+frontend/node_modules/
+frontend/dist/
+
+# editor / sistema
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# impostazioni personali di Claude Code
+.claude/settings.local.json
