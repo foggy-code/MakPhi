@@ -3,7 +3,8 @@
 export type JobStatus = "queued" | "running" | "cancelling" | "completed" | "failed" | "cancelled";
 export type JobKind =
   | "search" | "align" | "align2d" | "model" | "loop" | "quality" | "qmean" | "pipeline"
-  | "selftest" | "db_update_pdbaa" | "db_build_mmseqs" | "db_index_mmseqs" | "db_convert_uniclust" | "db_local_uniclust";
+  | "selftest" | "db_update_pdbaa" | "db_build_mmseqs" | "db_index_mmseqs" | "db_convert_uniclust" | "db_local_uniclust"
+  | "analysis";
 
 export type SearchEngine = "rcsb" | "ncbi" | "local" | "mmseqs" | "alphafold";
 
@@ -1230,4 +1231,177 @@ export interface ReportFile {
   blob: Blob;
   /** da Content-Disposition, es. report_yeast.B99990001.html */
   filename: string;
+}
+
+// ---------------------------------------------------------------------------------- analisi strutturale (F7)
+/** Estremità di un'interazione: residuo e atomo (o gruppo: "anello", "anello a 5", "anello a 6"). */
+export interface InteractionEnd {
+  chain: string;
+  resnum: string;
+  resname: string;
+  atom: string;
+}
+
+/** Legame idrogeno: `a` = donatore, `b` = accettore (domain/interactions.py). */
+export interface HBond {
+  a: InteractionEnd;
+  b: InteractionEnd;
+  /** D…A (Å) */
+  distance: number;
+  /** H…A (Å) e angolo D–H…A (°) con l'idrogeno (del file o posizionato); null per i gruppi che ruotano */
+  ha_distance: number | null;
+  angle: number | null;
+  /** AA–D…A (°) senza idrogeno */
+  donor_angle: number | null;
+  /** D…A–AA (°) */
+  acceptor_angle: number;
+  hydrogen: "explicit" | "placed" | null;
+  kind: "backbone" | "mixed" | "sidechain";
+  inter_chain: boolean;
+}
+
+/** Ponte salino: `a` = catione (Lys, Arg, His), `b` = anione (Asp, Glu); coppia di atomi più vicina. */
+export interface SaltBridge {
+  a: InteractionEnd;
+  b: InteractionEnd;
+  distance: number;
+  /** coppie di atomi entro 4,0 Å */
+  pairs: number;
+  /** istidina: carica solo se protonata */
+  his: boolean;
+  inter_chain: boolean;
+}
+
+export interface Disulfide {
+  a: InteractionEnd;
+  b: InteractionEnd;
+  /** SG–SG (Å) */
+  distance: number;
+  ca_distance: number;
+  /** diedro CB–SG–SG–CB (°) */
+  chi3: number | null;
+  inter_chain: boolean;
+}
+
+/** π-stacking (parallelo o a T) o catione-π (`a` = catione NZ/CZ, `b` = anello). */
+export interface AromaticInteraction {
+  type: "pi_parallel" | "pi_tshaped" | "cation_pi";
+  a: InteractionEnd;
+  b: InteractionEnd;
+  /** fra i centroidi, o fra catione e centroide (Å) */
+  distance: number;
+  /** fra i piani degli anelli, o fra la normale e la direzione del catione (°) */
+  angle: number;
+  offset: number;
+  inter_chain: boolean;
+}
+
+export interface InteractionsResult {
+  version: number;
+  hydrogens: "explicit" | "placed";
+  criteria: Record<string, Record<string, number | string>>;
+  summary: {
+    residues: number;
+    chains: number;
+    hbonds: number;
+    hbonds_backbone: number;
+    hbonds_mixed: number;
+    hbonds_sidechain: number;
+    salt_bridges: number;
+    disulfides: number;
+    pi_stacking: number;
+    cation_pi: number;
+    inter_chain: { hbonds: number; salt_bridges: number; disulfides: number; aromatic: number };
+  };
+  hbonds: HBond[];
+  salt_bridges: SaltBridge[];
+  disulfides: Disulfide[];
+  aromatic: AromaticInteraction[];
+}
+
+export interface InterfaceResidue {
+  chain: string;
+  resnum: string;
+  resname: string;
+  aa: string;
+  /** ΔSASA fra catena isolata e complesso (o coppia), Å² */
+  delta: number;
+  apolar_delta: number;
+  /** solo nell'elenco di tutti i residui: SASA nel complesso e nella catena isolata */
+  sasa?: number;
+  sasa_isolated?: number;
+}
+
+export type PlausibilityLevel = "bassa" | "incerta" | "compatibile";
+
+export interface InterfacePair {
+  chains: [string, string];
+  /** area d'interfaccia = area sepolta totale / 2 (Å²) */
+  area: number;
+  buried: number;
+  apolar_fraction: number | null;
+  /** residui d'interfaccia (ΔSASA > 1 Å²) per catena */
+  residues: Record<string, InterfaceResidue[]>;
+  counts: Record<string, number>;
+  composition: { counts: Record<string, number>; percent: Record<string, number> };
+  interactions: { hbonds: number; salt_bridges: number; disulfides: number; pi_stacking: number; cation_pi: number };
+  plausibility: { level: PlausibilityLevel; text: string; limits: string; thresholds: { low: number; high: number } };
+}
+
+export interface InterfacesResult {
+  version: number;
+  method: string;
+  chains: string[];
+  min_delta: number;
+  pairs: InterfacePair[];
+  /** tutti i residui del complesso con ΔSASA (vuoto con una sola catena) */
+  residues: InterfaceResidue[];
+  interface_residues?: number;
+  note?: string;
+}
+
+export interface ConservationResidue {
+  chain: string;
+  resnum: string;
+  aa: string;
+  /** colonna dell'allineamento (da 1), null se il residuo non è allineato alla riga */
+  column: number | null;
+  row_aa: string | null;
+  /** 0–1; null oltre il 30% di gap o senza colonna */
+  score: number | null;
+  entropy: number | null;
+  gap_fraction: number | null;
+}
+
+export interface ConservationResult {
+  version: number;
+  source: string;
+  sequences: number;
+  columns: number;
+  method: string;
+  gap_cutoff: number;
+  chains: { chain: string; row: string; identity: number; coverage: number; residues: number; mapped: number; scored: number; mean: number | null }[];
+  unmatched: { chain: string; best_row: string; identity: number; coverage: number }[];
+  residues: ConservationResidue[];
+  warnings: string[];
+}
+
+/** Risultato di un job `analysis` (services/analysis.py). */
+export interface AnalysisResult {
+  source: StructureSource;
+  label: string;
+  source_sha256: string;
+  structure: { file: string; chains: number; residues: number; heavy_atoms: number; chains_detail: ChainSummary[] };
+  interactions: InteractionsResult;
+  interfaces: InterfacesResult;
+  conservation: ConservationResult | null;
+  warnings: string[];
+}
+
+/** Corpo di POST /api/analysis: allineamento facoltativo da un job `align` o da testo (FASTA, Clustal, …). */
+export interface AnalysisRequest {
+  project_id?: string;
+  source: StructureSource;
+  chains?: string[];
+  msa?: { job_id?: string; text?: string; row?: string; tool?: "auto" | "builtin" | "clustalo" | "mafft" | "muscle" } | null;
 }

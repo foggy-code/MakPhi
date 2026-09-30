@@ -11,6 +11,7 @@ import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { StructurePicker } from "../components/Pickers";
 import { ReportButton } from "../components/ReportButton";
+import { AnalysisJobCard, StructuralAnalysisPanel } from "../components/StructuralAnalysis";
 import { Viewer3D, type Viewer3DHandle } from "../components/Viewer3D";
 import { Alert, Badge, BarCell, Card, DropZone, Empty, Grade, PageHead, Stat, Tabs } from "../components/ui";
 import { compareLink } from "../lib/compare";
@@ -24,7 +25,7 @@ import {
 } from "../lib/residueColoring";
 import { qmeanRoute } from "../lib/status";
 
-type Tab = "rama" | "profiles" | "clashes" | "residues" | "3d";
+type Tab = "rama" | "profiles" | "clashes" | "residues" | "3d" | "interactions";
 
 function structureUrl(source: StructureSource | undefined): string | null {
   if (!source) return null;
@@ -492,6 +493,7 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
           { value: "clashes", label: `Contatti sterici (${report.clashes.count})` },
           { value: "residues", label: "Residui" },
           { value: "3d", label: "3D" },
+          { value: "interactions", label: "Interazioni" },
         ]} />
         {tab === "rama" && (
           <div className="grid grid-2" style={{ alignItems: "start" }}>
@@ -568,6 +570,11 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
             </div>
           ) : <p className="small muted">Struttura non disponibile per la visualizzazione 3D.</p>
         )}
+        {/* analisi strutturale (F7): interazioni, interfacce, conservazione della stessa struttura */}
+        {tab === "interactions" && (
+          (source ?? report.source) ? <StructuralAnalysisPanel source={(source ?? report.source)!} url={url} />
+            : <p className="small muted">Struttura del rapporto non disponibile: rilancia l'analisi di qualità.</p>
+        )}
       </Card>
     </div>
   );
@@ -621,6 +628,7 @@ export default function Quality() {
   const modelJob = params.get("job");
   const modelFile = params.get("file");
   const templateId = params.get("template");
+  const ajob = params.get("ajob"); // analisi strutturale da un link (F7)
   const [source, setSource] = useState<StructureSource | null>(null);
   const [dope, setDope] = useState(true);
   const [extended, setExtended] = useState(true);
@@ -689,7 +697,8 @@ export default function Quality() {
         </div>
         <div className="stack">
           {qjob && <JobPanel summary={summary} log={log} onCancel={cancel} />}
-          {!qjob && !report && (
+          {ajob && !qjob && !report && <AnalysisJobCard jobId={ajob} />}
+          {!qjob && !report && !ajob && (
             <Card>
               {modelJob ? (
                 <Empty icon="shield" title="Analisi non ancora calcolata per questo modello">

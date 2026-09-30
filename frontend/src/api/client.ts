@@ -1,6 +1,7 @@
 import type {
   Align2dResult,
   AlignResult,
+  AnalysisRequest,
   AuthStatus,
   ConsensusResult,
   CoverageCheck,
@@ -276,6 +277,15 @@ export const api = {
   pipelineItem: (id: string, idx: number) => get<PipelineItem & { sequence: string }>(`/api/pipeline/${id}/items/${idx}`),
   pipelineCsvUrl: (id: string) => `/api/pipeline/${id}/export.csv`,
   pipelineZipUrl: (id: string) => `/api/pipeline/${id}/export.zip`,
+
+  // analisi strutturale (F7): interazioni, interfacce, conservazione; il risultato è quello del job
+  analysis: (body: AnalysisRequest) => post<JobSummary>("/api/analysis", body),
+  /** analisi strutturale completata più recente sulla struttura (stessa sorgente e stesso file), o null */
+  latestAnalysis: (source: StructureSource) => {
+    const params = new URLSearchParams({ type: source.type });
+    for (const key of ["id", "job_id", "file"] as const) if (source[key]) params.set(key, String(source[key]));
+    return get<{ job_id: string | null; finished_at: string | null }>(`/api/analysis/latest?${params}`);
+  },
 };
 
 export type { Align2dResult, AlignResult };

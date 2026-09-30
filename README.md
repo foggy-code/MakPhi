@@ -104,9 +104,9 @@ sequenze e altre opzioni di modellazione salta così tutte le ricerche.
 
 ## Coda dei calcoli
 
-- **Priorità:** ricerche, allineamenti, analisi di qualità e QMEAN partono prima di modellazioni e raffinamenti dei
-  loop, e questi prima di pipeline e aggiornamenti dei database; a parità, in ordine di creazione. I job in coda
-  mostrano la posizione ("2° in coda") nella pagina Job e nel riquadro del job.
+- **Priorità:** ricerche, allineamenti, analisi di qualità, analisi strutturali e QMEAN partono prima di modellazioni
+  e raffinamenti dei loop, e questi prima di pipeline e aggiornamenti dei database; a parità, in ordine di creazione.
+  I job in coda mostrano la posizione ("2° in coda") nella pagina Job e nel riquadro del job.
 - **CPU condivisa:** i programmi di calcolo di tutti i job insieme (MODELLER, PROCHECK, ProSA, BLAST+, MMseqs2,
   allineatori…) non superano i **Job di calcolo in parallelo** delle Impostazioni (predefinito: core − 1). Una
   pipeline con molte sequenze in parallelo e un'analisi lanciata nel frattempo si dividono i processori invece di
@@ -162,6 +162,26 @@ riferimento (per esempio il template o una struttura sperimentale), con US-align
   già scelte e il link resta stabile.
 - I risultati strutturali calcolati dalle versioni precedenti restano nella cache ma non si riusano: il primo confronto
   li ricalcola con i dati per residuo.
+
+## Analisi strutturale: interazioni, interfacce, conservazione
+
+Nella pagina Qualità la scheda **Interazioni** analizza la struttura mostrata (tutte le catene; acque e ligandi
+esclusi) in pochi secondi:
+
+- **Tabelle** di legami idrogeno, ponti salini, ponti disolfuro e interazioni aromatiche (π-stacking parallelo o a T,
+  catione-π), filtrabili per catena (anche "solo fra catene diverse") e per residuo (`27`, `K27`, `LYS27`, `A:27`).
+  Un clic su una riga evidenzia i due residui nel 3D; un clic nel 3D filtra le tabelle per quel residuo. I criteri
+  geometrici e le fonti sono nella scheda stessa.
+- **Interfacce** (strutture con più catene): residui d'interfaccia (superficie sepolta > 1 Å²), area d'interfaccia,
+  composizione, interazioni fra le catene e un indicatore di plausibilità biologica basato sull'area, con i suoi
+  limiti dichiarati (non sostituisce PISA o EPPIC). Il 3D si colora per superficie sepolta.
+- **Conservazione:** con un allineamento multiplo (un job di Allineamenti del progetto, oppure sequenze o un file
+  FASTA/Clustal/Stockholm incollati o caricati; le sequenze non allineate si allineano prima) la conservazione di ogni
+  colonna (0–1, entropia di Shannon con la penalità per i gap) viene riportata sui residui della struttura e colora il
+  3D con la tavolozza di ConSurf.
+- L'analisi è un job ("Analisi strutturale" nella pagina Job, link stabile `/quality?ajob=<id>`); la scheda mostra la
+  più recente per la stessa struttura. Il **report HTML** del modello o dell'analisi di qualità riassume interfacce e
+  ponti disolfuro, se l'analisi della stessa struttura li ha trovati.
 
 ## Report del modello
 
@@ -250,6 +270,7 @@ sperimentale**, con il pLDDT medio (confidenza della predizione, 0–100).
 | Ricerca template | RCSB, NCBI BLAST e modelli predetti di AlphaFold DB (online); BLAST+ e MMseqs2 sul database locale pdbaa; punteggio motivato di ogni template e template complementari consigliati |
 | Allineamenti | Clustal Omega, MAFFT, MUSCLE, TM-align, US-align, più motori integrati; confronto strutturale con GDT-TS/GDT-HA, lDDT e deviazione per residuo |
 | Qualità | Ramachandran, clashscore, DSSP (mkdssp), SASA, profilo DOPE, **PROCHECK**, **ProSA II**, **QMEAN locale** (UniClust30) o SWISS-MODEL, voto A–D, consenso tra i metodi, qualità per residuo nel 3D (anche pLDDT di AlphaFold), verifica di ligandi e metalli (contatti, scontri, coordinazione); i passi indipendenti girano in parallelo e con l'analisi "Su tutti i modelli" si analizzano più modelli insieme, report HTML stampabile in PDF |
+| Analisi strutturale | legami idrogeno, ponti salini, ponti disolfuro, interazioni aromatiche, interfacce fra catene (superficie sepolta, plausibilità), conservazione da un allineamento multiplo mappata sulla struttura |
 | Automazione | pipeline batch da multi-FASTA, riprendibili dopo un annullamento, un errore o un riavvio ("Riprendi" o "Riprova solo i falliti": le sequenze già modellate non si rifanno) e, se completate con sequenze fallite, "Riprova i falliti"; avanzamento, log e tabella dei risultati aggiornati in tempo reale, con la stima del tempo residuo ("circa 3 min rimanenti"); un template usato da più sequenze si prepara una volta sola per pipeline; verifica dell'installazione (Impostazioni → Strumenti) |
 
 ## Dove stanno i dati

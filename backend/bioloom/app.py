@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import __version__
+from .api import analysis
 from .api import auth as auth_api
 from .api import bio, compute, databases, files, jobs, licenses, projects, system, templates
 from .config import FRONTEND_DIST, Paths, default_paths
@@ -69,6 +70,7 @@ def create_app(paths: Optional[Paths] = None, frontend_dist: Optional[Path] = FR
 
     for module in (auth_api, system, licenses, databases, files, projects, bio, templates, jobs, compute):
         app.include_router(module.router)
+    app.include_router(analysis.router)  # analisi strutturale (F7)
 
     @app.get("/api/{rest:path}", include_in_schema=False)
     async def api_not_found(rest: str):

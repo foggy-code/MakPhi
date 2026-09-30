@@ -99,15 +99,15 @@ data/
 | Pacchetto | Contenuto |
 |---|---|
 | `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `dispatch` (coda con priorità di ogni pool), `budget` (budget di CPU condiviso fra i job), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi), `eta` (stima del tempo residuo), `events` (notifiche in-process dei cambiamenti dei job), `parallel` (passi indipendenti di un calcolo su un pool locale di thread, vedi [Prestazioni](#prestazioni)) |
-| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG), `template_rank` (punteggio motivato dei template e selezione dei complementari), `multitemplate` (scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template), `ligands` (classificazione dei gruppi eteroatomici, colonne '.' del PIR, verifica di contatti, scontri e coordinazione dei metalli), `disorder` (disordine FoldIndex, bassa complessità SEG, domini e copertura del bersaglio) |
+| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG), `template_rank` (punteggio motivato dei template e selezione dei complementari), `multitemplate` (scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template), `ligands` (classificazione dei gruppi eteroatomici, colonne '.' del PIR, verifica di contatti, scontri e coordinazione dei metalli), `disorder` (disordine FoldIndex, bassa complessità SEG, domini e copertura del bersaglio), `interactions`, `interfaces`, `conservation` (analisi strutturale, vedi [Analisi strutturale](#analisi-strutturale)) |
 | `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB), `remote` (client HTTP), `tools` (rilevamento strumenti, preambolo di licenza) |
-| `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job), `reports` (dati del report di un modello o di un'analisi), `coverage` (copertura del bersaglio da parte dei template, avvisi su disordine e domini) |
-| `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases` oltre a sistema, progetti, calcoli, job) |
+| `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job), `reports` (dati del report di un modello o di un'analisi), `coverage` (copertura del bersaglio da parte dei template, avvisi su disordine e domini), `analysis` (job dell'analisi strutturale) |
+| `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases`, `analysis` oltre a sistema, progetti, calcoli, job) |
 
 ### Job
 
-Tutti i calcoli (`search`, `align`, `align2d`, `model`, `loop`, `quality`, `qmean`, `pipeline`) passano dal
-`JobManager`:
+Tutti i calcoli (`search`, `align`, `align2d`, `model`, `loop`, `quality`, `qmean`, `analysis`, `pipeline`) passano
+dal `JobManager`:
 
 - stato `queued → running → completed | failed | cancelled` (più `cancelling`) salvato su SQLite;
 - coda con priorità per tipo di job e budget di CPU condiviso dai processi esterni di tutti i job (vedi [Coda con
@@ -255,7 +255,8 @@ aggiornamento di un elemento. Ogni cambiamento ha una versione crescente e resta
   ogni `ready` (dopo una riconnessione). CPU, memoria e disco della Panoramica restano periodici.
 - **Connessioni:** un browser tiene al massimo 6 connessioni HTTP/1.1 per server, contando tutte le schede: per
   questo l'elenco è condiviso e le schede nascoste chiudono i flussi e li riaprono quando tornano visibili. Una
-  scheda ne usa al massimo due (elenco e job aperto; tre sulla pagina Qualità con QMEAN e analisi insieme).
+  scheda ne usa al massimo due (elenco e job aperto; tre sulla pagina Qualità con QMEAN e analisi insieme, quattro per
+  i pochi secondi di un'analisi strutturale lanciata nella scheda Interazioni).
 
 ### Coda con priorità e budget di CPU
 
@@ -265,7 +266,7 @@ con 8. I worker prendono sempre il primo job avviabile in quest'ordine (`core/jo
 
 | Priorità | Tipi di job | Perché |
 |---|---|---|
-| 0 | `search`, `align`, `align2d`, `quality`, `qmean` (e `compare`) | interattivi brevi: l'utente aspetta davanti allo schermo |
+| 0 | `search`, `align`, `align2d`, `quality`, `qmean`, `analysis` (e `compare`) | interattivi brevi: l'utente aspetta davanti allo schermo |
 | 1 | `model`, `loop`, `selftest` e i tipi non elencati | minuti |
 | 2 | `pipeline`, `db_update_pdbaa`, `db_build_mmseqs`, `db_index_mmseqs`, `db_convert_uniclust`, `db_local_uniclust` | lavori lunghi in blocco |
 
@@ -713,6 +714,7 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
   | Modelli | risultato del job o `models.json` dell'elemento; voto solo per i modelli analizzati |
   | Qualità | `<modello>.quality.json` (o risultato del job quality); consenso ricomposto con GA341 e zDOPE del modello (`consensus.compute`), oppure dalla rotta del consenso quando c'è QMEAN |
   | Ligandi e metalli | campo `ligands` del rapporto di qualità; per il modello migliore senza analisi, `ligands.verification` del risultato. Sezione solo se presente: esito, classe, coordinazione con i donatori e le distanze attese, residui entro 4 Å, confronto con il sito del template, motivazione; nei parametri i gruppi trasferiti e da quale template |
+  | Analisi strutturale | ponti disolfuro e interfacce (area, residui, interazioni fra le catene, plausibilità con i limiti) del job `analysis` completato più recente sulla stessa struttura (`AnalysisService.latest`: stessa sorgente, `{job, file}` per i modelli, e stessa impronta del file); la sezione "Analisi strutturale" compare solo se ce ne sono (vedi [Analisi strutturale](#analisi-strutturale)) |
 
   Un modello senza rapporto di qualità ha il report dei soli risultati di MODELLER, con un avviso.
 - **Grafici SVG** (generati dal backend, XML ben formato):
@@ -730,7 +732,9 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
   (Šali & Blundell 1993, Shen & Sali 2006, Melo et al. 2002, John & Sali 2003, Benkert et al. 2011, Sippl 1993,
   Wiederstein & Sippl 2007, Laskowski et al. 1993, Jumper et al. 2021, Tunyasuvunakool et al. 2021, Mariani et al.
   2013, Ramachandran et al. 1963, Lovell et al. 2003, Word et al. 1999, Kabsch & Sander 1983, Shrake & Rupley 1973,
-  Tien et al. 2013, Rost 1999, Prilusky et al. 2005, Uversky et al. 2000, Kyte & Doolittle 1982, Ward et al. 2004).
+  Tien et al. 2013, Rost 1999, Prilusky et al. 2005, Uversky et al. 2000, Kyte & Doolittle 1982, Ward et al. 2004;
+  con l'analisi strutturale Richardson 1981, Krissinel & Henrick 2007, Janin et al. 2008, Lo Conte et al. 1999,
+  Baker & Hubbard 1984, Barlow & Thornton 1983).
 - **Stampa:** `@page` A4 e regole `@media print`: niente indice, intestazioni delle tabelle ripetute, nessuna
   interruzione dentro grafici, blocchi di allineamento, riquadri e righe, allineamento e qualità da una pagina nuova,
   colori conservati (`print-color-adjust: exact`).
@@ -843,6 +847,122 @@ metriche che hanno e chiede di rilanciare per il confronto per residuo. Per dist
 `comparison_version` (= `STRUCTURAL_VERSION`), anche quando il confronto per residuo non è riuscito: l'invito a
 rilanciare compare senza coppie e senza `comparison_version`, anche accanto alla nota "Allineamento dipendente dalla
 sequenza…" che il metodo integrato scriveva già prima; un risultato nuovo senza coppie mostra solo la sua nota.
+
+### Analisi strutturale
+
+Interazioni, interfacce fra catene e conservazione mappata sulla struttura (F7). Logica pura in `domain/interactions.py`,
+`domain/interfaces.py` e `domain/conservation.py` (numpy, `NeighborSearch`, `ShrakeRupley` e `PairwiseAligner` di
+Biopython: nessuno strumento nuovo); job `analysis` in `services/analysis.py`, rotte in `api/analysis.py`.
+
+**Perché un job a parte** e non un'opzione del job `quality`: il rapporto di qualità (voto, consenso, i
+`<modello>.quality.json` già salvati) non cambia; l'allineamento multiplo è un ingresso solo di quest'analisi, che si
+rilancia con un altro allineamento senza rifare DOPE, PROCHECK e ProSA. È un calcolo Python breve: priorità 0
+(`core/jobs.PRIORITY`, come `quality`), pool "cpu"; l'unico processo esterno possibile è l'allineamento multiplo di
+sequenze non allineate (`engines/align.multiple`, sotto il budget di CPU e con la cache dei calcoli). Il risultato non
+passa dalla cache dei calcoli: costa pochi secondi e resta nel job. Nessuna colonna né tabella nuova in SQLite.
+
+**Interazioni** (tutte le catene del primo modello, soli amminoacidi: acque, ligandi e ioni esclusi):
+
+| Interazione | Criterio | Fonte |
+|---|---|---|
+| Legame idrogeno | D…A ≤ 3,5 Å e D…A–AA ≥ 90°; con l'idrogeno H…A ≤ 2,5 Å, D–H…A ≥ 120° e H…A–AA ≥ 90°; per i gruppi che ruotano, senza idrogeno, AA(D)–D…A ≥ 90° | Baker & Hubbard 1984; angoli degli antecedenti come HBPLUS (McDonald & Thornton 1994) |
+| Ponte salino | O carico di Asp/Glu (OD1, OD2, OE1, OE2) entro 4,0 Å da un N di Lys/Arg/His (NZ; NE, NH1, NH2; ND1, NE2); una voce per coppia di residui con la coppia di atomi più vicina e il numero di coppie | Barlow & Thornton 1983 |
+| π-stacking | centroidi ≤ 5,5 Å, spostamento ≤ 2,0 Å; parallelo con angolo fra i piani ≤ 30°, a T con angolo ≥ 60° (fra 30° e 60° non si riporta) | McGaughey et al. 1998; Salentin et al. 2015 (PLIP) |
+| Catione-π | NZ di Lys o CZ di Arg ≤ 6,0 Å dal centroide, spostamento ≤ 2,0 Å | Gallivan & Dougherty 1999; Salentin et al. 2015 |
+| Ponte disolfuro | SG–SG 2,0 ± 0,2 Å (legame S–S tipico circa 2,04 Å), con Cα–Cα e χ3 (CB–SG–SG–CB, di solito vicino a ±90°) | Richardson 1981 |
+
+- **Idrogeni:** quelli del file se ci sono (un donatore senza idrogeni non dona, un N di istidina protonato non
+  accetta). Altrimenti si posizionano a 1,0 Å dove la geometria è fissa, come HBPLUS: N–H dello scheletro come DSSP
+  (Kabsch & Sander 1983), NH degli anelli di His e Trp e NE di Arg sulla bisettrice esterna, NH₂ di Asn, Gln e Arg nel
+  piano a 120° dal legame C–N. OH di Ser/Thr/Tyr e NH₃⁺ di Lys e dell'N-terminale ruotano: criterio sugli atomi pesanti.
+  Senza idrogeni entrambi gli N dell'istidina valgono da donatori e accettori.
+- **Esclusioni:** coppie nello stesso residuo; coppie scheletro-scheletro fra residui consecutivi legati; lo zolfo
+  come donatore o accettore; le estremità N e C nei ponti salini; His come catione nel catione-π. Una coppia di atomi
+  entrambi donatori e accettori (Ser–Thr, His) compare una volta, nel verso con l'angolo migliore.
+- **Tipi di legame idrogeno:** `backbone` (scheletro-scheletro), `mixed`, `sidechain`; `inter_chain` per le coppie fra
+  catene diverse.
+
+**Interfacce** (strutture con più catene proteiche):
+
+- SASA per atomo con Shrake & Rupley 1973 (sonda 1,4 Å, 100 punti, raggi di Biopython; senza idrogeni) nel complesso,
+  in ogni catena isolata e in ogni coppia di catene che si toccano (atomi entro 2 × (1,8 + 1,4) = 6,4 Å, le sole la
+  cui SASA può cambiare). Aggiungere atomi copre solo punti: ΔSASA non è mai negativa.
+- Residui d'interfaccia: ΔSASA > 1 Å² fra catena isolata e coppia (PISA, Krissinel & Henrick 2007; Janin et al. 2008).
+  Con più di due catene la coppia si misura sulle sole due catene: i residui sepolti da una terza non entrano.
+- Area d'interfaccia = Σ ΔSASA delle due catene / 2 (metà dell'area sepolta totale B, convenzione di PISA).
+- Composizione: residui apolari (G A V L I M P F W), polari (S T C N Q Y H), carichi (D E K R); frazione apolare
+  dell'area sepolta (atomi C e S). Interazioni attraverso l'interfaccia: quelle della tabella sopra con le due estremità
+  nelle due catene.
+- **Plausibilità biologica** (indicatore semplice, sulla sola area): < 400 Å² bassa, nell'intervallo dei contatti di
+  impaccamento cristallino (B < 800 Å², Janin et al. 2008); 400–600 Å² incerta; ≥ 600 Å² compatibile, come le
+  interfacce proteina-proteina standard (B 1200–2000 Å², Lo Conte, Chothia & Janin 1999). **Limiti** (nel risultato e
+  nell'interfaccia): le interfacce biologiche piccole e i contatti cristallini grandi si sovrappongono; non valuta
+  conservazione né complementarità chimica (PISA, EPPIC); in un modello per omologia l'interfaccia è quella del
+  template; un'unità asimmetrica o una struttura sintetica può non essere l'assemblaggio biologico.
+- `residues` elenca ΔSASA, SASA nel complesso e isolata per tutti i residui (colorazione del 3D).
+
+**Conservazione** (`domain/conservation.py`):
+
+- Pesi delle sequenze di Henikoff & Henikoff 1994 (il gap conta come 21° tipo, come in Capra & Singh), frequenze pesate
+  dei 20 amminoacidi fra le sequenze con un residuo nella colonna (lettere non standard = gap), H = −Σ p ln p
+  normalizzata con ln(min(20, N)), N = sequenze. Conservazione = (1 − H/H_max) × (1 − g), g = frazione pesata di gap:
+  1 per una colonna invariante senza gap. Colonne con più del 30% di gap (frazione semplice): nessun punteggio, come il
+  `gap_cutoff` di Capra & Singh 2007. Con meno di 10 sequenze un avviso (scelta BioLoom).
+- **Mappatura:** la sequenza della catena (residui della struttura, X per i non standard) si allinea (Needleman-Wunsch,
+  BLOSUM62, gap 10/0,5, gap terminali gratuiti, come `align.pairwise`) alla riga senza gap: residuo → residuo della
+  riga → colonna. Residui mancanti, code in più e inserzioni non spostano la numerazione. Riga indicata (`row`) oppure,
+  per ogni catena, la più simile: candidate per 3-mer in comune, le prime 5 allineate; serve identità ≥ 90% e
+  copertura ≥ 50% (l'allineamento deve contenere la sequenza della catena). Una riga indicata vale anche sotto, con un
+  avviso; le catene senza riga corrispondente si elencano in `unmatched`; nessuna catena → job fallito
+  (`conservation_no_match`).
+- **Allineamento:** `msa.job_id` di un job `align` completato (righe `aligned`), oppure `msa.text` in un formato qualunque
+  di `domain/fileformats` (righe già allineate usate così; sequenze di lunghezza diversa allineate con
+  `engines/align.multiple`, al massimo 200; testo fino a 10 MB, nei parametri del job).
+
+**Rotte:**
+
+| Rotta | Funzione |
+|---|---|
+| `POST /api/analysis` | `{source, chains?, msa?: {job_id \| text, row?, tool?}}` → job `analysis`; errori subito: struttura assente 404, job di allineamento inesistente 404, non `align` o testo non valido 400 `conservation_invalid`, allineamento non completato 409 |
+| `GET /api/analysis/latest?type=&id=&job_id=&file=` | `{job_id, finished_at}` dell'analisi completata più recente sulla stessa struttura (`source_key` di `services/compute` e stessa impronta SHA-256 del file, se il file c'è ancora), altrimenti `null`: un template sostituito con lo stesso id non ha più analisi |
+
+Il risultato (`GET /api/jobs/{id}`): `source`, `label`, `source_sha256`, `structure`, `interactions` (criteri, riepilogo,
+elenchi), `interfaces`, `conservation` (o null), `warnings`. Il log riporta la durata dei passi ("Analisi strutturale in
+0.12 s (lettura 0.01, interazioni 0.01, interfacce 0.00 s)") e i conteggi.
+
+**Valori di riferimento** (test in `test_interactions.py`, `test_interfaces.py`, `test_conservation.py`):
+
+| Struttura | Valore |
+|---|---|
+| 1UBQ | 63 legami idrogeno (45 scheletro, 14 misti, 4 catene laterali), idrogeni posizionati; elica 23–34: gli 8 legami i→i+4 di un'elica ideale di 12 residui (n − 4); foglietto: 21 legami fra filamenti diversi (8 nella forcina β1–β2, 5 fra β1 e β5 paralleli, 5 fra β3 e β5, 3 fra β3 e β4); i 20 legami del foglietto del DSSP integrato (energia < −0,5 kcal/mol) tutti trovati, più quello dell'N-terminale che il DSSP non valuta, e il 93% dei legami geometrici dello scheletro è anche del DSSP |
+| 1UBQ | ponti salini K11–E34 (3,35 Å), K27–D52 (2,90 Å, NZ–OD2) e R54–D58 (3,88 Å), le sole coppie N⁺–O⁻ entro 4,0 Å del file; nessun disolfuro né interazione aromatica |
+| 1UBQ con gli H dello scheletro nel file | stessi legami dello scheletro (meno l'N-terminale), nessun donatore delle catene laterali, stessi ponti salini |
+| `ubq_dimer.pdb` | interfaccia A–B simmetrica: Ser57, Asp58, Asn60, Gln62 in entrambe le catene; area 123 Å² (B 246 Å²), plausibilità bassa; nessuna interazione fra le catene; 26 contatti < 4,5 Å |
+| sintetiche | disolfuro a 2,05 Å con χ3 = 90° trovato, a 2,30 e 1,75 Å no; ponte salino a 3,9 Å sì, a 4,1 no; π parallelo a 3,8 Å, a T a 5,0 Å, spostato di 3 Å no; catione-π a 4,0 Å sì, spostato di 3 Å o a 6,2 Å no; NH₂ posizionati a 1,0 Å e 120° nel piano |
+| conservazione su 1UBQ | 12 righe con la colonna 20 variabile (10 amminoacidi) e 3 gap nelle colonne 75–76: colonne invarianti 1, colonna 20 < 0,1, P19 (S nel lievito) intermedia, 75–76 con il 25% di gap 0,75; pesi di Henikoff e punteggi calcolati a mano |
+
+**Prestazioni** (container di test, Intel i3-1115G4): 1UBQ, interazioni 0,01 s; `ubq_dimer.pdb` (1204 atomi), interfacce
+0,46 s (tre calcoli della SASA); quattro copie del dimero, 4816 atomi e 8 catene, analisi completa con la conservazione
+2,6 s (il test fissa un limite largo di 60 s). Il costo è quello della SASA: complesso + catene isolate + coppie.
+
+**Report** (`domain/report.py`, `services/reports.py`): la sezione "Analisi strutturale" (ponti disolfuro con SG–SG,
+Cα–Cα e χ3; interfacce con area, residui, legami H, ponti salini, area apolare, plausibilità e limiti) compare nei
+report del modello, dell'elemento di pipeline (anche nello ZIP) e dell'analisi di qualità quando l'analisi strutturale
+più recente della stessa struttura ha disolfuri o interfacce. Il report non ricalcola nulla.
+
+**Interfaccia** (`components/StructuralAnalysis.tsx`, logica in `lib/interactions.ts`):
+
+- Scheda **Interazioni** della pagina Qualità: mostra l'analisi più recente della struttura del rapporto (`latest`) e la
+  lancia o rilancia, con la conservazione facoltativa (job di allineamento del progetto, oppure testo o file letto da
+  `/api/files/sequences`, con la riga della struttura facoltativa).
+- Tabelle di legami idrogeno, ponti salini, disolfuri e interazioni aromatiche con righe uniformi (`interactionRows`),
+  filtri per catena (tutte, solo fra catene diverse, una catena) e per residuo (`parseResidueQuery`: `27`, `K27` o `A27`
+  — una lettera vale come catena o come amminoacido —, `LYS27`, `A:27`, `52A`, testo libero). Un clic su una riga
+  evidenzia e centra i due residui (`highlightFor`); un clic nel 3D filtra le tabelle per quel residuo.
+- 3D colorato con l'API di colorazione di `Viewer3D`: superficie sepolta (fasce di ΔSASA con la soglia di 1 Å² esclusa,
+  come il backend) o conservazione (tavolozza di ConSurf, Ashkenazy et al. 2016, su scala assoluta 0–1, con la striscia
+  per residuo); "Evidenzia l'interfaccia" per ogni coppia di catene.
+- Link stabile di un'analisi: `/quality?ajob=<id>` (anche «Apri» nella pagina Job).
 
 ### Ricerca di template
 
@@ -1435,7 +1555,7 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 | Allineamenti | pairwise, multiplo, strutturale (con il confronto per residuo e «Apri in Confronto»); esportazione FASTA/Clustal/PIR; salvataggio nel progetto; cache per multiplo e strutturale |
 | Editor PIR | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
 | Modellazione | input automatico o da PIR, parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); avvisi prima del lancio su regioni disordinate e domini non coperti dai template, con suggerimento; modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job; «Trasferisci ligandi, cofattori e metalli dai template» con la scelta dei gruppi (additivi e ioni del tampone deselezionati per default, `LigandPicker`) e la verifica del modello migliore |
-| Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche, disordine predetto come segnale informativo), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura; sezione Ligandi e metalli (esiti, coordinazione, confronto con il sito del template): il clic su un gruppo lo mostra nel 3D con i residui coordinanti e le linee di coordinazione (`LigandsPanel`, `lib/ligands.ts`; ioni metallici sempre a sfere) |
+| Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche, disordine predetto come segnale informativo), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura; sezione Ligandi e metalli (esiti, coordinazione, confronto con il sito del template): il clic su un gruppo lo mostra nel 3D con i residui coordinanti e le linee di coordinazione (`LigandsPanel`, `lib/ligands.ts`; ioni metallici sempre a sfere); scheda Interazioni (analisi strutturale: legami H, ponti salini, disolfuri, aromatiche, interfacce, conservazione; `?ajob=`) |
 | Confronto | `/compare?a=&ca=&b=&cb=&job=`: B sovrapposta ad A (riferimento), metriche (TM-score su A e su B, RMSD, RMSD entro 5 Å, GDT-TS, GDT-HA, lDDT, lunghezza allineata), 3D con B colorata per distanza (0 → ≥ 5 Å) o lDDT e A in grigio chiaro, grafico di distanza e lDDT per posizione, tratti che deviano, tabella per coppia; clic ovunque → coppia evidenziata nel 3D |
 | Pipeline batch | multi-FASTA → modelli validati, template da ricerca automatica, «Più template complementari» (N da 2 a 5) o fissi; filtro zona crepuscolare, tabella paginata (template usati elencati, motivazioni nel suggerimento), CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
 | Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione e la posizione di quelli in coda ("2° in coda") |
@@ -1599,6 +1719,15 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     UniProt e sequenza diversa, servizi non raggiungibili, accessione sconosciuta o non valida, intervalli della ricerca,
     PIR, template non valutabili, template AlphaFold con il ritaglio pLDDT, verifiche concorrenti sullo stesso template
     senza analisi in cache;
+  - analisi strutturale (`test_interactions.py`, `test_interfaces.py`, `test_conservation.py`, `test_analysis_api.py`):
+    legami idrogeno di elica e foglietto di 1UBQ con il confronto con il DSSP integrato, ponti salini noti verificati
+    sulle coordinate del file, idrogeni espliciti, geometrie sintetiche (disolfuro, ponte salino, legame idrogeno sugli
+    atomi pesanti, coppia elencata una volta, NH₂ posizionati, π-stacking, catione-π) e soglie; interfaccia simmetrica e
+    piccola di `ubq_dimer.pdb`, ΔSASA mai negativa, coppie solo fra catene vicine, terza catena, bande di plausibilità,
+    annullamento fra i calcoli della SASA; pesi di Henikoff e punteggi calcolati a mano, gap, mappatura su 1UBQ (anche
+    con code e inserzioni nella riga), scelta della riga, catene multiple, allineamenti non validi; prestazioni su 4816
+    atomi; job e rotte (allineamento da testo, da sequenze non allineate e da un job; errori; analisi più recente per
+    sorgente e impronta; job concorrenti), sezione del report (dimero sì, 1UBQ no, modelli di un job, escape);
   - verifica dell'installazione.
 
   `pytest -m network` prova i servizi reali. Oltre a 1UBQ, `tests/data` contiene strutture sintetiche generate
@@ -1649,6 +1778,10 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     bersaglio (sequenza del progetto o intestazione `sp|`), richieste di Modellazione (template senza catene esclusi, PIR,
     soglia pLDDT) e Ricerca (un intervallo per hit), ordine degli avvisi, badge degli hit, riga di sintesi; markup degli
     avvisi e della mappa.
+  - analisi strutturale (`interactions.test.ts`): righe uniformi delle interazioni, filtri per catena e per residuo
+    (una lettera come catena o amminoacido, codici di inserzione, testo libero), residui da evidenziare, scale della
+    conservazione e dell'interfaccia (soglia di 1 Å² esclusa), opzioni di colorazione, richiesta dell'allineamento e
+    FASTA da un file letto dal server.
 - **Profilazione:** `scripts/test.sh backend tests/perf_timing.py -s` (fuori dalla suite, vedi
   [Prestazioni](#prestazioni)).
 - **Esecuzione:** `scripts/test.sh` (ruff, pytest nell'immagine con MODELLER reale, typecheck e vitest). La CI

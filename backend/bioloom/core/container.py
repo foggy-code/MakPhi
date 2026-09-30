@@ -8,6 +8,7 @@ from typing import Any
 
 from ..config import Paths, SettingsStore
 from ..engines import remote, search, tools
+from ..services.analysis import AnalysisService
 from ..services.compute import ComputeService
 from ..services.databases import DatabaseService
 from ..services.housekeeping import Housekeeping
@@ -76,6 +77,7 @@ def build_core(paths: Paths) -> Core:
     library = TemplateLibrary(paths.templates)
     projects = ProjectService(db)
     compute = ComputeService(jobs, library, paths.uploads, paths.databases)
+    AnalysisService(jobs, compute).register()  # job "analysis" (F7)
     pipeline = PipelineService(db, jobs, compute)
     databases = DatabaseService(jobs, paths.databases, paths.local_cache, settings.get)
     SelfTestService(jobs, paths.databases)
