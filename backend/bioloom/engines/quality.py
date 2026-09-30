@@ -1,38 +1,105 @@
-"""Analisi di qualità di una struttura: metriche globali e tabella unificata per residuo."""
+"""Analisi di qualità di una struttura: metriche globali e tabella unificata per residuo.
+
+I passi indipendenti dell'analisi girano in parallelo (`core/parallel.Steps`, F1.3): i sottoprocessi (DOPE di
+MODELLER, mkdssp, PROCHECK, ProSA) partono per primi e i calcoli Python (Ramachandran, clash, SASA) si sovrappongono
+a loro. Tutti i processi passano da `JobContext.run` (budget di CPU del JobManager, annullamento, timeout), ognuno
+con il proprio contesto figlio: le righe di log di un passo hanno il prefisso del passo (`[DOPE] …`). Il rapporto non
+dipende dall'ordine in cui i passi finiscono: i risultati si leggono e gli avvisi si aggiungono nell'ordine della
+versione seriale, che `analyze(parallel=False)` riproduce.
+"""
 
 from __future__ import annotations
 
-import os
+import re
+import shutil
+import subprocess
 import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Optional
 
 from ..core.errors import AppError, ToolUnavailable
-from ..core.jobs import JobContext
+from ..core.jobs import JobCancelled, JobContext
+from ..core.parallel import Steps
 from ..domain import clashes, consensus, grading, perresidue, plddt, ramachandran, secondary, structure
 from . import modeller, procheck, prosa, tools
 
 # ASA massima teorica per residuo (Tien et al. 2013), per la SASA relativa.
 MAX_ASA = {"A": 129, "R": 274, "N": 195, "D": 193, "C": 167, "Q": 225, "E": 223, "G": 104, "H": 224, "I": 197,
            "L": 201, "K": 236, "M": 224, "F": 240, "P": 159, "S": 155, "T": 172, "W": 285, "Y": 263, "V": 174}
+# Thread dell'analisi: uno per passo indipendente (mkdssp o DSSP integrato, DOPE, PROCHECK, ProSA, Ramachandran,
+# clash, SASA), così nessun passo aspetta un thread libero. Non è un limite di CPU: i processi pesanti li governa il
+# budget del JobManager.
+STEP_THREADS = 7
+DSSP_TIMEOUT = 600
+# Ordine dei passi nella riga dei tempi del log (lo stesso della versione seriale)
+TIMING_ORDER = ("lettura", "Ramachandran", "clash", "mkdssp", "DSSP integrato", "SASA", "DOPE", "procheck", "prosa")
+TIMING_LABELS = {"procheck": "PROCHECK", "prosa": "ProSA"}
+
+_dssp_versions: dict[str, int] = {}
+_dssp_lock = threading.Lock()
 
 
-def _dssp_external(model, structure_obj) -> Optional[list[dict]]:
-    exe = tools.find("dssp")
-    if not exe:
-        return None
+def _dssp_input(structure_obj, folder: Path) -> Path:
+    """Copia per mkdssp: mkdssp 4.x riconosce il formato PDB solo se il file inizia con HEADER e richiede CRYST1, quindi
+    si scrive una copia pulita con le sole coordinate del primo modello."""
+    coords = structure.pdb_text(structure_obj, keep_hetero=True)
+    header = ("HEADER    BIOLOOM STRUCTURE                                                  \n"
+              "CRYST1    1.000    1.000    1.000  90.00  90.00  90.00 P 1           1          \n")
+    dest = folder / "dssp_input.pdb"
+    dest.write_text(header + coords, encoding="utf-8")
+    return dest
+
+
+def _run(cmd: list[str], cwd: Path, ctx: Optional[JobContext], timeout: float) -> tuple[int, str]:
+    """Processo esterno di un passo: con un job da ctx.run (budget, annullamento, timeout), senza job direttamente."""
+    if ctx is not None:
+        result = ctx.run(cmd, cwd=cwd, log_output=False, timeout=timeout)
+        return result.returncode, result.output
+    proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, errors="replace", timeout=timeout)
+    return proc.returncode, proc.stdout + proc.stderr
+
+
+def _dssp_major(exe: str, ctx: Optional[JobContext]) -> int:
+    """Versione principale di mkdssp (una volta per eseguibile): dalla 4 l'uscita classica va chiesta con
+    `--output-format=dssp`, come fa Biopython."""
+    with _dssp_lock:
+        if exe in _dssp_versions:
+            return _dssp_versions[exe]
+    try:
+        _code, text = _run([exe, "--version"], Path(tempfile.gettempdir()), ctx, 60)
+        match = re.search(r"(\d+)\.\d+", text)
+        major = int(match.group(1)) if match else 4
+    except JobCancelled:
+        raise
+    except (AppError, OSError, subprocess.SubprocessError):
+        return 4  # non memorizzata: si riprova al prossimo calcolo
+    with _dssp_lock:
+        _dssp_versions[exe] = major
+    return major
+
+
+def _run_mkdssp(exe: str, model, input_pdb: Path, ctx: Optional[JobContext]) -> Optional[list[dict]]:
+    """mkdssp sulla copia `_dssp_input`, lettura dell'uscita con Biopython; None se non riesce (DSSP integrato).
+
+    Lo stesso comando di `Bio.PDB.DSSP`, con l'uscita su file invece che sullo standard output (nessuna riga di avviso
+    mescolata ai dati). La lettura (`DSSP(..., file_type="DSSP")`) lavora su una copia del modello: Biopython vi
+    registra i risultati e seleziona le varianti dei residui disordinati, e il modello condiviso con gli altri passi
+    paralleli non deve cambiare.
+    """
     from Bio.PDB import DSSP
 
-    fd, tmp = tempfile.mkstemp(suffix=".pdb")
-    os.close(fd)
+    out_path = input_pdb.with_suffix(".dssp")
     try:
-        # mkdssp 4.x riconosce il formato PDB solo se il file inizia con HEADER e richiede CRYST1:
-        # si scrive una copia pulita con le sole coordinate del primo modello.
-        coords = structure.pdb_text(structure_obj, keep_hetero=True)
-        header = ("HEADER    BIOLOOM STRUCTURE                                                  \n"
-                  "CRYST1    1.000    1.000    1.000  90.00  90.00  90.00 P 1           1          \n")
-        Path(tmp).write_text(header + coords, encoding="utf-8")
-        dssp = DSSP(model, tmp, dssp=exe)
+        if _dssp_major(exe, ctx) >= 4:
+            cmd = [exe, "--output-format=dssp", input_pdb.name, out_path.name]
+        else:
+            cmd = [exe, input_pdb.name, out_path.name]
+        code, _output = _run(cmd, input_pdb.parent, ctx, DSSP_TIMEOUT)
+        if code != 0 or not out_path.is_file() or out_path.stat().st_size == 0:
+            return None
+        dssp = DSSP(model.copy(), str(out_path), file_type="DSSP")
         out = []
         for key in dssp.keys():
             chain, res_id = key
@@ -42,10 +109,26 @@ def _dssp_external(model, structure_obj) -> Optional[list[dict]]:
                         "ss3": secondary.EIGHT_TO_THREE.get(code, "C"), "rsa": round(float(row[3]), 3)
                         if isinstance(row[3], (int, float)) else None})
         return out
+    except JobCancelled:
+        raise
     except Exception:
         return None
+
+
+def _dssp_external(model, structure_obj, ctx: Optional[JobContext] = None) -> Optional[list[dict]]:
+    """Struttura secondaria e SASA relativa di mkdssp; None se mkdssp manca o non riesce."""
+    exe = tools.find("dssp")
+    if not exe:
+        return None
+    folder = Path(tempfile.mkdtemp(prefix="bioloom-dssp-"))
+    try:
+        try:
+            input_pdb = _dssp_input(structure_obj, folder)
+        except Exception:
+            return None
+        return _run_mkdssp(exe, model, input_pdb, ctx)
     finally:
-        os.remove(tmp)
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def _sasa(model) -> dict[tuple[str, str], float]:
@@ -70,11 +153,23 @@ def _sasa(model) -> dict[tuple[str, str], float]:
     return out
 
 
+def _timings_line(seconds: dict[str, float], total: float, parallel: bool) -> str:
+    """"Analisi di qualità in 1.07 s (passi in parallelo: lettura 0.01, …, DOPE 0.95 s)", per la profilazione."""
+    parts = [f"{TIMING_LABELS.get(k, k)} {seconds[k]:.2f}" for k in TIMING_ORDER if k in seconds]
+    mode = "passi in parallelo" if parallel else "passi in serie"
+    return f"Analisi di qualità in {total:.2f} s ({mode}: {', '.join(parts)} s)"
+
+
 def analyze(path: Path, ctx: Optional[JobContext] = None, *, with_dope: bool = True,
-            dope_workdir: Optional[Path] = None, with_procheck: bool = False, with_prosa: bool = False) -> dict:
+            dope_workdir: Optional[Path] = None, with_procheck: bool = False, with_prosa: bool = False,
+            parallel: bool = True) -> dict:
     """Pipeline completa di validazione. Senza `ctx` (o senza MODELLER) il DOPE viene omesso.
 
     PROCHECK e ProSA sono facoltativi: i loro file restano accanto al DOPE (cartelle `procheck/`, `prosa/`).
+    Con `parallel` (predefinito) i passi indipendenti girano insieme; `parallel=False` li esegue uno dopo l'altro
+    nell'ordine della versione seriale, con lo stesso rapporto. La struttura si legge una volta sola e i passi
+    condividono il modello di Biopython in sola lettura (chi deve modificarlo, SASA e lettura di mkdssp, ne usa una
+    copia). Con un job, il log riceve alla fine la durata di ogni passo.
     """
 
     def step(fraction: float, stage: str) -> None:
@@ -82,6 +177,7 @@ def analyze(path: Path, ctx: Optional[JobContext] = None, *, with_dope: bool = T
             ctx.check()
             ctx.progress(fraction, stage)
 
+    started = time.perf_counter()
     path = Path(path)
     step(0.05, "Lettura della struttura")
     st = structure.load_structure(path, path.stem)
@@ -92,70 +188,109 @@ def analyze(path: Path, ctx: Optional[JobContext] = None, *, with_dope: bool = T
     stats = structure.structure_stats(model)
     if stats["residues"] == 0:
         raise AppError("La struttura non contiene residui amminoacidici con C-alfa.")
+    read_seconds = time.perf_counter() - started
     warnings: list[str] = []
-
-    step(0.15, "Angoli diedri e Ramachandran")
-    rama = ramachandran.analyze(model)
-    step(0.3, "Contatti sterici (clashscore)")
-    clash = clashes.analyze(model)
-
-    step(0.45, "Struttura secondaria")
-    pdb_for_tools = path
-    tmp_pdb = None
-    if path.suffix.lower() in (".cif", ".mmcif"):
-        fd, tmp_name = tempfile.mkstemp(suffix=".pdb")
-        os.close(fd)
-        tmp_pdb = Path(tmp_name)
-        try:
-            structure.write_pdb(st, tmp_pdb, keep_hetero=True)
-            pdb_for_tools = tmp_pdb
-        except AppError:
-            pdb_for_tools = None
+    tools_dir = dope_workdir or (ctx.workdir if ctx is not None else None)
+    external = (("procheck", with_procheck, "PROCHECK", procheck.run, 0.75),
+                ("prosa", with_prosa, "ProSA II", prosa.run, 0.82))
+    # copie per gli strumenti esterni (PDB da un mmCIF, ingresso di mkdssp), eliminate alla fine
+    scratch = Path(tempfile.mkdtemp(prefix="bioloom-qa-"))
     try:
-        ss_rows = _dssp_external(model, st)
-        ss_method = "mkdssp"
-        if ss_rows is None:
-            ss_rows = secondary.assign(model)
-            ss_method = "DSSP integrato BioLoom (Kabsch-Sander)"
-
-        step(0.55, "Superficie accessibile (Shrake-Rupley)")
-        try:
-            rsa = _sasa(model)
-        except Exception as exc:
-            rsa = {}
-            warnings.append(f"SASA non calcolata: {exc}")
-
-        dope = None
-        if with_dope and ctx is not None:
-            step(0.65, "Energia DOPE (MODELLER)")
+        pdb_for_tools: Optional[Path] = path
+        if is_cif:
             try:
+                structure.write_pdb(st, scratch / "structure.pdb", keep_hetero=True)
+                pdb_for_tools = scratch / "structure.pdb"
+            except AppError:
+                pdb_for_tools = None
+        dssp_exe = tools.find("dssp")
+        dssp_input = None
+        if dssp_exe:
+            try:
+                dssp_input = _dssp_input(st, scratch)
+            except Exception:
+                dssp_input = None  # come un mkdssp non riuscito: DSSP integrato
+
+        with Steps(check=ctx.check if ctx is not None else None, parallel=parallel, workers=STEP_THREADS,
+                   name="qualita") as steps:
+            # prima i sottoprocessi, dal più lungo (il DOPE decide la durata dell'analisi); ognuno con il suo contesto
+            # (prefisso nel log, cartella propria)
+            with_dope = with_dope and ctx is not None
+            if with_dope:
+                dope_dir = dope_workdir or ctx.workdir / "dope"
                 src = pdb_for_tools or path
-                dope = modeller.evaluate_dope(ctx, src, dope_workdir or ctx.workdir / "dope")
-            except ToolUnavailable:
-                warnings.append("MODELLER non disponibile: profilo DOPE non calcolato.")
-            except AppError as exc:
-                warnings.append(f"DOPE non calcolato: {exc.message.splitlines()[0]}")
+                steps.start("DOPE", lambda: modeller.evaluate_dope(ctx.sub("DOPE", dope_dir), src, dope_dir))
+            for key, enabled, label, runner, _fraction in external:
+                if enabled and ctx is not None and tools_dir is not None and pdb_for_tools is not None:
+                    steps.start(key, lambda runner=runner, key=key, label=label:
+                                runner(pdb_for_tools, ctx.sub(label, tools_dir / key), tools_dir / key))
+            if dssp_input is not None:
+                steps.start("mkdssp", lambda: _run_mkdssp(dssp_exe, model, dssp_input,
+                                                          ctx.sub("mkdssp", scratch) if ctx is not None else None))
+            else:
+                steps.start("DSSP integrato", lambda: secondary.assign(model))
+            steps.start("Ramachandran", lambda: ramachandran.analyze(model))
+            steps.start("clash", lambda: clashes.analyze(model))
+            steps.start("SASA", lambda: _sasa(model))
 
-        extra: dict[str, Optional[dict]] = {"procheck": None, "prosa": None}
-        tools_dir = dope_workdir or (ctx.workdir if ctx is not None else None)
-        external = (("procheck", with_procheck, "PROCHECK", procheck.run, 0.75),
-                    ("prosa", with_prosa, "ProSA II", prosa.run, 0.82))
-        for key, enabled, label, runner, fraction in external:
-            if not enabled or ctx is None or tools_dir is None:
-                continue
-            if pdb_for_tools is None:
-                warnings.append(f"{label}: la struttura non è convertibile in formato PDB.")
-                continue
-            step(fraction, label)
-            try:
-                extra[key] = runner(pdb_for_tools, ctx, tools_dir / key)
-            except ToolUnavailable as exc:
-                warnings.append(f"{label} non disponibile: {exc.message}")
-            except AppError as exc:
-                warnings.append(f"{label} non riuscito: {exc.message.splitlines()[0]}")
+            # esiti nell'ordine della versione seriale: stesso rapporto, stessi avvisi nello stesso ordine
+            step(0.15, "Angoli diedri e Ramachandran")
+            rama = steps.result("Ramachandran")
+            step(0.3, "Contatti sterici (clashscore)")
+            clash = steps.result("clash")
+
+            step(0.45, "Struttura secondaria")
+            ss_rows = steps.result("mkdssp") if steps.started("mkdssp") else None
+            ss_method = "mkdssp"
+            if ss_rows is None:
+                if not steps.started("DSSP integrato"):  # mkdssp non riuscito
+                    steps.start("DSSP integrato", lambda: secondary.assign(model))
+                ss_rows = steps.result("DSSP integrato")
+                ss_method = "DSSP integrato BioLoom (Kabsch-Sander)"
+
+            step(0.55, "Superficie accessibile (Shrake-Rupley)")
+            sasa = steps.outcome("SASA")
+            if isinstance(sasa.error, Exception):
+                rsa = {}
+                warnings.append(f"SASA non calcolata: {sasa.error}")
+            elif sasa.error is not None:
+                raise sasa.error
+            else:
+                rsa = sasa.value
+
+            dope = None
+            if with_dope:
+                step(0.65, "Energia DOPE (MODELLER)")
+                out = steps.outcome("DOPE")
+                if isinstance(out.error, ToolUnavailable):
+                    warnings.append("MODELLER non disponibile: profilo DOPE non calcolato.")
+                elif isinstance(out.error, AppError):
+                    warnings.append(f"DOPE non calcolato: {out.error.message.splitlines()[0]}")
+                elif out.error is not None:
+                    raise out.error
+                else:
+                    dope = out.value
+
+            extra: dict[str, Optional[dict]] = {"procheck": None, "prosa": None}
+            for key, enabled, label, _runner, fraction in external:
+                if not enabled or ctx is None or tools_dir is None:
+                    continue
+                if pdb_for_tools is None:
+                    warnings.append(f"{label}: la struttura non è convertibile in formato PDB.")
+                    continue
+                step(fraction, label)
+                out = steps.outcome(key)
+                if isinstance(out.error, ToolUnavailable):
+                    warnings.append(f"{label} non disponibile: {out.error.message}")
+                elif isinstance(out.error, AppError):
+                    warnings.append(f"{label} non riuscito: {out.error.message.splitlines()[0]}")
+                elif out.error is not None:
+                    raise out.error
+                else:
+                    extra[key] = out.value
+            timings = {"lettura": read_seconds, **steps.timings}
     finally:
-        if tmp_pdb is not None:
-            tmp_pdb.unlink(missing_ok=True)
+        shutil.rmtree(scratch, ignore_errors=True)
 
     step(0.9, "Composizione del rapporto")
     ss_map = {(r["chain"], r["resnum"]): r for r in ss_rows}
@@ -221,6 +356,8 @@ def analyze(path: Path, ctx: Optional[JobContext] = None, *, with_dope: bool = T
     }
     # consenso con i metodi di questa analisi; QMEAN e GA341 si aggiungono dopo (run_modeling, rotta del consenso)
     report["consensus"] = consensus.compute(report)
+    if ctx is not None:  # durata dei passi nel log, non nel rapporto (che non dipende dai tempi)
+        ctx.log(_timings_line(timings, time.perf_counter() - started, steps.parallel))
     return report
 
 

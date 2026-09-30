@@ -8,7 +8,14 @@ import warnings
 from pathlib import Path
 from typing import Iterable, Optional
 
+from Bio.PDB.PDBExceptions import PDBConstructionWarning
+
 from ..core.errors import AppError
+
+# Gli avvisi di costruzione di Biopython (record non riconosciuti, atomi incompleti) si ignorano sempre, anche con un
+# filtro permanente: `warnings.catch_warnings` di `load_structure` non è sicuro fra thread (Python < 3.14) e con più
+# letture insieme (elementi di pipeline, modelli analizzati in parallelo) un avviso poteva sfuggire.
+warnings.filterwarnings("ignore", category=PDBConstructionWarning)
 
 WATER_NAMES = {"HOH", "WAT", "DOD", "H2O", "TIP", "TIP3", "SOL"}
 # Ioni e additivi di cristallizzazione esclusi dall'elenco "ligandi di interesse".
@@ -28,7 +35,6 @@ def is_amino_residue(residue) -> bool:
 def load_structure(path: Path, structure_id: str = "structure"):
     """Carica un file PDB o mmCIF e restituisce l'oggetto Structure di Biopython."""
     from Bio.PDB import MMCIFParser, PDBParser
-    from Bio.PDB.PDBExceptions import PDBConstructionWarning
 
     path = Path(path)
     suffix = path.suffix.lower()

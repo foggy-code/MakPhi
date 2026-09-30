@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import copy
 import shutil
+import threading
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path, PurePosixPath
-from typing import Optional
+from typing import Callable, Optional
 
 from ..core import cache
 from ..core.errors import AppError, Conflict, NotFound
 from ..core.jobs import QMEAN_LOCAL, JobCancelled, JobContext, JobManager
+from ..core.parallel import Steps
 from ..core.storage import atomic_write_json, atomic_write_text, read_json, safe_join
 from ..domain import consensus, sequences
 from ..domain.sequences import SeqRecord
@@ -18,6 +22,76 @@ from ..engines.modeller import TemplateSpec
 from .templates import TemplateLibrary, normalize_id
 
 MAX_SEQUENCE = 5000
+# Qualità "all": modelli dello stesso job analizzati insieme (non oltre i job paralleli delle Impostazioni). Ogni
+# analisi lancia fino a 4 processi brevi (DOPE, mkdssp, PROCHECK, ProSA): con 3 analisi un computer a 4 core resta
+# occupato senza code lunghe (misure in ARCHITETTURA.md, "Prestazioni"); i processi li governa comunque il budget di
+# CPU del JobManager.
+QUALITY_MODELS_PARALLEL = 3
+
+
+class PreparedTemplates:
+    """Template preparati per MODELLER riusati fra gli elementi di una pipeline (F1.2).
+
+    `prepare_template` legge tutta la struttura anche per una sola catena (un mmCIF di 4560 residui: circa 1 s, e il
+    doppio con due elementi in parallelo; misure in ARCHITETTURA.md): gli elementi con lo stesso template e le stesse
+    opzioni ricevono una copia del file già preparato nella propria cartella di lavoro.
+
+    - **Chiave:** id del template, file della libreria (percorso, dimensione, data di modifica in ns), catene, ligandi
+      e soglia del ritaglio pLDDT (None = nessun ritaglio). Un template sostituito nella libreria durante il job
+      (nuovo download o caricamento con lo stesso id) cambia chiave e si prepara di nuovo.
+    - **Dove:** cartella nascosta dello scratch del job (`.tmp/templates`), mai tra i risultati e svuotata a fine
+      job: la cache vive quanto un'esecuzione, e una ripresa ne crea una nuova.
+    - **Concorrenza:** un lock per chiave; un elemento parallelo con lo stesso template aspetta la prima preparazione
+      (controllando l'annullamento) invece di rifarla.
+    - **Errori:** una preparazione non riuscita non si conserva: l'elemento successivo riprova e registra l'errore
+      nel proprio log.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self._lock = threading.Lock()
+        self._key_locks: dict[tuple, threading.Lock] = {}
+        self._entries: dict[tuple, tuple[Path, dict]] = {}
+        self._folders = 0
+        self.prepared = 0
+        self.reused = 0
+
+    @staticmethod
+    def key(source: Path, spec: TemplateSpec) -> tuple:
+        stat = source.stat()
+        return (spec.id, str(source), stat.st_size, stat.st_mtime_ns, tuple(spec.chains), bool(spec.hetatm),
+                None if spec.plddt_min is None else float(spec.plddt_min))
+
+    def get(self, source: Path, spec: TemplateSpec, dest_dir: Path,
+            check: Callable[[], None]) -> tuple[dict, bool]:
+        """Informazioni del template preparato (copia indipendente) e se la preparazione è riusata; il file
+        preparato viene copiato in `dest_dir`."""
+        key = self.key(source, spec)
+        with self._lock:
+            lock = self._key_locks.setdefault(key, threading.Lock())
+        while not lock.acquire(timeout=0.5):
+            check()
+        try:
+            check()  # svegliato dopo l'annullamento: nessuna preparazione
+            entry = self._entries.get(key)
+            reused = entry is not None
+            if entry is None:
+                with self._lock:
+                    self._folders += 1
+                    folder = self.root / f"{self._folders:04d}"
+                entry = (folder, modeller.prepare_template(source, spec, folder))
+                self._entries[key] = entry
+            with self._lock:
+                if reused:
+                    self.reused += 1
+                else:
+                    self.prepared += 1
+        finally:
+            lock.release()
+        folder, info = entry
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(folder / info["file"], dest_dir / info["file"])
+        return copy.deepcopy(info), reused
 
 
 def _record(raw: dict, default: str = "TARGET") -> SeqRecord:
@@ -210,11 +284,13 @@ class ComputeService:
 
     # ------------------------------------------------------------------------------ MODELLER
     def _prepare_templates(self, ctx: JobContext, specs: list[TemplateSpec], workdir: Path,
-                           auto_fetch: bool = True, plddt_min: Optional[float] = None) -> list[dict]:
+                           auto_fetch: bool = True, plddt_min: Optional[float] = None,
+                           cache: Optional[PreparedTemplates] = None) -> list[dict]:
         """Template preparati per MODELLER; quelli assenti dalla libreria si scaricano (RCSB o AlphaFold DB).
 
         `plddt_min`: soglia di ritaglio per i template predetti (AlphaFold); None = nessun ritaglio. Le strutture
-        sperimentali non si ritagliano mai: i loro B-factor non sono pLDDT.
+        sperimentali non si ritagliano mai: i loro B-factor non sono pLDDT. `cache` (pipeline): preparazioni riusate
+        fra gli elementi dello stesso job.
         """
         prepared = []
         for spec in specs:
@@ -231,9 +307,14 @@ class ComputeService:
                     raise AppError(f"Template {spec.id} non presente nella libreria.")
             predicted = self.library.is_predicted(spec.id)
             spec.plddt_min = plddt_min if predicted else None
-            info = modeller.prepare_template(self.library.path(spec.id), spec, workdir)
+            source = self.library.path(spec.id)
+            if cache is not None:
+                info, reused = cache.get(source, spec, workdir, ctx.check)
+            else:
+                info, reused = modeller.prepare_template(source, spec, workdir), False
             ctx.log(f"Template {info['code']}: catene {','.join(info['chains'])}, "
-                    f"residui {info['first']}–{info['last']}, {len(info['sequence'].replace('/', ''))} aa")
+                    f"residui {info['first']}–{info['last']}, {len(info['sequence'].replace('/', ''))} aa"
+                    + (" (preparazione riusata da un elemento precedente)" if reused else ""))
             if predicted:
                 info["predicted"] = True
                 trim = info.get("plddt")
@@ -323,8 +404,13 @@ class ComputeService:
 
     def run_modeling(self, ctx: JobContext, *, target: Optional[SeqRecord], templates_raw: list[dict],
                      alignment: Optional[str], options_raw: dict, quality_mode: str = "best",
-                     extended_quality: bool = False) -> dict:
-        """Flusso completo: template → allineamento → AutoModel → selezione → qualità. Usato anche dalla pipeline."""
+                     extended_quality: bool = False, template_cache: Optional[PreparedTemplates] = None) -> dict:
+        """Flusso completo: template → allineamento → AutoModel → selezione → qualità. Usato anche dalla pipeline.
+
+        Con la qualità "all" i modelli si analizzano in parallelo (al massimo `QUALITY_MODELS_PARALLEL`), ognuno con
+        il proprio contesto e la propria cartella; i risultati restano nell'ordine dei modelli. `template_cache`
+        (pipeline): template preparati riusati fra gli elementi del job.
+        """
         workdir = ctx.workdir
         opts = modeller.parse_options(options_raw or {})
         specs = _template_specs(templates_raw)
@@ -334,7 +420,8 @@ class ComputeService:
         modeller.modeller_python(ctx)  # errore immediato se MODELLER manca
         ctx.progress(0.02, "Preparazione dei template")
         templates = self._prepare_templates(ctx, specs, workdir,
-                                            plddt_min=opts.plddt_min if opts.plddt_trim else None)
+                                            plddt_min=opts.plddt_min if opts.plddt_trim else None,
+                                            cache=template_cache)
         warnings: list[str] = []
         if alignment:
             pir, target_code, warnings = self._normalize_pir(alignment, templates)
@@ -365,9 +452,9 @@ class ComputeService:
         for m in models:
             m["best"] = m is best
         targets = ok if quality_mode == "all" else ([best] if quality_mode == "best" else [])
-        for n, m in enumerate(targets):
-            ctx.check()
-            ctx.progress(0.8 + 0.18 * n / max(1, len(targets)), f"Analisi di qualità di {m['file']}")
+
+        def assess(m: dict) -> None:
+            """Analisi di un modello: rapporto accanto al modello, metriche nel riepilogo, REMARK nel PDB."""
             sub = ctx.sub(m["file"], workdir / f"qa_{Path(m['file']).stem}")
             report = quality.analyze(workdir / m["file"], sub, with_dope=True,
                                      dope_workdir=workdir / f"qa_{Path(m['file']).stem}",
@@ -387,6 +474,20 @@ class ComputeService:
                 f"GRADE {m['quality']['grade']} ({m['quality']['grade_score']}) "
                 f"RAMA_FAVORED {m['quality']['rama_favored']} CLASHSCORE {m['quality']['clashscore']}",
             ])
+
+        workers = min(len(targets), QUALITY_MODELS_PARALLEL, max(1, int(ctx.settings.effective_workers())))
+        if workers > 1:
+            ctx.log(f"Analisi di qualità di {len(targets)} modelli, {workers} in parallelo")
+        # esiti letti nell'ordine dei modelli: il primo modello fallito (in quest'ordine) fa fallire il job
+        with Steps(check=ctx.check, parallel=workers > 1, workers=workers, name="modelli") as steps:
+            for m in targets:
+                steps.start(m["file"], partial(assess, m))
+            for n, m in enumerate(targets):
+                ctx.check()
+                ctx.progress(0.8 + 0.18 * n / max(1, len(targets)),
+                             f"Analisi di qualità di {m['file']}" if workers == 1 else
+                             f"Analisi di qualità dei modelli ({n} di {len(targets)} completate)")
+                steps.result(m["file"])
         target_seq = next((e.sequence for e in sequences.parse_pir(pir) if e.kind == "sequence"), "")
         return {
             "target": {"code": target_code, "sequence": target_seq.replace("-", "").replace("/", "")},
