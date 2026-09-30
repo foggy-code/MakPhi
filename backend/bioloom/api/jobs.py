@@ -1,4 +1,4 @@
-"""Job: elenco, stato, log incrementale, file prodotti, annullamento, ripresa, eliminazione.
+"""Job: elenco, stato, log incrementale, file prodotti, annullamento, ripresa, eliminazione, report HTML.
 
 I riepiloghi dei job (elenco, dettaglio, stato, annullamento, ripresa) hanno `eta_seconds`: tempo residuo
 stimato dei job in esecuzione, null se non stimabile; e `queue_position`: posizione (da 1) di un job in coda
@@ -16,14 +16,15 @@ from typing import AsyncIterator, Literal, Optional
 
 import anyio.to_thread
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import FileResponse, PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from ..core.container import Core
 from ..core.errors import AppError
 from ..core.storage import read_json
-from ..domain import exports
+from ..domain import exports, report
+from ..services.reports import ReportService
 from .deps import get_core
 
 router = APIRouter(prefix="/api/jobs", tags=["Job"])
@@ -140,6 +141,59 @@ def model_consensus(job_id: str, model: str,
                     core: Core = Depends(get_core)) -> dict:
     """Consenso di un modello di un job model, loop o pipeline (rapporto `<modello>.quality.json`)."""
     return core.compute.consensus(job_id, model, qmean_job or None)
+
+
+class ReportIn(BaseModel):
+    image_png_base64: Optional[str] = Field(
+        None, description="Vista 3D in PNG (base64 o data URI data:image/png;base64,…, come pngURI di 3Dmol), al "
+                          f"massimo {report.MAX_IMAGE_BYTES // (1024 * 1024)} MB")
+
+
+# il report è un documento autonomo: nessuno script, nessuna risorsa esterna anche aperto dal server
+REPORT_HEADERS = {"Content-Security-Policy": report.CSP, "X-Content-Type-Options": "nosniff",
+                  "Cache-Control": "no-store"}
+DOWNLOAD_HELP = "true = da scaricare (attachment); false = da aprire nel browser (inline)"
+
+
+def _report(core: Core, job_id: str, model: Optional[str], body: Optional[ReportIn], qmean_job: Optional[str],
+            download: bool) -> HTMLResponse:
+    image = report.decode_png(body.image_png_base64) if body and body.image_png_base64 else None
+    text, filename = ReportService(core.jobs, core.compute, core.db).build(job_id, model, qmean_job=qmean_job or None,
+                                                                           image_png=image)
+    disposition = "attachment" if download else "inline"
+    return HTMLResponse(text, headers={**REPORT_HEADERS, "Content-Disposition": f'{disposition}; filename="{filename}"'})
+
+
+@router.get("/{job_id}/report", response_class=HTMLResponse)
+def quality_report(job_id: str, qmean_job: Optional[str] = Query(None, max_length=64, description=QMEAN_JOB_HELP),
+                   download: bool = Query(True, description=DOWNLOAD_HELP), core: Core = Depends(get_core)):
+    """Report HTML autonomo (stampabile in PDF) di un'analisi di qualità: struttura, voto, consenso, grafici."""
+    return _report(core, job_id, None, None, qmean_job, download)
+
+
+@router.post("/{job_id}/report", response_class=HTMLResponse)
+def quality_report_with_image(job_id: str, body: Optional[ReportIn] = None,
+                              qmean_job: Optional[str] = Query(None, max_length=64, description=QMEAN_JOB_HELP),
+                              download: bool = Query(True, description=DOWNLOAD_HELP), core: Core = Depends(get_core)):
+    """Come la GET, con l'immagine corrente del viewer 3D (PNG) incorporata nel report."""
+    return _report(core, job_id, None, body, qmean_job, download)
+
+
+@router.get("/{job_id}/report/{model:path}", response_class=HTMLResponse)
+def model_report(job_id: str, model: str,
+                 qmean_job: Optional[str] = Query(None, max_length=64, description=QMEAN_JOB_HELP),
+                 download: bool = Query(True, description=DOWNLOAD_HELP), core: Core = Depends(get_core)):
+    """Report HTML autonomo (stampabile in PDF) di un modello di un job model, loop o pipeline: bersaglio,
+    template, allineamento, parametri di MODELLER, modelli, qualità del modello, legenda e riferimenti."""
+    return _report(core, job_id, model, None, qmean_job, download)
+
+
+@router.post("/{job_id}/report/{model:path}", response_class=HTMLResponse)
+def model_report_with_image(job_id: str, model: str, body: Optional[ReportIn] = None,
+                            qmean_job: Optional[str] = Query(None, max_length=64, description=QMEAN_JOB_HELP),
+                            download: bool = Query(True, description=DOWNLOAD_HELP), core: Core = Depends(get_core)):
+    """Come la GET, con l'immagine corrente del viewer 3D (PNG) incorporata nel report."""
+    return _report(core, job_id, model, body, qmean_job, download)
 
 
 @router.get("/{job_id}/pymol/{model:path}", response_class=PlainTextResponse)
