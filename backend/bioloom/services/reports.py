@@ -10,6 +10,8 @@ rotta del consenso (`ComputeService.consensus`), che controlla che QMEAN riguard
   ricerca e metriche vengono dalla riga dell'elemento, allineamento e modelli dalla sua cartella. Lo ZIP della
   pipeline usa `pipeline_item` per il modello migliore di ogni elemento, un report alla volta.
 * **quality:** report ridotto della struttura analizzata (niente template, allineamento e parametri).
+* **analisi strutturale (F7):** in ogni report, i ponti disolfuro e le interfacce dell'analisi `analysis` completata
+  più recente sulla stessa struttura (stessa sorgente e stessa impronta del file), se ce ne sono.
 """
 
 from __future__ import annotations
@@ -21,12 +23,14 @@ from pathlib import Path, PurePosixPath
 from typing import Optional
 
 from .. import __version__
+from ..core import cache
 from ..core.db import Database, now_iso
 from ..core.errors import AppError, Conflict, NotFound
 from ..core.jobs import JobManager
 from ..core.storage import read_json
 from ..domain import consensus, report, sequences, structure
 from ..engines import modeller
+from .analysis import AnalysisService, report_summary
 from .compute import ComputeService, describe_source, load_quality_report
 
 MODEL_KINDS = ("model", "loop", "pipeline")
@@ -87,12 +91,32 @@ class ReportService:
             raise AppError(f"Il report è disponibile per i modelli dei job di modellazione, loop e pipeline e per le "
                            f"analisi di qualità, non per i job di tipo '{kind}'.", code="report_unsupported")
         data["image_png"] = image_png
+        data["analysis"] = self._analysis(job, _rel(model) if model else None)
         return report.render(data), report.safe_filename(stem)
 
     def pipeline_item(self, job: dict, row: dict) -> str:
         """Report del modello migliore di un elemento completato (ZIP della pipeline: senza immagine né QMEAN)."""
-        data, _stem = self._pipeline_data(job, _rel(row.get("best_model") or ""), None, row=row)
+        rel = _rel(row.get("best_model") or "")
+        data, _stem = self._pipeline_data(job, rel, None, row=row)
+        data["analysis"] = self._analysis(job, rel)
         return report.render(data)
+
+    def _analysis(self, job: dict, model: Optional[str]) -> Optional[dict]:
+        """Disolfuri e interfacce dell'analisi strutturale (F7) più recente sulla stessa struttura, se ne ha: stessa
+        sorgente (il modello del job, o la struttura dell'analisi di qualità) e stessa impronta del file."""
+        if model:
+            source: object = {"type": "job", "job_id": job["id"], "file": model}
+        else:
+            source = (job.get("params") or {}).get("source")
+        if not isinstance(source, dict):
+            return None
+        try:
+            path, _label = self.compute.resolve_structure(source)
+            fingerprint: Optional[str] = cache.content_hash(path)
+        except (AppError, OSError):
+            fingerprint = None
+        found = AnalysisService(self.jobs, self.compute).latest(source, fingerprint)
+        return report_summary(found) if found else None
 
     # ------------------------------------------------------------------------------ parti comuni
     def _base(self, job: dict, kind: str) -> dict:

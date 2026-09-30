@@ -566,6 +566,18 @@ REFERENCES = {
     "tien": "Tien M.Z., Meyer A.G., Sydykova D.K., Spielman S.J., Wilke C.O. (2013) Maximum allowed solvent "
             "accessibilites of residues in proteins. PLoS ONE 8:e80635.",
     "rost": "Rost B. (1999) Twilight zone of protein sequence alignments. Protein Eng. 12:85–94.",
+    # analisi strutturale (F7)
+    "krissinel": "Krissinel E., Henrick K. (2007) Inference of macromolecular assemblies from crystalline state. J. "
+                 "Mol. Biol. 372:774–797.",
+    "janin2008": "Janin J., Bahadur R.P., Chakrabarti P. (2008) Protein-protein interaction and quaternary structure. "
+                 "Q. Rev. Biophys. 41:133–180.",
+    "loconte": "Lo Conte L., Chothia C., Janin J. (1999) The atomic structure of protein-protein recognition sites. J. "
+               "Mol. Biol. 285:2177–2198.",
+    "baker": "Baker E.N., Hubbard R.E. (1984) Hydrogen bonding in globular proteins. Prog. Biophys. Mol. Biol. "
+             "44:97–179.",
+    "barlow": "Barlow D.J., Thornton J.M. (1983) Ion-pairs in proteins. J. Mol. Biol. 168:867–885.",
+    "richardson": "Richardson J.S. (1981) The anatomy and taxonomy of protein structure. Adv. Protein Chem. "
+                  "34:167–339.",
 }
 
 LEGEND = {
@@ -618,6 +630,15 @@ LEGEND = {
            "filamento β (E, B), coil (T, S e il resto)."),
     "sasa": ("SASA relativa", "superficie accessibile al solvente (Shrake & Rupley 1973 o mkdssp) divisa per l'area "
              "massima del residuo (Tien et al. 2013); sepolto sotto il 20%."),
+    "disulfide": ("Ponti disolfuro", "coppie di cisteine con SG–SG entro 2,0 ± 0,2 Å (legame S–S tipico circa 2,04 Å); "
+                  "χ3 è il diedro CB–SG–SG–CB, di solito vicino a ±90° (Richardson 1981)."),
+    "interface": ("Interfacce", "residui con ΔSASA > 1 Å² fra la catena isolata e la coppia di catene (Shrake & Rupley "
+                  "1973, sonda 1,4 Å, soli amminoacidi); area d'interfaccia = metà dell'area sepolta totale "
+                  "(convenzione di PISA, Krissinel & Henrick 2007). Interazioni attraverso l'interfaccia: legami "
+                  "idrogeno (D…A ≤ 3,5 Å, D–H…A ≥ 120°, Baker & Hubbard 1984) e ponti salini (N–O ≤ 4,0 Å, Barlow & "
+                  "Thornton 1983). Plausibilità dalla sola area: sotto 400 Å² bassa (contatti cristallini, Janin et "
+                  "al. 2008), 400–600 Å² incerta, da 600 Å² compatibile (interfacce standard, Lo Conte et al. 1999): "
+                  "un indicatore semplice, non una classificazione come PISA o EPPIC."),
 }
 
 
@@ -1264,6 +1285,64 @@ def _quality(doc: _Doc, data: dict) -> None:
     doc.end()
 
 
+PLAUSIBILITY_TONE = {"bassa": "err", "incerta": "warn", "compatibile": "ok"}
+
+
+def _structural(doc: _Doc, data: dict) -> None:
+    """Ponti disolfuro e interfacce fra catene dall'analisi strutturale (F7) della stessa struttura, se ce ne sono."""
+    info = data.get("analysis")
+    if not isinstance(info, dict):
+        return
+    ss = [d for d in info.get("disulfides") or [] if isinstance(d, dict)]
+    pairs = [p for p in info.get("interfaces") or [] if isinstance(p, dict)]
+    if not ss and not pairs:
+        return
+    doc.section("analisi", "Analisi strutturale")
+    doc.add(f'<p class="small muted">Dall\'analisi strutturale {_e(info.get("job_id"))} del '
+            f"{_date(info.get('finished_at'))} sulla stessa struttura.</p>")
+    if ss:
+        rows = ["<tr>" + _td(_e(_residue_label(d.get("a") or {}))) + _td(_e(_residue_label(d.get("b") or {})))
+                + _td(_num(d.get("distance"), 2), True) + _td(_num(d.get("ca_distance"), 2), True)
+                + _td(_num(d.get("chi3"), 0, "°"), True) + "</tr>" for d in ss]
+        doc.add('<h3 id="disolfuri">Ponti disolfuro</h3>',
+                _table([("Cisteina", False), ("Cisteina", False), ("SG–SG (Å)", True), ("Cα–Cα (Å)", True),
+                        ("χ3", True)], rows))
+        doc.explain("disulfide")
+        doc.cite("richardson")
+    if pairs:
+        rows = []
+        for p in pairs:
+            chains = [str(c) for c in p.get("chains") or []][:2]
+            counts = p.get("counts") if isinstance(p.get("counts"), dict) else {}
+            inter = p.get("interactions") if isinstance(p.get("interactions"), dict) else {}
+            level = (p.get("plausibility") or {}).get("level")
+            rows.append("<tr>" + _td(_e(" – ".join(chains))) + _td(_num(p.get("area"), 0), True)
+                        + _td(_e(" / ".join(str(counts.get(c, "—")) for c in chains)), True)
+                        + _td(_e(inter.get("hbonds", "—")), True) + _td(_e(inter.get("salt_bridges", "—")), True)
+                        + _td(_num(100 * p["apolar_fraction"], 0, "%") if _isnum(p.get("apolar_fraction")) else "—",
+                              True)
+                        + _td(f'<span class="tag {_lookup(PLAUSIBILITY_TONE, level, "")}">{_e(level or "—")}</span>')
+                        + "</tr>")
+        doc.add('<h3 id="interfacce">Interfacce fra catene</h3>',
+                _table([("Catene", False), ("Area (Å²)", True), ("Residui", True), ("Legami H", True),
+                        ("Ponti salini", True), ("Area apolare", True), ("Plausibilità", False)], rows))
+        for p in pairs:
+            residues = p.get("residues") if isinstance(p.get("residues"), dict) else {}
+            parts = []
+            for chain in [str(c) for c in p.get("chains") or []][:2]:
+                names = ", ".join(_residue_label(r) for r in residues.get(chain) or [] if isinstance(r, dict))
+                parts.append(f"<b>{_e(chain)}</b>: {_e(names) or '—'}")
+            text = (p.get("plausibility") or {}).get("text")
+            doc.add(f'<p class="small">Residui d\'interfaccia (ΔSASA &gt; 1 Å²) — {"; ".join(parts)}.'
+                    + (f" Plausibilità: {_e(text)}." if text else "") + "</p>")
+        limits = next(((p.get("plausibility") or {}).get("limits") for p in pairs if p.get("plausibility")), None)
+        if limits:
+            doc.add(_note(_e(limits), "warn"))
+        doc.explain("interface")
+        doc.cite("sasa", "krissinel", "janin2008", "loconte", "baker", "barlow")
+    doc.end()
+
+
 def _warnings(doc: _Doc, data: dict) -> None:
     items: list[str] = []
     for w in [*(data.get("warnings") or []), *(((data.get("quality") or {}).get("warnings")) or [])]:
@@ -1298,7 +1377,8 @@ def render(data: dict) -> str:
     engine, identity, coverage, evalue, twilight), alignment (testo PIR), options (ModelOptions come dizionario), loop
     (source, start, end, models, level), pipeline (parametri della pipeline), models [{file, kind, dope, zdope, ga341,
     molpdf, grade, grade_score, best, chosen, failure}], quality (rapporto di engines/quality), consensus
-    (domain/consensus.compute), warnings [testo], image_png (byte di un PNG già verificato con `decode_png`) o None.
+    (domain/consensus.compute), warnings [testo], image_png (byte di un PNG già verificato con `decode_png`) o None,
+    analysis (services/analysis.report_summary: job_id, finished_at, disulfides, interfaces) o None.
     """
     doc = _Doc()
     kind = data.get("kind")
@@ -1313,6 +1393,7 @@ def render(data: dict) -> str:
     elif (data.get("quality") or {}).get("dope"):
         doc.cite("modeller", "dope")
     _quality(doc, data)
+    _structural(doc, data)
     _warnings(doc, data)
     _legend_and_refs(doc)
     subject = data.get("title") or data.get("model") or ""

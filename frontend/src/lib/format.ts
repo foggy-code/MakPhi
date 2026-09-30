@@ -28,6 +28,7 @@ export const KIND_LABEL: Record<JobKind, string> = {
   db_index_mmseqs: "Indice MMseqs2",
   db_convert_uniclust: "Conversione UniClust30",
   db_local_uniclust: "Copia locale UniClust30",
+  analysis: "Analisi strutturale",
 };
 
 export const ACTIVE_STATUSES: JobStatus[] = ["queued", "running", "cancelling"];

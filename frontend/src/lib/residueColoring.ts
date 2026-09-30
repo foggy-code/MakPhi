@@ -21,8 +21,9 @@ export interface ResidueValue extends ResidueRef {
 }
 
 export interface ResidueColoring {
-  /** opzione "Colora per" della pagina Qualità, oppure del confronto strutturale (lib/compare.ts) */
-  key: ColorBy | "distance" | "lddt";
+  /** opzione "Colora per" della pagina Qualità, del confronto strutturale (lib/compare.ts) o dell'analisi strutturale
+   *  (lib/interactions.ts) */
+  key: ColorBy | "distance" | "lddt" | "conservation" | "interface";
   /** titolo della legenda */
   title: string;
   values: ResidueValue[];

@@ -70,11 +70,12 @@ INTERMEDIATE_PATTERNS = ("*.rsr", "*.lrsr", "*.sch", "*.ini", "*.D[0-9]*", "*.V[
 # Priorità di esecuzione per tipo di job (numero più basso = parte prima), nella coda di ciascun pool e nel
 # budget di CPU: i calcoli interattivi brevi, che l'utente sta aspettando davanti allo schermo, prima della
 # modellazione; questa prima dei lavori lunghi in blocco (pipeline, manutenzione dei database). A parità di
-# priorità vale l'ordine di creazione. `compare` è il confronto strutturale (leggero, interattivo). La priorità
+# priorità vale l'ordine di creazione. `compare` è il confronto strutturale (leggero, interattivo), `analysis`
+# l'analisi strutturale (interazioni, interfacce, conservazione: pochi secondi, services/analysis.py). La priorità
 # migliora con l'attesa (invecchiamento: core/dispatch.AGING_SECONDS in coda, core/budget.AGING_SECONDS per gli slot),
 # così un flusso continuo di calcoli interattivi non ferma per sempre modellazioni e pipeline.
 PRIORITY = {
-    "search": 0, "align": 0, "align2d": 0, "quality": 0, "qmean": 0, "compare": 0,
+    "search": 0, "align": 0, "align2d": 0, "quality": 0, "qmean": 0, "compare": 0, "analysis": 0,
     "model": 1, "loop": 1, "selftest": 1,
     "pipeline": 2, "db_update_pdbaa": 2, "db_build_mmseqs": 2, "db_index_mmseqs": 2, "db_convert_uniclust": 2,
     "db_local_uniclust": 2,

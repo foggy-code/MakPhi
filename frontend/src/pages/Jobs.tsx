@@ -25,6 +25,7 @@ const OPEN_IN: Record<JobKind, (id: string) => string> = {
   db_index_mmseqs: () => "/settings?tab=databases",
   db_convert_uniclust: () => "/settings?tab=databases",
   db_local_uniclust: () => "/settings?tab=databases",
+  analysis: (id) => `/quality?ajob=${id}`,
 };
 
 function Detail({ id, onDeleted, onChanged }: { id: string; onDeleted: () => void; onChanged: () => void }) {
