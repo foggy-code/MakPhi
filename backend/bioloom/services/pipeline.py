@@ -280,10 +280,14 @@ class PipelineService:
                              template_source="scelto dall'utente")
             else:
                 self._update(job_id, idx, status="searching", stage="Ricerca del template")
-                result = search.search(sub, item["sequence"], engine=p.get("engine", "rcsb"),
+                engine = p.get("engine", "rcsb")
+                # AlphaFold DB: con un'intestazione FASTA di UniProt (sp|ACC|NOME) l'accessione è già nota e la
+                # sequenza non va a NCBI; altrimenti le proteine più simili si cercano con BLAST su Swiss-Prot.
+                uniprot = search.uniprot_from_name(name) if engine == "alphafold" else ""
+                result = search.search(sub, item["sequence"], engine=engine,
                                        evalue=float(p.get("evalue", 1e-3)), max_hits=25,
                                        databases_dir=self.compute.databases_dir,
-                                       use_cache=bool(p.get("use_cache", True)))
+                                       use_cache=bool(p.get("use_cache", True)), uniprot=uniprot)
                 if result.get("cached"):
                     search_info = {"search_cached_at": result.get("cached_at")}
                     self._update(job_id, idx, metrics=search_info)
@@ -298,7 +302,9 @@ class PipelineService:
                              identity=best["identity"], coverage=best["coverage"], evalue=best["evalue"],
                              twilight=int(twilight))
                 sub.log(f"Template scelto {best['template_id']} (identità {best['identity']}%, "
-                        f"copertura {best['coverage']}%)")
+                        f"copertura {best['coverage']}%"
+                        + (f"; modello predetto AlphaFold, pLDDT medio {best.get('plddt')}" if best.get("predicted")
+                           else "") + ")")
                 if twilight and tw.get("filter", False):
                     self._update(job_id, idx, status="filtered", stage="Zona crepuscolare: saltata",
                                  error="Identità o copertura sotto soglia (filtro attivo).", finished_at=now_iso())
@@ -315,12 +321,15 @@ class PipelineService:
             q = best_model.get("quality") or {}
             rel = (sub.workdir / best_model["file"]).relative_to(ctx.workdir).as_posix()
             self._update(job_id, idx, stage="Salvataggio dei file")
+            # template AlphaFold: provenienza e residui tolti per pLDDT basso nelle metriche dell'elemento
+            predicted = [t for t in res.get("templates") or [] if t.get("predicted")]
+            af_info = {"template_predicted": True, "plddt_removed": res.get("plddt_removed", 0)} if predicted else {}
             return {"status": "completed", "stage": "Completato", "best_model": rel,
                     "dope": best_model.get("dope"), "ga341": best_model.get("ga341"), "grade": q.get("grade"),
                     "grade_score": q.get("grade_score"), "rama_favored": q.get("rama_favored"),
                     "clashscore": q.get("clashscore"),
                     "metrics": {"zdope": best_model.get("zdope"), "molpdf": best_model.get("molpdf"),
-                                "models": len(res["models"]), **q, **search_info},
+                                "models": len(res["models"]), **q, **search_info, **af_info},
                     "finished_at": now_iso()}
         except JobCancelled:
             raise

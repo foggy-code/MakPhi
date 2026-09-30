@@ -5,7 +5,7 @@ export type JobKind =
   | "search" | "align" | "align2d" | "model" | "loop" | "quality" | "qmean" | "pipeline"
   | "selftest" | "db_update_pdbaa" | "db_build_mmseqs" | "db_index_mmseqs" | "db_convert_uniclust" | "db_local_uniclust";
 
-export type SearchEngine = "rcsb" | "ncbi" | "local" | "mmseqs";
+export type SearchEngine = "rcsb" | "ncbi" | "local" | "mmseqs" | "alphafold";
 
 export interface JobSummary {
   id: string;
@@ -324,6 +324,52 @@ export interface TemplateItem {
   method: string;
   resolution: number | null;
   chains: string[];
+  /** modello predetto (AlphaFold DB, o file di AlphaFold caricato): non una struttura sperimentale */
+  predicted?: boolean;
+  /** pLDDT medio (0–100) dei modelli predetti */
+  plddt_mean?: number | null;
+  plddt_fractions?: PlddtFractions | null;
+  /** solo nella scheda del template (meta): "modello predetto, non struttura sperimentale" */
+  note?: string;
+  /** voce di AlphaFold DB da cui viene il modello (versione, intervallo UniProt coperto...) */
+  alphafold?: AlphaFoldInfo | null;
+}
+
+/** Frazione di residui per fascia di pLDDT: ≥ 90, 70–90, 50–70, < 50. */
+export interface PlddtFractions {
+  very_high: number | null;
+  confident: number | null;
+  low: number | null;
+  very_low: number | null;
+}
+
+export interface AlphaFoldInfo {
+  entry_id: string;
+  accession: string;
+  fragment: number;
+  version: number | null;
+  uniprot_start: number | null;
+  uniprot_end: number | null;
+  uniprot_id: string;
+  gene: string;
+  description: string;
+  organism: string;
+  tax_id: number | null;
+  created: string;
+  tool: string;
+  pae_url: string | null;
+}
+
+/** Residui tolti da un template AlphaFold perché con pLDDT sotto la soglia (gap nell'allineamento). */
+export interface PlddtTrim {
+  threshold: number;
+  total: number;
+  removed: number;
+  kept: number;
+  mean_before: number | null;
+  mean_after: number | null;
+  /** [primo, ultimo, catena] nella numerazione del template */
+  removed_ranges: [string, string, string][];
 }
 
 export interface ChainSummary {
@@ -379,6 +425,13 @@ export interface SearchHit {
   subject_aligned: string;
   subject_length: number;
   source: string;
+  /** motore alphafold: modello predetto; `pdb_id` e `template_id` sono l'id della libreria (AF-<ACC>-F<n>) */
+  predicted?: boolean;
+  plddt?: number | null;
+  uniprot_accession?: string;
+  uniprot_start?: number | null;
+  uniprot_end?: number | null;
+  model_version?: number | null;
 }
 
 /** Provenienza di un risultato: presente e vera solo se riusato dalla cache dei calcoli. */
@@ -395,6 +448,8 @@ export interface SearchResult extends CacheInfo {
   hits: SearchHit[];
   query: { name: string; sequence: string; length: number };
   best: string | null;
+  /** motore alphafold: accessione UniProt usata (vuota = proteine trovate con NCBI BLAST su Swiss-Prot) */
+  uniprot?: string;
 }
 
 export interface AlignStats {
@@ -438,6 +493,10 @@ export interface PreparedTemplate {
   last: string;
   sequence: string;
   ligands: number;
+  /** template AlphaFold (modello predetto) */
+  predicted?: boolean;
+  /** ritaglio dei residui a basso pLDDT; assente se non applicato */
+  plddt?: PlddtTrim | null;
 }
 
 export interface PirReport {
@@ -484,6 +543,8 @@ export interface ModelResult {
   models: ModelEntry[];
   best_model: string;
   warnings: string[];
+  /** residui tolti dai template AlphaFold per pLDDT basso (somma su tutti i template) */
+  plddt_removed?: number;
 }
 
 export interface Align2dResult {
@@ -708,8 +769,9 @@ export interface PipelineItem {
   grade_score: number | null;
   rama_favored: number | null;
   clashscore: number | null;
-  /** metriche del modello; `search_cached_at` = ricerca del template riusata dalla cache (data ISO) */
-  metrics: Record<string, unknown> & { search_cached_at?: string };
+  /** metriche del modello; `search_cached_at` = ricerca del template riusata dalla cache (data ISO);
+   * `template_predicted`/`plddt_removed` = template AlphaFold e residui tolti per pLDDT basso */
+  metrics: Record<string, unknown> & { search_cached_at?: string; template_predicted?: boolean; plddt_removed?: number };
   error: string | null;
   started_at: string | null;
   finished_at: string | null;

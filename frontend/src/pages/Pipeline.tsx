@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { JobSummary, PipelinePage, PipelineResult, ResumeScope, SearchEngine, Sequence, TemplateRef } from "../api/types";
+import type { JobSummary, PipelinePage, PipelineResult, ResumeScope, SearchEngine, Sequence, TemplateItem, TemplateRef } from "../api/types";
 import { RecomputeOption } from "../components/CacheOption";
 import { SequenceFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { TemplatePicker } from "../components/Pickers";
+import { PlddtOption } from "../components/PlddtOption";
 import { Viewer3D } from "../components/Viewer3D";
 import { Badge, BarCell, Card, Empty, Field, Grade, Modal, PageHead, Segmented, StatusBadge } from "../components/ui";
+import { hasPredictedTemplate, PLDDT_DEFAULT } from "../lib/alphafold";
 import { useProject, useToast } from "../lib/context";
 import { fmtDate, fmtEvalue, fmtNum, isActive, relTime, searchCacheHitsLabel, STATUS_LABEL } from "../lib/format";
 import { recordsToFasta } from "../lib/files";
@@ -93,6 +95,9 @@ function Items({ jobId, running, cacheHits }: { jobId: string; running: boolean;
                   </td>
                   <td className="nowrap">
                     {it.template ?? "—"} {it.twilight ? <Badge tone="warn" title="Identità o copertura sotto soglia">crepuscolare</Badge> : null}
+                    {(it.template_source === "alphafold" || it.metrics?.template_predicted) && (
+                      <Badge tone="warn" title={`Modello predetto da AlphaFold DB, non struttura sperimentale${it.metrics?.plddt_removed ? `: tolti ${it.metrics.plddt_removed} residui a basso pLDDT` : ""}`}>AlphaFold</Badge>
+                    )}
                     {it.metrics?.search_cached_at && <Badge tone="info" title={`Ricerca del template riusata dalla cache dei calcoli (${fmtDate(it.metrics.search_cached_at)})`}>cache</Badge>}
                     {it.evalue != null && <div className="tiny muted">E {fmtEvalue(it.evalue)}</div>}
                   </td>
@@ -157,7 +162,12 @@ export default function Pipeline() {
   const [extended, setExtended] = useState(false);
   const [parallel, setParallel] = useState(2);
   const [recompute, setRecompute] = useState(false);
+  const [plddtTrim, setPlddtTrim] = useState(true);
+  const [plddtMin, setPlddtMin] = useState(PLDDT_DEFAULT);
   const { data: projectSeqs } = useAsync<Sequence[]>(() => (projectId ? api.sequences(projectId) : Promise.resolve([])), [projectId]);
+  const { data: library } = useAsync<TemplateItem[]>(() => api.templates(), [templates.map((t) => t.id).join(",")]);
+  // la soglia pLDDT serve solo se i template possono essere modelli AlphaFold
+  const predictedPossible = mode === "auto" ? engine === "alphafold" : hasPredictedTemplate(templates, library);
   const { data: recent, reload: reloadRecent } = useAsync<JobSummary[]>(() => api.jobs({ project_id: projectId ?? undefined, kind: "pipeline", limit: 10 }), [projectId, jobId]);
   const { job, summary, log, cancel, resume } = useJob<PipelineResult>(jobId, { withLog: true });
   const count = (fasta.match(/^>/gm) ?? []).length;
@@ -190,7 +200,7 @@ export default function Pipeline() {
         engine,
         evalue,
         twilight: { filter: twFilter, identity: twIdentity, coverage: twCoverage },
-        options: { models, refinement },
+        options: { models, refinement, plddt_trim: plddtTrim, plddt_min: plddtMin },
         quality,
         extended_quality: quality && extended,
         parallel,
@@ -233,6 +243,7 @@ export default function Pipeline() {
                         <option value="ncbi">NCBI BLAST (lento)</option>
                         <option value="local">BLAST+ locale</option>
                         <option value="mmseqs">MMseqs2 locale</option>
+                        <option value="alphafold">AlphaFold DB (modelli predetti)</option>
                       </select>
                     </Field>
                     <Field label="E-value massimo">
@@ -241,6 +252,13 @@ export default function Pipeline() {
                       </select>
                     </Field>
                   </div>
+                  {engine === "alphafold" && (
+                    <span className="tiny muted">
+                      Modelli predetti di AlphaFold DB, non strutture sperimentali. Per ogni sequenza si usa l'accessione dell'intestazione FASTA di UniProt
+                      (<span className="mono">&gt;sp|P69905|HBA_HUMAN</span>); altrimenti NCBI BLAST su Swiss-Prot trova le proteine più simili (1–5 min per sequenza).
+                      Le accessioni vanno a EBI, le sequenze senza accessione a NCBI.
+                    </span>
+                  )}
                   <label className="check"><input type="checkbox" checked={twFilter} onChange={(e) => setTwFilter(e.target.checked)} /> Salta le sequenze in zona crepuscolare</label>
                   <div className="grid grid-2">
                     <Field label="Identità minima (%)"><input className="input" type="number" value={twIdentity} onChange={(e) => setTwIdentity(Number(e.target.value))} /></Field>
@@ -265,6 +283,7 @@ export default function Pipeline() {
                 </Field>
                 <Field label="In parallelo"><input className="input" type="number" min={1} max={8} value={parallel} onChange={(e) => setParallel(Number(e.target.value))} /></Field>
               </div>
+              {predictedPossible && <PlddtOption enabled={plddtTrim} threshold={plddtMin} onEnabled={setPlddtTrim} onThreshold={setPlddtMin} />}
               <label className="check"><input type="checkbox" checked={quality} onChange={(e) => setQuality(e.target.checked)} /> Analisi di qualità del modello migliore</label>
               {quality && <label className="check"><input type="checkbox" checked={extended} onChange={(e) => setExtended(e.target.checked)} /> Includi PROCHECK e ProSA II (qualche secondo in più per sequenza)</label>}
               <button className="btn btn-primary" disabled={count < 1 || (mode === "fixed" && !templates.length)} onClick={submit}><Icon name="play" size={14} /> Avvia pipeline</button>

@@ -41,6 +41,65 @@ def _template_specs(raw: list[dict]) -> list[TemplateSpec]:
     return specs
 
 
+def _apply_plddt_trim(entry: sequences.PirEntry, fields: list[str], t: dict) -> None:
+    """Riporta una riga PIR di template sul template ritagliato per pLDDT (residui tolti = gap).
+
+    La riga può descrivere il template completo (allineamento fatto prima del ritaglio, per esempio con l'Editor
+    PIR): i residui tolti diventano gap, così il bersaglio in quelle posizioni resta senza template, e l'intervallo
+    passa al primo e all'ultimo residuo rimasti. Una riga che descrive già il template ritagliato resta com'è. Se la
+    riga non corrisponde a nessuno dei due, l'allineamento non è per questo template: errore chiaro (MODELLER
+    fallirebbe con un messaggio poco leggibile).
+    """
+    rows = t["_residues"]  # (catena, residuo, lettera, tenuto) del template completo, nell'ordine del file
+    code = t["code"]
+
+    def locate(resid: str, chain: str, default: int) -> int:
+        value = (resid or "").strip()
+        if not value or value.upper() in ("FIRST", "LAST", "."):
+            return default
+        chain = (chain or "").strip() or None
+        for i, (c, r, _aa, _keep) in enumerate(rows):
+            if r == value and (chain is None or c == chain):
+                return i
+        raise AppError(f"Il PIR indica il residuo {value}:{chain or '?'} che non esiste nel template {code}.",
+                       code="invalid_pir")
+
+    start = locate(fields[0], fields[1], 0)
+    end_field = (fields[2] or "").strip()
+    if end_field.startswith("+") and end_field[1:].isdigit():  # "+N": N residui a partire dal primo
+        end = start + int(end_field[1:]) - 1
+    else:
+        end = locate(fields[2], fields[3], len(rows) - 1)
+    segment = rows[start:end + 1]
+    if not segment:
+        raise AppError(f"Intervallo di residui del template {code} vuoto nel PIR.", code="invalid_pir")
+    letters = "".join(c for c in entry.sequence if c.isalpha())
+    full = "".join(r[2] for r in segment)
+    kept_rows = [r for r in segment if r[3]]
+    kept = "".join(r[2] for r in kept_rows)
+    if not kept_rows:
+        raise AppError(f"Nessun residuo del template {code} nell'intervallo del PIR supera la soglia pLDDT.",
+                       code="plddt_too_few")
+    if letters == full and full != kept:
+        out, k = [], 0
+        for ch in entry.sequence:
+            if ch.isalpha():
+                out.append(ch if segment[k][3] else "-")
+                k += 1
+            else:
+                out.append(ch)
+        entry.sequence = "".join(out)
+    elif letters != kept:
+        threshold = t["plddt"]["threshold"]
+        raise AppError(f"Nel PIR la sequenza del template {code} non corrisponde al file del template, né completo né "
+                       f"ritagliato per pLDDT < {threshold:g} ({len(letters)} residui nel PIR, {len(full)} nel "
+                       f"template, {len(kept)} dopo il ritaglio).", code="invalid_pir")
+    if fields[0] and fields[0].upper() not in ("FIRST", "."):
+        fields[0], fields[1] = kept_rows[0][1], kept_rows[0][0]
+    if fields[2] and fields[2].upper() not in ("LAST", "."):
+        fields[2], fields[3] = kept_rows[-1][1], kept_rows[-1][0]
+
+
 class ComputeService:
     """Registra gli handler dei job e contiene la logica condivisa (anche dalla pipeline)."""
 
@@ -80,7 +139,7 @@ class ComputeService:
         result = search.search(ctx, rec.sequence, engine=p.get("engine", "rcsb"),
                                evalue=float(p.get("evalue", 10.0)), max_hits=int(p.get("max_hits", 50)),
                                databases_dir=self.databases_dir, taxid=str(p.get("taxid", "")).strip(),
-                               use_cache=bool(p.get("use_cache", True)))
+                               use_cache=bool(p.get("use_cache", True)), uniprot=str(p.get("uniprot") or "").strip())
         best = search.best_template(result["hits"])
         ctx.log(f"{len(result['hits'])} template trovati")
         return {**result, "query": rec.to_dict(), "best": best["template_id"] if best else None}
@@ -133,7 +192,12 @@ class ComputeService:
 
     # ------------------------------------------------------------------------------ MODELLER
     def _prepare_templates(self, ctx: JobContext, specs: list[TemplateSpec], workdir: Path,
-                           auto_fetch: bool = True) -> list[dict]:
+                           auto_fetch: bool = True, plddt_min: Optional[float] = None) -> list[dict]:
+        """Template preparati per MODELLER; quelli assenti dalla libreria si scaricano (RCSB o AlphaFold DB).
+
+        `plddt_min`: soglia di ritaglio per i template predetti (AlphaFold); None = nessun ritaglio. Le strutture
+        sperimentali non si ritagliano mai: i loro B-factor non sono pLDDT.
+        """
         prepared = []
         for spec in specs:
             ctx.check()
@@ -141,16 +205,55 @@ class ComputeService:
                 if auto_fetch and len(spec.id) == 4:
                     ctx.log(f"Template {spec.id} non in libreria: download da RCSB")
                     self.library.fetch(spec.id)
+                elif auto_fetch and remote.parse_alphafold_id(spec.id):
+                    ctx.log(f"Template {spec.id} non in libreria: download da AlphaFold DB (EBI)")
+                    self.library.fetch_alphafold(spec.id)
                 else:
                     raise AppError(f"Template {spec.id} non presente nella libreria.")
+            predicted = self.library.is_predicted(spec.id)
+            spec.plddt_min = plddt_min if predicted else None
             info = modeller.prepare_template(self.library.path(spec.id), spec, workdir)
             ctx.log(f"Template {info['code']}: catene {','.join(info['chains'])}, "
                     f"residui {info['first']}–{info['last']}, {len(info['sequence'].replace('/', ''))} aa")
+            if predicted:
+                info["predicted"] = True
+                trim = info.get("plddt")
+                if trim is None:
+                    ctx.log(f"Template {info['code']}: modello predetto (AlphaFold), usato senza ritaglio pLDDT")
+                else:
+                    where = ", ".join(f"{a}–{b}:{c}" if a != b else f"{a}:{c}" for a, b, c in trim["removed_ranges"])
+                    ctx.log(f"Template {info['code']}: modello predetto (AlphaFold), rimossi {trim['removed']} "
+                            f"residui con pLDDT < {trim['threshold']:g}" + (f" ({where})" if where else "")
+                            + f", restano {trim['kept']} di {trim['total']}; pLDDT medio {trim['mean_before']} → "
+                              f"{trim['mean_after']}")
             prepared.append(info)
         codes = [t["code"] for t in prepared]
         if len(set(codes)) != len(codes):
             raise AppError("Lo stesso template/catena è stato selezionato più volte.")
         return prepared
+
+    @staticmethod
+    def _public(templates: list[dict]) -> list[dict]:
+        """Template per i risultati del job, senza le chiavi interne (es. l'elenco dei residui del ritaglio)."""
+        return [{k: v for k, v in t.items() if not k.startswith("_")} for t in templates]
+
+    @staticmethod
+    def _predicted_notes(templates: list[dict]) -> list[str]:
+        notes = []
+        for t in templates:
+            if not t.get("predicted"):
+                continue
+            trim = t.get("plddt")
+            text = f"{t['code']}: modello predetto (AlphaFold DB), non una struttura sperimentale"
+            if trim is None:
+                text += "; nessun ritaglio dei residui a basso pLDDT."
+            elif trim["removed"]:
+                text += (f"; rimossi {trim['removed']} residui con pLDDT < {trim['threshold']:g} "
+                         f"(restano {trim['kept']} di {trim['total']}), costruiti senza vincoli dal template.")
+            else:
+                text += f"; tutti i residui hanno pLDDT ≥ {trim['threshold']:g}."
+            notes.append(text)
+        return notes
 
     def _run_alignment(self, ctx: JobContext, target: SeqRecord, templates: list[dict], workdir: Path,
                        progress: tuple[float, float]) -> str:
@@ -176,6 +279,7 @@ class ComputeService:
                            f"{len(templates)}.")
         by_code = {t["code"].upper(): t for t in templates}
         used = set()
+        trimmed = False
         for pos, entry in enumerate(tmpl_entries):
             t = by_code.get(entry.code.upper())
             if t is None or t["code"] in used:
@@ -183,10 +287,17 @@ class ComputeService:
             used.add(t["code"])
             entry.code = t["code"]
             fields = (entry.fields + [""] * 8)[:8]
+            if t.get("_residues") and (t.get("plddt") or {}).get("removed"):
+                _apply_plddt_trim(entry, fields, t)
+                trimmed = True
             if not fields[0] or not fields[1]:
                 fields[0:4] = [t["first"], t["chains"][0], t["last"], t["chains"][-1]]
             entry.fields = fields
             entry.kind = "structureX"
+        if trimmed:  # colonne rimaste di soli gap (residui tolti allineati a gap del bersaglio)
+            keep = [i for i in range(len(entries[0].sequence)) if any(e.sequence[i] != "-" for e in entries)]
+            for e in entries:
+                e.sequence = "".join(e.sequence[i] for i in keep)
         target = next(e for e in entries if e.kind == "sequence")
         target.code = sequences.sanitize_code(target.code, default="TARGET")
         return sequences.format_pir(entries), target.code, report["warnings"]
@@ -203,7 +314,8 @@ class ComputeService:
                 s.hetatm = True
         modeller.modeller_python(ctx)  # errore immediato se MODELLER manca
         ctx.progress(0.02, "Preparazione dei template")
-        templates = self._prepare_templates(ctx, specs, workdir)
+        templates = self._prepare_templates(ctx, specs, workdir,
+                                            plddt_min=opts.plddt_min if opts.plddt_trim else None)
         warnings: list[str] = []
         if alignment:
             pir, target_code, warnings = self._normalize_pir(alignment, templates)
@@ -215,6 +327,7 @@ class ComputeService:
             report = sequences.validate_pir(pir)
             warnings = report["warnings"]
             target_code = next(e.code for e in sequences.parse_pir(pir) if e.kind == "sequence")
+        warnings = [*warnings, *self._predicted_notes(templates)]
         for w in warnings:
             ctx.log(f"Avviso: {w}")
         ctx.progress(0.15, "Costruzione dei modelli")
@@ -247,6 +360,10 @@ class ComputeService:
             quality.inject_remarks(workdir / m["file"], [
                 f"MODEL {m['file']} TARGET {target_code}",
                 f"TEMPLATES {' '.join(t['code'] for t in templates)}",
+                *(f"TEMPLATE {t['code']} ALPHAFOLD "
+                  + (f"PLDDT<{t['plddt']['threshold']:g} REMOVED {t['plddt']['removed']}" if t.get("plddt")
+                     else "PLDDT_TRIM OFF")
+                  for t in templates if t.get("predicted")),
                 f"DOPE {m.get('dope')} ZDOPE {m.get('zdope')} GA341 {m.get('ga341')}",
                 f"GRADE {m['quality']['grade']} ({m['quality']['grade_score']}) "
                 f"RAMA_FAVORED {m['quality']['rama_favored']} CLASHSCORE {m['quality']['clashscore']}",
@@ -254,7 +371,8 @@ class ComputeService:
         target_seq = next((e.sequence for e in sequences.parse_pir(pir) if e.kind == "sequence"), "")
         return {
             "target": {"code": target_code, "sequence": target_seq.replace("-", "").replace("/", "")},
-            "templates": templates,
+            "templates": self._public(templates),
+            "plddt_removed": sum((t.get("plddt") or {}).get("removed", 0) for t in templates),
             "alignment": (workdir / "alignment.ali").read_text(encoding="utf-8"),
             "alignment_report": sequences.validate_pir((workdir / "alignment.ali").read_text(encoding="utf-8")),
             "options": asdict(opts),
@@ -268,7 +386,8 @@ class ComputeService:
         modeller.modeller_python(ctx)
         templates = self._prepare_templates(ctx, _template_specs(p.get("templates", [])), ctx.workdir)
         pir = self._run_alignment(ctx, target, templates, ctx.workdir, (0.1, 0.9))
-        return {"pir": pir, "report": sequences.validate_pir(pir), "templates": templates,
+        # Template AlphaFold interi: in modellazione, con il ritaglio pLDDT, i residui tolti diventano gap del PIR
+        return {"pir": pir, "report": sequences.validate_pir(pir), "templates": self._public(templates),
                 "pap": (ctx.workdir / "alignment.pap").read_text(encoding="utf-8", errors="replace")
                 if (ctx.workdir / "alignment.pap").exists() else ""}
 

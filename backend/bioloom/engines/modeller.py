@@ -17,7 +17,7 @@ from typing import Optional
 from ..core.errors import AppError, ToolUnavailable
 from ..core.jobs import JobContext, default_env
 from ..core.storage import atomic_write_text, read_json
-from ..domain import sequences, structure
+from ..domain import plddt, sequences, structure
 from ..domain.sequences import PirEntry
 from . import tools
 
@@ -33,6 +33,8 @@ class TemplateSpec:
     id: str
     chains: list[str] = field(default_factory=list)
     hetatm: bool = False
+    # Template predetto (AlphaFold): si tolgono i residui con pLDDT (colonna B-factor) sotto la soglia; None = no
+    plddt_min: Optional[float] = None
 
 
 @dataclass
@@ -57,6 +59,9 @@ class ModelOptions:
     restraints: list[Restraint] = field(default_factory=list)
     hetatm: bool = False
     seed: int = -8123
+    # Solo per i template AlphaFold: ritaglio dei residui con pLDDT < plddt_min (domain/plddt.py)
+    plddt_trim: bool = True
+    plddt_min: float = plddt.DEFAULT_THRESHOLD
 
 
 def modeller_python(ctx: JobContext) -> str:
@@ -71,7 +76,13 @@ def modeller_python(ctx: JobContext) -> str:
 
 # --------------------------------------------------------------------------------- preparazione template
 def prepare_template(source: Path, spec: TemplateSpec, dest_dir: Path) -> dict:
-    """Converte il template in PDB pulito (catene scelte, ligandi opzionali, MSE→MET) nella cartella del job."""
+    """Converte il template in PDB pulito (catene scelte, ligandi opzionali, MSE→MET) nella cartella del job.
+
+    Con `spec.plddt_min` (template AlphaFold) toglie i residui con pLDDT sotto la soglia: il template preparato,
+    la sua sequenza e il primo/ultimo residuo sono quelli ritagliati, e il risultato riporta in `plddt` quanti residui
+    sono stati tolti e dove. `_residues` (chiave interna, da non salvare nei risultati) elenca i residui del template
+    completo con l'esito, per riportare sul ritaglio un PIR scritto sul template completo.
+    """
     st = structure.load_structure(source, spec.id)
     model = structure.first_model(st)
     summaries = {c["chain"]: c for c in structure.chain_summaries(model)}
@@ -86,16 +97,71 @@ def prepare_template(source: Path, spec: TemplateSpec, dest_dir: Path) -> dict:
     code = sequences.sanitize_code(f"{spec.id}_{''.join(chains)}", default="TEMPLATE")
     dest = dest_dir / f"{code}.pdb"
     dest_dir.mkdir(parents=True, exist_ok=True)
-    structure.write_pdb(st, dest, chains=chains, keep_hetero=spec.hetatm, keep_water=False)
+    trim = None
+    removed: set = set()
+    if spec.plddt_min is not None:
+        trim = plddt.low_confidence(model, chains, float(spec.plddt_min))
+        removed = trim["removed"]
+        kept = len(trim["rows"]) - len(removed)
+        if removed and kept < plddt.MIN_TRIMMED_RESIDUES:
+            raise AppError(
+                f"Togliendo i residui con pLDDT < {float(spec.plddt_min):g} del template {spec.id} ne restano "
+                f"{kept} su {len(trim['rows'])} (minimo {plddt.MIN_TRIMMED_RESIDUES}): il modello AlphaFold è poco "
+                "affidabile in questa regione. Abbassa la soglia pLDDT o disattiva il ritaglio nelle opzioni di "
+                "modellazione, oppure cerca un altro template.", code="plddt_too_few")
+    structure.write_pdb(st, dest, chains=chains, keep_hetero=spec.hetatm, keep_water=False, exclude=removed or None)
     _convert_selenomethionine(dest)
+    header = _alphafold_header(source)
+    if header:  # provenienza AlphaFold riconoscibile anche nella copia del job (i B-factor restano pLDDT)
+        if trim is not None:
+            header.append(f"REMARK 999 BIOLOOM PLDDT_TRIM THRESHOLD {float(spec.plddt_min):g} "
+                          f"REMOVED {len(removed)} OF {len(trim['rows'])}")
+        body = dest.read_text(encoding="utf-8")
+        atomic_write_text(dest, "\n".join(line.ljust(80) for line in header) + "\n" + body)
+    if removed:
+        summaries = {c["chain"]: c for c in structure.chain_summaries(
+            structure.first_model(structure.load_structure(dest, code)))}
+        empty = [c for c in chains if c not in summaries]
+        if empty:
+            raise AppError(f"Nessun residuo della catena {', '.join(empty)} del template {spec.id} ha pLDDT ≥ "
+                           f"{float(spec.plddt_min):g}: togli la catena o abbassa la soglia.", code="plddt_too_few")
     ligands = []
     if spec.hetatm:
         ligands = [g for g in structure.hetero_groups(structure.first_model(structure.load_structure(dest, code)))]
-    return {
+    info = {
         "id": spec.id, "code": code, "file": dest.name, "chains": chains,
         "first": summaries[chains[0]]["first"], "last": summaries[chains[-1]]["last"],
         "sequence": "/".join(summaries[c]["sequence"] for c in chains), "ligands": len(ligands),
     }
+    if trim is not None:
+        values = [row[4] for row in trim["rows"]]
+        kept_values = [row[4] for row in trim["rows"] if row[5]]
+        info["plddt"] = {
+            "threshold": float(spec.plddt_min), "total": len(values), "removed": len(removed),
+            "kept": len(kept_values), "mean_before": plddt.summarize(values)["mean"],
+            "mean_after": plddt.summarize(kept_values)["mean"], "removed_ranges": plddt.removed_ranges(trim["rows"]),
+        }
+        info["_residues"] = [(row[0], row[2], row[3], row[5]) for row in trim["rows"]]
+    return info
+
+
+_HEADER_RECORDS = ("HEADER", "TITLE ", "COMPND", "SOURCE", "KEYWDS", "EXPDTA", "AUTHOR", "REMARK")
+
+
+def _alphafold_header(source: Path) -> list[str]:
+    """Record descrittivi (HEADER, TITLE, COMPND, SOURCE, REMARK...) di un PDB di AlphaFold, altrimenti []."""
+    if source.suffix.lower() not in (".pdb", ".ent"):
+        return []
+    head = structure.read_text_head(source, 200_000)
+    if not plddt.is_alphafold_text(head):
+        return []
+    lines = []
+    for line in head.splitlines():
+        if line.startswith(("ATOM", "HETATM", "MODEL", "SEQRES", "DBREF", "CRYST1")):
+            break
+        if line.startswith(_HEADER_RECORDS) and not line.startswith(("REMARK 465", "REMARK 470")):
+            lines.append(line.rstrip())
+    return lines
 
 
 def _convert_selenomethionine(path: Path) -> None:
@@ -296,6 +362,14 @@ def parse_options(raw: dict) -> ModelOptions:
     opts.seed = int(raw.get("seed", -8123))
     if not -50000 <= opts.seed <= -2:
         raise AppError("Il seme casuale di MODELLER deve essere compreso tra -50000 e -2.")
+    opts.plddt_trim = bool(raw.get("plddt_trim", True))
+    try:
+        value = raw.get("plddt_min")
+        opts.plddt_min = plddt.DEFAULT_THRESHOLD if value is None else float(value)
+    except (TypeError, ValueError):
+        raise AppError("La soglia pLDDT deve essere un numero tra 0 e 100.")
+    if not 0 <= opts.plddt_min <= 100:
+        raise AppError("La soglia pLDDT deve essere compresa tra 0 e 100 (predefinita 70).")
     loop = raw.get("loop") or {}
     opts.loop_refinement = bool(loop.get("enabled", False))
     opts.loop_models = int(loop.get("models", 4))

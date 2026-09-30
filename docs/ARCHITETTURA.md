@@ -23,7 +23,7 @@ Container "bioloom" (Ubuntu 24.04, Python 3.12, utente = proprietario di /data)
                      ├─ JobManager: pool "cpu" (core−1) + "io" (8) · stato su SQLite · lavoro in /scratch
                      │    └─ sottoprocessi: MODELLER 10.8, mkdssp, BLAST+, MMseqs2, Clustal Omega, MAFFT, MUSCLE,
                      │                      TM-align, US-align, PROCHECK, ProSA II
-                     └─ servizi remoti: RCSB · UniProt · InterPro · NCBI QBlast · SWISS-MODEL (opt-in)
+                     └─ servizi remoti: RCSB · UniProt · InterPro · NCBI QBlast · AlphaFold DB (EBI) · SWISS-MODEL (opt-in)
   /data     ◀─ bind mount  cartella data/ (chiavetta, cartella o server): viaggia con BioLoom
   /scratch  ◀─ volume      lavoro dei job e file temporanei (veloce, svuotato a ogni avvio)
   /cache    ◀─ volume      indici ricostruibili di questo computer (MMseqs2)
@@ -96,8 +96,8 @@ data/
 | Pacchetto | Contenuto |
 |---|---|
 | `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi) |
-| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL) |
-| `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2), `remote` (client HTTP), `tools` (rilevamento strumenti, preambolo di licenza) |
+| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file) |
+| `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB), `remote` (client HTTP), `tools` (rilevamento strumenti, preambolo di licenza) |
 | `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione) |
 | `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases` oltre a sistema, progetti, calcoli, job) |
 
@@ -358,7 +358,69 @@ Il voto A–D non cambia: `consensus` è un campo in più del rapporto di qualit
 - **BLAST+ locale**: `blastp` contro `data/databases/pdbaa` (scaricabile e aggiornabile da NCBI con un job).
 - **MMseqs2 locale**: `easy-search -s 7.5` sul database creato da pdbaa (`blastdbcmd` → `createdb`), con
   l'indice locale se presente.
-- Template consigliato: massimo identità × copertura, a parità miglior risoluzione.
+- **AlphaFold DB** (modelli predetti, vedi [sotto](#modelli-alphafold-db)): accessione UniProt indicata, oppure
+  proteine Swiss-Prot più simili trovate con NCBI QBlast.
+- Template consigliato: massimo identità × copertura; a parità, una struttura sperimentale prima di un modello
+  predetto, poi la miglior risoluzione, poi il pLDDT medio più alto. Un modello AlphaFold è un'ipotesi e non un dato:
+  vince solo se allinea meglio il bersaglio.
+
+### Modelli AlphaFold DB
+
+Per le proteine senza struttura sperimentale omologa un modello di AlphaFold DB (EBI) fa da template o da
+riferimento. È sempre segnato come **modello predetto, non struttura sperimentale**.
+
+- **Client** (`engines/remote.py`): `GET https://alphafold.ebi.ac.uk/api/prediction/{accessione}`, con l'accessione
+  controllata dalla regex ufficiale di UniProtKB (isoforme escluse) prima di ogni richiesta. Il parser è tollerante:
+  identificativo da `entryId` o `modelEntityId`, versione da `latestVersion`, dagli URL (`_vN`) o da `allVersions`,
+  intervallo da `uniprotStart/End` o `sequenceStart/End`, sequenza del frammento anche ritagliata dalla sequenza
+  UniProt intera, pLDDT medio da `globalMetricValue` (0–100, altrimenti nullo). Le voci senza id `AF-<ACC>-F<n>`
+  (complessi) si scartano; a parità di id resta la versione più recente. Risposte in cache 7 giorni
+  (`data/cache/alphafold`, come UniProt), nuovi tentativi sui 5xx, 404 o nessuna voce = `alphafold_not_found`
+  ("nessun modello per l'accessione…", per esempio proteine oltre 2700 residui, escluse da AlphaFold DB). Download
+  del PDB, oppure del mmCIF se il PDB manca, solo da URL `https://alphafold.ebi.ac.uk/files/…` e con controllo che
+  il file contenga coordinate (non una pagina d'errore).
+- **Libreria** (`TemplateLibrary.fetch_alphafold`, `POST /api/templates/alphafold` con `{"accession"}`, anche
+  `AF-<ACC>-F2` per i frammenti delle proteine lunghe): id `AF-<ACC>-F<n>` (compatibile con `normalize_id`), file
+  originale intatto (HEADER/TITLE/REMARK di AlphaFold e pLDDT nella colonna B-factor), meta con `source: "alphafold"`,
+  `predicted: true`, `note`, `plddt_mean`, `plddt_fractions` (dal file) e `alphafold` (versione, frammento,
+  intervallo UniProt, gene, organismo, URL del PAE). Un modello già in libreria non genera richieste. Anche un file di
+  AlphaFold caricato dall'utente diventa `predicted`, ma solo con segni certi nell'header (TITLE "ALPHAFOLD …
+  PREDICTION" senza EXPDTA, oppure ModelCIF con `_ma_qa_metric` e il nome AlphaFold): i B-factor di una struttura
+  sperimentale non vanno mai presi per pLDDT. I template registrati prima di questa versione si riconoscono
+  dall'header quando servono.
+- **Motore `alphafold`** (`engines/search.py`): AlphaFold DB non ha una ricerca per sequenza.
+  - Con l'accessione (`uniprot` di `/api/search`, precompilato dall'interfaccia per le sequenze importate da UniProt;
+    nella pipeline dall'intestazione FASTA `sp|ACC|NOME`) si usano i modelli di quell'accessione.
+  - Senza, NCBI QBlast su `swissprot` (`ncbi_blast(database="swissprot")`); le accessioni vengono da `sp|P0CG48.1|…`
+    o dall'accessione NCBI con versione (`P0CG48.1`), nell'ordine di BLAST e senza ripetizioni, e si prendono i
+    modelli delle prime 10.
+  - Per ogni modello: Smith-Waterman (`align.pairwise`, BLOSUM62, gap 11/1) del bersaglio sulla sequenza del modello;
+    identità e positivi sulla lunghezza dell'allineamento, copertura = tratto del bersaglio allineato, come gli altri
+    motori. E-value di BLAST se l'accessione viene da lì, altrimenti Karlin-Altschul sul solo confronto a coppie
+    (indicativo). Hit con `source: "alphafold"`, `predicted`, `plddt`, `template_id = pdb_id = AF-<ACC>-F<n>`, catena A.
+  - Cache dei calcoli con il TTL dei motori remoti (7 giorni); l'accessione entra nella chiave solo per questo
+    motore (le chiavi degli altri non cambiano). Un 404 di AlphaFold DB è un esito; un errore di EBI rende il
+    risultato parziale e non va in cache.
+  - Nella pipeline (`template_mode: auto`) funziona come gli altri: il modello scelto si scarica nella libreria
+    prima della modellazione (`_prepare_templates` scarica da RCSB i codici di 4 caratteri e da AlphaFold DB gli id
+    `AF-…`).
+- **Ritaglio per pLDDT** (`domain/plddt.py`, `modeller.prepare_template`): per i template predetti, opzioni di
+  modellazione `plddt_trim` (predefinita accesa) e `plddt_min` (predefinita 70, 0–100), anche nella pipeline. Il
+  pLDDT è il B-factor del C-alfa. Fasce di AlphaFold DB (Tunyasuvunakool et al., Nature 596:590, 2021), estremo
+  inferiore compreso: ≥ 90 molto alta, 70–90 confidente, 50–70 bassa, < 50 molto bassa (spesso disordine). Sotto 70
+  lo scheletro non è affidabile e, come template, trasferirebbe vincoli su conformazioni non predette con confidenza.
+  - Si tolgono i residui con pLDDT < soglia; il template preparato, la sua sequenza e primo/ultimo residuo sono
+    quelli ritagliati, con i record descrittivi di AlphaFold e una riga `REMARK 999 BIOLOOM PLDDT_TRIM`.
+  - Minimo 30 residui rimasti (`plddt_too_few`): circa la dimensione dei più piccoli domini che si ripiegano da soli
+    (HP35 della villina, dominio WW, zinc finger C2H2); sotto, il template è un frammento e align2d non è affidabile.
+  - **Allineamento automatico**: MODELLER legge il template ritagliato, quindi i residui tolti sono gap del template.
+  - **PIR dell'utente** (`_normalize_pir`): una riga scritta sul modello completo viene riportata sul ritaglio (residui
+    tolti → gap, intervallo al primo/ultimo residuo rimasto, colonne di soli gap eliminate); una riga già ritagliata
+    resta com'è; una riga diversa da entrambe è un errore chiaro. `align2d` (Editor PIR) allinea sul modello intero.
+  - Log ("rimossi 11 residui con pLDDT < 70 (1–5:A, 71–76:A), restano 65 di 76"), risultato (`templates[].plddt`,
+    `plddt_removed`, avviso "modello predetto"), `REMARK 999 BIOLOOM TEMPLATE … ALPHAFOLD PLDDT<70 REMOVED 11` nel
+    modello e, nella pipeline, `template_predicted`/`plddt_removed` nelle metriche dell'elemento.
+  - Le strutture sperimentali non si ritagliano mai.
 
 ### Cache dei calcoli (`core/cache.py`)
 
@@ -374,13 +436,14 @@ ricerche. Il pairwise è istantaneo e non passa dalla cache.
 
   | Operazione | Input e parametri | Timbro |
   |---|---|---|
-  | ricerca | sequenza (maiuscole, senza spazi), motore, E-value, risultati massimi, taxid (solo NCBI) | BLAST+ e MMseqs2: dimensione e data di tutti i file del database (`pdbaa.*`, `pdbaa_h*`), eseguibile (percorso, dimensione, data), uso dell'indice veloce MMseqs2 |
+  | ricerca | sequenza (maiuscole, senza spazi), motore, E-value, risultati massimi, taxid (solo NCBI), accessione UniProt (solo AlphaFold DB) | BLAST+ e MMseqs2: dimensione e data di tutti i file del database (`pdbaa.*`, `pdbaa_h*`), eseguibile (percorso, dimensione, data), uso dell'indice veloce MMseqs2 |
   | multiplo | nomi e sequenze nell'ordine dato, tipo (proteina/acido nucleico), programma effettivo (`auto` risolto) | eseguibile di Clustal Omega/MAFFT/MUSCLE |
   | strutturale | SHA-256 del contenuto e formato dei due file, catene, programma effettivo | eseguibile di TM-align/US-align |
 
   Il nome delle strutture non entra nella chiave (un file caricato di nuovo ha un prefisso casuale): gli `ids`
   del risultato si riapplicano dopo la lettura.
-- **Scadenza:** 7 giorni per RCSB e NCBI (il PDB cambia ogni settimana); per i motori locali decide il timbro del
+- **Scadenza:** 7 giorni per RCSB, NCBI e AlphaFold DB (il PDB cambia ogni settimana, Swiss-Prot e AlphaFold DB con
+  le loro versioni); per i motori locali decide il timbro del
   database e la pulizia a 30 giorni. Una voce "dal futuro" di oltre un giorno (orologio di un altro computer) non
   vale.
 - **Valore:** risultato del motore e testo dei file che il calcolo ha scritto nella cartella di lavoro
@@ -444,11 +507,11 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 |---|---|
 | Panoramica | flusso guidato, esempi, motori disponibili, risorse del computer |
 | Sequenze | import FASTA/UniProt, proprietà ProtParam, predizione GOR, annotazioni UniProt/InterPro/PDB |
-| Ricerca template | RCSB/NCBI/locale, tabella ordinabile, allineamento dell'hit, download, "modella con"; nota "dalla cache (data)" e ricalcolo ignorando la cache |
-| Libreria template | download RCSB, upload PDB/mmCIF, catene, residui mancanti, ligandi, DSSP, 3D |
+| Ricerca template | RCSB/NCBI/locale/AlphaFold DB (accessione UniProt facoltativa, precompilata dalle sequenze UniProt), tabella ordinabile, allineamento dell'hit, download, "modella con"; badge "modello predetto" e pLDDT; nota "dalla cache (data)" e ricalcolo ignorando la cache |
+| Libreria template | download RCSB e "Da AlphaFold DB (UniProt)", upload PDB/mmCIF, catene, residui mancanti, ligandi, DSSP, 3D; badge "AlphaFold", pLDDT medio e fasce di confidenza |
 | Allineamenti | pairwise, multiplo, strutturale; esportazione FASTA/Clustal/PIR; salvataggio nel progetto; cache per multiplo e strutturale |
 | Editor PIR | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
-| Modellazione | input automatico o da PIR, parametri, vincoli, loop; modelli, 3D, PyMOL, archivio |
+| Modellazione | input automatico o da PIR, parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); modelli, 3D, PyMOL, archivio |
 | Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi |
 | Pipeline batch | multi-FASTA → modelli validati, filtro zona crepuscolare, tabella paginata, CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti) |
 | Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate |
@@ -474,6 +537,10 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 - **CSV esportati:** con neutralizzazione delle formule.
 - **Privacy:** le coordinate lasciano il computer solo per QMEAN su SWISS-MODEL, scelto o come fallback, e
   sempre con il consenso esplicito all'invio. QMEAN locale, BLAST+ e MMseqs2 non usano la rete.
+- **AlphaFold DB:** l'importazione nella libreria e il motore `alphafold` inviano a EBI (alphafold.ebi.ac.uk) solo
+  l'accessione UniProt, mai la sequenza né le coordinate. Senza accessione il motore invia la sequenza a NCBI
+  (QBlast su Swiss-Prot), come il motore `ncbi`; nella pipeline ciò vale per le sequenze senza intestazione FASTA di
+  UniProt. I file si scaricano solo da URL `https://alphafold.ebi.ac.uk/files/…`, qualunque URL contenga la risposta.
 - **File caricati:** sequenze e allineamenti (`/api/files/sequences`) vengono solo letti e non salvati. Le
   strutture (`/api/files/structure`) vanno tra gli upload, validate e soggette alla pulizia automatica.
 
@@ -501,6 +568,13 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
       MODELLER simulati;
     - riconoscimento del pLDDT (intestazione AlphaFold sintetica, nome di AlphaFold DB, file normale, valori fuori
       scala);
+  - AlphaFold DB (`test_alphafold.py`, EBI simulato con `httpx.MockTransport`, NCBI con monkeypatch): parser della
+    risposta (campi mancanti, più voci e frammenti, versioni, URL estranei), 404, accessioni non valide senza
+    richieste, cache e nuovi tentativi, download PDB/mmCIF, libreria (id, meta, record originali, frammenti, file
+    caricati), motore con accessione e con BLAST simulato (estrazione delle accessioni, identità 96,1% e copertura
+    su 1UBQ contro l'ubiquitina di lievito), cache dei calcoli, `best_template` a parità, ritaglio per pLDDT su 1UBQ
+    con B-factor riscritti (11 residui tolti, soglia esclusa, minimo 30), PIR riportato sul ritaglio, pipeline e,
+    con MODELLER, modellazione e pipeline con template ritagliato;
   - cache dei calcoli (`test_compute_cache.py`): riscontri senza rieseguire i motori (simulati), invalidazione per
     parametri, sequenza, timbro del database o dello strumento, scadenza, file corrotti, job falliti e annullati,
     riuso nella pipeline e scritture concorrenti;
@@ -517,6 +591,8 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - decodifica dei file, chiave MODELLER da file, vincoli da e verso file;
   - scale di colore e legende (`colorscale.test.ts`), conversione del rapporto nei valori per residuo, pLDDT
     compreso (`residueColoring.test.ts`), confidenza degli allineamenti (`alignConfidence.test.ts`).
+  - AlphaFold (`alphafold.test.ts`): accessioni e id `AF-…`, fasce di pLDDT, quando mostrare la soglia, riepilogo del
+    ritaglio.
 - **Esecuzione:** `scripts/test.sh` (ruff, pytest nell'immagine con MODELLER reale, typecheck e vitest). La CI
   (`.github/workflows/ci.yml`) esegue gli stessi controlli: test rapidi senza strumenti esterni, frontend, e
   immagine completa con i test al suo interno.
