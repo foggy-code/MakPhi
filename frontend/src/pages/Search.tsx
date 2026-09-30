@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { JobSummary, SearchEngine, SearchHit, SearchResult, Sequence, Settings } from "../api/types";
+import type { JobSummary, SearchEngine, SearchHit, SearchResult, Sequence, Settings, SuggestedTemplate } from "../api/types";
 import { CachedBadge, RecomputeOption } from "../components/CacheOption";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
@@ -13,8 +13,26 @@ import {
 import { useProject, useToast } from "../lib/context";
 import { fmtEvalue, fmtNum, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
+import { modelingLink, rankTone, rankTooltip, reasonLine, sortedReasons, suggestedRoles, suggestionTemplates } from "../lib/templateRank";
 
-type SortKey = "evalue" | "identity" | "coverage" | "bitscore" | "resolution";
+type SortKey = "rank_score" | "evalue" | "identity" | "coverage" | "bitscore" | "resolution";
+
+/** Motivazioni del punteggio di un template (riga espansa della tabella). */
+function RankReasons({ hit }: { hit: SearchHit }) {
+  if (hit.rank_score === undefined) return <p className="tiny muted">Punteggio non disponibile: ricerca di una versione precedente, rilanciala per vederlo.</p>;
+  return (
+    <div className="stack-sm">
+      <div className="small">
+        <b>Punteggio {fmtNum(hit.rank_score, 1)}/100</b> (fascia {hit.rank_band}){hit.rank_twilight && <> · <Badge tone="warn" title="Identità sotto la curva di Rost 1999 per la lunghezza allineata">zona crepuscolare</Badge></>}
+      </div>
+      <ul className="tiny" style={{ margin: 0, paddingLeft: 18 }}>
+        {sortedReasons(hit.rank_reasons).map((r) => (
+          <li key={r.key} className={r.score === null ? "muted" : undefined}>{reasonLine(r)}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 function HitAlignment({ hit }: { hit: SearchHit }) {
   const mid = hit.query_aligned
@@ -72,7 +90,9 @@ export default function Search() {
     setUniprot(autoAcc.current?.accession ?? "");
   };
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "evalue", dir: 1 });
+  // predefinito: punteggio composito decrescente (i risultati delle versioni precedenti, senza punteggio, restano
+  // nell'ordine del motore)
+  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "rank_score", dir: -1 });
   const [filter, setFilter] = useState("");
   const [fetching, setFetching] = useState<string | null>(null);
   const { data: library, reload: reloadLibrary } = useAsync(() => api.templates(), []);
@@ -121,6 +141,8 @@ export default function Search() {
     });
   }, [result, filter, sort]);
   const inLibrary = new Set(library?.map((t) => t.id) ?? []);
+  const roles = useMemo(() => (result ? suggestedRoles(result) : new Map<string, SuggestedTemplate | null>()), [result]);
+  const suggestedLink = result ? modelingLink(result, suggestionTemplates(result)) : "";
 
   const addToLibrary = async (hit: SearchHit) => {
     setFetching(hit.pdb_id);
@@ -218,6 +240,32 @@ export default function Search() {
               {result.engine === "alphafold" && !!result.notes?.length && result.hits.length > 0 && (
                 <div className="stack-sm" style={{ marginBottom: 8 }}>{result.notes.map((n, i) => <Alert key={i} tone="warn">{n}</Alert>)}</div>
               )}
+              {!!result.suggested?.templates.length && (
+                <div className="stack-sm" style={{ marginBottom: 10, padding: "8px 10px", borderRadius: 8, background: "var(--ok-soft)" }}>
+                  <div className="row">
+                    <b className="small">Template consigliati</b>
+                    <span className="tiny muted">
+                      copertura complessiva {fmtNum(result.suggested.coverage, 1)}% ({result.suggested.covered_residues} di {result.suggested.query_length} residui) · al massimo {result.suggested.max_templates}
+                    </span>
+                    <button className="btn btn-sm btn-primary right" disabled={!suggestedLink} onClick={() => navigate(suggestedLink)} title="Apre la Modellazione con la sequenza e i template consigliati">
+                      <Icon name="cube" size={13} /> Usa i consigliati per la modellazione
+                    </button>
+                  </div>
+                  <ul className="tiny" style={{ margin: 0, paddingLeft: 18 }}>
+                    {result.suggested.templates.map((t) => (
+                      <li key={t.template_id}><b>{t.template_id}</b> ({t.role}, punteggio {fmtNum(t.rank_score, 1)}): {t.reason}</li>
+                    ))}
+                  </ul>
+                  {(result.suggested.excluded.length > 0 || result.suggested.not_examined > 0) && (
+                    <details className="tiny">
+                      <summary className="muted">Candidati esclusi ({result.suggested.excluded.length}{result.suggested.not_examined ? `, più ${result.suggested.not_examined} non esaminati: numero massimo raggiunto` : ""})</summary>
+                      <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                        {result.suggested.excluded.map((e) => <li key={e.template_id}><b>{e.template_id}</b>: {e.reason}</li>)}
+                      </ul>
+                    </details>
+                  )}
+                </div>
+              )}
               {!hits.length ? (
                 result.hits.length ? <Empty icon="search" title="Nessun template corrisponde al filtro" />
                   : result.engine === "alphafold" ? (
@@ -234,6 +282,7 @@ export default function Search() {
                       <tr>
                         <th>Template</th>
                         <th>Descrizione</th>
+                        {header("rank_score", "Punteggio")}
                         {header("identity", "Identità")}
                         {header("coverage", "Copertura")}
                         {header("evalue", "E-value")}
@@ -244,10 +293,12 @@ export default function Search() {
                     <tbody>
                       {hits.map((h) => (
                         <Fragment key={h.template_id}>
-                          <tr className="clickable" onClick={() => setExpanded(expanded === h.template_id ? null : h.template_id)}>
+                          <tr className="clickable" style={roles.has(h.template_id) ? { background: "var(--ok-soft)" } : undefined} onClick={() => setExpanded(expanded === h.template_id ? null : h.template_id)}>
                             <td className="nowrap">
                               <b>{h.template_id}</b>{" "}
-                              {h.template_id === result.best && <Badge tone="ok" title="Massimo identità × copertura">consigliato</Badge>}
+                              {roles.has(h.template_id) && (roles.get(h.template_id)?.role === "complementare"
+                                ? <Badge tone="info" title={roles.get(h.template_id)?.reason}>complementare</Badge>
+                                : <Badge tone="ok" title={roles.get(h.template_id)?.reason ?? "Miglior punteggio"}>consigliato</Badge>)}
                               {inLibrary.has(h.pdb_id) && <Badge tone="accent">in libreria</Badge>}
                               {h.predicted && (
                                 <div className="row" style={{ gap: 4, marginTop: 3 }}>
@@ -259,6 +310,10 @@ export default function Search() {
                             <td className="small" style={{ maxWidth: 320 }}>
                               <div className="ellipsis">{h.title || h.description}</div>
                               <div className="tiny muted ellipsis">{h.method}{h.organism ? ` · ${h.organism}` : ""}</div>
+                            </td>
+                            <td className="num nowrap" title={rankTooltip(h)}>
+                              {h.rank_score !== undefined ? <Badge tone={rankTone(h.rank_score)}>{fmtNum(h.rank_score, 1)}</Badge> : "—"}
+                              {h.rank_twilight && <div className="tiny" style={{ color: "var(--warn)" }}>crepuscolare</div>}
                             </td>
                             <td className="num"><BarCell value={h.identity} /></td>
                             <td className="num">
@@ -284,7 +339,9 @@ export default function Search() {
                           </tr>
                           {expanded === h.template_id && (
                             <tr>
-                              <td colSpan={7} style={{ background: "var(--panel-2)" }}><HitAlignment hit={h} /></td>
+                              <td colSpan={8} style={{ background: "var(--panel-2)" }}>
+                                <div className="stack-sm"><RankReasons hit={h} /><HitAlignment hit={h} /></div>
+                              </td>
                             </tr>
                           )}
                         </Fragment>
@@ -294,7 +351,10 @@ export default function Search() {
                 </div>
               )}
               <p className="tiny muted" style={{ marginTop: 8 }}>
-                Identità &lt; 25% o copertura &lt; 40%: zona crepuscolare, modello a basso affidabilità. L'E-value della ricerca RCSB è stimato con la statistica di Karlin-Altschul.
+                Punteggio 0–100: media pesata di identità (rispetto alla curva della zona crepuscolare di Rost 1999 per la lunghezza allineata), copertura, E-value, risoluzione o pLDDT, R-free, metodo, lacune e data; ligandi e stato oligomerico sono informativi.
+                Fasce: buona ≥ 70, intermedia 40–70, scarsa &lt; 40. Clic su una riga per le motivazioni e l'allineamento.
+                I consigliati sono il migliore più i template complementari che coprono almeno 10 residui nuovi o migliorano l'identità locale, senza ridondanze.
+                L'E-value della ricerca RCSB è stimato con la statistica di Karlin-Altschul.
               </p>
               {result.engine === "alphafold" && (
                 <p className="tiny muted">

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { JobItemsEvent, JobSummary, PipelinePage, PipelineResult, ResumeScope, SearchEngine, Sequence, TemplateItem, TemplateRef } from "../api/types";
+import type { JobItemsEvent, JobSummary, PipelinePage, PipelineResult, ResumeScope, SearchEngine, Sequence, TemplateItem, TemplateMode, TemplateRef } from "../api/types";
 import { RecomputeOption } from "../components/CacheOption";
 import { SequenceFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
@@ -15,6 +15,7 @@ import { useProject, useToast } from "../lib/context";
 import { fmtDate, fmtEvalue, fmtNum, isActive, relTime, searchCacheHitsLabel, STATUS_LABEL } from "../lib/format";
 import { recordsToFasta } from "../lib/files";
 import { useAsync, useInterval, useJob, useJobsFeed, useLiveJobList, useThrottled } from "../lib/hooks";
+import { clampMaxTemplates, itemTemplates, itemTemplatesTooltip, MAX_TEMPLATES_DEFAULT, MAX_TEMPLATES_MAX, MAX_TEMPLATES_MIN } from "../lib/templateRank";
 
 const SORTS: { key: string; label: string }[] = [
   { key: "idx", label: "#" },
@@ -98,8 +99,11 @@ function Items({ jobId, running, cacheHits }: { jobId: string; running: boolean;
                     <StatusBadge status={it.status} />
                     {it.status !== "completed" && it.stage && <div className="tiny muted ellipsis" style={{ maxWidth: 180 }} title={it.error ?? it.stage}>{it.error ?? it.stage}</div>}
                   </td>
-                  <td className="nowrap">
-                    {it.template ?? "—"} {it.twilight ? <Badge tone="warn" title="Identità o copertura sotto soglia">crepuscolare</Badge> : null}
+                  <td className="nowrap" title={itemTemplatesTooltip(it)}>
+                    {itemTemplates(it).length ? itemTemplates(it).map((t, i) => (
+                      <span key={t.id}>{i > 0 && <br />}{t.id}{t.role === "complementare" && <span className="tiny muted"> (compl.)</span>}</span>
+                    )) : "—"}{" "}
+                    {it.twilight ? <Badge tone="warn" title="Identità o copertura sotto soglia">crepuscolare</Badge> : null}
                     {(it.template_source === "alphafold" || it.metrics?.template_predicted) && (
                       <Badge tone="warn" title={`Modello predetto da AlphaFold DB, non struttura sperimentale${it.metrics?.plddt_removed ? `: tolti ${it.metrics.plddt_removed} residui a basso pLDDT` : ""}`}>AlphaFold</Badge>
                     )}
@@ -144,7 +148,8 @@ export default function Pipeline() {
   const jobId = params.get("job");
   const [name, setName] = useState("");
   const [fasta, setFasta] = useState("");
-  const [mode, setMode] = useState<"auto" | "fixed">("auto");
+  const [mode, setMode] = useState<TemplateMode>("auto");
+  const [maxTemplates, setMaxTemplates] = useState(MAX_TEMPLATES_DEFAULT);
   const [templates, setTemplates] = useState<TemplateRef[]>([]);
   const [engine, setEngine] = useState<SearchEngine>("rcsb");
   const [evalue, setEvalue] = useState(0.001);
@@ -162,7 +167,7 @@ export default function Pipeline() {
   const { data: projectSeqs } = useAsync<Sequence[]>(() => (projectId ? api.sequences(projectId) : Promise.resolve([])), [projectId]);
   const { data: library } = useAsync<TemplateItem[]>(() => api.templates(), [templates.map((t) => t.id).join(",")]);
   // la soglia pLDDT serve solo se i template possono essere modelli AlphaFold
-  const predictedPossible = mode === "auto" ? engine === "alphafold" : hasPredictedTemplate(templates, library);
+  const predictedPossible = mode !== "fixed" ? engine === "alphafold" : hasPredictedTemplate(templates, library);
   const { data: recent, reload: reloadRecent, setData: setRecent } = useAsync<JobSummary[]>(() => api.jobs({ project_id: projectId ?? undefined, kind: "pipeline", limit: 10 }), [projectId, jobId]);
   // stato delle pipeline recenti dal flusso dell'elenco (anche quelle avviate da un'altra scheda)
   useLiveJobList(recent, setRecent, reloadRecent, (j) => j.kind === "pipeline" && (!projectId || j.project_id === projectId));
@@ -193,6 +198,7 @@ export default function Pipeline() {
         name: name || undefined,
         fasta,
         template_mode: mode,
+        max_templates: clampMaxTemplates(maxTemplates),
         templates,
         engine,
         evalue,
@@ -229,10 +235,22 @@ export default function Pipeline() {
                 <span className="tiny muted">multi-FASTA, GenBank, UniProt… (anche .gz)</span>
               </div>
               <Field label="Template">
-                <Segmented value={mode} onChange={setMode} options={[{ value: "auto", label: "Ricerca automatica" }, { value: "fixed", label: "Template fisso" }]} />
+                <Segmented value={mode} onChange={setMode} options={[{ value: "auto", label: "Ricerca automatica" }, { value: "multi", label: "Più template complementari" }, { value: "fixed", label: "Template fisso" }]} />
               </Field>
-              {mode === "auto" ? (
+              {mode !== "fixed" ? (
                 <>
+                  {mode === "multi" && (
+                    <>
+                      <Field label={`Template al massimo per sequenza (${MAX_TEMPLATES_MIN}–${MAX_TEMPLATES_MAX})`}>
+                        <input className="input" type="number" min={MAX_TEMPLATES_MIN} max={MAX_TEMPLATES_MAX} value={maxTemplates} onChange={(e) => setMaxTemplates(Number(e.target.value))} onBlur={() => setMaxTemplates(clampMaxTemplates(maxTemplates))} />
+                      </Field>
+                      <span className="tiny muted">
+                        Il primo è il template con il punteggio migliore; gli altri si aggiungono solo se coprono almeno 10 residui del bersaglio non coperti o migliorano l'identità locale, e se non sono quasi identici a uno già scelto.
+                        MODELLER li usa insieme: allineamento strutturale dei template (salign) oppure, se questo ne sposta uno rispetto al bersaglio, l'allineamento di ogni template sul bersaglio (la scelta è nel log).
+                        La copertura della tabella è quella complessiva; le motivazioni sono nel log e nel suggerimento della colonna Template.
+                      </span>
+                    </>
+                  )}
                   <div className="grid grid-2">
                     <Field label="Motore">
                       <select className="input" value={engine} onChange={(e) => setEngine(e.target.value as SearchEngine)}>

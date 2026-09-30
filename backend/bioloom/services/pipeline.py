@@ -31,12 +31,15 @@ from ..core.errors import AppError, Conflict, NotFound
 from ..core.events import ITEM
 from ..core.jobs import REQUEUABLE, JobCancelled, JobContext, JobManager, requeue_error
 from ..core.storage import remove_tree, safe_join
-from ..domain import sequences
+from ..domain import sequences, template_rank
 from ..domain.sequences import SeqRecord
 from ..engines import search
 from .compute import ComputeService, PreparedTemplates
 from .reports import ReportService
 
+# Scelta dei template: "auto" = il migliore della ricerca, "fixed" = scelti dall'utente, "multi" = fino a
+# `max_templates` template complementari della ricerca (domain/template_rank.select_complementary)
+TEMPLATE_MODES = ("auto", "fixed", "multi")
 TERMINAL_ITEM = {"completed", "failed", "cancelled", "filtered"}
 # Elementi che una ripresa rielabora, per ambito: "incomplete" = tutto ciò che non è completato o filtrato
 # (falliti, annullati, interrotti, in corso o in attesa); "failed" = solo i falliti.
@@ -78,8 +81,12 @@ class PipelineService:
 
         modeller.parse_options(opts)  # validazione anticipata
         mode = params.get("template_mode", "auto")
+        if mode not in TEMPLATE_MODES:
+            raise AppError(f"Modalità dei template sconosciuta: '{mode}' (ammesse: {', '.join(TEMPLATE_MODES)}).")
         if mode == "fixed" and not params.get("templates"):
             raise AppError("In modalità 'template fisso' seleziona almeno un template.")
+        if mode == "multi":
+            max_templates(params)  # errore subito, prima della coda
         stored = {**params, "sequences": [{"name": r.name, "length": len(r.sequence)} for r in records]}
 
         def prepare(job_id: str, _workdir: Path) -> None:
@@ -329,10 +336,12 @@ class PipelineService:
         il salvataggio dei file: lo stato 'completed' con modello e metriche, oppure {} per un elemento
         filtrato (esito già registrato: senza modello, i suoi file non sono essenziali)."""
         job_id, idx, name = ctx.job_id, item["idx"], item["name"]
-        # provenienza della ricerca (cache dei calcoli), conservata anche nelle metriche finali
+        # provenienza della ricerca (cache dei calcoli) e template scelti (modalità multi), conservati anche nelle
+        # metriche finali
         search_info: dict = {}
+        mode = p.get("template_mode", "auto")
         try:
-            if p.get("template_mode", "auto") == "fixed":
+            if mode == "fixed":
                 templates = p.get("templates") or []
                 self._update(job_id, idx, template=",".join(t.get("id", "") for t in templates),
                              template_source="scelto dall'utente")
@@ -357,19 +366,42 @@ class PipelineService:
                                  finished_at=now_iso())
                     return None
                 tw = p.get("twilight") or {}
-                twilight = best["identity"] < float(tw.get("identity", 25)) or best["coverage"] < float(tw.get("coverage", 40))
-                self._update(job_id, idx, template=best["template_id"], template_source=result["engine"],
-                             identity=best["identity"], coverage=best["coverage"], evalue=best["evalue"],
-                             twilight=int(twilight))
+                chosen = [best]
+                coverage = best["coverage"]
+                if mode == "multi":
+                    # template complementari: identità del principale, copertura dell'insieme (unione)
+                    selection = template_rank.select_complementary(
+                        result["hits"], result.get("query_length") or len(item["sequence"]),
+                        max_templates=max_templates(p))
+                    by_id = {h.get("template_id"): h for h in result["hits"]}
+                    chosen = [by_id[t["template_id"]] for t in selection["templates"] if t["template_id"] in by_id]
+                    coverage = selection["coverage"]
+                    search_info["templates"] = [
+                        {k: t.get(k) for k in ("template_id", "role", "reason", "identity", "coverage", "rank_score",
+                                               "predicted")} for t in selection["templates"]]
+                    search_info["combined_coverage"] = selection["coverage"]
+                    search_info["excluded_templates"] = len(selection["excluded"]) + selection["not_examined"]
+                    for t in selection["templates"]:
+                        sub.log(f"Template {t['role']} {t['template_id']} (punteggio {t['rank_score']}): {t['reason']}")
+                    for e in selection["excluded"][:10]:
+                        sub.log(f"Escluso {e['template_id']}: {e['reason']}")
+                twilight = best["identity"] < float(tw.get("identity", 25)) or coverage < float(tw.get("coverage", 40))
+                self._update(job_id, idx, template=",".join(h["template_id"] for h in chosen),
+                             template_source=result["engine"], identity=best["identity"], coverage=coverage,
+                             evalue=best["evalue"], twilight=int(twilight),
+                             **({"metrics": search_info} if search_info else {}))
                 sub.log(f"Template scelto {best['template_id']} (identità {best['identity']}%, "
                         f"copertura {best['coverage']}%"
                         + (f"; modello predetto AlphaFold, pLDDT medio {best.get('plddt')}" if best.get("predicted")
-                           else "") + ")")
+                           else "")
+                        + (f"; punteggio {best['rank_score']}" if best.get("rank_score") is not None else "") + ")"
+                        + (f" e {len(chosen) - 1} complementari, copertura complessiva {coverage}%"
+                           if len(chosen) > 1 else ""))
                 if twilight and tw.get("filter", False):
                     self._update(job_id, idx, status="filtered", stage="Zona crepuscolare: saltata",
                                  error="Identità o copertura sotto soglia (filtro attivo).", finished_at=now_iso())
                     return {}
-                templates = [{"id": best["pdb_id"], "chains": [best["chain"]]}]
+                templates = [{"id": h["pdb_id"], "chains": [h["chain"]]} for h in chosen]
             ctx.check()
             self._update(job_id, idx, status="modeling", stage="Modellazione")
             quality_mode = "best" if p.get("quality", True) else "none"
@@ -507,6 +539,20 @@ def _zip_stem(name: str, idx: int, used: set[str]) -> str:
 
 def _seqs(n: int) -> str:
     return f"{n} sequenza" if n == 1 else f"{n} sequenze"
+
+
+def max_templates(params: dict) -> int:
+    """Template al massimo per sequenza nella modalità multi: da 2 a `template_rank.MAX_TEMPLATES_LIMIT`,
+    predefinito `template_rank.MAX_TEMPLATES` (3)."""
+    value = params.get("max_templates", template_rank.MAX_TEMPLATES)
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = -1
+    if isinstance(value, bool) or not 2 <= number <= template_rank.MAX_TEMPLATES_LIMIT:
+        raise AppError(f"Numero di template complementari non valido: {value!r} (da 2 a "
+                       f"{template_rank.MAX_TEMPLATES_LIMIT}).")
+    return number
 
 
 def effective_parallel(params: dict, workers: int) -> int:

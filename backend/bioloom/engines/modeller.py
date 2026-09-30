@@ -213,36 +213,65 @@ def _header() -> str:
 
 
 def build_alignment_script(templates: list[dict], target_code: str) -> str:
-    """align2d (un template) oppure salign strutturale dei template + allineamento del bersaglio."""
+    """align2d (un template) oppure, con più template, salign strutturale dei template + allineamento del bersaglio
+    sul loro profilo (`SALIGN_FILE`) e align2d del bersaglio su ogni template (`pair_file`). Con più template
+    l'allineamento definitivo (`alignment.ali`) lo sceglie BioLoom fra i due (`domain/multitemplate.choose`)."""
     lines = [_header(), "env = Environ()", "env.io.atom_files_directory = ['.']", "aln = Alignment(env)",
              "mark('stage Lettura dei template')"]
+    segments = []
     for t in templates:
         seg = (f"FIRST:{t['chains'][0]}", f"LAST:{t['chains'][-1]}")
+        segments.append(seg)
         lines.append(f"mdl = Model(env, file={t['file']!r}, model_segment={seg!r})")
         lines.append(f"aln.append_model(mdl, align_codes={t['code']!r}, atom_files={t['file']!r})")
     if len(templates) > 1:
+        # salign può non riuscire con template molto diversi: l'errore si scrive nel log e restano gli align2d
         lines += [
             "mark('stage Allineamento strutturale dei template (salign)')",
-            "aln.salign(rms_cutoff=3.5, normalize_pp_scores=False, rr_file='$(LIB)/as1.sim.mat', overhang=30,",
-            "           gap_penalties_1d=(-450, -50), gap_penalties_3d=(0, 3), gap_gap_score=0, gap_residue_score=0,",
-            "           alignment_type='tree', feature_weights=(1., 0., 0., 0., 1., 0.), improve_alignment=True,",
-            "           fit=True, write_fit=False, output='ALIGNMENT QUALITY')",
-            "block = len(aln)",
-            f"aln.append(file='target.ali', align_codes={target_code!r})",
-            "mark('stage Allineamento del bersaglio sul profilo dei template')",
-            "aln.salign(output='', max_gap_length=20, gap_function=True, alignment_type='PAIRWISE',",
-            "           align_block=block, feature_weights=(1., 0., 0., 0., 0., 0.), overhang=0,",
-            "           gap_penalties_1d=(-450, 0), gap_penalties_2d=(0.35, 1.2, 0.9, 1.2, 0.6, 8.6, 1.2, 0., 0.),",
-            "           similarity_flag=True)",
+            "try:",
+            "    aln.salign(rms_cutoff=3.5, normalize_pp_scores=False, rr_file='$(LIB)/as1.sim.mat', overhang=30,",
+            "               gap_penalties_1d=(-450, -50), gap_penalties_3d=(0, 3), gap_gap_score=0,",
+            "               gap_residue_score=0, alignment_type='tree', feature_weights=(1., 0., 0., 0., 1., 0.),",
+            "               improve_alignment=True, fit=True, write_fit=False, output='ALIGNMENT QUALITY')",
+            "    block = len(aln)",
+            f"    aln.append(file='target.ali', align_codes={target_code!r})",
+            "    mark('stage Allineamento del bersaglio sul profilo dei template')",
+            "    aln.salign(output='', max_gap_length=20, gap_function=True, alignment_type='PAIRWISE',",
+            "               align_block=block, feature_weights=(1., 0., 0., 0., 0., 0.), overhang=0,",
+            "               gap_penalties_1d=(-450, 0), gap_penalties_2d=(0.35, 1.2, 0.9, 1.2, 0.6, 8.6, 1.2, 0., 0.),",
+            "               similarity_flag=True)",
+            f"    aln.write(file={SALIGN_FILE!r}, alignment_format='PIR')",
+            "    aln.write(file='alignment.pap', alignment_format='PAP')",
+            "except Exception as exc:",
+            "    print('salign non riuscito: %s' % exc, flush=True)",
+            "mark('stage Allineamento del bersaglio su ogni template (align2d)')",
         ]
-    else:
-        lines += [f"aln.append(file='target.ali', align_codes={target_code!r})",
-                  "mark('stage Allineamento sequenza-struttura (align2d)')",
-                  "aln.align2d(max_gap_length=50)"]
-    lines += ["aln.write(file='alignment.ali', alignment_format='PIR')",
+        for i, (t, seg) in enumerate(zip(templates, segments)):
+            lines += [
+                "pair = Alignment(env)",
+                f"mdl = Model(env, file={t['file']!r}, model_segment={seg!r})",
+                f"pair.append_model(mdl, align_codes={t['code']!r}, atom_files={t['file']!r})",
+                f"pair.append(file='target.ali', align_codes={target_code!r})",
+                "pair.align2d(max_gap_length=50)",
+                f"pair.write(file={pair_file(i)!r}, alignment_format='PIR')",
+            ]
+        lines.append("mark('stage Allineamenti scritti')")
+        return "\n".join(lines) + "\n"
+    lines += [f"aln.append(file='target.ali', align_codes={target_code!r})",
+              "mark('stage Allineamento sequenza-struttura (align2d)')",
+              "aln.align2d(max_gap_length=50)",
+              "aln.write(file='alignment.ali', alignment_format='PIR')",
               "aln.write(file='alignment.pap', alignment_format='PAP')",
               "mark('stage Allineamento scritto')"]
     return "\n".join(lines) + "\n"
+
+
+# Più template: allineamento di salign e allineamenti a coppie del bersaglio su ogni template (align2d)
+SALIGN_FILE = "alignment_salign.ali"
+
+
+def pair_file(index: int) -> str:
+    return f"alignment_pair_{index + 1}.ali"
 
 
 def build_model_script(knowns: list[str], target_code: str, opts: ModelOptions) -> str:

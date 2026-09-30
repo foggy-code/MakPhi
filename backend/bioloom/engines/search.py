@@ -1,7 +1,8 @@
 """Ricerca di template omologhi: RCSB (default), NCBI BLAST remoto, BLAST+ locale, MMseqs2 locale, AlphaFold DB.
 
 I risultati passano dalla cache dei calcoli (`core/cache.py`): la chiave comprende sequenza, motore e
-parametri e, per i motori locali, il timbro del database e dell'eseguibile.
+parametri e, per i motori locali, il timbro del database e dell'eseguibile. Punteggio composito e motivazioni di
+ogni hit (`domain/template_rank.py`) si calcolano dopo la cache, a ogni lettura.
 
 AlphaFold DB non ha una ricerca per sequenza: il motore `alphafold` usa l'accessione UniProt indicata oppure, senza
 accessione, le proteine di Swiss-Prot più simili trovate con NCBI BLAST remoto, e ne prende i modelli predetti.
@@ -20,6 +21,7 @@ from typing import Optional
 from ..core import cache
 from ..core.errors import AppError, NotFound, RemoteServiceError, ToolUnavailable
 from ..core.jobs import JobContext, default_env
+from ..domain import template_rank
 from ..domain.sequences import SeqRecord
 from . import align, remote, tools
 
@@ -40,6 +42,11 @@ CACHE_TTL = {"rcsb": cache.REMOTE_TTL, "ncbi": cache.REMOTE_TTL, "alphafold": ca
 # EBI ciascuna)
 ALPHAFOLD_ACCESSIONS = 10
 PREDICTED_METHOD = "Modello predetto (AlphaFold DB)"
+# Versione del formato dei risultati nella chiave della cache (motori con i metadati di RCSB): la 2 aggiunge agli hit
+# R-free, data di rilascio, ligandi e stato oligomerico per la scelta ragionata dei template. Le voci scritte prima
+# hanno un'altra chiave e non si leggono più; `_current_format` le scarta comunque anche alla lettura. Il motore
+# alphafold non cambia (i suoi hit non hanno metadati di RCSB) e mantiene le sue voci.
+SEARCH_VERSION = 2
 
 
 _local_cache: Optional[Path] = None
@@ -380,7 +387,7 @@ def search(ctx: JobContext, sequence: str, *, engine: str = "rcsb", evalue: floa
         "indexed": fast is not None,
         "tool": cache.file_stamp(exe),
     }
-    if engine == "alphafold":  # solo qui: le chiavi degli altri motori restano quelle di prima
+    if engine == "alphafold":  # solo qui: le chiavi degli altri motori non dipendono dall'accessione
         descriptor["uniprot"] = uniprot
     outcome = {"complete": True}
 
@@ -431,10 +438,22 @@ def search(ctx: JobContext, sequence: str, *, engine: str = "rcsb", evalue: floa
                     h["method"] = info.get("method", "")
                     h["resolution"] = info.get("resolution")
                     h["title"] = h["title"] or info.get("title", "")
+                    h.update(remote.hit_metadata(info))
+                    if info.get("stale"):
+                        h["metadata_stale"] = True
             except AppError as exc:
                 ctx.log(f"Metadati RCSB non disponibili: {exc.message}")
                 outcome["complete"] = False  # senza metodo e risoluzione: risultato parziale, non va in cache
+        if engine != "alphafold":
+            # metadati di una versione precedente (RCSB non raggiungibile): risultato parziale, non va in cache
+            stale = [h.pop("metadata_stale") for h in hits if "metadata_stale" in h]
+            if stale:
+                ctx.log("Metadati RCSB dalla cache di una versione precedente (senza R-free né stato oligomerico): "
+                        "risultato non salvato nella cache dei calcoli.")
+                outcome["complete"] = False
         out = {"engine": engine, "engine_label": ENGINES[engine], "query_length": len(sequence), "hits": hits}
+        if engine != "alphafold":
+            out["search_version"] = SEARCH_VERSION
         if engine == "alphafold":
             out["uniprot"] = uniprot
             out["engine_label"] = (f"AlphaFold DB, modelli predetti dell'accessione UniProt {uniprot}" if uniprot
@@ -442,17 +461,30 @@ def search(ctx: JobContext, sequence: str, *, engine: str = "rcsb", evalue: floa
             out["notes"] = list(outcome.get("notes") or [])
         return out
 
-    return cache.run_cached(ctx, "search", descriptor, run, use_cache=use_cache, ttl=CACHE_TTL.get(engine),
-                            keep=lambda _result: outcome["complete"])
+    accept = None
+    if engine != "alphafold":
+        # risultati con i metadati della scelta ragionata dei template (R-free, data, ligandi, stato oligomerico)
+        descriptor["version"] = SEARCH_VERSION
+        accept = _current_format
+    result = cache.run_cached(ctx, "search", descriptor, run, use_cache=use_cache, ttl=CACHE_TTL.get(engine),
+                              keep=lambda _result: outcome["complete"], accept=accept)
+    # punteggio e motivazioni calcolati dopo la cache: cambiare i pesi non richiede di invalidare le ricerche
+    template_rank.rank_hits(result.get("hits") or [])
+    return result
+
+
+def _current_format(result: dict) -> bool:
+    """Voce di cache scritta con i metadati attuali (le precedenti hanno un'altra chiave; controllo anche alla
+    lettura, come per l'allineamento strutturale)."""
+    return result.get("search_version") == SEARCH_VERSION and isinstance(result.get("hits"), list)
 
 
 def best_template(hits: list[dict]) -> Optional[dict]:
-    """Template consigliato: massimo prodotto identità × copertura; a parità, una struttura sperimentale prima di un
-    modello predetto (AlphaFold), poi la risoluzione migliore, poi il pLDDT medio più alto.
+    """Template consigliato: punteggio composito più alto (`domain/template_rank`); a parità di punteggio una
+    struttura sperimentale prima di un modello predetto (AlphaFold), poi identità × copertura, la risoluzione
+    migliore e il pLDDT medio più alto.
 
-    Un modello predetto è un'ipotesi e non un dato: lo si preferisce solo se allinea meglio il bersaglio.
+    Un modello predetto è un'ipotesi e non un dato: la componente del metodo lo pesa meno di una struttura
+    sperimentale, quindi vince solo se allinea chiaramente meglio il bersaglio.
     """
-    if not hits:
-        return None
-    return max(hits, key=lambda h: (h["identity"] * h["coverage"], 0 if h.get("predicted") else 1,
-                                    -(h.get("resolution") or 99), h.get("plddt") or 0))
+    return template_rank.best(hits)

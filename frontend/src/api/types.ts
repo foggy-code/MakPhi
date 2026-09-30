@@ -460,6 +460,64 @@ export interface SearchHit {
   uniprot_start?: number | null;
   uniprot_end?: number | null;
   model_version?: number | null;
+  /** metadati RCSB (motori sul PDB, dalla versione con la scelta ragionata dei template) */
+  rfree?: number | null;
+  /** data di rilascio AAAA-MM-GG, vuota se non nota */
+  released?: string;
+  /** codici chimici dei componenti non polimerici; null = non noti */
+  ligands?: string[] | null;
+  /** assemblaggio biologico 1: "Monomer", "Homo 2-mer"… */
+  oligomeric_state?: string;
+  oligomeric_count?: number | null;
+  /** punteggio composito 0–100 (domain/template_rank.py); assente nei risultati delle versioni precedenti */
+  rank_score?: number;
+  rank_band?: RankBand;
+  /** identità sotto la curva di Rost 1999 per la lunghezza allineata */
+  rank_twilight?: boolean;
+  rank_reasons?: RankReason[];
+}
+
+export type RankBand = "buona" | "intermedia" | "scarsa";
+
+/** Una componente del punteggio di un template, con la motivazione. */
+export interface RankReason {
+  key: "identity" | "coverage" | "evalue" | "resolution" | "rfree" | "method" | "gaps" | "date" | "ligands" | "oligomer";
+  label: string;
+  /** 0–100; null = non disponibile, non applicabile o informativa (peso 0) */
+  score: number | null;
+  weight: number;
+  text: string;
+}
+
+/** Template consigliato (il principale o uno complementare). */
+export interface SuggestedTemplate {
+  template_id: string;
+  pdb_id: string;
+  chain: string;
+  rank_score: number;
+  identity: number | null;
+  coverage: number | null;
+  predicted: boolean;
+  role: "principale" | "complementare";
+  reason: string;
+  /** residui del bersaglio aggiunti (o con identità locale migliorata) e loro intervalli */
+  new_residues: number;
+  ranges: string;
+}
+
+/** Selezione dei template complementari (template_rank.select_complementary). */
+export interface TemplateSuggestion {
+  templates: SuggestedTemplate[];
+  excluded: { template_id: string; reason: string }[];
+  /** candidati non esaminati perché il numero massimo di template era già raggiunto */
+  not_examined: number;
+  /** copertura complessiva (%) e residui coperti dall'insieme */
+  coverage: number;
+  covered_residues: number;
+  query_length: number;
+  max_templates: number;
+  min_new_residues: number;
+  version: number;
 }
 
 /** Provenienza di un risultato: presente e vera solo se riusato dalla cache dei calcoli. */
@@ -480,6 +538,8 @@ export interface SearchResult extends CacheInfo {
   uniprot?: string;
   /** motore alphafold: proteine senza modello, EBI non disponibile per alcune (risultato parziale) */
   notes?: string[];
+  /** template consigliati con motivazione (assente nei risultati delle versioni precedenti) */
+  suggested?: TemplateSuggestion;
 }
 
 export interface AlignStats {
@@ -836,11 +896,41 @@ export interface PipelineItem {
   rama_favored: number | null;
   clashscore: number | null;
   /** metriche del modello; `search_cached_at` = ricerca del template riusata dalla cache (data ISO);
-   * `template_predicted`/`plddt_removed` = template AlphaFold e residui tolti per pLDDT basso */
-  metrics: Record<string, unknown> & { search_cached_at?: string; template_predicted?: boolean; plddt_removed?: number };
+   * `template_predicted`/`plddt_removed` = template AlphaFold e residui tolti per pLDDT basso; modalità multi:
+   * `templates` (scelti, con ruolo e motivazione), `combined_coverage` (anche nella colonna `coverage`) e
+   * `excluded_templates` (candidati scartati o non esaminati) */
+  metrics: Record<string, unknown> & {
+    search_cached_at?: string; template_predicted?: boolean; plddt_removed?: number;
+    templates?: PipelineTemplateChoice[]; combined_coverage?: number; excluded_templates?: number;
+  };
   error: string | null;
   started_at: string | null;
   finished_at: string | null;
+}
+
+/** Template scelto per un elemento della pipeline in modalità multi. */
+export type PipelineTemplateChoice = Pick<SuggestedTemplate, "template_id" | "role" | "reason" | "identity" | "coverage" | "rank_score" | "predicted">;
+
+export type TemplateMode = "auto" | "fixed" | "multi";
+
+/** Corpo di POST /api/pipeline (api/compute.PipelineIn). */
+export interface PipelineRequest {
+  project_id?: string;
+  name?: string;
+  fasta?: string;
+  records?: { name: string; sequence: string }[];
+  template_mode?: TemplateMode;
+  /** solo modalità multi: template complementari al massimo per sequenza (2–5, predefinito 3) */
+  max_templates?: number;
+  templates?: TemplateRef[];
+  engine?: SearchEngine;
+  evalue?: number;
+  twilight?: { filter: boolean; identity: number; coverage: number };
+  options?: Record<string, unknown>;
+  quality?: boolean;
+  extended_quality?: boolean;
+  parallel?: number;
+  use_cache?: boolean;
 }
 
 export interface PipelineResult {

@@ -14,6 +14,7 @@ import type {
   JobSummary,
   PipelineItem,
   PipelinePage,
+  PipelineRequest,
   PirReport,
   Project,
   QualityReport,
@@ -257,7 +258,7 @@ export const api = {
   },
   qmean: (body: { project_id?: string; source: StructureSource; mode?: "local" | "remote"; fallback?: boolean; database?: string }) =>
     post<JobSummary>("/api/qmean", body),
-  pipeline: (body: Record<string, unknown>) => post<JobSummary>("/api/pipeline", body),
+  pipeline: (body: PipelineRequest) => post<JobSummary>("/api/pipeline", body),
   pipelineItems: (id: string, q: { page: number; size: number; status?: string; sort?: string; direction?: string; q?: string }) => {
     const params = new URLSearchParams();
     Object.entries(q).forEach(([k, v]) => v !== undefined && v !== "" && params.set(k, String(v)));

@@ -256,6 +256,11 @@ query($ids: [String!]!) {
     exptl { method }
     rcsb_entry_info { resolution_combined deposited_polymer_monomer_count }
     rcsb_accession_info { initial_release_date }
+    refine { ls_R_factor_R_free pdbx_refine_id }
+    assemblies {
+      pdbx_struct_assembly { id oligomeric_details oligomeric_count }
+      rcsb_struct_symmetry { kind oligomeric_state }
+    }
     nonpolymer_entities { pdbx_entity_nonpoly { comp_id name } }
     polymer_entities {
       entity_poly { pdbx_seq_one_letter_code_can rcsb_entity_polymer_type }
@@ -266,27 +271,101 @@ query($ids: [String!]!) {
   }
 }
 """
+# Versione dei metadati in cache: la 2 aggiunge R-free e stato oligomerico (scelta ragionata dei template). Una voce
+# senza versione (scritta prima) si riscarica; se RCSB non risponde si usa lo stesso, segnata `stale` (niente R-free
+# né stato oligomerico), così un computer senza rete non perde metodo e risoluzione già noti.
+RCSB_META_VERSION = 2
+
+
+def _rfree(entry: dict) -> Optional[float]:
+    """R-free dell'affinamento da diffrazione; con più affinamenti (per esempio raggi X + neutroni) quello a
+    raggi X."""
+    rows = [r for r in entry.get("refine") or [] if isinstance(r, dict)]
+    rows.sort(key=lambda r: 0 if "X-RAY" in str(r.get("pdbx_refine_id") or "").upper() else 1)
+    for row in rows:
+        value = _as_float(row.get("ls_R_factor_R_free"), 0.0, 1.0)
+        if value:
+            return value
+    return None
+
+
+def _oligomer(entry: dict) -> tuple[str, Optional[int]]:
+    """Stato oligomerico dell'assemblaggio biologico 1 (il primo elencato se manca): la simmetria globale di RCSB
+    ("Homo 2-mer", "Monomer") o, senza, `oligomeric_details` ("dimeric"), e il numero di catene."""
+    assemblies = [a for a in entry.get("assemblies") or [] if isinstance(a, dict)]
+    if not assemblies:
+        return "", None
+    first = next((a for a in assemblies if str((a.get("pdbx_struct_assembly") or {}).get("id")) == "1"),
+                 assemblies[0])
+    info = first.get("pdbx_struct_assembly") or {}
+    symmetry = [s for s in first.get("rcsb_struct_symmetry") or [] if isinstance(s, dict)]
+    glob = next((s for s in symmetry if str(s.get("kind") or "").lower().startswith("global")), None)
+    state = str((glob or {}).get("oligomeric_state") or info.get("oligomeric_details") or "")
+    return state[:60], _as_int(info.get("oligomeric_count"))
+
+
+def hit_metadata(info: Optional[dict]) -> dict:
+    """Campi dei metadati RCSB di una voce per un hit della ricerca (valori vuoti se la voce non li ha)."""
+    info = info if isinstance(info, dict) else {}
+    ligands = info.get("ligands")
+    return {"rfree": info.get("rfree"), "released": info.get("released") or "",
+            "ligands": list(ligands) if isinstance(ligands, list) else None,
+            "oligomeric_state": info.get("oligomeric_state") or "", "oligomeric_count": info.get("oligomeric_count")}
+
+
+def _graphql_entries(ids: list[str], check: Optional[Callable[[], None]],
+                     log: Optional[Callable[[str], None]]) -> list[dict]:
+    """Voci della risposta GraphQL; una risposta illeggibile, o con soli errori (query rifiutata), è un errore del
+    servizio e non un elenco vuoto: prima diventava "nessun template trovato"."""
+    resp = _request_retry("POST", RCSB_GRAPHQL, "RCSB GraphQL", json={"query": _GQL_ENTRIES, "variables": {"ids": ids}},
+                          attempts=3, wait=5.0, check=check, log=log, timeout=httpx.Timeout(60.0, connect=15.0))
+    try:
+        data = resp.json()
+    except ValueError:
+        raise RemoteServiceError("RCSB GraphQL ha inviato una risposta non leggibile.", details=resp.text[:300])
+    data = data if isinstance(data, dict) else {}
+    entries = (data.get("data") or {}).get("entries") if isinstance(data.get("data"), dict) else None
+    if entries is None and data.get("errors"):
+        raise RemoteServiceError("RCSB GraphQL ha rifiutato la richiesta dei metadati.",
+                                 details=str(data.get("errors"))[:500])
+    return [e for e in entries or [] if isinstance(e, dict)]
 
 
 def rcsb_metadata(ids: list[str], check: Optional[Callable[[], None]] = None,
                   log: Optional[Callable[[str], None]] = None) -> dict[str, dict]:
+    """Metadati delle voci PDB (GraphQL di RCSB, in cache 30 giorni).
+
+    Voci in cache di una versione precedente (senza R-free e stato oligomerico) si riscaricano; se RCSB non risponde
+    si usano lo stesso, con `stale: True`, invece di perdere metodo e risoluzione.
+    """
     clean = sorted({validate_pdb_id(i) for i in ids if i})
     if not clean:
         return {}
     out: dict[str, dict] = {}
     missing = []
+    stale: dict[str, dict] = {}
     for pid in clean:
         cached = _cache_get("rcsb_meta", pid, 30 * 86400)
-        if cached:
+        if isinstance(cached, dict) and cached.get("version") == RCSB_META_VERSION:
             out[pid] = cached
         else:
+            if isinstance(cached, dict) and cached:
+                stale[pid] = cached
             missing.append(pid)
     for start in range(0, len(missing), 25):
         chunk = missing[start:start + 25]
-        body = {"query": _GQL_ENTRIES, "variables": {"ids": chunk}}
-        data = _request_retry("POST", RCSB_GRAPHQL, "RCSB GraphQL", json=body, attempts=3, wait=5.0,
-                              check=check, log=log, timeout=httpx.Timeout(60.0, connect=15.0)).json()
-        for entry in (data.get("data") or {}).get("entries") or []:
+        try:
+            entries = _graphql_entries(chunk, check, log)
+        except RemoteServiceError:
+            rest = missing[start:]
+            if not all(pid in stale for pid in rest):
+                raise
+            if log:
+                log("Metadati RCSB non aggiornabili: uso quelli in cache, senza R-free né stato oligomerico.")
+            for pid in rest:
+                out[pid] = {**stale[pid], "stale": True}
+            break
+        for entry in entries:
             if not entry:
                 continue
             pid = entry["rcsb_id"].upper()
@@ -302,14 +381,19 @@ def rcsb_metadata(ids: list[str], check: Optional[Callable[[], None]] = None,
                                   "organism": orgs[0].get("scientific_name") if orgs else ""}
             ligands = sorted({(n.get("pdbx_entity_nonpoly") or {}).get("comp_id")
                               for n in entry.get("nonpolymer_entities") or []} - {None})
+            state, count = _oligomer(entry)
             meta = {
                 "id": pid,
+                "version": RCSB_META_VERSION,
                 "title": (entry.get("struct") or {}).get("title", ""),
                 "method": ", ".join(e.get("method", "") for e in entry.get("exptl") or []),
                 "resolution": res[0] if res else None,
                 "released": ((entry.get("rcsb_accession_info") or {}).get("initial_release_date") or "")[:10],
                 "chains": chains,
                 "ligands": ligands,
+                "rfree": _rfree(entry),
+                "oligomeric_state": state,
+                "oligomeric_count": count,
             }
             out[pid] = meta
             _cache_put("rcsb_meta", pid, meta)
@@ -400,8 +484,10 @@ def rcsb_sequence_search(sequence: str, evalue: float = 10.0, max_hits: int = 50
             "evalue": float(f"{e_val:.2e}"), "bitscore": round(bits, 1), "align_length": length,
             "query_start": q_start, "query_end": q_end, "subject_start": t_start, "subject_end": t_end,
             "query_aligned": q_aln, "subject_aligned": t_aln, "subject_length": len(target),
-            "source": "rcsb",
+            "source": "rcsb", **hit_metadata(info),
         })
+        if info.get("stale"):  # metadati di una versione precedente: la ricerca li segnala come parziali
+            results[-1]["metadata_stale"] = True
     results.sort(key=lambda h: (h["evalue"], -h["bitscore"]))
     return results[:max_hits]
 

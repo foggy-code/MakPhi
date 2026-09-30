@@ -110,7 +110,10 @@ class PipelineIn(BaseModel):
     name: str = ""
     fasta: str = ""
     records: list[SeqIn] = []
-    template_mode: Literal["auto", "fixed"] = "auto"
+    template_mode: Literal["auto", "fixed", "multi"] = Field(
+        "auto", description="auto = il template migliore della ricerca; fixed = template scelti; multi = fino a "
+                            "max_templates template complementari della ricerca")
+    max_templates: int = Field(3, ge=2, le=5, description="Solo modalità multi: template al massimo per sequenza")
     templates: list[TemplateRef] = []
     engine: Literal["rcsb", "ncbi", "local", "mmseqs", "alphafold"] = "rcsb"
     evalue: float = Field(1e-3, gt=0, le=100)
