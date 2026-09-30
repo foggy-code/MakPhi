@@ -64,14 +64,23 @@ export function licenseWarnings(s: LicenseStatus): string[] {
 }
 
 export type ResumeOptions = {
-  /** "Riprendi": tutti gli elementi non conclusi */
+  /** pulsante principale (ambito "incomplete"): tutti gli elementi non conclusi */
   incomplete: number;
+  /** testo del pulsante principale: "Riprendi", oppure "Riprova i falliti" per una pipeline completata */
+  label: string;
+  /** suggerimento del pulsante principale */
+  hint: string;
   /** "Riprova solo i falliti": solo se diverso da "Riprendi" (ci sono anche elementi annullati o interrotti) */
   failedOnly: boolean;
   text: string;
 };
 
-/** Pulsanti di ripresa di una pipeline terminata; null se non c'è nulla da riprendere o il job è attivo. */
+const fallite = (n: number) => `${n} ${n === 1 ? "fallita" : "fallite"}`;
+
+/**
+ * Pulsanti di ripresa di una pipeline terminata (fallita, annullata, oppure completata con elementi falliti);
+ * null se non c'è nulla da riprendere o il job è attivo.
+ */
 export function resumeOptions(
   status: string,
   job: { resumable?: boolean; resumable_items?: ResumeItems | null } | null | undefined,
@@ -79,11 +88,23 @@ export function resumeOptions(
   const items = job?.resumable_items;
   if (isActive(status) || !job?.resumable || !items || items.incomplete <= 0) return null;
   const done = Math.max(0, items.total - items.incomplete);
-  const failed = items.failed > 0 ? ` (${items.failed} ${items.failed === 1 ? "fallita" : "fallite"})` : "";
+  const head = `${done} di ${items.total} sequenze concluse`;
+  if (status === "completed") {
+    // completata: restano solo elementi falliti, e il pulsante principale riprova quelli
+    return {
+      incomplete: items.incomplete,
+      label: "Riprova i falliti",
+      hint: "Rielabora le sequenze fallite; quelle completate restano come sono",
+      failedOnly: false,
+      text: `${head} · ${fallite(items.incomplete)} da riprovare.`,
+    };
+  }
   return {
     incomplete: items.incomplete,
+    label: "Riprendi",
+    hint: "Rielabora le sequenze non concluse; quelle completate restano come sono",
     failedOnly: items.failed > 0 && items.failed < items.incomplete,
-    text: `${done} di ${items.total} sequenze concluse · ${items.incomplete} da riprendere${failed}.`,
+    text: `${head} · ${items.incomplete} da riprendere${items.failed > 0 ? ` (${fallite(items.failed)})` : ""}.`,
   };
 }
 
@@ -94,6 +115,41 @@ export function resumeOptions(
 export function needsFullReload(prev: Pick<JobSummary, "status" | "updated_at"> | null, next: Pick<JobSummary, "status" | "updated_at">): boolean {
   if (isActive(next.status)) return false;
   return !prev || isActive(prev.status) || prev.status !== next.status || prev.updated_at !== next.updated_at;
+}
+
+/** Stato di `useJob` usato da polling, annullamento e ripresa (senza React, per i test). */
+export type JobSync = {
+  /** ultimo stato visto, per ricaricare il job completo solo quando serve */
+  last: { current: JobSummary | null };
+  setSummary: (s: JobSummary) => void;
+  /** ricarica il job completo: risultato, file, riprendibilità, log */
+  loadFull: () => Promise<void>;
+};
+
+/** Registra uno stato arrivato dal server; true se il job completo va ricaricato (`needsFullReload`). */
+export function recordStatus(sync: JobSync, s: JobSummary): boolean {
+  const prev = sync.last.current;
+  sync.last.current = s;
+  sync.setSummary(s);
+  return needsFullReload(prev, s);
+}
+
+/**
+ * Annullamento. Un job in coda si chiude subito (la risposta è già "cancelled") e il polling si ferma: va
+ * ricaricato per intero, altrimenti non compaiono i pulsanti di ripresa. Uno in esecuzione passa da
+ * "cancelling" e lo segue il polling.
+ */
+export async function cancelAndSync(sync: JobSync, request: () => Promise<JobSummary>): Promise<void> {
+  if (recordStatus(sync, await request())) await sync.loadFull();
+}
+
+/**
+ * Ripresa. La risposta arriva a preparazione finita, quando gli elementi rimessi in attesa e i loro file sono
+ * già stati azzerati: si ricarica subito il job completo (file, riprendibilità) invece di tenere quelli vecchi.
+ */
+export async function resumeAndSync(sync: JobSync, request: () => Promise<JobSummary>): Promise<void> {
+  recordStatus(sync, await request());
+  await sync.loadFull();
 }
 
 /** Stima leggibile di una durata in secondi. */

@@ -470,6 +470,12 @@ def test_pipeline_reuses_the_search_cache(client, monkeypatch):
     assert len(calls) == 4 and third["result"]["search_cache_hits"] == 0
     items = client.get(f"/api/pipeline/{third['id']}/items").json()["items"]
     assert not any(i["metrics"].get("search_cached_at") for i in items)
+    # una sola ricerca riusata: messaggi al singolare
+    single = _pipeline(client, {**body, "fasta": f">a\n{HUMAN_UB}\n"})
+    assert len(calls) == 4 and single["result"]["search_cache_hits"] == 1
+    log = _log(client, single["id"])
+    assert "1 ricerca di template riusata dalla cache dei calcoli" in log and "Pipeline di 1 sequenza," in log
+    assert single["title"] == "Pipeline di 1 sequenza"
 
 
 def test_pipeline_concurrent_identical_searches_leave_a_valid_entry(client, monkeypatch):

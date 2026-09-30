@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { Job, JobSummary, ResumeScope } from "../api/types";
 import { isActive } from "./format";
-import { needsFullReload } from "./status";
+import { cancelAndSync, type JobSync, recordStatus, resumeAndSync } from "./status";
 
 /** Controllo lento di un job terminato ma riprendibile: la ripresa può arrivare da un'altra scheda. */
 const WATCH_RESUMABLE_MS = 5000;
@@ -80,6 +80,7 @@ export function useJob<R = unknown>(jobId: string | null | undefined, opts: { wi
       setError(e instanceof Error ? e.message : String(e));
     }
   }, [jobId, opts.withLog]);
+  const sync = useMemo<JobSync>(() => ({ last, setSummary, loadFull }), [loadFull]);
 
   useEffect(() => {
     setJob(null);
@@ -95,37 +96,29 @@ export function useJob<R = unknown>(jobId: string | null | undefined, opts: { wi
     if (!jobId) return;
     try {
       const s = await api.jobStatus(jobId);
-      const prev = last.current;
-      last.current = s;
-      setSummary(s);
+      const reload = recordStatus(sync, s);
       if (opts.withLog && isActive(s.status)) {
         const chunk = await api.jobLog(jobId, offset.current);
         if (chunk.text) setLog((prev) => (prev + chunk.text).slice(-200_000));
         offset.current = chunk.offset;
       }
-      if (needsFullReload(prev, s)) await loadFull();
+      if (reload) await loadFull();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [jobId, loadFull, opts.withLog]);
+  }, [jobId, loadFull, opts.withLog, sync]);
 
   useInterval(poll, jobId && active ? 900 : jobId && watch ? WATCH_RESUMABLE_MS : null);
 
+  /** Annulla il job; uno in coda si chiude subito e viene ricaricato (pulsanti di ripresa compresi). */
   const cancel = useCallback(async () => {
-    if (!jobId) return;
-    const s = await api.cancelJob(jobId);
-    last.current = s;
-    setSummary(s);
-  }, [jobId]);
+    if (jobId) await cancelAndSync(sync, () => api.cancelJob(jobId));
+  }, [jobId, sync]);
 
-  /** Riprende una pipeline terminata: il job torna in coda e il polling riparte da solo. */
+  /** Riprende una pipeline terminata: il job torna in coda, si ricarica (file azzerati) e il polling riparte. */
   const resume = useCallback(async (scope: ResumeScope = "incomplete") => {
-    if (!jobId) return;
-    const s = await api.resumeJob(jobId, scope);
-    last.current = s;
-    setSummary(s);
-    setJob((prev) => (prev ? { ...prev, ...s, result: null, resumable: false, resumable_items: null } : prev));
-  }, [jobId]);
+    if (jobId) await resumeAndSync(sync, () => api.resumeJob(jobId, scope));
+  }, [jobId, sync]);
 
   return { job, summary: summary ?? job, log, error, active, cancel, resume, reload: loadFull };
 }

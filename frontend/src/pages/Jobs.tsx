@@ -32,9 +32,10 @@ function Detail({ id, onDeleted, onChanged }: { id: string; onDeleted: () => voi
   const [confirm, setConfirm] = useState(false);
   if (!summary) return null;
   const doResume = async (scope: ResumeScope) => {
+    const retry = scope === "failed" || summary.status === "completed"; // da completata restano solo i falliti
     try {
       await resume(scope);
-      toast.push(scope === "failed" ? "Nuovo tentativo sulle sequenze fallite" : "Pipeline ripresa");
+      toast.push(retry ? "Nuovo tentativo sulle sequenze fallite" : "Pipeline ripresa");
       onChanged();
     } catch (e) {
       toast.error(e);

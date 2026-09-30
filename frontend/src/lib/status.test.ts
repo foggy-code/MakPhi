@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { JobStatus, LicenseStatus } from "../api/types";
-import { fmtSeconds, licenseWarnings, needsFullReload, qmeanRoute, resumeOptions } from "./status";
+import type { JobStatus, JobSummary, LicenseStatus } from "../api/types";
+import {
+  cancelAndSync, fmtSeconds, type JobSync, licenseWarnings, needsFullReload, qmeanRoute, resumeAndSync, resumeOptions,
+} from "./status";
 
 const base = { qmean_mode: "local" as const, qmean_remote: false, contact_email: "", qmean_fallback_remote: false };
 const remote = { qmean_remote: true, contact_email: "a@b.it" };
@@ -79,13 +81,67 @@ describe("resumeOptions", () => {
     expect(onlyCancelled.failedOnly).toBe(false);
     expect(onlyCancelled.text).toBe("2 di 5 sequenze concluse · 3 da riprendere.");
     expect(resumeOptions("failed", job(2, 1, 5))!.text).toContain("(1 fallita)");
+    expect(resumeOptions("cancelled", job(3, 1))!.label).toBe("Riprendi");
   });
-  it("niente ripresa per job attivi, completati o senza elementi da rifare", () => {
+  it("propone Riprova i falliti per una pipeline completata con elementi falliti", () => {
+    const r = resumeOptions("completed", job(2, 2));
+    expect(r).not.toBeNull();
+    expect(r!.label).toBe("Riprova i falliti");
+    expect(r!.failedOnly).toBe(false); // un solo pulsante: coincide con il principale
+    expect(r!.text).toBe("38 di 40 sequenze concluse · 2 fallite da riprovare.");
+    expect(resumeOptions("completed", job(1, 1, 5))!.text).toBe("4 di 5 sequenze concluse · 1 fallita da riprovare.");
+  });
+  it("niente ripresa per job attivi, completati senza falliti o senza elementi da rifare", () => {
     expect(resumeOptions("running", job(3, 1))).toBeNull(); // il job completo può essere vecchio: vale lo stato
     expect(resumeOptions("queued", job(3, 1))).toBeNull();
     expect(resumeOptions("completed", { resumable: false, resumable_items: null })).toBeNull();
+    expect(resumeOptions("completed", job(0, 0))).toBeNull();
     expect(resumeOptions("failed", job(0, 0))).toBeNull();
     expect(resumeOptions("failed", null)).toBeNull();
+  });
+});
+
+describe("annullamento e ripresa (useJob)", () => {
+  const summary = (status: JobStatus, updated_at = "2026-01-01T10:00:00+00:00") => ({ status, updated_at }) as JobSummary;
+  const tracker = (last: JobSummary | null) => {
+    const seen: string[] = [];
+    let reloads = 0;
+    const sync: JobSync = {
+      last: { current: last },
+      setSummary: (s) => seen.push(s.status),
+      loadFull: async () => {
+        reloads += 1;
+      },
+    };
+    return { sync, seen, reloads: () => reloads };
+  };
+
+  it("annullando un job in coda (chiuso subito) ricarica il job completo, così compaiono i pulsanti di ripresa", async () => {
+    const t = tracker(summary("queued"));
+    await cancelAndSync(t.sync, async () => summary("cancelled", "2026-01-01T10:01:00+00:00"));
+    expect(t.seen).toEqual(["cancelled"]);
+    expect(t.sync.last.current?.status).toBe("cancelled");
+    expect(t.reloads()).toBe(1);
+  });
+  it("annullando un job in esecuzione lascia la ricarica al polling", async () => {
+    const t = tracker(summary("running"));
+    await cancelAndSync(t.sync, async () => summary("cancelling"));
+    expect(t.seen).toEqual(["cancelling"]);
+    expect(t.reloads()).toBe(0);
+  });
+  it("dopo la ripresa ricarica subito il job completo (file azzerati dalla preparazione)", async () => {
+    const t = tracker(summary("cancelled"));
+    await resumeAndSync(t.sync, async () => summary("queued", "2026-01-01T10:02:00+00:00"));
+    expect(t.seen).toEqual(["queued"]);
+    expect(t.sync.last.current?.status).toBe("queued");
+    expect(t.reloads()).toBe(1);
+  });
+  it("una ripresa rifiutata non cambia nulla", async () => {
+    const t = tracker(summary("failed"));
+    await expect(resumeAndSync(t.sync, async () => Promise.reject(new Error("409")))).rejects.toThrow("409");
+    expect(t.seen).toEqual([]);
+    expect(t.sync.last.current?.status).toBe("failed");
+    expect(t.reloads()).toBe(0);
   });
 });
 
@@ -94,6 +150,7 @@ describe("needsFullReload", () => {
   it("ricarica solo al termine, non a ogni controllo di un job terminato", () => {
     expect(needsFullReload(s("running"), s("running"))).toBe(false);
     expect(needsFullReload(s("running"), s("completed"))).toBe(true);
+    expect(needsFullReload(s("queued"), s("cancelled"))).toBe(true); // annullato mentre era in coda
     expect(needsFullReload(null, s("failed"))).toBe(true);
     expect(needsFullReload(s("failed"), s("failed"))).toBe(false);
   });

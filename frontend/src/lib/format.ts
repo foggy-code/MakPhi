@@ -74,6 +74,12 @@ export function cachedLabel(result: { cached?: boolean; cached_at?: string | nul
   return when && !Number.isNaN(when.getTime()) ? `dalla cache (${fmtDate(result.cached_at)})` : "dalla cache";
 }
 
+/** Nota sulle ricerche di template riusate dalla cache in una pipeline; null se nessuna. */
+export function searchCacheHitsLabel(hits: number | null | undefined): string | null {
+  if (!hits) return null;
+  return `${hits} ${hits === 1 ? "ricerca" : "ricerche"} di template dalla cache`;
+}
+
 export function fmtDuration(start: string | null, end: string | null): string {
   if (!start) return "—";
   const s = new Date(start).getTime();

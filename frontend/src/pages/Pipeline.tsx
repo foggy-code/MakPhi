@@ -10,7 +10,7 @@ import { TemplatePicker } from "../components/Pickers";
 import { Viewer3D } from "../components/Viewer3D";
 import { Badge, BarCell, Card, Empty, Field, Grade, Modal, PageHead, Segmented, StatusBadge } from "../components/ui";
 import { useProject, useToast } from "../lib/context";
-import { fmtDate, fmtEvalue, fmtNum, isActive, relTime, STATUS_LABEL } from "../lib/format";
+import { fmtDate, fmtEvalue, fmtNum, isActive, relTime, searchCacheHitsLabel, STATUS_LABEL } from "../lib/format";
 import { recordsToFasta } from "../lib/files";
 import { useAsync, useInterval, useJob } from "../lib/hooks";
 
@@ -48,7 +48,7 @@ function Items({ jobId, running, cacheHits }: { jobId: string; running: boolean;
   return (
     <Card
       title="Risultati per sequenza"
-      sub={cacheHits ? `${cacheHits} ricerche di template dalla cache` : undefined}
+      sub={searchCacheHitsLabel(cacheHits) ?? undefined}
       right={
         <>
           <a className="btn btn-sm" href={api.pipelineCsvUrl(jobId)}><Icon name="download" size={13} /> CSV</a>
@@ -170,9 +170,10 @@ export default function Pipeline() {
   }, [running]);
 
   const doResume = async (scope: ResumeScope) => {
+    const retry = scope === "failed" || summary?.status === "completed"; // da completata restano solo i falliti
     try {
       await resume(scope);
-      toast.push(scope === "failed" ? "Nuovo tentativo sulle sequenze fallite" : "Pipeline ripresa: si elaborano solo le sequenze non concluse");
+      toast.push(retry ? "Nuovo tentativo sulle sequenze fallite" : "Pipeline ripresa: si elaborano solo le sequenze non concluse");
     } catch (e) {
       toast.error(e);
     }

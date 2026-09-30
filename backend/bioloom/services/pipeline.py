@@ -3,9 +3,10 @@
 Ogni elemento è una riga di `pipeline_items` (interrogabile con paginazione e ordinamento lato
 server); il job padre esegue gli elementi in parallelo con un pool dedicato e aggiorna il progresso.
 
-Ripresa: una pipeline fallita, annullata o interrotta dal riavvio si riprende (`resume`) rimettendo in
-attesa solo gli elementi non conclusi (o solo i falliti); quelli completati restano come sono, con i
-loro file già salvati, e l'esecuzione elabora soltanto gli elementi in attesa.
+Ripresa: una pipeline fallita, annullata o interrotta dal riavvio, oppure completata con elementi falliti,
+si riprende (`resume`) rimettendo in attesa solo gli elementi non conclusi (o solo i falliti); quelli
+completati restano come sono, con i loro file già salvati, e l'esecuzione elabora soltanto gli elementi in
+attesa. Un elemento diventa 'completed' solo dopo che i suoi file sono arrivati nella cartella definitiva.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from typing import Optional
 
 from ..core.db import Database, encode_json, now_iso
 from ..core.errors import AppError, Conflict, NotFound
-from ..core.jobs import JobCancelled, JobContext, JobManager, requeue_error
+from ..core.jobs import REQUEUABLE, JobCancelled, JobContext, JobManager, requeue_error
 from ..core.storage import remove_tree, safe_join
 from ..domain import sequences
 from ..domain.sequences import SeqRecord
@@ -36,6 +37,9 @@ RESUME_WHERE = {
     "failed": "status='failed'",
 }
 RESUME_LABEL = {"incomplete": "elementi non conclusi", "failed": "solo i falliti"}
+# Stati da cui si riprende una pipeline: anche completata, se ha elementi falliti da riprovare (un errore
+# temporaneo di rete o di RCSB non obbliga a rilanciare tutte le sequenze).
+RESUMABLE = REQUEUABLE | {"completed"}
 # Un elemento rimesso in attesa torna com'era appena creato (nome e sequenza restano).
 RESET_ITEM = ("status='pending', stage='', template=NULL, template_source=NULL, identity=NULL, coverage=NULL, "
               "evalue=NULL, twilight=0, best_model=NULL, dope=NULL, ga341=NULL, grade=NULL, grade_score=NULL, "
@@ -73,13 +77,16 @@ class PipelineService:
                 "INSERT INTO pipeline_items(job_id, idx, name, sequence, status) VALUES (?,?,?,?, 'pending')",
                 [(job_id, i, r.name, r.sequence) for i, r in enumerate(records)])
 
-        title = params.get("name") or f"Pipeline di {len(records)} sequenze"
+        title = params.get("name") or f"Pipeline di {_seqs(len(records))}"
         return self.jobs.submit("pipeline", stored, project_id=project_id, title=title, prepare=prepare)
 
     # ------------------------------------------------------------------------------ ripresa
     def resume(self, job_id: str, scope: str = "incomplete") -> dict:
-        """Riprende una pipeline fallita o annullata rielaborando solo gli elementi dell'ambito scelto.
+        """Riprende una pipeline terminata rielaborando solo gli elementi dell'ambito scelto.
 
+        Si riprendono le pipeline fallite o annullate e quelle completate con elementi falliti. Nell'ambito
+        rientrano anche gli elementi completati il cui modello manca nei risultati definitivi (salvataggio
+        mai riuscito, con una versione che segnava l'elemento completato prima di spostarne i file).
         Gli elementi scelti tornano in attesa, azzerati, e i loro file già salvati vengono eliminati
         (dopo il passaggio atomico a 'queued', così due richieste concorrenti non si sovrappongono).
         """
@@ -90,32 +97,57 @@ class PipelineService:
         if job["kind"] != "pipeline":
             raise AppError(f"Ripresa non supportata per i job di tipo '{job['kind']}': "
                            "si possono riprendere solo le pipeline.", code="resume_unsupported")
-        blocked = requeue_error(job)
+        blocked = requeue_error(job, RESUMABLE)
         if blocked is not None:
             raise blocked
-        todo = int(self.db.scalar(f"SELECT COUNT(*) FROM pipeline_items WHERE job_id=? AND {where}", (job_id,)))
-        if not todo:
+        # un file per elemento completato, solo qui (non a ogni lettura dello stato del job)
+        lost = len(self._missing_models(job_id, self.jobs.workdir(job_id)))
+
+        def count(current: dict) -> int:
+            """Elementi da rielaborare; rifiuta la ripresa se non ce ne sono (ripetuto sotto il lock del gestore)."""
+            n = lost + int(self.db.scalar(f"SELECT COUNT(*) FROM pipeline_items WHERE job_id=? AND {where}",
+                                          (job_id,)))
+            if n:
+                return n
+            if current["status"] == "completed":
+                raise Conflict("Il job è già completato: nessuna sequenza fallita da riprovare.")
             raise Conflict("Nessun elemento fallito da riprovare." if scope == "failed" else
                            "Nessun elemento da riprendere: tutte le sequenze sono già concluse.")
 
+        todo = count(job)
+
         def prepare(_job_id: str, final_dir: Path) -> None:
+            # rilevati di nuovo dopo il passaggio a 'queued': nessuna esecuzione li sta cambiando
+            missing = self._missing_models(job_id, final_dir)
             with self.db.transaction() as conn:
-                rows = conn.execute(f"SELECT idx, name FROM pipeline_items WHERE job_id=? AND {where}",
-                                    (job_id,)).fetchall()
+                rows = [dict(r) for r in conn.execute(f"SELECT idx, name FROM pipeline_items WHERE job_id=? "
+                                                      f"AND {where}", (job_id,)).fetchall()]
                 conn.execute(f"UPDATE pipeline_items SET {RESET_ITEM} WHERE job_id=? AND {where}", (job_id,))
+                conn.executemany(f"UPDATE pipeline_items SET {RESET_ITEM} WHERE job_id=? AND idx=? "
+                                 "AND status='completed'", [(job_id, r["idx"]) for r in missing])
             # niente file vecchi accanto a quelli nuovi: la cartella dell'elemento riparte vuota
-            for row in rows:
+            for row in rows + missing:
                 remove_tree(safe_join(final_dir, "items", f"{row['idx']:04d}_{row['name']}"))
 
-        return self.jobs.requeue(job_id, prepare=prepare,
-                                 note=f"{_seqs(todo)} da rielaborare ({RESUME_LABEL[scope]})")
+        detail = RESUME_LABEL[scope]
+        if lost:
+            detail += f"; {lost} {'completata' if lost == 1 else 'completate'} ma senza il file del modello"
+        return self.jobs.requeue(job_id, prepare=prepare, statuses=RESUMABLE, check=count,
+                                 note=f"{_seqs(todo)} da rielaborare ({detail})")
+
+    def _missing_models(self, job_id: str, final_dir: Path) -> list[dict]:
+        """Elementi completati il cui modello non è nella cartella definitiva del job."""
+        rows = self.db.query("SELECT idx, name, best_model FROM pipeline_items WHERE job_id=? AND status='completed' "
+                             "ORDER BY idx", (job_id,))
+        return [{"idx": r["idx"], "name": r["name"]} for r in rows if not _saved(final_dir, r["best_model"])]
 
     def resume_state(self, job: dict) -> dict:
         """Indicazione per l'interfaccia: la pipeline si può riprendere, e con quali elementi.
 
-        Costa una sola query aggregata sulla chiave primaria, e solo per pipeline fallite o annullate.
+        Costa una sola query aggregata sulla chiave primaria, e solo per pipeline terminate (fallite,
+        annullate o completate: queste ultime si riprendono se hanno elementi falliti).
         """
-        if job.get("kind") != "pipeline" or requeue_error(job) is not None:
+        if job.get("kind") != "pipeline" or requeue_error(job, RESUMABLE) is not None:
             return {"resumable": False, "resumable_items": None}
         row = self.db.query_one(
             f"SELECT COUNT(*) AS total, COALESCE(SUM({RESUME_WHERE['incomplete']}), 0) AS incomplete, "
@@ -159,7 +191,7 @@ class PipelineService:
         parallel = max(1, min(int(p.get("parallel", 2)), ctx.settings.effective_workers(), 8))
         done_lock = threading.Lock()
         done = {"n": already}
-        ctx.log(f"Pipeline di {total} sequenze, {parallel} in parallelo")
+        ctx.log(f"Pipeline di {_seqs(total)}, {parallel} in parallelo")
         skipped = total - already - len(items)
         if len(items) < total:
             ctx.log(f"Ripresa: {_seqs(len(items))} da elaborare, {already} già elaborate"
@@ -189,9 +221,10 @@ class PipelineService:
                                                     (ctx.job_id,))
                          if isinstance(row["metrics"], dict) and row["metrics"].get("search_cached_at"))
         if cache_hits:
-            ctx.log(f"{cache_hits} ricerche di template riusate dalla cache dei calcoli")
+            ctx.log(f"{cache_hits} " + ("ricerca di template riusata" if cache_hits == 1 else
+                                        "ricerche di template riusate") + " dalla cache dei calcoli")
         # Una ripresa "solo i falliti" lascia com'erano gli annullati: la pipeline non si dichiara completata
-        # (un job completato non si riprende più) ma resta annullata e riprendibile per quegli elementi.
+        # (quelle sequenze non sono mai state elaborate) ma resta annullata e riprendibile per quegli elementi.
         left = sum(n for status, n in counts.items() if status not in PROCESSED_ITEM)
         if left:
             one = left == 1
@@ -215,17 +248,28 @@ class PipelineService:
                 self._update(job_id, idx, stage=stage[:120])
 
         sub = ctx.sub(name, ctx.workdir / "items" / f"{idx:04d}_{name}", on_progress=on_progress)
-        ok = False
+        final: Optional[dict] = None
         try:
-            ok = self._run_item(ctx, sub, p, item)
+            final = self._run_item(ctx, sub, p, item)
         finally:
             # salvataggio progressivo: i file dell'elemento passano subito dallo scratch ai risultati
             try:
-                sub.commit(success=ok)
+                sub.commit(success=final is not None)
             except OSError as exc:
-                sub.log(f"Avviso: salvataggio dei file dell'elemento non riuscito: {exc}")
+                if final:  # il modello non è arrivato tra i risultati: l'elemento non è completato
+                    self._update(job_id, idx, status="failed", stage="Errore", finished_at=now_iso(),
+                                 error=f"Salvataggio dei file dell'elemento non riuscito: {exc}"[:2000])
+                    final = None
+                sub.log(f"ERRORE: salvataggio dei file dell'elemento non riuscito: {exc}")
+        # Completato solo con i file al sicuro: un'interruzione prima di qui lascia l'elemento non concluso,
+        # quindi il riavvio lo segna interrotto e la ripresa lo rifà.
+        if final:
+            self._update(job_id, idx, **final)
 
-    def _run_item(self, ctx: JobContext, sub: JobContext, p: dict, item: dict) -> bool:
+    def _run_item(self, ctx: JobContext, sub: JobContext, p: dict, item: dict) -> Optional[dict]:
+        """Elabora un elemento. None se è fallito (esito già registrato); altrimenti i campi da scrivere dopo
+        il salvataggio dei file: lo stato 'completed' con modello e metriche, oppure {} per un elemento
+        filtrato (esito già registrato: senza modello, i suoi file non sono essenziali)."""
         job_id, idx, name = ctx.job_id, item["idx"], item["name"]
         # provenienza della ricerca (cache dei calcoli), conservata anche nelle metriche finali
         search_info: dict = {}
@@ -247,7 +291,7 @@ class PipelineService:
                 if best is None:
                     self._update(job_id, idx, status="failed", stage="Nessun template",
                                  error="Nessun template omologo trovato.", finished_at=now_iso())
-                    return False
+                    return None
                 tw = p.get("twilight") or {}
                 twilight = best["identity"] < float(tw.get("identity", 25)) or best["coverage"] < float(tw.get("coverage", 40))
                 self._update(job_id, idx, template=best["template_id"], template_source=result["engine"],
@@ -258,7 +302,7 @@ class PipelineService:
                 if twilight and tw.get("filter", False):
                     self._update(job_id, idx, status="filtered", stage="Zona crepuscolare: saltata",
                                  error="Identità o copertura sotto soglia (filtro attivo).", finished_at=now_iso())
-                    return True
+                    return {}
                 templates = [{"id": best["pdb_id"], "chains": [best["chain"]]}]
             ctx.check()
             self._update(job_id, idx, status="modeling", stage="Modellazione")
@@ -270,14 +314,14 @@ class PipelineService:
             best_model = next(m for m in res["models"] if m["best"])
             q = best_model.get("quality") or {}
             rel = (sub.workdir / best_model["file"]).relative_to(ctx.workdir).as_posix()
-            self._update(job_id, idx, status="completed", stage="Completato", best_model=rel,
-                         dope=best_model.get("dope"), ga341=best_model.get("ga341"), grade=q.get("grade"),
-                         grade_score=q.get("grade_score"), rama_favored=q.get("rama_favored"),
-                         clashscore=q.get("clashscore"),
-                         metrics={"zdope": best_model.get("zdope"), "molpdf": best_model.get("molpdf"),
-                                  "models": len(res["models"]), **q, **search_info},
-                         finished_at=now_iso())
-            return True
+            self._update(job_id, idx, stage="Salvataggio dei file")
+            return {"status": "completed", "stage": "Completato", "best_model": rel,
+                    "dope": best_model.get("dope"), "ga341": best_model.get("ga341"), "grade": q.get("grade"),
+                    "grade_score": q.get("grade_score"), "rama_favored": q.get("rama_favored"),
+                    "clashscore": q.get("clashscore"),
+                    "metrics": {"zdope": best_model.get("zdope"), "molpdf": best_model.get("molpdf"),
+                                "models": len(res["models"]), **q, **search_info},
+                    "finished_at": now_iso()}
         except JobCancelled:
             raise
         except AppError as exc:
@@ -287,7 +331,7 @@ class PipelineService:
             sub.log(f"ERRORE INATTESO: {exc!r}")
             self._update(job_id, idx, status="failed", stage="Errore", error=f"{type(exc).__name__}: {exc}",
                          finished_at=now_iso())
-        return False
+        return None
 
     # ------------------------------------------------------------------------------ consultazione
     def items(self, job_id: str, *, page: int = 1, size: int = 25, status: Optional[str] = None,
@@ -355,6 +399,16 @@ class PipelineService:
 
 def _seqs(n: int) -> str:
     return f"{n} sequenza" if n == 1 else f"{n} sequenze"
+
+
+def _saved(final_dir: Path, rel: Optional[str]) -> bool:
+    """Il file (percorso relativo del modello di un elemento) è nella cartella definitiva del job."""
+    if not rel:
+        return False
+    try:
+        return safe_join(final_dir, *rel.split("/")).is_file()
+    except (AppError, OSError):
+        return False
 
 
 def _csv_safe(value):

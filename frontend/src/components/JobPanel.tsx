@@ -10,7 +10,7 @@ interface Props {
   summary: JobSummary | null;
   log?: string;
   onCancel?: () => void;
-  /** stato di ripresa del job completo (pipeline fallite o annullate) */
+  /** stato di ripresa del job completo (pipeline fallite, annullate o completate con elementi falliti) */
   resume?: { resumable?: boolean; resumable_items?: ResumeItems | null } | null;
   onResume?: (scope: ResumeScope) => Promise<void> | void;
   compact?: boolean;
@@ -77,8 +77,8 @@ export function JobPanel({ summary, log, onCancel, resume, onResume, compact = f
           <span className="small text-2">{options.text}</span>
           <div className="right row">
             <button className="btn btn-sm btn-primary" disabled={resuming} onClick={() => doResume("incomplete")}
-              title="Rielabora le sequenze non concluse; quelle completate restano come sono">
-              <Icon name="play" size={12} /> Riprendi
+              title={options.hint}>
+              <Icon name={summary.status === "completed" ? "refresh" : "play"} size={12} /> {options.label}
             </button>
             {options.failedOnly && (
               <button className="btn btn-sm" disabled={resuming} onClick={() => doResume("failed")}

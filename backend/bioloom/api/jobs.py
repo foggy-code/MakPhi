@@ -63,7 +63,8 @@ def cancel_job(job_id: str, core: Core = Depends(get_core)) -> dict:
 
 @router.post("/{job_id}/resume")
 def resume_job(job_id: str, body: Optional[ResumeIn] = None, core: Core = Depends(get_core)) -> dict:
-    """Riprende una pipeline fallita o annullata: rielabora solo gli elementi non conclusi (o i falliti)."""
+    """Riprende una pipeline fallita, annullata o completata con elementi falliti: rielabora solo gli elementi
+    non conclusi (o i falliti)."""
     return core.pipeline.resume(job_id, (body or ResumeIn()).scope)
 
 

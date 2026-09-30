@@ -186,6 +186,204 @@ def test_requeue_waits_in_queue_and_can_be_cancelled_again(tmp_path):
         db.close()
 
 
+def test_requeue_completed_only_when_explicitly_allowed(manager):
+    gate = threading.Event()
+    runs = []
+
+    def handler(ctx, params):
+        runs.append(1)
+        if len(runs) > 1:
+            gate.wait(10)  # la ripresa resta in esecuzione
+        return {"runs": len(runs)}
+
+    manager.register("twice", handler)
+    job_id = wait(manager, manager.submit("twice", {})["id"])["id"]
+    with pytest.raises(Conflict, match="già completato"):
+        manager.requeue(job_id)  # predefinito: solo falliti e annullati
+    with pytest.raises(ValueError):
+        manager.requeue(job_id, statuses=frozenset({"completed", "running"}))  # mai da uno stato attivo
+
+    def refuse(_job):
+        raise Conflict("niente da riprendere")
+
+    with pytest.raises(Conflict, match="niente da riprendere"):
+        manager.requeue(job_id, statuses=frozenset({"completed"}), check=refuse)
+    assert manager.get(job_id)["status"] == "completed" and len(runs) == 1  # rifiutata dal controllo: nulla cambia
+    seen = []
+    manager.requeue(job_id, statuses=frozenset({"completed"}), check=lambda job: seen.append(job["status"]))
+    assert seen == ["completed"]  # il controllo vede il job riletto, prima del passaggio a 'queued'
+    start = time.time()
+    while manager.get(job_id)["status"] != "running" and time.time() - start < 10:
+        time.sleep(0.02)
+    job = manager.get(job_id)
+    assert job["status"] == "running" and job["progress"] == 0  # non più la barra piena del job completato
+    gate.set()
+    done = wait(manager, job_id)
+    assert done["status"] == "completed" and done["result"] == {"runs": 2} and done["progress"] == 1
+
+
+def _scratch_manager(tmp_path, name: str):
+    db = Database(tmp_path / f"{name}.db")
+    mgr = JobManager(db, tmp_path / "jobs", workers=1, settings_provider=UserSettings,
+                     scratch_dir=tmp_path / "scratch")
+    return db, mgr
+
+
+def test_delete_and_resume_never_both_succeed(tmp_path):
+    """Eliminazione e ripresa concorrenti: o il job sparisce e la ripresa non lo trova, o la ripresa parte e
+    l'eliminazione è rifiutata. Mai un job eliminato mentre riparte (cartelle orfane, processi non annullabili)."""
+    db, mgr = _scratch_manager(tmp_path, "d")
+    gate = threading.Event()
+    runs = []
+
+    def handler(ctx, params):
+        runs.append(1)
+        if len(runs) == 1:
+            raise AppError("primo tentativo fallito")
+        gate.wait(10)  # la ripresa resta in esecuzione
+        (ctx.workdir / "modello.pdb").write_text("ATOM\n")
+        return {}
+
+    mgr.register("flaky", handler)
+    try:
+        job_id = mgr.submit("flaky", {})["id"]
+        assert wait(mgr, job_id)["status"] == "failed"
+        # l'eliminazione si ferma a metà (in _close_log) mentre arriva la ripresa
+        in_delete, release = threading.Event(), threading.Event()
+        close_log = mgr._close_log
+
+        def held_close_log(jid):
+            if threading.current_thread().name == "elimina":
+                in_delete.set()
+                release.wait(10)
+            close_log(jid)
+
+        mgr._close_log = held_close_log
+        outcome = {}
+
+        def delete():
+            try:
+                mgr.delete(job_id)
+                outcome["delete"] = "ok"
+            except Conflict:
+                outcome["delete"] = "conflict"
+
+        deleter = threading.Thread(target=delete, name="elimina")
+        deleter.start()
+        assert in_delete.wait(5)
+        try:
+            mgr.requeue(job_id)
+            outcome["resume"] = "ok"
+            start = time.time()
+            while mgr.get(job_id)["status"] != "running" and time.time() - start < 5:
+                time.sleep(0.02)
+        except NotFound:
+            outcome["resume"] = "notfound"
+        except Conflict:
+            outcome["resume"] = "conflict"
+        release.set()
+        deleter.join(20)
+        assert outcome in ({"delete": "ok", "resume": "notfound"}, {"delete": "conflict", "resume": "ok"}), outcome
+        gate.set()
+        if outcome["delete"] == "ok":
+            with pytest.raises(NotFound):
+                mgr.get(job_id)
+            with pytest.raises(NotFound):
+                mgr.cancel(job_id)
+            assert len(runs) == 1  # nessuna esecuzione ripartita
+            assert not mgr.workdir(job_id).exists() and not mgr.live_dir(job_id).exists()
+        else:
+            assert wait(mgr, job_id)["status"] == "completed"
+            assert (mgr.workdir(job_id) / "modello.pdb").exists()
+    finally:
+        gate.set()
+        mgr.shutdown()
+        db.close()
+
+
+def test_delete_waits_for_a_resume_being_prepared(tmp_path):
+    """Ripresa annullata mentre si prepara (stato già terminale): l'eliminazione aspetta la fine della
+    preparazione invece di cancellare i file mentre questa li sta azzerando."""
+    db, mgr = _scratch_manager(tmp_path, "p")
+    mgr.register("once", lambda ctx, p: (_ for _ in ()).throw(AppError("guasto")))
+    try:
+        job_id = wait(mgr, mgr.submit("once", {})["id"])["id"]
+        preparing, go = threading.Event(), threading.Event()
+
+        def slow_prepare(_job_id, final_dir):
+            preparing.set()
+            go.wait(10)
+            (final_dir / "items").mkdir(exist_ok=True)
+            (final_dir / "items" / "azzerato.txt").write_text("preparazione")
+
+        outcome = {}
+
+        def resume():
+            try:
+                mgr.requeue(job_id, prepare=slow_prepare)
+                outcome["resume"] = "ok"
+            except NotFound:  # eliminato subito dopo la preparazione
+                outcome["resume"] = "notfound"
+
+        def delete():
+            try:
+                mgr.delete(job_id)
+                outcome["delete"] = "ok"
+            except Exception as exc:  # l'esito si controlla sotto
+                outcome["delete"] = repr(exc)
+
+        resumer = threading.Thread(target=resume)
+        resumer.start()
+        assert preparing.wait(5)
+        assert mgr.cancel(job_id)["status"] == "cancelled"
+        deleter = threading.Thread(target=delete)
+        deleter.start()
+        time.sleep(0.3)
+        assert deleter.is_alive()  # in attesa della preparazione
+        go.set()
+        resumer.join(20)
+        deleter.join(20)
+        assert outcome["delete"] == "ok" and outcome["resume"] in ("ok", "notfound"), outcome
+        with pytest.raises(NotFound):
+            mgr.get(job_id)
+        assert not mgr.workdir(job_id).exists()  # nessuna cartella ricreata dopo l'eliminazione
+    finally:
+        go.set()
+        mgr.shutdown()
+        db.close()
+
+
+def test_final_state_is_written_even_if_saving_the_files_fails(tmp_path):
+    """Disco dati pieno: il job finisce 'failed' con il motivo invece di restare 'running' fino al riavvio."""
+    db, mgr = _scratch_manager(tmp_path, "f")
+    commit = mgr._commit
+    full = {"on": True}
+
+    def disk_full(job_id, source, *, success):
+        if full["on"]:
+            raise OSError(28, "No space left on device")
+        commit(job_id, source, success=success)
+
+    mgr._commit = disk_full
+    mgr.register("app_err", lambda ctx, p: (_ for _ in ()).throw(AppError("errore chiaro")))
+    mgr.register("ok", lambda ctx, p: {"ok": True})
+    try:
+        failed = wait(mgr, mgr.submit("app_err", {})["id"], timeout=10)
+        assert failed["status"] == "failed" and failed["error"].startswith("errore chiaro")
+        assert "salvataggio dei file non riuscito" in failed["error"]
+        assert "salvataggio dei file non riuscito" in mgr.read_log(failed["id"])["text"]
+        ok = wait(mgr, mgr.submit("ok", {})["id"], timeout=10)
+        assert ok["status"] == "failed" and "No space left on device" in ok["error"]
+        # chiuso davvero: si può riprendere subito, senza attendere
+        full["on"] = False
+        mgr.register("app_err", lambda ctx, p: {"ok": True})
+        mgr.requeue(failed["id"])
+        assert wait(mgr, failed["id"])["status"] == "completed"
+    finally:
+        mgr.shutdown()
+        db.close()
+
+
 def test_requeue_prepare_failure_leaves_job_failed(manager):
     manager.register("once", lambda ctx, p: (_ for _ in ()).throw(AppError("guasto")))
     job_id = wait(manager, manager.submit("once", {})["id"])["id"]

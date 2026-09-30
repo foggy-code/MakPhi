@@ -31,9 +31,9 @@ export interface Job<R = unknown> extends JobSummary {
   params: Record<string, unknown>;
   result: R | null;
   files: JobFile[];
-  /** pipeline fallita o annullata con elementi non conclusi: si può riprendere */
+  /** pipeline terminata con elementi non conclusi (anche completata, con elementi falliti): si può riprendere */
   resumable: boolean;
-  /** conteggi per i pulsanti di ripresa (solo pipeline fallite o annullate, altrimenti null) */
+  /** conteggi per i pulsanti di ripresa (solo pipeline terminate, altrimenti null) */
   resumable_items: ResumeItems | null;
 }
 

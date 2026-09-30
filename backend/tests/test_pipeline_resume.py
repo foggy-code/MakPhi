@@ -123,7 +123,7 @@ def test_resume_after_cancel_processes_only_unfinished_items(pipe):
     assert fake.calls == ["c", "d", "e"]  # gli elementi già conclusi non si rifanno
     assert done["result"] == {"total": 5, "counts": {"completed": 5}, "search_cache_hits": 0}
     assert done["progress"] == 1 and done["error"] is None
-    assert done["resumable"] is False and done["resumable_items"] is None
+    assert done["resumable"] is False and done["resumable_items"] == {"total": 5, "incomplete": 0, "failed": 0}
     # il file del tentativo interrotto è sparito, il nuovo modello c'è, gli altri elementi sono intatti
     assert not stale.exists()
     assert (final / "items" / "0002_c" / "c.B99990001.pdb").exists()
@@ -338,7 +338,6 @@ def test_resume_in_auto_mode_clears_search_results(pipe, monkeypatch):
     done = wait_job(client, job_id)
     assert done["status"] == "completed" and statuses(client, job_id) == {"a": "completed", "b": "failed"}
     assert items(client, job_id)["b"]["identity"] == 30.0
-    core.db.execute("UPDATE jobs SET status='failed' WHERE id=?", (job_id,))  # per poterla riprendere
     fake.fail.clear()
     fake.hold("b")
     identity["value"] = 80.0
@@ -352,3 +351,102 @@ def test_resume_in_auto_mode_clears_search_results(pipe, monkeypatch):
     b = items(client, job_id)["b"]
     assert b["status"] == "completed" and b["identity"] == 80.0 and b["template"] == "1UBQ_A"
     assert items(client, job_id)["a"]["identity"] == 30.0  # l'elemento concluso non cambia
+
+
+def test_completed_pipeline_with_failed_items_can_be_retried(pipe):
+    client, core, fake, submit = pipe
+    fake.fail.add("b")
+    job_id = submit(names=["a", "b", "c"])
+    done = wait_job(client, job_id)
+    assert done["status"] == "completed" and statuses(client, job_id) == {"a": "completed", "b": "failed",
+                                                                          "c": "completed"}
+    assert done["resumable"] is True and done["resumable_items"] == {"total": 3, "incomplete": 1, "failed": 1}
+    kept = core.jobs.workdir(job_id) / "items" / "0000_a" / "a.B99990001.pdb"
+    kept_stamp = kept.stat().st_mtime_ns
+
+    fake.fail.clear()
+    fake.hold("b")
+    fake.calls.clear()
+    r = client.post(f"/api/jobs/{job_id}/resume", json={"scope": "failed"})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] in ("queued", "running") and r.json()["error"] is None
+    until(lambda: "b" in fake.calls)
+    running = client.get(f"/api/jobs/{job_id}").json()
+    assert running["status"] == "running" and running["stage"] == "2 di 3 sequenze elaborate"
+    assert running["result"] is None and running["resumable"] is False
+    fake.let_go()
+    again = wait_job(client, job_id)
+    assert again["status"] == "completed" and again["error"] is None and fake.calls == ["b"]
+    assert again["result"]["counts"] == {"completed": 3} and again["progress"] == 1
+    assert again["resumable"] is False and again["resumable_items"] == {"total": 3, "incomplete": 0, "failed": 0}
+    assert kept.stat().st_mtime_ns == kept_stamp
+    assert "Ripresa del job: 1 sequenza da rielaborare (solo i falliti)" in client.get(
+        f"/api/jobs/{job_id}/log").json()["text"]
+    # completata senza più falliti: nulla da riprendere, come prima
+    for scope in ("incomplete", "failed"):
+        r = client.post(f"/api/jobs/{job_id}/resume", json={"scope": scope})
+        assert r.status_code == 409 and "già completato" in r.json()["error"]["message"]
+    assert fake.calls == ["b"]
+
+
+def test_item_is_completed_only_after_its_files_are_saved(pipe, monkeypatch):
+    """Disco dati pieno mentre si salvano i file di un elemento: l'elemento non risulta completato (con un
+    modello che non c'è), ma fallito, e la ripresa lo rifà."""
+    client, core, fake, submit = pipe
+    commit = core.jobs._commit
+
+    def disk_full_for_b(job_id, source, *, success):
+        if source.name == "0001_b":
+            raise OSError(28, "No space left on device")
+        commit(job_id, source, success=success)
+
+    monkeypatch.setattr(core.jobs, "_commit", disk_full_for_b)
+    job_id = submit(names=["a", "b", "c"])
+    done = wait_job(client, job_id)
+    assert statuses(client, job_id) == {"a": "completed", "b": "failed", "c": "completed"}
+    b = items(client, job_id)["b"]
+    assert "Salvataggio dei file dell'elemento non riuscito" in b["error"] and "No space left" in b["error"]
+    assert b["best_model"] is None and b["dope"] is None
+    assert done["status"] == "completed" and done["resumable_items"] == {"total": 3, "incomplete": 1, "failed": 1}
+    csv_text = client.get(f"/api/pipeline/{job_id}/export.csv").text
+    assert "b.B99990001.pdb" not in csv_text  # nessun modello dichiarato per l'elemento non salvato
+
+    monkeypatch.setattr(core.jobs, "_commit", commit)
+    fake.calls.clear()
+    assert client.post(f"/api/jobs/{job_id}/resume").status_code == 200
+    again = wait_job(client, job_id)
+    assert again["status"] == "completed" and fake.calls == ["b"]
+    b = items(client, job_id)["b"]
+    assert b["status"] == "completed" and b["best_model"] == "items/0001_b/b.B99990001.pdb"
+    assert (core.jobs.workdir(job_id) / b["best_model"]).is_file()
+
+
+def test_resume_redoes_completed_items_whose_model_was_never_saved(pipe):
+    """Dati lasciati da una versione precedente (elemento segnato completato prima di spostarne i file, poi
+    salvataggio mai riuscito): la ripresa rifà anche quegli elementi."""
+    client, core, fake, submit = pipe
+    fake.fail.add("c")
+    job_id = submit(names=["a", "b", "c"])
+    assert wait_job(client, job_id)["status"] == "completed"
+    final = core.jobs.workdir(job_id)
+    lost = final / "items" / "0001_b" / "b.B99990001.pdb"
+    lost.unlink()
+    kept = final / "items" / "0000_a" / "a.B99990001.pdb"
+    kept_stamp = kept.stat().st_mtime_ns
+
+    fake.fail.clear()
+    fake.calls.clear()
+    assert client.post(f"/api/jobs/{job_id}/resume", json={"scope": "failed"}).status_code == 200
+    done = wait_job(client, job_id)
+    assert done["status"] == "completed" and fake.calls == ["b", "c"]
+    assert done["result"]["counts"] == {"completed": 3}
+    assert lost.is_file() and kept.stat().st_mtime_ns == kept_stamp
+    log = client.get(f"/api/jobs/{job_id}/log").json()["text"]
+    assert ("Ripresa del job: 2 sequenze da rielaborare (solo i falliti; 1 completata ma senza il file del "
+            "modello)") in log
+    # anche senza elementi falliti: il modello mancante basta per riprendere
+    kept.unlink()
+    fake.calls.clear()
+    assert client.post(f"/api/jobs/{job_id}/resume").status_code == 200
+    assert wait_job(client, job_id)["status"] == "completed" and fake.calls == ["a"]
+    assert kept.is_file()

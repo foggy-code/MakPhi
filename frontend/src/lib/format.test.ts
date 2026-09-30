@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { cachedLabel } from "./format";
+import { cachedLabel, searchCacheHitsLabel } from "./format";
+
+describe("searchCacheHitsLabel", () => {
+  it("nessuna nota senza ricerche riusate", () => {
+    expect(searchCacheHitsLabel(0)).toBeNull();
+    expect(searchCacheHitsLabel(undefined)).toBeNull();
+    expect(searchCacheHitsLabel(null)).toBeNull();
+  });
+  it("singolare e plurale", () => {
+    expect(searchCacheHitsLabel(1)).toBe("1 ricerca di template dalla cache");
+    expect(searchCacheHitsLabel(2)).toBe("2 ricerche di template dalla cache");
+  });
+});
 
 describe("cachedLabel", () => {
   it("nessuna nota per i risultati calcolati ora o dei job precedenti alla cache", () => {
