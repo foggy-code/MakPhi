@@ -17,6 +17,7 @@ from typing import Optional
 from ..core.errors import AppError, ToolUnavailable
 from ..core.jobs import JobContext, default_env
 from ..core.storage import atomic_write_text, read_json
+from ..domain import ligands as ligands_mod
 from ..domain import plddt, sequences, structure
 from ..domain.sequences import PirEntry
 from . import tools
@@ -26,15 +27,25 @@ _RESIDUE_ID = re.compile(r"^-?\d+[A-Za-z]?:[A-Za-z0-9]$")
 _ATOM_ID = re.compile(r"^[A-Za-z0-9']{1,4}:-?\d+[A-Za-z]?:[A-Za-z0-9]$")
 REFINEMENTS = ("very_fast", "fast", "normal", "thorough")
 LOOP_LEVELS = {"very_fast": "refine.very_fast", "fast": "refine.fast", "slow": "refine.slow"}
+# Gruppo eteroatomico nelle opzioni: catena (anche di più caratteri nei mmCIF), numero con codice di inserzione,
+# nome del componente chimico (fino a 5 caratteri nei mmCIF)
+_LIGAND_CHAIN = re.compile(r"^[A-Za-z0-9]{1,4}$")
+_LIGAND_RESNUM = re.compile(r"^-?\d{1,6}[A-Za-z]?$")
+_LIGAND_NAME = re.compile(r"^[A-Za-z0-9]{1,5}$")
+MAX_LIGANDS = 100
 
 
 @dataclass
 class TemplateSpec:
     id: str
     chains: list[str] = field(default_factory=list)
+    # Trasferimento dei gruppi eteroatomici (ligandi, cofattori, metalli) nel modello
     hetatm: bool = False
     # Template predetto (AlphaFold): si tolgono i residui con pLDDT (colonna B-factor) sotto la soglia; None = no
     plddt_min: Optional[float] = None
+    # Gruppi da trasferire come (catena, numero, nome); None = scelta predefinita (domain/ligands.select: niente
+    # additivi, ioni monovalenti e residui modificati). Conta solo con `hetatm`.
+    ligands: Optional[list[tuple[str, str, str]]] = None
 
 
 @dataclass
@@ -62,6 +73,10 @@ class ModelOptions:
     # Solo per i template AlphaFold: ritaglio dei residui con pLDDT < plddt_min (domain/plddt.py)
     plddt_trim: bool = True
     plddt_min: float = plddt.DEFAULT_THRESHOLD
+    # Gruppi eteroatomici da trasferire: [{"template", "chain", "resnum", "resname"}] ("template" vuoto = qualunque
+    # template con quel gruppo). None = scelta predefinita dei template con i ligandi attivi; un elenco = solo quei
+    # gruppi (e attiva il trasferimento per i loro template).
+    ligands: Optional[list[dict]] = None
 
 
 def modeller_python(ctx: JobContext) -> str:
@@ -84,6 +99,14 @@ def prepare_template(source: Path, spec: TemplateSpec, dest_dir: Path) -> dict:
     `_residues` (chiave interna, da non salvare nei risultati) elenca i residui del template completo con l'esito,
     per riportare sul ritaglio un PIR scritto sul template completo. La copia resta riconoscibile come il file
     d'origine (`_provenance_header`): modello AlphaFold oppure struttura con il suo metodo (EXPDTA).
+
+    Ligandi (`spec.hetatm`): si scrivono solo i gruppi scelti (`domain/ligands.select`: quelli di `spec.ligands`
+    oppure la scelta predefinita), in fondo alla loro catena e nell'ordine del file, così le colonne '.' del PIR
+    (`ligands.pir_with_ligands`) corrispondono ai gruppi che MODELLER legge. `ligand_groups` li descrive con il sito
+    nel file originale (donatori dei metalli, acque comprese, e legami covalenti) per il confronto dopo la
+    modellazione; `ligands_excluded` elenca i gruppi delle catene scelte lasciati fuori, con il motivo. Le chiavi
+    interne `_chain_residues` (residui ATOM per catena nella copia) e `_hetero` (eteroatomi delle catene) servono
+    al PIR.
     """
     st = structure.load_structure(source, spec.id)
     model = structure.first_model(st)
@@ -111,7 +134,19 @@ def prepare_template(source: Path, spec: TemplateSpec, dest_dir: Path) -> dict:
                 f"{kept} su {len(trim['rows'])} (minimo {plddt.MIN_TRIMMED_RESIDUES}): il modello AlphaFold è poco "
                 "affidabile in questa regione. Abbassa la soglia pLDDT o disattiva il ritaglio nelle opzioni di "
                 "modellazione, oppure cerca un altro template.", code="plddt_too_few")
-    structure.write_pdb(st, dest, chains=chains, keep_hetero=spec.hetatm, keep_water=False, exclude=removed or None)
+    selected = ligands_mod.select(model, chains, spec.ligands) if spec.hetatm else []
+    selected_ids = {(r.get_parent().id, r.id) for r in selected}
+    keep = set(selected_ids)
+    if spec.hetatm:  # come prima: con i ligandi attivi le selenometionine restano (convertite in MET)
+        keep |= {(c.id, r.id) for c in model if c.id in chains for r in c if r.get_resname().strip() == "MSE"}
+    # siti nel file originale (con le acque, che la copia non ha), prima di riordinare le catene
+    groups = ligands_mod.describe_groups(model, selected) if selected else []
+    candidates = ligands_mod.candidates(model, chains)
+    for chain in model:  # gruppi scelti in fondo alla loro catena: MODELLER li legge dopo l'ultimo residuo
+        if chain.id in chains:
+            chain.child_list.sort(key=lambda r, c=chain.id: (c, r.id) in selected_ids)
+    structure.write_pdb(st, dest, chains=chains, keep_hetero=keep or False, keep_water=False,
+                        exclude=removed or None)
     _convert_selenomethionine(dest)
     header, predicted = _provenance_header(source, model, spec.id)
     if header:  # provenienza riconoscibile anche nella copia del job (per AlphaFold i B-factor restano pLDDT)
@@ -121,21 +156,26 @@ def prepare_template(source: Path, spec: TemplateSpec, dest_dir: Path) -> dict:
                           + (f" FRAGMENTS {trim['fragments']}" if trim["fragments"] else ""))
         body = dest.read_text(encoding="utf-8")
         atomic_write_text(dest, "\n".join(line.ljust(80) for line in header) + "\n" + body)
+    prepared = structure.first_model(structure.load_structure(dest, code))
     if removed:
-        summaries = {c["chain"]: c for c in structure.chain_summaries(
-            structure.first_model(structure.load_structure(dest, code)))}
+        summaries = {c["chain"]: c for c in structure.chain_summaries(prepared)}
         empty = [c for c in chains if c not in summaries]
         if empty:
             raise AppError(f"Nessun residuo della catena {', '.join(empty)} del template {spec.id} ha pLDDT ≥ "
                            f"{float(spec.plddt_min):g}: togli la catena o abbassa la soglia.", code="plddt_too_few")
-    ligands = []
-    if spec.hetatm:
-        ligands = [g for g in structure.hetero_groups(structure.first_model(structure.load_structure(dest, code)))]
     info = {
         "id": spec.id, "code": code, "file": dest.name, "chains": chains,
         "first": summaries[chains[0]]["first"], "last": summaries[chains[-1]]["last"],
-        "sequence": "/".join(summaries[c]["sequence"] for c in chains), "ligands": len(ligands),
+        "sequence": "/".join(summaries[c]["sequence"] for c in chains), "ligands": len(selected),
     }
+    if spec.hetatm:
+        info["ligand_groups"] = groups
+        chosen = {(g["chain"], g["resnum"], g["resname"]) for g in groups}
+        info["ligands_excluded"] = [
+            {k: g[k] for k in ("resname", "chain", "resnum", "class", "label", "reason")} for g in candidates
+            if (g["chain"], g["resnum"], g["resname"]) not in chosen]
+    info["_chain_residues"] = {c.id: sum(1 for r in c if r.id[0] == " ") for c in prepared}
+    info["_hetero"] = [(g["chain"], g["resnum"]) for g in candidates]
     if trim is not None:
         values = [row[4] for row in trim["rows"]]
         kept_values = [row[4] for row in trim["rows"] if row[5]]
@@ -274,7 +314,10 @@ def pair_file(index: int) -> str:
     return f"alignment_pair_{index + 1}.ali"
 
 
-def build_model_script(knowns: list[str], target_code: str, opts: ModelOptions) -> str:
+def build_model_script(knowns: list[str], target_code: str, opts: ModelOptions,
+                       hetatm: Optional[bool] = None) -> str:
+    """Script di AutoModel/DOPELoopModel. `hetatm`: MODELLER legge i gruppi HETATM dei template (quelli scritti nelle
+    copie preparate, con le colonne '.' nel PIR); None = come l'opzione `hetatm`."""
     base = "DOPELoopModel" if opts.loop_refinement else "AutoModel"
     body = [f"class BioLoomModel({base}):", "    _done = 0", "    _loops_done = 0"]
     if opts.restraints:
@@ -307,7 +350,7 @@ def build_model_script(knowns: list[str], target_code: str, opts: ModelOptions) 
     lines = [_header(), *body, "",
              f"env = Environ(rand_seed={int(opts.seed)})",
              "env.io.atom_files_directory = ['.']"]
-    if opts.hetatm:
+    if (opts.hetatm if hetatm is None else hetatm):
         lines.append("env.io.hetatm = True")
     lines += [
         f"a = BioLoomModel(env, alnfile='alignment.ali', knowns={knowns_tuple}, sequence={target_code!r},",
@@ -417,6 +460,7 @@ def parse_options(raw: dict) -> ModelOptions:
         raise AppError("La soglia pLDDT deve essere un numero tra 0 e 100.")
     if not 0 <= opts.plddt_min <= 100:
         raise AppError("La soglia pLDDT deve essere compresa tra 0 e 100 (predefinita 70).")
+    opts.ligands = _parse_ligands(raw.get("ligands"))
     loop = raw.get("loop") or {}
     opts.loop_refinement = bool(loop.get("enabled", False))
     opts.loop_models = int(loop.get("models", 4))
@@ -446,6 +490,33 @@ def parse_options(raw: dict) -> ModelOptions:
         else:
             raise AppError(f"Tipo di vincolo sconosciuto: {rtype}")
     return opts
+
+
+def _parse_ligands(raw) -> Optional[list[dict]]:
+    """Opzione `ligands`: None (scelta predefinita) oppure l'elenco dei gruppi da trasferire, validati (i valori
+    finiscono nei nomi dei residui scritti da Biopython, mai negli script di MODELLER)."""
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise AppError("L'opzione ligands deve essere un elenco di gruppi {template, chain, resnum, resname}.")
+    if len(raw) > MAX_LIGANDS:
+        raise AppError(f"Troppi ligandi da trasferire ({len(raw)}, massimo {MAX_LIGANDS}).")
+    out, seen = [], set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise AppError("Ogni ligando da trasferire è un oggetto {template, chain, resnum, resname}.")
+        entry = {"template": str(item.get("template") or "").strip(), "chain": str(item.get("chain") or "").strip(),
+                 "resnum": str(item.get("resnum") or "").strip(), "resname": str(item.get("resname") or "").strip()}
+        if not (_LIGAND_CHAIN.match(entry["chain"]) and _LIGAND_RESNUM.match(entry["resnum"])
+                and _LIGAND_NAME.match(entry["resname"])) or len(entry["template"]) > 60:
+            raise AppError(f"Ligando non valido: {entry['resname'] or '?'} {entry['chain'] or '?'}"
+                           f"{entry['resnum'] or '?'} (catena, numero e nome come nel file del template, "
+                           "es. ZN A101).", code="invalid_ligand")
+        key = tuple(entry.values())
+        if key not in seen:
+            seen.add(key)
+            out.append(entry)
+    return out
 
 
 # --------------------------------------------------------------------------------- esecuzione

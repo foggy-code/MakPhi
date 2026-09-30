@@ -12,6 +12,7 @@ import type {
   InterProDomain,
   Job,
   JobSummary,
+  LigandRef,
   PipelineItem,
   PipelinePage,
   PipelineRequest,
@@ -241,7 +242,8 @@ export const api = {
     post<JobSummary>("/api/align", { ...body, mode: "structural" }),
   align2d: (body: { project_id?: string; target: { name: string; sequence: string }; templates: TemplateRef[] }) =>
     post<JobSummary>("/api/align2d", body),
-  model: (body: { project_id?: string; target?: { name: string; sequence: string } | null; alignment?: string | null; templates: TemplateRef[]; options: Record<string, unknown>; quality: string; extended_quality?: boolean }) =>
+  /** `options.hetatm` + `options.ligands`: ligandi, cofattori e metalli da trasferire (elenco = solo quei gruppi) */
+  model: (body: { project_id?: string; target?: { name: string; sequence: string } | null; alignment?: string | null; templates: TemplateRef[]; options: Record<string, unknown> & { hetatm?: boolean; ligands?: LigandRef[] }; quality: string; extended_quality?: boolean }) =>
     post<JobSummary>("/api/model", body),
   loop: (body: { project_id?: string; source: StructureSource; chain: string; start: number; end: number; models: number; level: string }) =>
     post<JobSummary>("/api/model/loop", body),

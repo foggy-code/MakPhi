@@ -22,7 +22,7 @@ from typing import Optional
 from ..core.errors import AppError, ToolUnavailable
 from ..core.jobs import JobCancelled, JobContext
 from ..core.parallel import Steps
-from ..domain import clashes, consensus, grading, perresidue, plddt, ramachandran, secondary, structure
+from ..domain import clashes, consensus, grading, ligands, perresidue, plddt, ramachandran, secondary, structure
 from . import modeller, procheck, prosa, tools
 
 # ASA massima teorica per residuo (Tien et al. 2013), per la SASA relativa.
@@ -354,6 +354,15 @@ def analyze(path: Path, ctx: Optional[JobContext] = None, *, with_dope: bool = T
         "residues": residues,
         "warnings": warnings,
     }
+    # ligandi, cofattori e metalli (F5.4): solo se la struttura ha gruppi eteroatomici non d'acqua; il voto non cambia.
+    # Nella modellazione run_modeling la ripete con il confronto dei siti del template.
+    try:
+        checked = ligands.evaluate(model)
+    except (ValueError, KeyError, IndexError) as exc:  # la verifica dei ligandi non ferma l'analisi
+        checked = None
+        warnings.append(f"Verifica dei ligandi non riuscita: {exc}")
+    if checked is not None:
+        report["ligands"] = checked
     # consenso con i metodi di questa analisi; QMEAN e GA341 si aggiungono dopo (run_modeling, rotta del consenso)
     report["consensus"] = consensus.compute(report)
     if ctx is not None:  # durata dei passi nel log, non nel rapporto (che non dipende dai tempi)

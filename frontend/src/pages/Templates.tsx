@@ -10,6 +10,7 @@ import { isAlphaFoldId, isUniProtAccession, normalizeAccession, PLDDT_BAND_LABEL
 import { useToast } from "../lib/context";
 import { fmtBytes, fmtNum, relTime } from "../lib/format";
 import { useAsync } from "../lib/hooks";
+import { CLASS_LABEL, CLASS_TONE, groupClass } from "../lib/ligands";
 
 /** Avviso e dettagli di un modello predetto (AlphaFold): versione, intervallo UniProt, fasce di pLDDT. */
 function PredictedNote({ meta }: { meta: TemplateItem }) {
@@ -102,10 +103,13 @@ function TemplateDetail({ id, onDeleted }: { id: string; onDeleted: () => void }
         </p>
       </Card>
       {(ligands.length > 0 || additives.length > 0) && (
-        <Card title="Ligandi ed eteroatomi" sub="Selezionabili come HETATM nella modellazione">
+        <Card title="Ligandi ed eteroatomi" sub="Trasferibili nel modello (Modellazione → Trasferisci ligandi, cofattori e metalli)">
           <div className="row">
-            {ligands.map((l, i) => <Badge key={i} tone="accent" title={`${l.atoms} atomi`}>{l.resname} {l.chain}{l.resnum}</Badge>)}
-            {additives.map((l, i) => <Badge key={`x${i}`} title="Additivo di cristallizzazione">{l.resname} {l.chain}{l.resnum}</Badge>)}
+            {[...ligands, ...additives].map((l, i) => (
+              <Badge key={i} tone={CLASS_TONE[groupClass(l)]} title={[`${l.atoms} ${l.atoms === 1 ? "atomo" : "atomi"}`, l.description, l.reason].filter(Boolean).join(" · ")}>
+                {l.resname} {l.chain}{l.resnum} · {l.label ?? CLASS_LABEL[groupClass(l)]}
+              </Badge>
+            ))}
           </div>
         </Card>
       )}

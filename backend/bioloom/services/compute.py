@@ -15,7 +15,7 @@ from ..core.errors import AppError, Conflict, NotFound
 from ..core.jobs import QMEAN_LOCAL, JobCancelled, JobContext, JobManager
 from ..core.parallel import Steps
 from ..core.storage import atomic_write_json, atomic_write_text, read_json, safe_join
-from ..domain import consensus, multitemplate, sequences, template_rank
+from ..domain import consensus, ligands, multitemplate, sequences, structure, template_rank
 from ..domain.sequences import SeqRecord
 from ..engines import align, modeller, qmean_local, quality, remote, search
 from ..engines.modeller import TemplateSpec
@@ -37,8 +37,9 @@ class PreparedTemplates:
     opzioni ricevono una copia del file già preparato nella propria cartella di lavoro.
 
     - **Chiave:** id del template, file della libreria (percorso, dimensione, data di modifica in ns), catene, ligandi
-      e soglia del ritaglio pLDDT (None = nessun ritaglio). Un template sostituito nella libreria durante il job
-      (nuovo download o caricamento con lo stesso id) cambia chiave e si prepara di nuovo.
+      (trasferimento attivo e gruppi scelti, None = scelta predefinita) e soglia del ritaglio pLDDT (None = nessun
+      ritaglio). Un template sostituito nella libreria durante il job (nuovo download o caricamento con lo stesso id)
+      cambia chiave e si prepara di nuovo.
     - **Dove:** cartella nascosta dello scratch del job (`.tmp/templates`), mai tra i risultati e svuotata a fine
       job: la cache vive quanto un'esecuzione, e una ripresa ne crea una nuova.
     - **Concorrenza:** un lock per chiave; un elemento parallelo con lo stesso template aspetta la prima preparazione
@@ -59,8 +60,9 @@ class PreparedTemplates:
     @staticmethod
     def key(source: Path, spec: TemplateSpec) -> tuple:
         stat = source.stat()
+        chosen = None if spec.ligands is None else tuple(sorted(tuple(g) for g in spec.ligands))
         return (spec.id, str(source), stat.st_size, stat.st_mtime_ns, tuple(spec.chains), bool(spec.hetatm),
-                None if spec.plddt_min is None else float(spec.plddt_min))
+                chosen if spec.hetatm else None, None if spec.plddt_min is None else float(spec.plddt_min))
 
     def get(self, source: Path, spec: TemplateSpec, dest_dir: Path,
             check: Callable[[], None]) -> tuple[dict, bool]:
@@ -114,6 +116,37 @@ def _template_specs(raw: list[dict]) -> list[TemplateSpec]:
             raise AppError("Template senza identificativo.")
         specs.append(TemplateSpec(id=tid, chains=chains, hetatm=bool(t.get("hetatm", False))))
     return specs
+
+
+def _apply_ligand_options(specs: list[TemplateSpec], opts: modeller.ModelOptions) -> None:
+    """Gruppi eteroatomici da trasferire per ogni template.
+
+    * `opts.hetatm`: ligandi attivi per tutti i template (oltre a quelli con `hetatm` nel riferimento del template);
+    * `opts.ligands` None: scelta predefinita dei template attivi (niente additivi né ioni monovalenti);
+    * `opts.ligands` elenco: esattamente quei gruppi. Una voce vale per il template indicato (il template si può
+      omettere solo con un template) e attiva il trasferimento per quel template; un template attivo senza voci non
+      trasferisce nulla. Una voce per un template che non è tra quelli scelti è un errore.
+    """
+    known = {normalize_id(s.id) for s in specs}
+    for g in opts.ligands or []:
+        label = f"{g['resname']} {g['chain']}{g['resnum']}"
+        if not g["template"] and len(specs) > 1:
+            raise AppError(f"Con più template indica da quale template trasferire il ligando {label}.",
+                           code="invalid_ligand")
+        if g["template"] and normalize_id(g["template"]) not in known:
+            raise AppError(f"Il ligando {label} indica il template {g['template']}, che non è tra quelli scelti.",
+                           code="invalid_ligand")
+    for s in specs:
+        if opts.hetatm:
+            s.hetatm = True
+        if opts.ligands is None:
+            continue
+        mine = [(g["chain"], g["resnum"], g["resname"]) for g in opts.ligands
+                if not g["template"] or normalize_id(g["template"]) == normalize_id(s.id)]
+        if mine:
+            s.hetatm = True
+        if s.hetatm:
+            s.ligands = mine
 
 
 def _removed_text(trim: dict) -> str:
@@ -328,6 +361,13 @@ class ComputeService:
             ctx.log(f"Template {info['code']}: catene {','.join(info['chains'])}, "
                     f"residui {info['first']}–{info['last']}, {len(info['sequence'].replace('/', ''))} aa"
                     + (" (preparazione riusata da un elemento precedente)" if reused else ""))
+            if info.get("ligand_groups") is not None:
+                chosen = ", ".join(f"{g['resname']} {g['chain']}{g['resnum']} ({g['label']})"
+                                   for g in info["ligand_groups"])
+                left = "; ".join(f"{g['resname']} {g['chain']}{g['resnum']} ({g['reason'] or g['label']})"
+                                 for g in info.get("ligands_excluded") or [])
+                ctx.log(f"Template {info['code']}: ligandi trasferiti: {chosen or 'nessuno'}"
+                        + (f"; non trasferiti: {left}" if left else ""))
             if predicted:
                 info["predicted"] = True
                 trim = info.get("plddt")
@@ -451,9 +491,7 @@ class ComputeService:
         workdir = ctx.workdir
         opts = modeller.parse_options(options_raw or {})
         specs = _template_specs(templates_raw)
-        if opts.hetatm:
-            for s in specs:
-                s.hetatm = True
+        _apply_ligand_options(specs, opts)
         modeller.modeller_python(ctx)  # errore immediato se MODELLER manca
         ctx.progress(0.02, "Preparazione dei template")
         templates = self._prepare_templates(ctx, specs, workdir,
@@ -470,11 +508,19 @@ class ComputeService:
             report = sequences.validate_pir(pir)
             warnings = report["warnings"]
             target_code = next(e.code for e in sequences.parse_pir(pir) if e.kind == "sequence")
+        # ligandi: colonne '.' dei gruppi scelti, uguali per l'allineamento automatico e per quello dell'utente
+        transfer = any(t.get("ligand_groups") for t in templates)
+        entries = sequences.parse_pir(pir)
+        if transfer or any("." in e.sequence for e in entries):
+            entries, ligand_notes = ligands.pir_with_ligands(entries, templates)
+            pir = sequences.format_pir(entries)
+            atomic_write_text(workdir / "alignment.ali", pir)
+            warnings = [*warnings, *ligand_notes]
         warnings = [*warnings, *self._predicted_notes(templates)]
         for w in warnings:
             ctx.log(f"Avviso: {w}")
         ctx.progress(0.15, "Costruzione dei modelli")
-        script = modeller.build_model_script([t["code"] for t in templates], target_code, opts)
+        script = modeller.build_model_script([t["code"] for t in templates], target_code, opts, hetatm=transfer)
         modeller.run_script(ctx, script, "model.py", workdir=workdir, progress_range=(0.15, 0.8))
         summary = modeller.read_models(workdir)
         models = []
@@ -489,6 +535,9 @@ class ComputeService:
         for m in models:
             m["best"] = m is best
         targets = ok if quality_mode == "all" else ([best] if quality_mode == "best" else [])
+        verify = self._ligand_verifier(workdir, entries, templates) if transfer else None
+        transferred = [f"{g['resname']} {g['chain']}{g['resnum']}" for t in templates
+                       for g in t.get("ligand_groups") or []]
 
         def assess(m: dict) -> None:
             """Analisi di un modello: rapporto accanto al modello, metriche nel riepilogo, REMARK nel PDB."""
@@ -498,6 +547,11 @@ class ComputeService:
                                      with_procheck=extended_quality, with_prosa=extended_quality)
             # il consenso del modello include GA341 (e zDOPE, se il DOPE non è stato calcolato) di MODELLER
             report["consensus"] = consensus.compute(report, modeller=m)
+            if verify is not None:  # ligandi trasferiti: verifica con il confronto dei siti del template
+                checked = verify(m["file"], sub.log)
+                if checked is not None:
+                    report["ligands"] = checked
+                    m["ligands"] = ligands.summary(checked)
             atomic_write_json(workdir / f"{m['file']}.quality.json", report)
             m["quality"] = quality.summary_metrics(report)
             quality.inject_remarks(workdir / m["file"], [
@@ -507,6 +561,8 @@ class ComputeService:
                   + (f"PLDDT<{t['plddt']['threshold']:g} REMOVED {t['plddt']['removed']}" if t.get("plddt")
                      else "PLDDT_TRIM OFF")
                   for t in templates if t.get("predicted")),
+                *([f"LIGANDS {len(transferred)} " + " ".join(g.replace(" ", ":") for g in transferred)]
+                  if transferred else []),
                 f"DOPE {m.get('dope')} ZDOPE {m.get('zdope')} GA341 {m.get('ga341')}",
                 f"GRADE {m['quality']['grade']} ({m['quality']['grade_score']}) "
                 f"RAMA_FAVORED {m['quality']['rama_favored']} CLASHSCORE {m['quality']['clashscore']}",
@@ -526,8 +582,8 @@ class ComputeService:
                              f"Analisi di qualità dei modelli ({n} di {len(targets)} completate)")
                 steps.result(m["file"])
         target_seq = next((e.sequence for e in sequences.parse_pir(pir) if e.kind == "sequence"), "")
-        return {
-            "target": {"code": target_code, "sequence": target_seq.replace("-", "").replace("/", "")},
+        result = {
+            "target": {"code": target_code, "sequence": "".join(c for c in target_seq if c.isalpha())},
             "templates": self._public(templates),
             "plddt_removed": sum((t.get("plddt") or {}).get("removed", 0) for t in templates),
             "alignment": (workdir / "alignment.ali").read_text(encoding="utf-8"),
@@ -537,6 +593,54 @@ class ComputeService:
             "best_model": best["file"],
             "warnings": warnings,
         }
+        if verify is not None:
+            # verifica del modello migliore anche senza analisi di qualità (rapida: solo il vicinato degli atomi)
+            if best in targets:
+                checked = (read_json(workdir / f"{best['file']}.quality.json") or {}).get("ligands")
+            else:
+                checked = verify(best["file"], ctx.log)
+                if checked is not None:
+                    best["ligands"] = ligands.summary(checked)
+            # gruppi scritti da MODELLER, contati sul file (anche se la verifica non fosse riuscita)
+            lines = (workdir / best["file"]).read_text(encoding="utf-8", errors="replace").splitlines()
+            written = len({(ln[21], ln[22:27]) for ln in lines
+                           if ln.startswith("HETATM") and ln[17:20].strip() not in structure.WATER_NAMES})
+            if written < len(transferred):
+                text = (f"Il modello migliore contiene {written} dei {len(transferred)} gruppi eteroatomici "
+                        f"trasferiti ({', '.join(transferred)}): controlla le colonne '.' dell'allineamento.")
+                warnings.append(text)
+                ctx.log(f"Avviso: {text}")
+            result["ligands"] = {"transferred": [
+                {"template": t["code"], **{k: g[k] for k in ("resname", "chain", "resnum", "class", "label")}}
+                for t in templates for g in t.get("ligand_groups") or []], "verification": checked}
+        return result
+
+    @staticmethod
+    def _ligand_verifier(workdir: Path, entries: list, templates: list[dict]) -> Callable:
+        """Verifica dei ligandi di un modello (domain/ligands.evaluate) con il sito del template di ogni gruppo.
+
+        Le copie preparate dei template si leggono una volta; ogni chiamata legge il modello. Un errore inatteso
+        della verifica diventa una riga del log e un rapporto senza ligandi: non fa fallire la modellazione."""
+        template_models = {}
+        for t in templates:
+            if t.get("ligand_groups"):
+                template_models[t["code"]] = structure.first_model(structure.load_structure(workdir / t["file"],
+                                                                                            t["code"]))
+
+        def verify(model_file: str, log: Callable[[str], None]) -> Optional[dict]:
+            try:
+                model = structure.first_model(structure.load_structure(workdir / model_file, Path(model_file).stem))
+                contexts, notes = ligands.template_contexts(entries, templates, template_models, model)
+                checked = ligands.evaluate(model, contexts=contexts, notes=notes)
+            except (AppError, ValueError, KeyError, IndexError) as exc:
+                log(f"Verifica dei ligandi di {model_file} non riuscita: {exc}")
+                return None
+            if checked is not None:
+                counts = ", ".join(f"{n} {s}" for s, n in checked["counts"].items() if n)
+                log(f"Ligandi di {model_file}: {counts}")
+            return checked
+
+        return verify
 
     def handle_align2d(self, ctx: JobContext, p: dict) -> dict:
         target = _record(p.get("target", {}))

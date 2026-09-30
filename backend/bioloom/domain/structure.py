@@ -184,9 +184,13 @@ def parse_cif_header(path: Path) -> dict:
 
 
 class _Selector:
-    """Selettore per PDBIO: catene scelte, ligandi facoltativi, niente acqua, prima altloc, residui esclusi."""
+    """Selettore per PDBIO: catene scelte, ligandi facoltativi, niente acqua, prima altloc, residui esclusi.
 
-    def __init__(self, chains: Optional[set[str]], keep_hetero: bool | set[str], keep_water: bool,
+    `keep_hetero`: tutti i gruppi eteroatomici (True), nessuno (False) oppure un insieme di nomi di residuo o di coppie
+    (catena, id Biopython del residuo) per i singoli gruppi scelti (ligandi della modellazione).
+    """
+
+    def __init__(self, chains: Optional[set[str]], keep_hetero: bool | set, keep_water: bool,
                  exclude: Optional[set] = None) -> None:
         self.chains = chains
         self.keep_hetero = keep_hetero
@@ -209,7 +213,7 @@ class _Selector:
         if flag == "W" or name in WATER_NAMES:
             return self.keep_water
         if isinstance(self.keep_hetero, set):
-            return name in self.keep_hetero
+            return name in self.keep_hetero or (residue.get_parent().id, residue.id) in self.keep_hetero
         return bool(self.keep_hetero)
 
     def accept_atom(self, atom) -> bool:
@@ -217,10 +221,11 @@ class _Selector:
 
 
 def write_pdb(structure, dest: Path, chains: Optional[Iterable[str]] = None,
-              keep_hetero: bool | set[str] = False, keep_water: bool = False,
+              keep_hetero: bool | set = False, keep_water: bool = False,
               exclude: Optional[set] = None) -> None:
     """Scrive un PDB filtrato (catene, ligandi) — usato anche per convertire mmCIF in PDB.
 
+    `keep_hetero`: vedi `_Selector` (anche i singoli gruppi come coppie (catena, id del residuo)).
     `exclude`: residui da togliere, come coppie (catena, id Biopython del residuo), es. quelli a basso pLDDT.
     """
     from Bio.PDB import PDBIO

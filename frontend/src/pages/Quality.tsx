@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type {
-  ConsensusBand, ConsensusMethod, ConsensusRegion, ConsensusResult, DatabaseStatus, Job, JobSummary, ModelResult, QmeanResult, QualityReport, ResidueRow, Settings, StructureSource,
+  ConsensusBand, ConsensusMethod, ConsensusRegion, ConsensusResult, DatabaseStatus, Job, JobSummary, LigandGroupCheck, ModelResult, QmeanResult, QualityReport, ResidueRow, Settings,
+  StructureSource,
 } from "../api/types";
+import { LigandsPanel } from "../components/LigandsPanel";
 import { ConsensusTracks, RamachandranPlot, ResidueProfile, ResidueStrip, StackBar } from "../components/charts";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
@@ -15,6 +17,7 @@ import { compareLink } from "../lib/compare";
 import { useProject, useToast } from "../lib/context";
 import { fmtNum, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
+import { coordinationLines, ligandFocus, type CoordinationLine } from "../lib/ligands";
 import { alignedPerResidue, isProblemResidue, problemResidues, shownReportSource } from "../lib/qualityReport";
 import {
   colorOptions, isPlddt, QMEAN_LOCAL_THRESHOLD, regionResidues, residueColoring, resiNumber, SIGNAL_LABEL, type ColorBy, type ColorOption, type ResidueRef,
@@ -355,6 +358,9 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
   const [qmeanJob, setQmeanJob] = useState<string | null>(null);
   const [consensus, setConsensus] = useState<ConsensusResult | null>(report.consensus ?? null);
   const [consensusError, setConsensusError] = useState<string | null>(null);
+  // ligando scelto nella sezione "Ligandi e metalli": evidenziato nel 3D con le linee di coordinazione
+  const [ligand, setLigand] = useState<LigandGroupCheck | null>(null);
+  const [lines, setLines] = useState<CoordinationLine[]>([]);
   // vista 3D per il report: c'è solo con la scheda 3D aperta
   const viewer = useRef<Viewer3DHandle>(null);
   const g = report.grade;
@@ -389,6 +395,8 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
 
   /** Dal grafico o dalla tabella: evidenzia e centra nel 3D. */
   const pick = (r: ResidueRef) => {
+    setLigand(null);
+    setLines([]);
     setSelected({ chain: r.chain, resnum: r.resnum });
     setFocus([{ chain: r.chain, resi: resiNumber(r.resnum) }]);
     setCenterKey((k) => k + 1);
@@ -399,7 +407,17 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
     setSelected(r);
     setFocus([{ chain: r.chain, resi: resiNumber(r.resnum) }]);
   };
+  const pickLigand = (g: LigandGroupCheck) => {
+    setLigand(g);
+    setSelected(null);
+    setFocus(ligandFocus(g));
+    setLines(coordinationLines(g));
+    setCenterKey((k) => k + 1);
+    setTab("3d");
+  };
   const pickRegion = (region: ConsensusRegion) => {
+    setLigand(null);
+    setLines([]);
     const res = regionResidues(report, region);
     setSelected(res[0] ?? null);
     setFocus(res.map((r) => ({ chain: r.chain, resi: resiNumber(r.resnum) })));
@@ -457,6 +475,7 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
       </div>
       <ExternalValidation report={report} />
       <ConsensusPanel report={report} consensus={consensus} error={consensusError} selected={selected} onSelect={pick} onRegion={pickRegion} />
+      {report.ligands && <LigandsPanel report={report.ligands} selected={ligand} onSelect={pickLigand} />}
       <Card title="Struttura secondaria" sub={report.secondary_structure.method}>
         <StackBar parts={[
           { label: "Elica", value: report.secondary_structure.helix_pct, color: "var(--helix)" },
@@ -538,10 +557,10 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
               <div className="row small">
                 <ColorBySelect options={options} value={shownBy} onChange={setColorBy} />
                 <button className="btn btn-sm" onClick={() => { setFocus(problems); setCenterKey((k) => k + 1); }}>Evidenzia tutti i residui problematici ({problems.length})</button>
-                <button className="btn btn-sm btn-ghost" onClick={() => { setFocus([]); setSelected(null); }}>Nessuna evidenza</button>
-                <span className="muted">Evidenziati a bastoncini arancioni · clic su un residuo per selezionarlo.</span>
+                <button className="btn btn-sm btn-ghost" onClick={() => { setFocus([]); setSelected(null); setLigand(null); setLines([]); }}>Nessuna evidenza</button>
+                <span className="muted">Evidenziati a bastoncini arancioni · clic su un residuo per selezionarlo.{lines.length > 0 && ligand && ` Linee tratteggiate: coordinazione di ${ligand.resname} ${ligand.chain}${ligand.resnum}.`}</span>
               </div>
-              <Viewer3D url={url} highlight={focus} format={url.endsWith(".cif") ? "cif" : "pdb"} coloring={coloring} onPickResidue={pick3d} centerKey={centerKey} handle={viewer} />
+              <Viewer3D url={url} highlight={focus} format={url.endsWith(".cif") ? "cif" : "pdb"} coloring={coloring} onPickResidue={pick3d} centerKey={centerKey} handle={viewer} lines={lines} centerZoom={!!ligand} />
               {coloring && <ResidueStrip residues={report.residues} coloring={coloring} selected={selected} onSelect={pick} />}
               {selected && <ResidueDetail report={report} selected={selected} consensus={consensus} onTable={() => setTab("residues")} />}
             </div>

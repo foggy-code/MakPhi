@@ -99,7 +99,7 @@ data/
 | Pacchetto | Contenuto |
 |---|---|
 | `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `dispatch` (coda con priorità di ogni pool), `budget` (budget di CPU condiviso fra i job), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi), `eta` (stima del tempo residuo), `events` (notifiche in-process dei cambiamenti dei job), `parallel` (passi indipendenti di un calcolo su un pool locale di thread, vedi [Prestazioni](#prestazioni)) |
-| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG), `template_rank` (punteggio motivato dei template e selezione dei complementari), `multitemplate` (scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template) |
+| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG), `template_rank` (punteggio motivato dei template e selezione dei complementari), `multitemplate` (scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template), `ligands` (classificazione dei gruppi eteroatomici, colonne '.' del PIR, verifica di contatti, scontri e coordinazione dei metalli) |
 | `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB), `remote` (client HTTP), `tools` (rilevamento strumenti, preambolo di licenza) |
 | `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job), `reports` (dati del report di un modello o di un'analisi) |
 | `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases` oltre a sistema, progetti, calcoli, job) |
@@ -361,11 +361,13 @@ Il server non importa mai `modeller`: ogni operazione è uno script generato ed 
 sottoprocesso. Nel container è MODELLER 10.8 del pacchetto .deb; in esecuzione nativa di sviluppo si può
 indicare un altro interprete (`BIOLOOM_MODELLER_PYTHON`). Flusso di un job `model`:
 
-1. **Template**: conversione in PDB pulito (catene scelte, ligandi facoltativi, niente acqua, MSE→MET).
+1. **Template**: conversione in PDB pulito (catene scelte, solo i ligandi scelti, niente acqua, MSE→MET; vedi
+   [Ligandi, cofattori e metalli](#ligandi-cofattori-e-metalli-domainligandspy)).
 2. **Allineamento**: se non viene fornito un PIR, MODELLER stesso lo calcola (`align2d` con un template,
    `salign` strutturale + allineamento sul profilo con più template, con il controllo degli `align2d` di ogni
    template: vedi [Più template](#più-template-salign-o-align2d-uniti-sul-bersaglio)). Il PIR fornito dall'utente
-   viene validato (lunghezze, catene, caratteri) e riallineato ai codici/file dei template preparati.
+   viene validato (lunghezze, catene, caratteri) e riallineato ai codici/file dei template preparati. In entrambi i casi le colonne
+   '.' dei ligandi si riscrivono secondo la scelta delle opzioni.
 3. **AutoModel / DOPELoopModel** con raffinamento (`very_fast`/`fast`/`normal`/`thorough`), vincoli di
    struttura secondaria e di distanza, regioni di loop, seme casuale. I risultati (`molpdf`, DOPE, GA341,
    zDOPE) sono scritti in `models.json` direttamente da `a.outputs`.
@@ -388,6 +390,7 @@ Nella pipeline un template usato da più elementi si prepara una volta per esecu
 | PROCHECK | `procheck.scr` (csh + Fortran compilato nell'immagine): Ramachandran a 4 regioni, G-factor, parametri di legame; grafici PostScript tra i file del job |
 | ProSA II | z-score combinato, di coppia e di superficie; profilo di energia per residuo (finestra 1 e 10) |
 | QMEAN | su richiesta. **Locale**: worker nel container `qmean` (HHblits su UniClust30/UniRef30 di qualunque versione; QMEANDisCo se c'è la QMTL), un calcolo alla volta, annullabile. **Remoto**: SWISS-MODEL, con email e consenso esplicito. Modalità `local` / `remote`, più **fallback facoltativo** dal locale a SWISS-MODEL (impostazione o scelta del singolo calcolo) |
+| Ligandi e metalli | campo `ligands` solo se la struttura ha gruppi eteroatomici non d'acqua: contatti, scontri, coordinazione dei metalli (`domain/ligands.py`, vedi [Ligandi, cofattori e metalli](#ligandi-cofattori-e-metalli-domainligandspy)); nessun effetto sul voto |
 
 **Esecuzione dei passi** (`quality.analyze`, `core/parallel.Steps`). La struttura si legge una volta; poi partono insieme
 i sottoprocessi (DOPE di MODELLER, mkdssp, PROCHECK, ProSA) e i calcoli Python (Ramachandran, clash, SASA; il DSSP
@@ -616,6 +619,7 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
   | Parametri | `options` del risultato; pipeline: `parse_options` dei parametri più motore, E-value e soglie della zona crepuscolare; loop: regione, modelli e dinamica |
   | Modelli | risultato del job o `models.json` dell'elemento; voto solo per i modelli analizzati |
   | Qualità | `<modello>.quality.json` (o risultato del job quality); consenso ricomposto con GA341 e zDOPE del modello (`consensus.compute`), oppure dalla rotta del consenso quando c'è QMEAN |
+  | Ligandi e metalli | campo `ligands` del rapporto di qualità; per il modello migliore senza analisi, `ligands.verification` del risultato. Sezione solo se presente: esito, classe, coordinazione con i donatori e le distanze attese, residui entro 4 Å, confronto con il sito del template, motivazione; nei parametri i gruppi trasferiti e da quale template |
 
   Un modello senza rapporto di qualità ha il report dei soli risultati di MODELLER, con un avviso.
 - **Grafici SVG** (generati dal backend, XML ben formato):
@@ -976,6 +980,122 @@ riferimento. È sempre segnato come **modello predetto, non struttura sperimenta
     modello e, nella pipeline, `template_predicted`/`plddt_removed` nelle metriche dell'elemento.
   - Le strutture sperimentali non si ritagliano mai.
 
+### Ligandi, cofattori e metalli (`domain/ligands.py`)
+
+Il trasferimento dei gruppi eteroatomici dal template al modello è selettivo e viene verificato dopo la modellazione.
+
+- **Prima di questa versione** l'opzione `hetatm` scriveva tutti gli eteroatomi nella copia preparata, ma lo script di
+  allineamento non leggeva gli HETATM e l'intervallo del template finiva sull'ultimo residuo: MODELLER ignorava i
+  gruppi e il modello non ne aveva (verificato con MODELLER 10.8 su `ubq_zn.pdb`). La casella «Ligandi» del singolo
+  template non attivava nemmeno `env.io.hetatm`.
+- **Classificazione** (`classify`, `candidates`), nel dettaglio del template (`GET /api/templates/{id}` → `ligands`,
+  `ANALYSIS_VERSION` 3: le analisi in cache si ricalcolano) e nella scelta della Modellazione. Le acque non compaiono.
+
+  | Classe | Criterio | Per default |
+  |---|---|---|
+  | metallo | un solo atomo di un elemento metallico (colonna element, altrimenti il nome: ZN, FE2, CU1…) | sì; no per Na⁺, K⁺ e altri monovalenti (spesso dal tampone) |
+  | cofattore noto | codice CCD in `COFACTORS`: HEM, HEC, HEA, FAD, FMN, NAD, NAI, NAP, NDP, ATP, ADP, AMP, ANP, GTP, GDP, GNP, SAM, SAH, PLP, PMP, COA, ACO, TPP, TDP, BTN, LPA, FES, SF4, F3S, CLA, BCL, RET, B12, CNC, PQQ, H4B, MGD | sì |
+  | additivo | `COMMON_ADDITIVES` di `domain/structure` più glicoli, tamponi, crioprotettori e piccoli anioni (MPD, PG4, PGE, EPE, MES, TRS, CIT, BME, ACY, IMD, SCN, AZI…) | no, con la motivazione: di solito senza ruolo biologico (come le esclusioni di BioLiP, Yang et al. 2013) |
+  | residuo modificato | ha N, CA e C dello scheletro (MSE, SEP, TPO…) | mai trasferibile: fa parte della catena |
+  | altro ligando | tutto il resto (inibitori, zuccheri…) | sì |
+
+- **Opzioni di modellazione:** `hetatm` attiva i ligandi per tutti i template con la scelta predefinita; `ligands` è
+  l'elenco `[{template, chain, resnum, resname}]` dei gruppi da trasferire, esattamente quelli, e attiva i template che
+  cita (un template attivo senza voci non trasferisce nulla). Con più template il `template` è obbligatorio; un template
+  non scelto, un gruppo che non c'è o un residuo modificato sono errori chiari (`invalid_ligand`, `ligand_not_found`,
+  `ligand_not_transferable`). I valori sono validati (regex, al massimo 100) e non entrano mai negli script. Il
+  riferimento del template conserva `hetatm` (Pipeline con template fisso). Nella pipeline con ricerca automatica vale
+  solo `hetatm`: i template non si conoscono prima (400 `invalid_ligand`).
+- **Copia preparata** (`modeller.prepare_template`): solo i gruppi scelti, spostati in fondo alla loro catena
+  nell'ordine del file; le selenometionine restano come prima (MET) con i ligandi attivi. Il risultato ha
+  `ligand_groups` (gruppi trasferiti con il sito nel file originale: donatori dei metalli, acque comprese, e legami
+  covalenti) e `ligands_excluded` (gli altri gruppi delle catene, con il motivo); il log li elenca. La chiave di
+  `PreparedTemplates` comprende la scelta.
+- **PIR** (`pir_with_ligands`, per l'allineamento automatico e per quello dell'utente): MODELLER, con
+  `env.io.hetatm = True`, legge ogni gruppo HETATM come residuo `.` (BLK) e lo copia nel modello solo se anche il
+  bersaglio ha `.` nella stessa colonna. Verificato con MODELLER 10.8: con `.` in entrambe le righe lo Zn arriva nel
+  modello, con `-` nel bersaglio no; `.` vale anche per i gruppi a cui `restyp.lib` dà un codice proprio (`z` per lo
+  Zn).
+  1. I `.` già presenti (PIR dell'utente, allineamento salvato da una modellazione precedente) diventano gap e le colonne
+     rimaste vuote si tolgono, con un avviso se non coincidono con la scelta: la scelta è quella delle opzioni.
+  2. Per ogni catena con gruppi trasferiti si aggiunge una colonna per gruppo alla fine del tratto di quella catena
+     (prima del `/`): `.` nel template e nel bersaglio, `-` negli altri template.
+  3. L'intervallo del template si aggiorna: fine sull'ultimo gruppo (se l'ultima catena ne ha), `+N` ricontato, una
+     fine che indicava un eteroatomo tolto torna sull'ultimo residuo.
+
+  Errore chiaro se i `/` del template e del bersaglio non sono nelle stesse colonne o se la voce del template non
+  comprende tutti i residui di una catena con ligandi (i gruppi stanno dopo l'ultimo residuo). Lo script dei modelli
+  imposta `env.io.hetatm = True` solo se almeno un gruppo è trasferito.
+- **Verifica** (`evaluate`), per ogni gruppo eteroatomico non d'acqua (i residui modificati no):
+
+  | Controllo | Regola | Esito |
+  |---|---|---|
+  | contatti | residui della proteina con un atomo pesante entro 4 Å | nessuno: da controllare |
+  | scontri | atomi pesanti a meno di 2,2 Å dalla proteina o da un altro gruppo, escluse la coordinazione (metallo–donatore nella sfera) e i legami covalenti (somma dei raggi covalenti + 0,45 Å) che il template ha con il residuo allineato; senza template la distanza di legame è un «possibile legame covalente» | problematico |
+  | donatori dei metalli | N, O, S (His, Cys, Met, Asp/Glu, Asn/Gln, Ser/Thr/Tyr, scheletro, acqua, altri ligandi) entro la distanza attesa + 0,5 Å | nessuno: problematico |
+  | distanze | attesa ± 0,25 Å nella norma, oltre «lunga»/«corta», sotto attesa − 0,5 Å «troppo corta» | da controllare / problematico |
+  | donatore insolito | categoria senza distanza attesa per il metallo (es. Ca–N(His)), N non imidazolico | da controllare |
+  | numero di coordinazione | fuori dall'intervallo tipico, contando le acque del template non trasferite | da controllare |
+  | geometria | gRMSD oltre 13,5° o posizioni vacanti oltre il 25% (CheckMyMetal) | da controllare |
+  | geometria | gRMSD oltre 21,5° | problematico |
+  | sito del template | meno di tutti i donatori della proteina conservati; meno della metà | da controllare; problematico |
+
+  **Distanze attese** (Å; Harding 2006, strutture proteiche a ≤ 1,25 Å; Ni dalla Tabella 3 di Zheng et al. 2017, CSD).
+  Le analisi più recenti differiscono di qualche centesimo (Zn–S(Cys) 2,32, Cu–S(Cys) 2,20, Na–O 2,35 Å in Bazayeva
+  et al. 2024), entro la tolleranza. Ser/Thr/Tyr usano il valore dell'acqua, Asn/Gln e i carbonili quello dello
+  scheletro, Met e gli S dei ligandi quello della Cys, gli O dei ligandi quello di Asp/Glu, gli N dei ligandi quello
+  dell'His.
+
+  | Metallo | O acqua | O Asp/Glu | O scheletro | N His | S Cys | Numero di coordinazione tipico |
+  |---|---|---|---|---|---|---|
+  | Na | 2,41 | 2,41 | 2,38 | — | — | 4–7 |
+  | Mg | 2,07 | 2,07 | 2,26 | — | — | 5–6 |
+  | K | 2,81 | 2,82 | 2,74 | — | — | 5–8 |
+  | Ca | 2,39 | 2,36 | 2,36 | — | — | 6–8 |
+  | Mn | 2,19 | 2,15 | 2,19 | 2,21 | 2,35 | 4–6 |
+  | Fe | 2,09 | 2,04 | 2,04 | 2,16 | 2,30 | 4–6 |
+  | Co | 2,09 | 2,05 | 2,08 | 2,14 | 2,25 | 4–6 |
+  | Ni | 2,08 | 2,07 | 2,07 | 2,09 | 2,18 | 4–6 |
+  | Cu | 2,13 | 1,99 | 2,04 | 2,02 | 2,15 | 3–6 |
+  | Zn | 2,09 | 1,99 | 2,07 | 2,03 | 2,31 | 4–6 |
+
+  Gli intervalli del numero di coordinazione seguono le distribuzioni nei siti proteici (Mg²⁺ quasi sempre 6, Zn²⁺ di
+  solito 4); gli estremi sono una scelta di BioLoom. Altri metalli (Cd, Hg…): donatori entro 3,0 Å, geometria, esito
+  al più «da controllare».
+- **Geometria** (`geometry`, come CheckMyMetal, Zheng et al. 2017, con le geometrie ideali confrontate per angoli di
+  Kuppuraj et al. 2009): per le geometrie ideali con m posizioni, da n a n + 2 (al massimo 7: lineare, trigonale
+  planare, tetraedrica, quadrato planare, bipiramide trigonale, piramide a base quadrata, ottaedrica, bipiramide
+  pentagonale), si cerca l'assegnazione degli n donatori che minimizza lo scarto quadratico medio fra gli angoli
+  donatore–metallo–donatore osservati e ideali (gRMSD); le posizioni libere sono vacanti. Vince la gRMSD minima; entro
+  1° quella con meno vacanze (tre donatori di un tetraedro: tetraedrica con una vacanza, non trigonale planare).
+- **Confronto con il sito del template** (modellazione, `template_contexts`): le colonne del PIR usato da MODELLER
+  legano i residui del template (dalla copia preparata, dal residuo iniziale dell'intervallo) a quelli del modello, e
+  i `.` legano i gruppi. Ogni residuo che coordina il metallo nel template è *conservato* (il residuo allineato lo
+  coordina nel modello), *perso*, *sostituito* (da un residuo che non coordina con la catena laterale), *non allineato*
+  o *non modellato* (catena o tratto fuori dall'allineamento). Le acque del template non si trasferiscono: si contano
+  per il numero di coordinazione («1 (3 con 2 acque del template, non trasferite)»). Un allineamento che non
+  corrisponde al modello o alla copia preparata lascia la verifica senza confronto, con una nota.
+- **Dove:** `quality.analyze` aggiunge `ligands` (senza template) se la struttura ha gruppi eteroatomici non d'acqua;
+  `run_modeling` lo ricalcola con il confronto per ogni modello analizzato, mette il riepilogo nel modello
+  (`models[].ligands`: gruppi, esito peggiore, conteggi) e nel risultato `ligands` (`transferred`, `verification` del
+  modello migliore anche senza analisi di qualità), scrive `REMARK 999 BIOLOOM LIGANDS n ZN:A101 …` e avvisa se il
+  modello ha meno gruppi di quelli trasferiti. Un errore inatteso della verifica va nel log e non fa fallire il job.
+  Voto e consenso non cambiano.
+- **Valori di riferimento** (test in `test_ligands.py`):
+  - `ubq_zn.pdb`: Zn con NE2 di His68 (2,10 Å, attesa 2,03) e due acque (2,10 Å, attesa 2,09), angoli 67,2°, 81,1° e
+    90,0°: piramide a base quadrata con 2 posizioni vacanti, gRMSD 14,1° → «da controllare» (numero di coordinazione 3
+    su 4–6, geometria distorta, vacanze 40%);
+  - lo Zn spostato a 0,9 Å dal CB di Leu43 → «problematico» (scontro);
+  - modello dell'ubiquitina di lievito (MODELLER, 1 modello `very_fast`) con il solo Zn trasferito da `ubq_zn.pdb` più
+    un SO₄ escluso: Zn A77 a 2,10 Å da NE2 di His68, sito del template conservato (1 su 1), 2 acque non trasferite →
+    numero di coordinazione 1 (3) → «da controllare»; lo stesso PIR con i ligandi spenti perde il `.` con un avviso e il
+    modello non ha HETATM.
+- **Limiti:** i gruppi di una catena senza residui proteici non sono trasferibili (si trasferiscono con la catena
+  scelta); il carbonio non è considerato donatore (CO e CN⁻ legati al ferro dell'eme risultano scontri); i codici
+  minuscoli di `restyp.lib` in un PIR dell'utente (`z`, `h`, `w`) vengono letti in maiuscolo come amminoacidi: per i
+  ligandi si usa `.`; il raffinamento dei loop di un modello non legge gli HETATM (MODELLER predefinito), quindi i
+  ligandi non passano ai modelli di loop.
+
 ### Cache dei calcoli (`core/cache.py`)
 
 Ricerche di template e allineamenti multipli e strutturali non si rifanno se la stessa richiesta è già stata
@@ -1110,7 +1230,7 @@ ed `Environ()` 0,21 s; più le librerie di DOPE 0,28 s; DOPE completa di 1UBQ 0,
    circa 1 s, 2 s con due elementi in parallelo (GIL). Con la cache un solo elemento prepara, gli altri copiano il
    file.
    - **Chiave:** id del template; file della libreria (percorso, dimensione, data di modifica in ns); catene;
-     ligandi; soglia del ritaglio pLDDT (None senza ritaglio).
+     ligandi (attivazione e gruppi scelti, None = scelta predefinita); soglia del ritaglio pLDDT (None senza ritaglio).
    - **Vita e spazio:** la cache vive un'esecuzione, in `.tmp/templates` dello scratch, e si svuota a fine pipeline.
    - **Concorrenza ed errori:** un lock per chiave con attesa annullabile; le preparazioni fallite non si conservano.
    - **Tracce:** il log segna "(preparazione riusata da un elemento precedente)" e un riepilogo finale; il risultato ha
@@ -1215,11 +1335,11 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 | Panoramica | flusso guidato, esempi, motori disponibili, risorse del computer |
 | Sequenze | import FASTA/UniProt, proprietà ProtParam, predizione GOR, annotazioni UniProt/InterPro/PDB |
 | Ricerca template | RCSB/NCBI/locale/AlphaFold DB (accessione UniProt facoltativa, precompilata dalle sequenze UniProt), tabella ordinabile (predefinito: punteggio), colonna Punteggio con fascia e motivazioni (suggerimento; per componente nella riga espansa, sopra l'allineamento dell'hit), riquadro dei template consigliati (principale e complementari, esclusi con il motivo) con «Usa i consigliati per la modellazione» (`lib/templateRank.modelingLink`: un `t=ID:CATENA` per template), righe consigliate evidenziate, download, "modella con"; badge "modello predetto" e pLDDT; nota "dalla cache (data)" e ricalcolo ignorando la cache |
-| Libreria template | download RCSB e "Da AlphaFold DB (UniProt)", upload PDB/mmCIF, catene, residui mancanti, ligandi, DSSP, 3D; badge "AlphaFold", pLDDT medio e fasce di confidenza |
+| Libreria template | download RCSB e "Da AlphaFold DB (UniProt)", upload PDB/mmCIF, catene, residui mancanti, ligandi classificati (metallo, cofattore noto, additivo, altro ligando, residuo modificato), DSSP, 3D; badge "AlphaFold", pLDDT medio e fasce di confidenza |
 | Allineamenti | pairwise, multiplo, strutturale (con il confronto per residuo e «Apri in Confronto»); esportazione FASTA/Clustal/PIR; salvataggio nel progetto; cache per multiplo e strutturale |
 | Editor PIR | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
-| Modellazione | input automatico o da PIR, parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job |
-| Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura |
+| Modellazione | input automatico o da PIR, parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job; «Trasferisci ligandi, cofattori e metalli dai template» con la scelta dei gruppi (additivi e ioni del tampone deselezionati per default, `LigandPicker`) e la verifica del modello migliore |
+| Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura; sezione Ligandi e metalli (esiti, coordinazione, confronto con il sito del template): il clic su un gruppo lo mostra nel 3D con i residui coordinanti e le linee di coordinazione (`LigandsPanel`, `lib/ligands.ts`; ioni metallici sempre a sfere) |
 | Confronto | `/compare?a=&ca=&b=&cb=&job=`: B sovrapposta ad A (riferimento), metriche (TM-score su A e su B, RMSD, RMSD entro 5 Å, GDT-TS, GDT-HA, lDDT, lunghezza allineata), 3D con B colorata per distanza (0 → ≥ 5 Å) o lDDT e A in grigio chiaro, grafico di distanza e lDDT per posizione, tratti che deviano, tabella per coppia; clic ovunque → coppia evidenziata nel 3D |
 | Pipeline batch | multi-FASTA → modelli validati, template da ricerca automatica, «Più template complementari» (N da 2 a 5) o fissi; filtro zona crepuscolare, tabella paginata (template usati elencati, motivazioni nel suggerimento), CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
 | Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione e la posizione di quelli in coda ("2° in coda") |
@@ -1359,6 +1479,15 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     colonne, metriche, log, validazione di `max_templates`, filtro sulla copertura dell'insieme); unione degli
     `align2d` sul bersaglio e scelta fra `salign` e `align2d`; con MODELLER reale due frammenti di 1UBQ (sovrapposti e
     disgiunti) → modello completo a TM-score > 0,95 e due template completi che tengono `salign`;
+  - ligandi, cofattori e metalli (`test_ligands.py`): classificazione (ZN metallo, HOH esclusa, GOL e SO4 additivi, HEM
+    cofattore, Na⁺ monovalente, MSE residuo modificato) anche nel dettaglio del template; geometrie ideali e incomplete;
+    sito Zn di `ubq_zn.pdb` (valori di riferimento), Zn spostato nella proteina (scontro), distanze lunghe e troppo corte;
+    copia preparata con i soli gruppi scelti in fondo alla catena e il sito del file originale; chiave dei template
+    preparati che cambia con la scelta; opzioni (validazione, template obbligatorio con più template, pipeline
+    automatica); colonne '.' del PIR (automatico, fine esplicita e "+N", '.' dell'utente tolti, catene, più template,
+    errori); confronto con il sito del template (conservato, sostituito, non allineato, allineamento che non
+    corrisponde); rapporto di qualità e report HTML solo con ligandi; con MODELLER, ubiquitina di lievito su
+    `ubq_zn.pdb` con il solo Zn trasferito (PIR, HETATM, verifica, report) e lo stesso PIR con i ligandi spenti;
   - verifica dell'installazione.
 
   `pytest -m network` prova i servizi reali. Oltre a 1UBQ, `tests/data` contiene strutture sintetiche generate
@@ -1401,6 +1530,9 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - scelta dei template (`templateRank.test.ts`): fasce come nel backend, righe e ordine delle motivazioni, tooltip,
     ruoli dei consigliati (anche per i risultati precedenti, dal solo `best`), collegamento alla Modellazione con un
     template per `t`, numero di template della modalità multi, template e suggerimento di un elemento di pipeline.
+  - ligandi (`ligands.test.ts`): candidati delle catene scelte, additivi e ioni monovalenti deselezionati per
+    default, residui modificati non selezionabili, scelte dell'utente conservate, analisi in cache precedenti, testi
+    della coordinazione, linee metallo → donatore colorate per esito (con sfera per le acque) e residui evidenziati.
 - **Profilazione:** `scripts/test.sh backend tests/perf_timing.py -s` (fuori dalla suite, vedi
   [Prestazioni](#prestazioni)).
 - **Esecuzione:** `scripts/test.sh` (ruff, pytest nell'immagine con MODELLER reale, typecheck e vitest). La CI

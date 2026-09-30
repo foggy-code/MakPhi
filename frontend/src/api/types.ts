@@ -424,10 +424,137 @@ export interface TemplateAnalysis {
     secondary_structure: { type: string; chain: string; start: number; end: number }[];
   };
   chains: ChainSummary[];
-  ligands: { resname: string; chain: string; resnum: string; atoms: number; additive: boolean }[];
+  /** gruppi eteroatomici non d'acqua con la classificazione (domain/ligands.candidates) */
+  ligands: HeteroGroup[];
   stats: { chains: number; residues: number; heavy_atoms: number };
   models: number;
   meta: TemplateItem;
+}
+
+// ---------------------------------------------------------------------------------- ligandi (domain/ligands.py)
+export type LigandClass = "metal" | "cofactor" | "additive" | "ligand" | "modified";
+export type LigandStatus = "buono" | "da controllare" | "problematico";
+
+/** Gruppo eteroatomico di un template, candidato al trasferimento nel modello. */
+export interface HeteroGroup {
+  resname: string;
+  chain: string;
+  resnum: string;
+  atoms: number;
+  /** additivo comune di cristallizzazione (campo precedente, per compatibilità) */
+  additive: boolean;
+  /** assenti nelle analisi in cache delle versioni precedenti (si ricalcolano alla prima lettura) */
+  class?: LigandClass;
+  /** metallo, cofattore noto, additivo, altro ligando, residuo modificato */
+  label?: string;
+  /** scelto per default nella modellazione (no additivi, ioni monovalenti, residui modificati) */
+  default?: boolean;
+  transferable?: boolean;
+  /** perché non è scelto per default */
+  reason?: string;
+  element?: string;
+  description?: string;
+}
+
+/** Gruppo da trasferire (opzione `ligands` della modellazione). */
+export interface LigandRef {
+  template?: string;
+  chain: string;
+  resnum: string;
+  resname: string;
+}
+
+/** Donatore di un metallo nel sito del template (per il confronto dopo la modellazione). */
+export interface TemplateSiteDonor {
+  chain: string;
+  resnum: string;
+  resname: string;
+  atom: string;
+  protein: boolean;
+  category: string;
+  distance: number;
+  water: boolean;
+}
+
+/** Gruppo trasferito da un template preparato, con il sito nel file originale. */
+export interface TransferredGroup {
+  resname: string;
+  chain: string;
+  resnum: string;
+  atoms: number;
+  class: LigandClass;
+  label: string;
+  metals: { atom: string; element: string; donors: TemplateSiteDonor[] }[];
+  links: { atom: string; partner: { chain: string; resnum: string; resname: string; atom: string }; distance: number }[];
+}
+
+export interface LigandDonor {
+  chain: string;
+  resnum: string;
+  resname: string;
+  atom: string;
+  protein: boolean;
+  label: string;
+  category: string;
+  donor: string;
+  distance: number;
+  /** distanza attesa (Harding 2006); null = donatore insolito o metallo senza riferimenti */
+  expected: number | null;
+  deviation?: number;
+  status: "nella norma" | "lunga" | "corta" | "troppo corta" | "insolito" | "senza riferimento";
+  water: boolean;
+  same_group: boolean;
+  coord: [number, number, number];
+}
+
+export interface MetalSite {
+  atom: string;
+  element: string;
+  symbol: string;
+  coord: [number, number, number];
+  coordination_number: number;
+  donors: LigandDonor[];
+  geometry: { key: string; name: string; positions: number; grmsd: number; vacancy: number } | null;
+  cn_range: [number, number] | null;
+  reference: boolean;
+  /** solo nei modelli: confronto con i donatori del template riportati sul bersaglio */
+  template_site?: {
+    donors: { template: string; atom: string; target: string | null; status: "conservato" | "perso" | "sostituito" | "non allineato" | "non modellato" }[];
+    protein_donors: number;
+    conserved: number;
+    waters: number;
+    new: string[];
+  };
+}
+
+export interface LigandGroupCheck {
+  resname: string;
+  chain: string;
+  resnum: string;
+  atoms: number;
+  class: LigandClass;
+  label: string;
+  description?: string;
+  status: LigandStatus;
+  summary: string;
+  reasons: string[];
+  contacts: { chain: string; resnum: string; resname: string; distance: number }[];
+  clashes: { atom: string; partner: string; distance: number }[];
+  links: { atom: string; partner: string; distance: number; confirmed: boolean }[];
+  metals: MetalSite[];
+  /** gruppo del template da cui viene (modelli) */
+  template?: { code: string; group: string };
+}
+
+/** Verifica di ligandi, cofattori e metalli (campo `ligands` del rapporto di qualità). */
+export interface LigandReport {
+  version: number;
+  groups: LigandGroupCheck[];
+  counts: Record<LigandStatus, number>;
+  status: LigandStatus;
+  template_compared: boolean;
+  thresholds: Record<string, number>;
+  notes: string[];
 }
 
 export interface SearchHit {
@@ -621,6 +748,9 @@ export interface PreparedTemplate {
   predicted?: boolean;
   /** ritaglio dei residui a basso pLDDT; assente se non applicato */
   plddt?: PlddtTrim | null;
+  /** con i ligandi attivi: gruppi trasferiti (ordine del file) e gruppi delle catene lasciati fuori, con il motivo */
+  ligand_groups?: TransferredGroup[];
+  ligands_excluded?: { resname: string; chain: string; resnum: string; class: LigandClass; label: string; reason: string }[];
 }
 
 export interface PirReport {
@@ -656,6 +786,8 @@ export interface ModelEntry {
   kind: "model" | "loop";
   best: boolean;
   quality?: QualitySummary;
+  /** ligandi trasferiti: gruppi verificati ed esito peggiore */
+  ligands?: { groups: number; status: LigandStatus; counts: Record<LigandStatus, number> } | null;
 }
 
 export interface ModelResult {
@@ -669,6 +801,11 @@ export interface ModelResult {
   warnings: string[];
   /** residui tolti dai template AlphaFold per pLDDT basso (somma su tutti i template) */
   plddt_removed?: number;
+  /** solo con ligandi trasferiti: gruppi e verifica del modello migliore */
+  ligands?: {
+    transferred: { template: string; resname: string; chain: string; resnum: string; class: LigandClass; label: string }[];
+    verification: LigandReport | null;
+  };
 }
 
 export interface Align2dResult {
@@ -767,6 +904,8 @@ export interface QualityReport {
   warnings: string[];
   /** consenso tra i metodi (assente nei rapporti precedenti: si chiede alla rotta del consenso) */
   consensus?: ConsensusResult;
+  /** ligandi, cofattori e metalli: solo se la struttura ha gruppi eteroatomici non d'acqua (il voto non cambia) */
+  ligands?: LigandReport;
 }
 
 export type BfactorKind = "plddt" | "bfactor";

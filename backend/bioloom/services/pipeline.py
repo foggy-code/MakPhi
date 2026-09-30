@@ -79,7 +79,7 @@ class PipelineService:
         opts = params.get("options") or {}
         from ..engines import modeller
 
-        modeller.parse_options(opts)  # validazione anticipata
+        parsed = modeller.parse_options(opts)  # validazione anticipata
         mode = params.get("template_mode", "auto")
         if mode not in TEMPLATE_MODES:
             raise AppError(f"Modalità dei template sconosciuta: '{mode}' (ammesse: {', '.join(TEMPLATE_MODES)}).")
@@ -87,6 +87,11 @@ class PipelineService:
             raise AppError("In modalità 'template fisso' seleziona almeno un template.")
         if mode == "multi":
             max_templates(params)  # errore subito, prima della coda
+        if mode != "fixed" and parsed.ligands:
+            # i template della ricerca non si conoscono prima: vale solo la scelta predefinita dei ligandi (hetatm)
+            raise AppError("Con la ricerca automatica dei template non si possono scegliere i singoli ligandi: usa "
+                           "l'opzione hetatm (metalli, cofattori e ligandi, additivi esclusi) oppure un template "
+                           "fisso.", code="invalid_ligand")
         stored = {**params, "sequences": [{"name": r.name, "length": len(r.sequence)} for r in records]}
 
         def prepare(job_id: str, _workdir: Path) -> None:

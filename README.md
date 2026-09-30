@@ -156,7 +156,8 @@ Il pulsante **Report** (tabella dei modelli in Modellazione, pagina Qualità, ri
   PIR a blocchi, parametri di MODELLER e tabella dei modelli con il migliore evidenziato;
 - per il modello: voto con le penalità, consenso tra i metodi (discordanze e regioni problematiche), grafici di
   Ramachandran e profili per residuo (DOPE; QMEAN locale se calcolato nella pagina Qualità), struttura secondaria,
-  contatti sterici principali, avvisi, legenda delle metriche e riferimenti bibliografici;
+  contatti sterici principali, ligandi e metalli (se la struttura ne ha), avvisi, legenda delle metriche e riferimenti
+  bibliografici;
 - la **vista 3D corrente**, se il viewer è aperto su quel modello (in Qualità: scheda 3D; in Pipeline: «Visualizza»).
 
 Per un'analisi di qualità di una struttura qualsiasi il report è ridotto (niente template, allineamento e parametri).
@@ -205,14 +206,32 @@ sperimentale**, con il pLDDT medio (confidenza della predizione, 0–100).
   modello AlphaFold resta sperimentale. Libreria, modellazione e pagina Qualità usano la stessa regola.
 - **Privacy:** a EBI va solo l'accessione; senza accessione la sequenza va a NCBI, come per il motore NCBI BLAST.
 
+## Ligandi, cofattori e metalli
+
+- **Scelta:** in Modellazione, **Trasferisci ligandi, cofattori e metalli dai template** elenca i gruppi eteroatomici
+  delle catene scelte con la classe (metallo, cofattore noto come eme, FAD, NAD, ATP, SAM, PLP, CoA…, additivo, altro
+  ligando). Gli additivi di cristallizzazione (SO₄, glicerolo, PEG, tamponi…) e gli ioni Na⁺/K⁺ del tampone sono
+  deselezionati per default, con il motivo; le acque non si trasferiscono. MODELLER copia nel modello solo i gruppi
+  scelti, anche partendo da un documento PIR (le colonne «.» dell'allineamento si aggiornano da sole). La Libreria
+  template mostra la classe di ogni gruppo.
+- **Verifica:** dopo la modellazione, e in ogni analisi di qualità di una struttura con ligandi, BioLoom controlla per
+  ogni gruppo i residui vicini (entro 4 Å), gli scontri (sotto 2,2 Å) e, per i metalli, gli atomi che li coordinano:
+  distanze rispetto ai valori attesi (Harding 2006), numero di coordinazione e geometria più probabile
+  (tetraedrica, ottaedrica…, come CheckMyMetal). Nei modelli confronta il sito con quello del template: i residui che
+  coordinavano il metallo lo coordinano ancora? L'esito è **buono**, **da controllare** o **problematico**, con la
+  motivazione. Il voto A–D non cambia.
+- **Dove si vede:** nella pagina Qualità la sezione **Ligandi e metalli**; un clic su un gruppo lo mostra nel 3D con
+  i residui coordinanti e le linee di coordinazione. Il risultato della Modellazione e il report HTML hanno la stessa
+  tabella.
+
 ## Cosa contiene
 
 | Area | Strumenti |
 |---|---|
-| Modellazione | MODELLER 10.8 (AutoModel, loop, allineamenti `align2d`/`salign`) |
+| Modellazione | MODELLER 10.8 (AutoModel, loop, allineamenti `align2d`/`salign`), con il trasferimento dei ligandi, cofattori e metalli scelti |
 | Ricerca template | RCSB, NCBI BLAST e modelli predetti di AlphaFold DB (online); BLAST+ e MMseqs2 sul database locale pdbaa; punteggio motivato di ogni template e template complementari consigliati |
 | Allineamenti | Clustal Omega, MAFFT, MUSCLE, TM-align, US-align, più motori integrati; confronto strutturale con GDT-TS/GDT-HA, lDDT e deviazione per residuo |
-| Qualità | Ramachandran, clashscore, DSSP (mkdssp), SASA, profilo DOPE, **PROCHECK**, **ProSA II**, **QMEAN locale** (UniClust30) o SWISS-MODEL, voto A–D, consenso tra i metodi, qualità per residuo nel 3D (anche pLDDT di AlphaFold); i passi indipendenti girano in parallelo e con l'analisi "Su tutti i modelli" si analizzano più modelli insieme, report HTML stampabile in PDF |
+| Qualità | Ramachandran, clashscore, DSSP (mkdssp), SASA, profilo DOPE, **PROCHECK**, **ProSA II**, **QMEAN locale** (UniClust30) o SWISS-MODEL, voto A–D, consenso tra i metodi, qualità per residuo nel 3D (anche pLDDT di AlphaFold), verifica di ligandi e metalli (contatti, scontri, coordinazione); i passi indipendenti girano in parallelo e con l'analisi "Su tutti i modelli" si analizzano più modelli insieme, report HTML stampabile in PDF |
 | Automazione | pipeline batch da multi-FASTA, riprendibili dopo un annullamento, un errore o un riavvio ("Riprendi" o "Riprova solo i falliti": le sequenze già modellate non si rifanno) e, se completate con sequenze fallite, "Riprova i falliti"; avanzamento, log e tabella dei risultati aggiornati in tempo reale, con la stima del tempo residuo ("circa 3 min rimanenti"); un template usato da più sequenze si prepara una volta sola per pipeline; verifica dell'installazione (Impostazioni → Strumenti) |
 
 ## Dove stanno i dati

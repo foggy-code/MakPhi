@@ -224,6 +224,10 @@ class ReportService:
                 "alignment": alignment, "options": res.get("options") if isinstance(res.get("options"), dict) else None,
                 "warnings": [str(w) for w in res.get("warnings") or []],
             })
+            # ligandi trasferiti: la verifica del modello migliore c'è anche senza rapporto di qualità
+            lig = res.get("ligands") if isinstance(res.get("ligands"), dict) else {}
+            if rel == res.get("best_model") and isinstance(lig.get("verification"), dict):
+                data["ligands"] = lig["verification"]
         else:  # loop: la struttura di partenza è il bersaglio, niente template né allineamento
             params = job.get("params") or {}
             region = res.get("region") if isinstance(res.get("region"), list) else []

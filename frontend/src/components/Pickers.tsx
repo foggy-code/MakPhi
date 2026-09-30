@@ -97,8 +97,10 @@ export function SequencePicker({ value, onChange, label = "Sequenza bersaglio" }
   );
 }
 
-/** Selezione di uno o più template della libreria con catene e ligandi. */
-export function TemplatePicker({ value, onChange, max = 10 }: { value: TemplateRef[]; onChange: (v: TemplateRef[]) => void; max?: number }) {
+/** Selezione di uno o più template della libreria con catene e ligandi. `ligands` = false nasconde la casella
+ *  "Ligandi" del singolo template: in Modellazione la scelta dei gruppi da trasferire ha un riquadro proprio
+ *  (LigandPicker), nell'Editor PIR i ligandi non entrano nell'allineamento (li aggiunge la modellazione). */
+export function TemplatePicker({ value, onChange, max = 10, ligands = true }: { value: TemplateRef[]; onChange: (v: TemplateRef[]) => void; max?: number; ligands?: boolean }) {
   const toast = useToast();
   const { data: templates, reload } = useAsync<TemplateItem[]>(() => api.templates(), []);
   const [adding, setAdding] = useState("");
@@ -210,7 +212,7 @@ export function TemplatePicker({ value, onChange, max = 10 }: { value: TemplateR
                   {c.chain} <span className="muted">({c.residues} aa)</span>
                 </label>
               ))}
-              {(a?.ligands.filter((l) => !l.additive).length ?? 0) > 0 && (
+              {ligands && (a?.ligands.filter((l) => !l.additive).length ?? 0) > 0 && (
                 <label className="check right" title="Copia i ligandi HETATM del template nel modello">
                   <input type="checkbox" checked={!!t.hetatm} onChange={(e) => onChange(value.map((v) => (v.id === t.id ? { ...v, hetatm: e.target.checked } : v)))} />
                   Ligandi ({a!.ligands.filter((l) => !l.additive).map((l) => l.resname).filter((x, i, arr) => arr.indexOf(x) === i).join(", ")})
