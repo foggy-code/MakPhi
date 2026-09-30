@@ -99,7 +99,7 @@ data/
 | Pacchetto | Contenuto |
 |---|---|
 | `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `dispatch` (coda con priorità di ogni pool), `budget` (budget di CPU condiviso fra i job), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi), `eta` (stima del tempo residuo), `events` (notifiche in-process dei cambiamenti dei job), `parallel` (passi indipendenti di un calcolo su un pool locale di thread, vedi [Prestazioni](#prestazioni)) |
-| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG) |
+| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG), `template_rank` (punteggio motivato dei template e selezione dei complementari), `multitemplate` (scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template) |
 | `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB), `remote` (client HTTP), `tools` (rilevamento strumenti, preambolo di licenza) |
 | `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job), `reports` (dati del report di un modello o di un'analisi) |
 | `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases` oltre a sistema, progetti, calcoli, job) |
@@ -363,8 +363,9 @@ indicare un altro interprete (`BIOLOOM_MODELLER_PYTHON`). Flusso di un job `mode
 
 1. **Template**: conversione in PDB pulito (catene scelte, ligandi facoltativi, niente acqua, MSE→MET).
 2. **Allineamento**: se non viene fornito un PIR, MODELLER stesso lo calcola (`align2d` con un template,
-   `salign` strutturale + allineamento sul profilo con più template). Il PIR fornito dall'utente viene validato
-   (lunghezze, catene, caratteri) e riallineato ai codici/file dei template preparati.
+   `salign` strutturale + allineamento sul profilo con più template, con il controllo degli `align2d` di ogni
+   template: vedi [Più template](#più-template-salign-o-align2d-uniti-sul-bersaglio)). Il PIR fornito dall'utente
+   viene validato (lunghezze, catene, caratteri) e riallineato ai codici/file dei template preparati.
 3. **AutoModel / DOPELoopModel** con raffinamento (`very_fast`/`fast`/`normal`/`thorough`), vincoli di
    struttura secondaria e di distanza, regioni di loop, seme casuale. I risultati (`molpdf`, DOPE, GA341,
    zDOPE) sono scritti in `models.json` direttamente da `a.outputs`.
@@ -753,9 +754,135 @@ sequenza…" che il metodo integrato scriveva già prima; un risultato nuovo sen
   l'indice locale se presente.
 - **AlphaFold DB** (modelli predetti, vedi [sotto](#modelli-alphafold-db)): accessione UniProt indicata, oppure
   proteine Swiss-Prot più simili trovate con NCBI QBlast.
-- Template consigliato: massimo identità × copertura; a parità, una struttura sperimentale prima di un modello
-  predetto, poi la miglior risoluzione, poi il pLDDT medio più alto. Un modello AlphaFold è un'ipotesi e non un dato:
-  vince solo se allinea meglio il bersaglio.
+- **Metadati RCSB degli hit** (motori sul PDB): metodo, risoluzione, titolo e, dalla versione della scelta
+  ragionata, R-free, data di rilascio, ligandi e stato oligomerico (vedi sotto).
+- Template consigliato: punteggio composito più alto (vedi [Scelta ragionata dei
+  template](#scelta-ragionata-dei-template-domaintemplate_rankpy)); a parità di punteggio una struttura sperimentale
+  prima di un modello predetto, poi identità × copertura, la miglior risoluzione, il pLDDT medio più alto. Un modello
+  AlphaFold è un'ipotesi e non un dato: la componente del metodo lo pesa meno, quindi vince solo se allinea
+  chiaramente meglio il bersaglio (prima bastava un punto di identità in più).
+
+### Scelta ragionata dei template (`domain/template_rank.py`)
+
+Logica pura, testata su hit sintetici dell'ubiquitina di lievito su 1UBQ. Il punteggio si calcola **dopo** la cache
+dei calcoli, a ogni lettura (`search.search` → `rank_hits`): cambiare pesi o scale non richiede di invalidare le
+ricerche.
+
+**Punteggio 0–100.** Ogni componente porta il valore grezzo su 0–100 con una funzione lineare a tratti
+(`consensus.piecewise`, saturata fuori dai punti); come nel consenso di qualità la soglia "affidabile" cade a 70 e
+quella "problematica" a 40 (fasce buona ≥ 70, intermedia 40–70, scarsa < 40). Il punteggio è la media pesata delle
+componenti disponibili: un dato assente (motore locale senza metadati, R-free non depositato) non penalizza. Ogni hit
+ha `rank_score`, `rank_band`, `rank_twilight` e `rank_reasons` (per componente `key`, `label`, `score` 0–100 o null,
+`weight`, `text` in italiano).
+
+| Componente | Peso | Scala (valore → punteggio) | Fonte |
+|---|---|---|---|
+| Identità | 30 | 0 → 0; curva di Rost pI(L) → 40; max(50%, pI + 10) → 70; 100% → 100 | Rost 1999, Protein Eng 12:85 (eq. 2, n = 0: pI = 480 · L^(−0,32(1+e^(−L/1000))), 100% fino a 11 residui, 19,5% oltre 450); Baker & Šali 2001 (oltre il 50% modelli di alta accuratezza) |
+| Copertura del bersaglio | 30 | lineare 0–100% | frazione del modello con vincoli dal template; 40% (soglia predefinita della pipeline) = confine della fascia scarsa |
+| E-value | 5 | −log10 E: 0 → 0, 2 → 40, 3 → 70, ≥ 10 → 100 | Pearson 2013 (E < 10⁻³ omologia affidabile) |
+| Risoluzione | 12 | raggi X e crio-EM: 1,0 Å → 100, 2,5 → 70, 3,5 → 40, 5,0 → 0; NMR: 60 fisso; predetti: pLDDT 50 → 0, 70 → 40, 90 → 70, 100 → 100 | Wlodawer et al. 2008; fasce di AlphaFold DB (Tunyasuvunakool et al. 2021); NMR scelta BioLoom |
+| R-free | 5 | 0,20 → 100, 0,25 → 70, 0,30 → 40, 0,40 → 0 (solo diffrazione) | Brünger 1992; Kleywegt & Brünger 1996 (oltre 0,40 errori gravi); punti intermedi scelta BioLoom |
+| Metodo | 8 | diffrazione 100, crio-EM 90, NMR 80, altri sperimentali 50, predetto 40 | scelta BioLoom: pesa solo ciò che la risoluzione non dice |
+| Lacune dell'allineamento | 7 | lacuna più lunga 0 → 100, 4 → 90, 8 → 70, 15 → 40, 30 → 0; −2 per ogni lacuna oltre la seconda | Fiser, Do & Šali 2000 (errore dei loop crescente con la lunghezza) |
+| Data di rilascio | 3 | 1990 → 40, 2008 → 80, 2014 → 100 | R-free dal 1992, dati sperimentali obbligatori dal 2008, rapporti di validazione wwPDB dal 2014 (Read et al. 2011; Gore et al. 2017) |
+| Ligandi e cofattori | 0 | informativo: olo (codici senza acqua e additivi di cristallizzazione) o apo | — |
+| Stato oligomerico | 0 | informativo: assemblaggio biologico 1 | — |
+
+- **Pesi:** identità e copertura pesano uguale (l'identità dice quanto è accurata la parte con template, la copertura
+  quanta parte ne ha uno): un template completo al 40% batte uno quasi identico che copre metà del bersaglio, uno in
+  zona crepuscolare no. La qualità sperimentale pesa sui dettagli, non sul ripiegamento; l'E-value dipende già da
+  identità e lunghezza.
+- **Identità sulla curva di Rost:** l'identità confrontata con la curva è quella sulle coppie allineate (colonne con
+  un residuo in entrambe le righe, come in Rost), che per allineamenti con lacune è un po' più alta di quella della
+  tabella (sulla lunghezza dell'allineamento); la motivazione riporta il valore e i residui allineati. La formula
+  pubblicata scende fino a circa 420 residui e poi risale di pochi centesimi verso 19,5%.
+- **Regola della zona crepuscolare** (scelta BioLoom): sotto la curva la copertura conta al più quanto l'identità;
+  un template in zona crepuscolare resta al massimo intermedio (0,3 × 40 + 0,3 × 40 + 0,4 × 100 = 64).
+- **Valori di riferimento** (test): ubiquitina di lievito su 1UBQ (73 identici su 76, 1,8 Å, 1987, senza R-free):
+  identità 97,6 (curva di Rost 33,2% per 76 residui), risoluzione 84, data 40, **punteggio 95,3**; lo stesso
+  allineamento a 3,8 Å con R-free 0,33 dà 87,5, una struttura a 1,5 Å al 35,5% di identità 82,0; NMR 90,6; il
+  modello AlphaFold con pLDDT 88,6 89,8 (la struttura sperimentale vince, la sola metà del bersaglio no).
+
+**Template complementari** (`select_complementary`, fino a `max_templates`, predefinito 3):
+
+1. il primo è il migliore (`sort_key`, lo stesso di `best_template`);
+2. i successivi, in ordine di merito, si scartano se sono in zona crepuscolare o in fascia scarsa; entrano se coprono
+   almeno 10 residui del bersaglio non coperti; altrimenti si scartano se ridondanti (identità reciproca > 95% su
+   almeno 10 residui in comune con uno scelto); altrimenti entrano se migliorano l'identità locale (+20 punti sulla
+   finestra centrata di 9 residui, come la modalità Confidenza) in almeno 10 residui; altrimenti si scartano.
+
+| Soglia | Valore | Motivo |
+|---|---|---|
+| Template al massimo | 3 (2–5) | Larsson et al. 2008: con MODELLER due o tre template scelti bene migliorano in media il modello, di più non aiuta |
+| Residui nuovi | 10 | un tratto più corto MODELLER lo ricostruisce come un loop con accuratezza in genere accettabile (Fiser et al. 2000) |
+| Ridondanza | identità reciproca > 95% | a quell'identità le strutture sono quasi uguali (Chothia & Lesk 1986: RMSD del nucleo circa 0,45 Å) |
+| Guadagno locale | +20 punti su 9 residui | 2 residui identici in più nella finestra |
+
+- **Confronto transitivo:** le posizioni sul bersaglio e l'identità reciproca vengono dagli allineamenti della
+  ricerca (`query_aligned`, `subject_aligned`, `query_start`), senza scaricare le strutture: il filtro di ridondanza
+  è di sola sequenza. Un TM-score > 0,9 fra i candidati richiederebbe di scaricarli tutti; oltre il 95% di identità le
+  strutture sono comunque quasi uguali, e due template strutturalmente simili ma divergenti in sequenza non sono
+  ridondanti come informazione (vincoli indipendenti). Senza le righe dell'allineamento si usano gli intervalli.
+- **Costrutto più lungo:** un candidato quasi identico a uno scelto nella regione comune entra se copre almeno 10
+  residui nuovi (porta vincoli dove non ce ne sono; nella regione comune i vincoli coincidono), con una nota.
+- **Regioni senza residui in comune:** la motivazione avverte che l'orientamento relativo delle regioni non è vincolato
+  (nessun vincolo di distanza fra residui di template diversi).
+- **Risultato:** `templates` (con `role` principale/complementare, `reason`, `new_residues`, `ranges`), `excluded`
+  (con `reason`), `not_examined` (oltre il massimo), `coverage` e `covered_residues` dell'insieme. Costo: identità
+  locale con somme prefisse, calcolata una volta per template scelto (400 candidati su 1000 residui: 0,12 s
+  misurati nel container di test).
+
+**Ricerca (`handle_search`):** ogni hit ha punteggio e motivazioni, il risultato ha `best` (con il nuovo punteggio) e
+`suggested` (selezione con 3 template al massimo). Il log riporta i template consigliati.
+
+**Metadati RCSB** (`remote.rcsb_metadata`): la query GraphQL chiede anche `refine { ls_R_factor_R_free pdbx_refine_id
+}` (R-free dell'affinamento a raggi X se ce ne sono più) e `assemblies { pdbx_struct_assembly { id oligomeric_details
+oligomeric_count } rcsb_struct_symmetry { kind oligomeric_state } }` (assemblaggio 1, che non è sempre il primo
+dell'elenco, e la sua simmetria globale: "Monomer", "Homo 2-mer"). Campi verificati sul servizio reale (settembre
+2026, `test_remote.py` con `-m network`: 3IU0 R-free 0,244, 1UBQ senza R-free, 4HHB "Hetero 4-mer"). Negli hit:
+`rfree`, `released`, `ligands`, `oligomeric_state`, `oligomeric_count` (`remote.hit_metadata`).
+
+- **Cache delle risposte:** le voci hanno `version: 2`. Una voce senza versione (scritta prima, senza R-free) si
+  riscarica; se RCSB non risponde si usa lo stesso, segnata `stale`, e la ricerca che la usa è parziale (non entra
+  nella cache dei calcoli): un computer senza rete non perde metodo e risoluzione già noti.
+- **Risposte GraphQL con soli errori** (query rifiutata): errore del servizio, non più un elenco vuoto che diventava
+  "nessun template trovato".
+- **Cache dei calcoli:** il descrittore della ricerca ha `version: 2` (`SEARCH_VERSION`) per i motori sul PDB, e il
+  risultato `search_version`; `accept` scarta anche alla lettura una voce senza. Le ricerche della versione precedente
+  hanno un'altra chiave e si rifanno (i motori remoti scadevano comunque dopo 7 giorni); il motore `alphafold` non
+  cambia e tiene le sue voci.
+
+**Pipeline, modalità `multi`** (`template_mode: "multi"`, `max_templates` 2–5, predefinito 3): per ogni sequenza la
+ricerca e poi `select_complementary`; `run_modeling` riceve tutti i template scelti.
+
+- **Campi dell'elemento:** `template` = gli id separati da virgole, `identity` ed `evalue` del principale, `coverage`
+  = copertura dell'insieme (anche per il filtro della zona crepuscolare); nelle metriche `templates` (ruolo e
+  motivazione), `combined_coverage`, `excluded_templates`. Il log dell'elemento ha una riga per template scelto ed
+  escluso (le prime 10). Nessuna colonna nuova: lo schema SQLite non cambia.
+- **Interfaccia:** la colonna Template elenca i template (complementari segnati), con le motivazioni nel suggerimento;
+  il report dell'elemento dice "più template complementari (al massimo N)".
+
+### Più template: `salign` o `align2d` uniti sul bersaglio
+
+Con più template lo script di allineamento esegue `salign` (template fra loro, poi il bersaglio sul loro profilo:
+il metodo del tutorial di MODELLER) e, per ogni template, `align2d` del bersaglio (`alignment_pair_<n>.ali`); se
+`salign` solleva un'eccezione lo script prosegue. `domain/multitemplate.choose` confronta per ogni template i residui
+identici al bersaglio con `salign` e con `align2d`:
+
+- se `salign` ne perde più della metà per un template (allineamento spostato: scende verso l'identità casuale, mentre
+  fra due buoni allineamenti le identità differiscono di pochi residui; sotto 5 identici il confronto non vale) o non
+  è riuscito, si usa l'unione degli `align2d` sul bersaglio (`merge_on_target`): ogni template resta allineato come
+  nel suo allineamento a coppie, le inserzioni dei template vanno in colonne con un gap nel bersaglio. Il file PAP di
+  `salign` si toglie;
+- altrimenti resta `salign`, come prima;
+- template a più catene o con ligandi ('/' e '.' da tenere in colonna) non si uniscono: resta `salign`, con un avviso
+  se un template risulta spostato.
+
+La scelta è nel log del job. Misurato con due frammenti di 1UBQ come template dell'ubiquitina di lievito
+(`test_template_rank.py`): con il solo `salign` il frammento 30–76 finiva allineato dal residuo 1 del bersaglio e il
+modello aveva TM-score 0,35 rispetto a 1UBQ (voto D); con gli `align2d` uniti 0,998 (frammenti 1–50 e 30–76) e 0,997
+(1–40 e 41–76, disgiunti ma nello stesso sistema di riferimento), come con 1UBQ intero (0,998). Con due template
+completi (1UBQ e una copia) `salign` è coerente e resta.
 
 ### Modelli AlphaFold DB
 
@@ -863,7 +990,7 @@ ricerche. Il pairwise è istantaneo e non passa dalla cache.
 
   | Operazione | Input e parametri | Timbro |
   |---|---|---|
-  | ricerca | sequenza (maiuscole, senza spazi), motore, E-value, risultati massimi, taxid (solo NCBI), accessione UniProt (solo AlphaFold DB) | BLAST+ e MMseqs2: dimensione e data di tutti i file del database (`pdbaa.*`, `pdbaa_h*`), eseguibile (percorso, dimensione, data), uso dell'indice veloce MMseqs2 |
+  | ricerca | sequenza (maiuscole, senza spazi), motore, E-value, risultati massimi, taxid (solo NCBI), accessione UniProt (solo AlphaFold DB), versione del formato dei risultati (2, motori sul PDB: vedi [Scelta ragionata dei template](#scelta-ragionata-dei-template-domaintemplate_rankpy)) | BLAST+ e MMseqs2: dimensione e data di tutti i file del database (`pdbaa.*`, `pdbaa_h*`), eseguibile (percorso, dimensione, data), uso dell'indice veloce MMseqs2 |
   | multiplo | nomi e sequenze nell'ordine dato, tipo (proteina/acido nucleico), programma effettivo (`auto` risolto) | eseguibile di Clustal Omega/MAFFT/MUSCLE |
   | strutturale | SHA-256 del contenuto e formato dei due file, catene, programma effettivo, versione del risultato (2: con il confronto per residuo) | eseguibile di TM-align/US-align |
 
@@ -1087,14 +1214,14 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 |---|---|
 | Panoramica | flusso guidato, esempi, motori disponibili, risorse del computer |
 | Sequenze | import FASTA/UniProt, proprietà ProtParam, predizione GOR, annotazioni UniProt/InterPro/PDB |
-| Ricerca template | RCSB/NCBI/locale/AlphaFold DB (accessione UniProt facoltativa, precompilata dalle sequenze UniProt), tabella ordinabile, allineamento dell'hit, download, "modella con"; badge "modello predetto" e pLDDT; nota "dalla cache (data)" e ricalcolo ignorando la cache |
+| Ricerca template | RCSB/NCBI/locale/AlphaFold DB (accessione UniProt facoltativa, precompilata dalle sequenze UniProt), tabella ordinabile (predefinito: punteggio), colonna Punteggio con fascia e motivazioni (suggerimento; per componente nella riga espansa, sopra l'allineamento dell'hit), riquadro dei template consigliati (principale e complementari, esclusi con il motivo) con «Usa i consigliati per la modellazione» (`lib/templateRank.modelingLink`: un `t=ID:CATENA` per template), righe consigliate evidenziate, download, "modella con"; badge "modello predetto" e pLDDT; nota "dalla cache (data)" e ricalcolo ignorando la cache |
 | Libreria template | download RCSB e "Da AlphaFold DB (UniProt)", upload PDB/mmCIF, catene, residui mancanti, ligandi, DSSP, 3D; badge "AlphaFold", pLDDT medio e fasce di confidenza |
 | Allineamenti | pairwise, multiplo, strutturale (con il confronto per residuo e «Apri in Confronto»); esportazione FASTA/Clustal/PIR; salvataggio nel progetto; cache per multiplo e strutturale |
 | Editor PIR | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
 | Modellazione | input automatico o da PIR, parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job |
 | Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura |
 | Confronto | `/compare?a=&ca=&b=&cb=&job=`: B sovrapposta ad A (riferimento), metriche (TM-score su A e su B, RMSD, RMSD entro 5 Å, GDT-TS, GDT-HA, lDDT, lunghezza allineata), 3D con B colorata per distanza (0 → ≥ 5 Å) o lDDT e A in grigio chiaro, grafico di distanza e lDDT per posizione, tratti che deviano, tabella per coppia; clic ovunque → coppia evidenziata nel 3D |
-| Pipeline batch | multi-FASTA → modelli validati, filtro zona crepuscolare, tabella paginata, CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
+| Pipeline batch | multi-FASTA → modelli validati, template da ricerca automatica, «Più template complementari» (N da 2 a 5) o fissi; filtro zona crepuscolare, tabella paginata (template usati elencati, motivazioni nel suggerimento), CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
 | Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione e la posizione di quelli in coda ("2° in coda") |
 | Impostazioni | schede Generale (esecuzione, QMEAN, email), Licenze (MODELLER, ProSA, PROCHECK), Database (pdbaa, MMseqs2, UniClust30), Strumenti (verifica dell'installazione), Spazio e file temporanei (con la cache dei calcoli) |
 | Login | solo in modalità server, quando l'API risponde 401 |
@@ -1218,6 +1345,20 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     loop; report di un job quality con QMEAN simulato (70–76 sotto 0,6); ZIP della pipeline con un report per
     elemento completato e rotta del report di un elemento; nomi unici nello ZIP ("abc" e "abc-", "x", "x", "x_2", job
     precedenti con nomi ripetuti); nomi di file sicuri;
+  - scelta ragionata dei template (`test_template_rank.py`, RCSB simulato con monkeypatch e `httpx.MockTransport`):
+    curva di Rost (valori a 76, 100, 250, 450 residui, asintoto); punteggio dell'ubiquitina di lievito su 1UBQ (95,3)
+    con ogni componente; alta identità a bassa risoluzione e R-free alto contro alta risoluzione al 35,5%; NMR e
+    crio-EM; modello predetto (pLDDT, metodo, sperimentale che vince a parità e perde con metà copertura); copertura
+    parziale; zona crepuscolare dipendente dalla lunghezza e copertura limitata dall'identità; lacune; scala
+    dell'E-value; metadati assenti che non penalizzano; ligandi e stato oligomerico informativi; selezione
+    complementare (due metà → entrambe, quasi identici → uno solo, frammenti sovrapposti, costrutto più lungo,
+    guadagno di identità locale, zona crepuscolare, limite, senza righe dell'allineamento, 400 candidati su 1000
+    residui); metadati RCSB con R-free e assemblaggio 1, voci di cache vecchie riscaricate o usate senza rete, risposte
+    GraphQL con soli errori; ricerca con punteggi e consigliati anche dalla cache, voci di cache della versione
+    precedente non lette, metadati vecchi che non entrano in cache; pipeline multi (template passati a MODELLER,
+    colonne, metriche, log, validazione di `max_templates`, filtro sulla copertura dell'insieme); unione degli
+    `align2d` sul bersaglio e scelta fra `salign` e `align2d`; con MODELLER reale due frammenti di 1UBQ (sovrapposti e
+    disgiunti) → modello completo a TM-score > 0,95 e due template completi che tengono `salign`;
   - verifica dell'installazione.
 
   `pytest -m network` prova i servizi reali. Oltre a 1UBQ, `tests/data` contiene strutture sintetiche generate
@@ -1257,6 +1398,9 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - report (`report.test.ts`): vista 3D inviata solo se è un PNG entro 3 MB, motivo della vista mancante solo
     nell'avviso del salvataggio riuscito, nome del file da Content-Disposition (senza percorsi) e nome di riserva come
     quello del server.
+  - scelta dei template (`templateRank.test.ts`): fasce come nel backend, righe e ordine delle motivazioni, tooltip,
+    ruoli dei consigliati (anche per i risultati precedenti, dal solo `best`), collegamento alla Modellazione con un
+    template per `t`, numero di template della modalità multi, template e suggerimento di un elemento di pipeline.
 - **Profilazione:** `scripts/test.sh backend tests/perf_timing.py -s` (fuori dalla suite, vedi
   [Prestazioni](#prestazioni)).
 - **Esecuzione:** `scripts/test.sh` (ruff, pytest nell'immagine con MODELLER reale, typecheck e vitest). La CI

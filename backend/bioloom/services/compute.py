@@ -15,7 +15,7 @@ from ..core.errors import AppError, Conflict, NotFound
 from ..core.jobs import QMEAN_LOCAL, JobCancelled, JobContext, JobManager
 from ..core.parallel import Steps
 from ..core.storage import atomic_write_json, atomic_write_text, read_json, safe_join
-from ..domain import consensus, sequences
+from ..domain import consensus, multitemplate, sequences, template_rank
 from ..domain.sequences import SeqRecord
 from ..engines import align, modeller, qmean_local, quality, remote, search
 from ..engines.modeller import TemplateSpec
@@ -241,7 +241,13 @@ class ComputeService:
                                use_cache=bool(p.get("use_cache", True)), uniprot=str(p.get("uniprot") or "").strip())
         best = search.best_template(result["hits"])
         ctx.log(f"{len(result['hits'])} template trovati")
-        return {**result, "query": rec.to_dict(), "best": best["template_id"] if best else None}
+        # template consigliati: il migliore più quelli complementari, con la motivazione di scelte ed esclusioni
+        suggested = template_rank.select_complementary(result["hits"], result.get("query_length") or len(rec.sequence))
+        if suggested["templates"]:
+            chosen = ", ".join(f"{t['template_id']} ({t['role']})" for t in suggested["templates"])
+            ctx.log(f"Template consigliati: {chosen}; copertura complessiva {suggested['coverage']}%")
+        return {**result, "query": rec.to_dict(), "best": best["template_id"] if best else None,
+                "suggested": suggested}
 
     # ------------------------------------------------------------------------------ allineamenti
     def handle_align(self, ctx: JobContext, p: dict) -> dict:
@@ -370,7 +376,31 @@ class ComputeService:
         ctx.progress(progress[0], "Allineamento sequenza-struttura")
         modeller.run_script(ctx, modeller.build_alignment_script(templates, target.name), "align.py",
                             workdir=workdir, progress_range=progress)
+        if len(templates) > 1:
+            self._choose_multi_alignment(ctx, templates, workdir)
         return (workdir / "alignment.ali").read_text(encoding="utf-8")
+
+    @staticmethod
+    def _choose_multi_alignment(ctx: JobContext, templates: list[dict], workdir: Path) -> None:
+        """Più template: salign oppure gli align2d di ogni template uniti sul bersaglio, se salign ha spostato un
+        template rispetto al bersaglio o non è riuscito (`domain/multitemplate.choose`)."""
+        salign_path = workdir / modeller.SALIGN_FILE
+        salign = salign_path.read_text(encoding="utf-8") if salign_path.exists() else None
+        pairs = []
+        for i in range(len(templates)):
+            path = workdir / modeller.pair_file(i)
+            if not path.exists():
+                raise AppError(f"MODELLER non ha scritto l'allineamento del bersaglio sul template "
+                               f"{templates[i]['code']}.", code="modeller_error")
+            pairs.append(path.read_text(encoding="utf-8"))
+        try:
+            choice = multitemplate.choose(salign, pairs)
+        except ValueError as exc:
+            raise AppError(f"Allineamento sui template non riuscito: {exc}.", code="modeller_error") from exc
+        ctx.log(choice["message"])
+        if choice["strategy"] == "pairwise":
+            (workdir / "alignment.pap").unlink(missing_ok=True)  # vista di salign, non più quella usata
+        atomic_write_text(workdir / "alignment.ali", choice["text"])
 
     @staticmethod
     def _normalize_pir(text: str, templates: list[dict]) -> tuple[str, str, list[str]]:

@@ -993,7 +993,10 @@ def _options(doc: _Doc, data: dict) -> None:
     if pipe:
         auto = pipe.get("template_mode") != "fixed"
         tw = pipe.get("twilight") if isinstance(pipe.get("twilight"), dict) else {}
-        rows += [("Scelta del template", "ricerca automatica" if auto else "template fisso"),
+        choice = "ricerca automatica" if auto else "template fisso"
+        if pipe.get("template_mode") == "multi":
+            choice = f"più template complementari (al massimo {_e(pipe.get('max_templates') or 3)})"
+        rows += [("Scelta del template", choice),
                  ("Motore di ricerca", _e(pipe.get("engine")) if auto else "—"),
                  ("E-value massimo", _sci(pipe.get("evalue")) if auto else "—"),
                  ("Zona crepuscolare", f"identità < {_num(tw.get('identity'), 0, '%')} o copertura < "

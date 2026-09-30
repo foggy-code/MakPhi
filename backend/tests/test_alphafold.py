@@ -626,8 +626,11 @@ def test_best_template_prefers_experimental_structures_at_equal_score():
           "plddt": 99.0}
     assert search.best_template([af, exp])["template_id"] == "1UBQ_A"
     assert search.best_template([exp, af])["template_id"] == "1UBQ_A"
-    better = {**af, "identity": 97.0}
-    assert search.best_template([exp, better])["template_id"] == "AF-P0CG48-F1"  # allinea meglio: vince
+    # punteggio composito (F5.2): un punto di identità in più non basta a un modello predetto, allineare molto
+    # meglio sì (la struttura sperimentale copre solo il 60% del bersaglio)
+    assert search.best_template([exp, {**af, "identity": 97.0}])["template_id"] == "1UBQ_A"
+    partial = {**exp, "coverage": 60.0}
+    assert search.best_template([partial, af])["template_id"] == "AF-P0CG48-F1"
     low = {**af, "template_id": "AF-P0CG47-F1", "plddt": 70.0}
     assert search.best_template([low, af])["template_id"] == "AF-P0CG48-F1"  # tra modelli: pLDDT più alto
 

@@ -162,6 +162,27 @@ Il pulsante **Report** (tabella dei modelli in Modellazione, pagina Qualità, ri
 Per un'analisi di qualità di una struttura qualsiasi il report è ridotto (niente template, allineamento e parametri).
 L'archivio ZIP della pipeline contiene un report per ogni sequenza completata (cartella `report/`, senza vista 3D).
 
+## Scelta ragionata dei template
+
+- **Punteggio 0–100** per ogni template trovato (colonna **Punteggio** della Ricerca, ordinata per punteggio): media
+  pesata di identità (confrontata con la curva della zona crepuscolare di Rost, che dipende dalla lunghezza
+  allineata), copertura del bersaglio, E-value, risoluzione (o pLDDT per i modelli AlphaFold; regola fissa per l'NMR),
+  R-free, metodo, lacune dell'allineamento e data. Ligandi/cofattori e stato oligomerico sono solo informativi. Fasce
+  buona ≥ 70, intermedia 40–70, scarsa < 40; un template in zona crepuscolare non arriva mai in fascia buona. Un clic
+  sulla riga mostra la motivazione di ogni componente, il passaggio del mouse sul punteggio la riassume.
+- **Template consigliati:** il migliore più, se servono, fino a due template **complementari** che coprono almeno 10
+  residui del bersaglio non coperti o migliorano l'identità locale, senza template quasi identici a uno già scelto;
+  ogni scelta ed esclusione è motivata. **Usa i consigliati per la modellazione** apre la Modellazione con la sequenza e
+  quei template.
+- **Pipeline → Più template complementari:** per ogni sequenza fino a N template (2–5, predefinito 3) scelti con la
+  stessa regola e usati insieme da MODELLER. La colonna Template li elenca (motivi nel suggerimento e nel log), la
+  copertura è quella complessiva, l'identità quella del template principale.
+- Con più template MODELLER allinea i template fra loro (`salign`); se questo sposta un template rispetto al bersaglio
+  (succede con template che coprono regioni diverse), BioLoom usa l'allineamento di ogni template sul bersaglio
+  (`align2d`) e lo scrive nel log.
+- Le ricerche salvate nella cache dalle versioni precedenti (senza R-free e stato oligomerico) si rifanno la prima
+  volta; senza rete i metadati RCSB già in cache restano utilizzabili.
+
 ## Modelli AlphaFold DB come template
 
 Per le proteine senza una struttura sperimentale omologa si può usare un modello predetto di
@@ -189,7 +210,7 @@ sperimentale**, con il pLDDT medio (confidenza della predizione, 0–100).
 | Area | Strumenti |
 |---|---|
 | Modellazione | MODELLER 10.8 (AutoModel, loop, allineamenti `align2d`/`salign`) |
-| Ricerca template | RCSB, NCBI BLAST e modelli predetti di AlphaFold DB (online); BLAST+ e MMseqs2 sul database locale pdbaa |
+| Ricerca template | RCSB, NCBI BLAST e modelli predetti di AlphaFold DB (online); BLAST+ e MMseqs2 sul database locale pdbaa; punteggio motivato di ogni template e template complementari consigliati |
 | Allineamenti | Clustal Omega, MAFFT, MUSCLE, TM-align, US-align, più motori integrati; confronto strutturale con GDT-TS/GDT-HA, lDDT e deviazione per residuo |
 | Qualità | Ramachandran, clashscore, DSSP (mkdssp), SASA, profilo DOPE, **PROCHECK**, **ProSA II**, **QMEAN locale** (UniClust30) o SWISS-MODEL, voto A–D, consenso tra i metodi, qualità per residuo nel 3D (anche pLDDT di AlphaFold); i passi indipendenti girano in parallelo e con l'analisi "Su tutti i modelli" si analizzano più modelli insieme, report HTML stampabile in PDF |
 | Automazione | pipeline batch da multi-FASTA, riprendibili dopo un annullamento, un errore o un riavvio ("Riprendi" o "Riprova solo i falliti": le sequenze già modellate non si rifanno) e, se completate con sequenze fallite, "Riprova i falliti"; avanzamento, log e tabella dei risultati aggiornati in tempo reale, con la stima del tempo residuo ("circa 3 min rimanenti"); un template usato da più sequenze si prepara una volta sola per pipeline; verifica dell'installazione (Impostazioni → Strumenti) |

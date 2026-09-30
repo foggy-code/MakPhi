@@ -295,7 +295,7 @@ class ReportService:
             "target": {"name": row["name"], "sequence": row.get("sequence") or ""},
             "templates": self._item_templates(job["id"], folder, alignment, row, metrics, head),
             "search": self._search(row), "alignment": alignment, "options": self._options(params),
-            "pipeline": {k: params.get(k) for k in ("template_mode", "engine", "evalue", "twilight")},
+            "pipeline": {k: params.get(k) for k in ("template_mode", "engine", "evalue", "twilight", "max_templates")},
             "models": self._models(entries, name, best, {best: (row.get("grade"), row.get("grade_score"))}),
             "warnings": self._item_warnings(alignment, row),
         })
