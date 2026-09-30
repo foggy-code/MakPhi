@@ -3,7 +3,10 @@ import type {
   AlignResult,
   AuthStatus,
   ConsensusResult,
+  CoverageCheck,
+  CoverageRequest,
   DatabaseStatus,
+  DisorderPrediction,
   DocumentItem,
   LicenseStatus,
   ParsedFile,
@@ -182,6 +185,10 @@ export const api = {
   uniprotSearch: (q: string) => get<UniProtHit[]>(`/api/uniprot/search?q=${enc(q)}`),
   uniprot: (acc: string) => get<UniProtEntry>(`/api/uniprot/${enc(acc)}`),
   uniprotDomains: (acc: string) => get<InterProDomain[]>(`/api/uniprot/${enc(acc)}/domains`),
+  /** disordine (FoldIndex), regioni disordinate lunghe e bassa complessità (SEG) dalla sola sequenza, senza rete */
+  disorder: (sequence: string) => post<DisorderPrediction>("/api/bio/disorder", { sequence }),
+  /** avvisi prima di modellare: disordine e domini (InterPro, solo con l'accessione) fuori dalla copertura */
+  coverage: (body: CoverageRequest) => post<CoverageCheck>("/api/bio/coverage", body),
 
   // template
   templates: () => get<TemplateItem[]>("/api/templates"),

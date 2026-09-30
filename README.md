@@ -128,6 +128,24 @@ sequenze e altre opzioni di modellazione salta così tutte le ricerche.
 - **Confidenza dell'allineamento:** negli allineamenti (Allineamenti, Modellazione, Editor PIR) la modalità
   **Confidenza** colora le colonne per identità locale rispetto al bersaglio e segnala la zona crepuscolare
   (sotto il 25%) e i residui non coperti dal template.
+- **Disordine predetto:** il consenso indica le regioni disordinate predette dalla sequenza come "attese poco
+  affidabili" e spiega le regioni problematiche che vi cadono dentro, senza abbassare il punteggio.
+
+## Disordine e domini
+
+Dove il modello sarà poco affidabile, prima di modellare:
+
+- **Sequenze:** la mappa delle caratteristiche mostra le regioni **disordinate** predette (FoldIndex, dalla sola
+  sequenza: almeno 30 residui), quelle a **bassa complessità** (SEG), i **domini** InterPro (solo per le sequenze con
+  accessione UniProt) e la struttura secondaria predetta.
+- **Modellazione e Ricerca:** prima di lanciare, un avviso se una regione disordinata lunga resta fuori dalla copertura
+  del template o se un dominio non è coperto, con un suggerimento (per esempio modellare per domini). Nella Ricerca ogni
+  template ha il suo avviso.
+- **Qualità e report:** le regioni disordinate predette compaiono nel consenso per residuo e, nel report HTML, come
+  profilo accanto agli altri.
+- **Limiti:** FoldIndex è un metodo semplice e documentato (carica e idropatia medie), molto meno accurato dei predittori
+  moderni come IUPred2A o quelli basati sul deep learning: va letto come un'indicazione. Il calcolo avviene sul computer;
+  per i domini a UniProt e InterPro va solo l'accessione.
 
 ## Confronto strutturale
 
@@ -155,9 +173,9 @@ Il pulsante **Report** (tabella dei modelli in Modellazione, pagina Qualità, ri
 - bersaglio, template (sorgente, identità e copertura; avviso e ritaglio pLDDT per i modelli AlphaFold), allineamento
   PIR a blocchi, parametri di MODELLER e tabella dei modelli con il migliore evidenziato;
 - per il modello: voto con le penalità, consenso tra i metodi (discordanze e regioni problematiche), grafici di
-  Ramachandran e profili per residuo (DOPE; QMEAN locale se calcolato nella pagina Qualità), struttura secondaria,
-  contatti sterici principali, ligandi e metalli (se la struttura ne ha), avvisi, legenda delle metriche e riferimenti
-  bibliografici;
+  Ramachandran e profili per residuo (DOPE; QMEAN locale se calcolato nella pagina Qualità; disordine predetto),
+  struttura secondaria, contatti sterici principali, ligandi e metalli (se la struttura ne ha), avvisi, legenda delle
+  metriche e riferimenti bibliografici;
 - la **vista 3D corrente**, se il viewer è aperto su quel modello (in Qualità: scheda 3D; in Pipeline: «Visualizza»).
 
 Per un'analisi di qualità di una struttura qualsiasi il report è ridotto (niente template, allineamento e parametri).

@@ -336,6 +336,104 @@ export interface InterProDomain {
   locations: { start: number; end: number }[];
 }
 
+// ---------------------------------------------------------------------------------- disordine e domini (domain/disorder.py, F5.5)
+export interface DisorderRegion {
+  /** 1-based, estremi compresi */
+  start: number;
+  end: number;
+  length: number;
+  /** residui con FoldIndex < 0 (i tollerati non contano) */
+  disordered: number;
+  mean_score: number;
+}
+
+export interface LowComplexityRegion {
+  start: number;
+  end: number;
+  length: number;
+  /** lettere più frequenti: "Q 27" */
+  composition: string;
+}
+
+/** POST /api/bio/disorder: FoldIndex per residuo, regioni disordinate lunghe e regioni a bassa complessità (SEG). */
+export interface DisorderPrediction {
+  method: string;
+  length: number;
+  window: number;
+  scale: { name: string; threshold: number; disordered: "below"; formula: string; min: number | null; max: number | null };
+  /** FoldIndex per residuo: sotto 0 probabilmente disordinato */
+  scores: (number | null)[];
+  regions: DisorderRegion[];
+  /** frazione dei residui nelle regioni disordinate lunghe */
+  fraction: number;
+  /** frazione dei residui con FoldIndex < 0, anche fuori dalle regioni */
+  below_fraction: number;
+  params: { window: number; threshold: number; min_region: number; max_gap: number };
+  low_complexity: { method: string; params: { window: number; k1: number; k2: number }; regions: LowComplexityRegion[]; fraction: number };
+  limits: string[];
+}
+
+/** Dominio di InterPro riportato sul bersaglio (voci dello stesso dominio fuse). */
+export interface TargetDomain {
+  accession: string;
+  accessions: string[];
+  name: string;
+  type: string;
+  start: number;
+  end: number;
+}
+
+export type CoverageWarningKind = "disorder_uncovered" | "disorder_covered" | "domain_uncovered" | "domain_partial";
+
+export interface CoverageWarning {
+  kind: CoverageWarningKind;
+  tone: "warn" | "info";
+  start: number;
+  end: number;
+  text: string;
+}
+
+export interface CoverageAssessment {
+  /** % dei residui del bersaglio con un residuo del template di fronte */
+  coverage: number;
+  covered: [number, number][];
+  warnings: CoverageWarning[];
+  domains: (TargetDomain & { covered_pct: number; status: "covered" | "partial" | "uncovered" })[];
+  suggestion: string | null;
+}
+
+export interface CoverageTemplate extends Partial<CoverageAssessment> {
+  label: string;
+  id?: string;
+  chains?: string[];
+  note?: string | null;
+  /** template non valutabile (assente dalla libreria, catena inesistente) */
+  error?: string;
+}
+
+/** POST /api/bio/coverage: avvisi prima di modellare. */
+export interface CoverageCheck {
+  length: number;
+  note: string | null;
+  disorder: DisorderPrediction | null;
+  domains: TargetDomain[];
+  domains_info: { source: string | null; accession: string | null; available: boolean; note: string | null } | null;
+  /** template della libreria o del PIR, poi gli intervalli (hit della ricerca), nell'ordine della richiesta */
+  templates: CoverageTemplate[];
+  /** template (o PIR) usati insieme; null per i soli intervalli */
+  combined: (CoverageAssessment & { label: string }) | null;
+}
+
+export interface CoverageRequest {
+  sequence?: string;
+  accession?: string | null;
+  templates?: TemplateRef[];
+  alignment?: string | null;
+  ranges?: { label: string; start: number; end: number }[];
+  /** soglia del ritaglio pLDDT dei template AlphaFold (come in modellazione); null = nessun ritaglio */
+  plddt_min?: number | null;
+}
+
 export interface TemplateItem {
   id: string;
   format: string;
@@ -940,6 +1038,27 @@ export interface ConsensusRegion {
   flagged: number;
   methods: ConsensusSignalKey[];
   text: string;
+  /** cade in una regione disordinata predetta (almeno metà dei residui): attesa poco affidabile (versione 2) */
+  expected?: boolean;
+  disorder_overlap?: number;
+}
+
+/** Disordine predetto dalla sequenza della struttura: segnale informativo, fuori dal punteggio (versione 2). */
+export interface ConsensusDisorder {
+  key: "disorder";
+  label: string;
+  rule: string;
+  method: string;
+  informative: true;
+  /** FoldIndex per residuo (ordine di QualityReport.residues) */
+  scores: (number | null)[];
+  /** residuo in una regione disordinata lunga */
+  flags: boolean[];
+  flagged: number;
+  fraction: number;
+  regions: { chain: string; start: string; end: string; start_index: number; end_index: number; length: number; text: string }[];
+  text: string;
+  limits: string[];
 }
 
 export interface ConsensusResult {
@@ -960,6 +1079,8 @@ export interface ConsensusResult {
     dope_threshold: number | null;
   };
   regions: ConsensusRegion[];
+  /** assente nei consensi della versione 1 (rapporti salvati prima di F5.5) */
+  disorder?: ConsensusDisorder | null;
   thresholds: Record<string, number>;
   warnings: string[];
   /** solo dalla rotta del consenso */

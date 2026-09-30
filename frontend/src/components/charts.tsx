@@ -260,6 +260,7 @@ export function ResidueStrip({ residues, coloring, selected, onSelect }: { resid
 
 // ---------------------------------------------------------------------------------- consenso per residuo
 const SIGNAL_COLOR: Record<string, string> = { rama: "#ef4444", clash: "#f59e0b", dope: "#a78bfa", qmean: "#38bdf8", prosa: "#34d399" };
+const DISORDER_COLOR = "#94a3b8";
 
 /** Segnalazioni dei metodi sovrapposte sullo stesso asse dei residui, numero di metodi e regioni problematiche. */
 export function ConsensusTracks({ residues, consensus, selected, onSelect, onRegion }: {
@@ -278,8 +279,11 @@ export function ConsensusTracks({ residues, consensus, selected, onSelect, onReg
   const rowH = 16;
   const barsH = 44;
   const signals = per.signals;
+  // disordine predetto (F5.5): riga informativa in più, fuori dal conteggio dei metodi
+  const dis = consensus.disorder && consensus.disorder.flags.length === n ? consensus.disorder : null;
   const top = 4;
-  const barsTop = top + signals.length * (rowH + 3) + 6;
+  const disTop = top + signals.length * (rowH + 3);
+  const barsTop = top + (signals.length + (dis ? 1 : 0)) * (rowH + 3) + 6;
   const regionsTop = barsTop + barsH + 4;
   const H = regionsTop + 12 + 16;
   const cw = (W - label - 10) / n;
@@ -304,6 +308,7 @@ export function ConsensusTracks({ residues, consensus, selected, onSelect, onReg
             <>
               <b>{r.resname} {r.chain}{r.resnum}</b>
               <div>{per.flags[i].length ? per.flags[i].map((k) => signals.find((s) => s.key === k)?.label ?? k).join(", ") : "nessuna segnalazione"}</div>
+              {dis?.flags[i] && <div className="muted">disordine predetto: atteso poco affidabile</div>}
             </>
           ));
         }}
@@ -324,6 +329,17 @@ export function ConsensusTracks({ residues, consensus, selected, onSelect, onReg
             </g>
           );
         })}
+        {dis && (
+          <g>
+            <text x={label - 8} y={disTop + rowH - 3} textAnchor="end">disordine (info)</text>
+            <rect x={label} y={disTop} width={W - label - 10} height={rowH} fill="var(--panel-3)" rx={2} />
+            {dis.regions.map((r, k) => (
+              <rect key={k} x={x(r.start_index)} y={disTop + 3} width={Math.max(1, x(r.end_index + 1) - x(r.start_index))} height={rowH - 6} rx={2} fill={DISORDER_COLOR} opacity={0.75}>
+                <title>{`Disordine predetto ${r.text}: atteso poco affidabile (non entra nel consenso)`}</title>
+              </rect>
+            ))}
+          </g>
+        )}
         <text x={label - 8} y={barsTop + barsH / 2 + 3} textAnchor="end">metodi</text>
         <line className="grid-line" x1={label} x2={W - 10} y1={barsTop + barsH - (2 / maxCount) * barsH} y2={barsTop + barsH - (2 / maxCount) * barsH} />
         {per.counts.map((c, i) => (c ? <rect key={i} x={x(i)} y={barsTop + barsH - (c / maxCount) * barsH} width={Math.max(1, cw)} height={(c / maxCount) * barsH} fill={colorFor(CONSENSUS_SCALE, c)} /> : null))}
@@ -335,7 +351,7 @@ export function ConsensusTracks({ residues, consensus, selected, onSelect, onReg
             width={Math.max(2, x(r.end_index + 1) - x(r.start_index))}
             height={10}
             rx={3}
-            fill="var(--err)"
+            fill={r.expected ? "var(--warn)" : "var(--err)"}
             opacity={0.85}
             onClick={(e) => {
               e.stopPropagation();
@@ -354,6 +370,7 @@ export function ConsensusTracks({ residues, consensus, selected, onSelect, onReg
       </svg>
       <div className="legend">
         {signals.map((s) => <span key={s.key} title={s.rule}><i style={{ background: SIGNAL_COLOR[s.key] }} />{s.label}: {s.rule}</span>)}
+        {dis && <span title={dis.rule}><i style={{ background: DISORDER_COLOR }} />{dis.label}: {dis.rule}</span>}
       </div>
       {tip.node}
     </div>
@@ -430,7 +447,10 @@ export function Heatmap({ ids, values }: { ids: string[]; values: number[][] }) 
 export interface Track {
   label: string;
   color: string;
-  items: { start: number; end: number; title: string }[];
+  /** colore di un tratto diverso da quello della traccia (es. eliche e filamenti nella stessa traccia) */
+  items: { start: number; end: number; title: string; color?: string }[];
+  /** testo sulla traccia senza tratti (es. "nessuna regione") */
+  empty?: string;
 }
 
 export function FeatureMap({ length, tracks }: { length: number; tracks: Track[] }) {
@@ -456,6 +476,7 @@ export function FeatureMap({ length, tracks }: { length: number; tracks: Track[]
           <g key={t.label}>
             <text x={label - 8} y={24 + r * rowH + 11} textAnchor="end">{t.label.slice(0, 24)}</text>
             <line x1={label} x2={W - 10} y1={24 + r * rowH + 7} y2={24 + r * rowH + 7} stroke="var(--border)" />
+            {!t.items.length && t.empty && <text x={label + 6} y={24 + r * rowH + 4} style={{ fill: "var(--text-2)" }}>{t.empty}</text>}
             {t.items.map((it, i) => (
               <rect
                 key={i}
@@ -464,7 +485,7 @@ export function FeatureMap({ length, tracks }: { length: number; tracks: Track[]
                 width={Math.max(2, x(it.end) - x(it.start))}
                 height={12}
                 rx={3}
-                fill={t.color}
+                fill={it.color ?? t.color}
                 opacity={0.85}
                 onMouseMove={(e) => tip.show(e, <><b>{it.title || t.label}</b><div>{it.start}–{it.end}</div></>)}
                 onMouseLeave={tip.hide}

@@ -99,9 +99,9 @@ data/
 | Pacchetto | Contenuto |
 |---|---|
 | `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `dispatch` (coda con priorità di ogni pool), `budget` (budget di CPU condiviso fra i job), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi), `eta` (stima del tempo residuo), `events` (notifiche in-process dei cambiamenti dei job), `parallel` (passi indipendenti di un calcolo su un pool locale di thread, vedi [Prestazioni](#prestazioni)) |
-| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG), `template_rank` (punteggio motivato dei template e selezione dei complementari), `multitemplate` (scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template), `ligands` (classificazione dei gruppi eteroatomici, colonne '.' del PIR, verifica di contatti, scontri e coordinazione dei metalli) |
+| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG), `template_rank` (punteggio motivato dei template e selezione dei complementari), `multitemplate` (scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template), `ligands` (classificazione dei gruppi eteroatomici, colonne '.' del PIR, verifica di contatti, scontri e coordinazione dei metalli), `disorder` (disordine FoldIndex, bassa complessità SEG, domini e copertura del bersaglio) |
 | `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB), `remote` (client HTTP), `tools` (rilevamento strumenti, preambolo di licenza) |
-| `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job), `reports` (dati del report di un modello o di un'analisi) |
+| `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job), `reports` (dati del report di un modello o di un'analisi), `coverage` (copertura del bersaglio da parte dei template, avvisi su disordine e domini) |
 | `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases` oltre a sistema, progetti, calcoli, job) |
 
 ### Job
@@ -588,6 +588,99 @@ Il voto A–D non cambia: `consensus` è un campo in più del rapporto di qualit
   Nessuna discordanza e nessuna regione problematica. Segnali isolati:
   - un clash su Arg72;
   - il picco DOPE sulla coda C-terminale flessibile (73–76; soglia −0,0355).
+- **Disordine predetto** (F5.5, vedi [sotto](#disordine-bassa-complessità-e-domini-domaindisorderpy-servicescoveragepy)): il
+  consenso ha un campo `disorder` (versione 2) e le regioni problematiche che vi cadono dentro hanno `expected`. Non cambia
+  punteggio, segnali, conteggi né regioni.
+
+### Disordine, bassa complessità e domini (`domain/disorder.py`, `services/coverage.py`)
+
+Dove il modello per omologia sarà poco affidabile, dalla sola sequenza (logica pura, nessuna dipendenza nuova). Tre
+segnali separati.
+
+| Segnale | Metodo | Parametri | Fonte |
+|---|---|---|---|
+| Disordine per residuo | FoldIndex = 2,785·⟨H⟩ − \|⟨R⟩\| − 1,151; ⟨H⟩ idropatia media di Kyte-Doolittle portata su 0–1 ((KD + 4,5)/9), ⟨R⟩ carica netta media a pH 7 (K, R +1; D, E −1; H neutra). Sotto 0 probabilmente disordinato | finestra di 51 residui centrata, passo 1 | Prilusky et al., Bioinformatics 21:3435, 2005; confine carica-idropatia di Uversky et al., Proteins 41:415, 2000; Kyte & Doolittle, J. Mol. Biol. 157:105, 1982 |
+| Regioni disordinate lunghe | almeno 30 residui con FoldIndex < 0; fino a 3 residui sopra 0 tollerati tra due tratti (meno di un giro d'elica, 3,6 residui), che non contano nei 30 | | "long disordered regions" di Ward et al., J. Mol. Biol. 337:635, 2004 |
+| Bassa complessità | SEG: finestre con entropia ≤ K1 innescano, estensione alle finestre ≤ K2, poi il sottotratto di composizione meno probabile (P0, accorciamento fino a 100 residui) come `seg`; segmenti sovrapposti fusi | finestra 12, K1 2,2 e K2 2,5 bit | Wootton & Federhen, Comput. Chem. 17:149, 1993 |
+| Domini | InterPro (`remote.interpro_domains`): voci `domain`, oppure le superfamiglie omologhe se non ce ne sono; voci sovrapposte per almeno metà del tratto più corto fuse (firme di banche dati diverse dello stesso dominio) | solo con un'accessione UniProt | |
+
+- **Perché FoldIndex e non IUPred:** IUPred (Dosztányi et al. 2005) converte l'energia di coppia in probabilità con la
+  sua matrice e una distribuzione tabulata, file distribuiti con il programma per uso accademico: ricostruirli dalle
+  pubblicazioni non darebbe gli stessi numeri. FoldIndex è definito da due costanti pubblicate e da una scala standard.
+- **Estremità:** il server di FoldIndex dà valori solo ai centri delle finestre complete. Qui ogni residuo ha un valore e
+  nei primi e negli ultimi 25 la finestra si accorcia (fino a 26 residui). Con una finestra fissa appoggiata al bordo,
+  l'ultima finestra dell'ubiquitina (26–76, FoldIndex −0,018) si ripeterebbe su 25 residui e darebbe una regione
+  disordinata 32–76 a una proteina ripiegata (test).
+- **Lettere:** X non entra nelle medie; B, Z, J come media delle due lettere, U come C, O come K. In SEG le finestre con
+  lettere non standard non si valutano. Una sequenza nucleotidica (≥ 90% di A, C, G, T/U, N, `sequences.detect_kind`) si
+  rifiuta (`not_protein`).
+- **Limiti** (anche nella risposta, `limits`, e nell'interfaccia): non è IUPred2A né un predittore di deep learning
+  (molto più accurati nelle valutazioni CAID); non vede il disordine con composizione da proteina ripiegata
+  (l'N-terminale dell'α-sinucleina risulta ordinato) né i loop disordinati corti; i confini sono incerti di circa mezza
+  finestra; non conosce il contesto (partner, cofattori, ponti disolfuro).
+
+**Valori di riferimento** (test in `test_disorder.py`):
+
+| Sequenza | Risultato |
+|---|---|
+| ubiquitina umana (1UBQ, 76) | nessuna regione, frazione disordinata 0; FoldIndex per residuo tra −0,17 e +0,26; FoldIndex della sequenza intera +0,090, uguale a 2,785·(GRAVY + 4,5)/9 − 1,151 con il GRAVY di Biopython (−0,489, carica netta 0) |
+| α-sinucleina umana (P37840, 140) | una regione 98–140 (attesa ~96–140: la coda acida C-terminale), frazione 0,307; nessuna regione prima di 90 (limite noto) |
+| ubiquitina con 25 Q dopo il residuo 40 | SEG: esattamente il tratto poli-Q 40–66 ("Q 27"); ogni residuo diverso aggiunto rende la composizione più probabile (P0) |
+| ubiquitina (SEG) | nessuna regione a bassa complessità |
+
+**Copertura e avvisi prima di modellare** (`disorder.coverage_assessment`, `services/coverage.CoverageService`):
+
+- **Copertura** = residui del bersaglio con un residuo del template di fronte:
+  - template della libreria (Modellazione, allineamento automatico): Smith-Waterman locale (BLOSUM62, gap 11/1, come i
+    motori di ricerca) su ogni catena scelta, unite; è una stima dell'allineamento di MODELLER. Per un template AlphaFold con
+    il ritaglio attivo i residui tolti (`plddt.low_confidence`: soglia e frammenti isolati, come in modellazione) non
+    coprono (test: pLDDT < 70 su 1–5 e 71–76 → coperti 6–70);
+  - PIR (Modellazione, da documento): le colonne del PIR, esatte; bersagli a più catene non valutati (nota);
+  - intervalli (Ricerca): il tratto `query_start`–`query_end` di ogni hit, valutato da solo (candidati alternativi);
+    template e PIR si valutano anche insieme (`combined`), come li usa MODELLER.
+- **Avvisi:** `disorder_uncovered` (warn) se almeno metà di una regione disordinata lunga è scoperta: MODELLER la
+  costruisce senza vincoli, come un tratto esteso senza significato strutturale; `disorder_covered` (info) altrimenti:
+  nel template può essere ordinata da un partner o dal cristallo. Domini: coperti dal 90% (i confini delle firme InterPro
+  sono approssimati di qualche residuo), `domain_uncovered` sotto il 10%, `domain_partial` in mezzo.
+- **Suggerimento:** con almeno due domini e uno non coperto del tutto, "modella per domini" (template per dominio, oppure
+  più template insieme); con un dominio solo, cercare un template che lo copra (NCBI BLAST, AlphaFold DB); con le sole
+  regioni disordinate scoperte, escluderle dal bersaglio o leggerle come ipotesi.
+- **Domini sul bersaglio:** i confini di InterPro stanno sulla sequenza di UniProt (`remote.uniprot_entry`): valgono se il
+  bersaglio è quella sequenza o un suo tratto (spostamento, nota "Bersaglio = residui 4–79 di UniProt …"), altrimenti si
+  tralasciano con una nota. UniProt e InterPro restano in cache 7 giorni. Senza accessione nessun dominio e nessuna
+  richiesta remota; accessione sconosciuta o servizi non raggiungibili danno una nota, non un errore; un'accessione con un
+  formato non valido è un 400 (`invalid_accession`).
+
+**Rotte** (`api/bio.py`):
+
+| Rotta | Corpo | Risposta ed errori |
+|---|---|---|
+| `POST /api/bio/disorder` | `{"sequence"}`: testo o FASTA con una sola sequenza | punteggi (`scores`, scala di FoldIndex), `regions`, `fraction` (residui nelle regioni), `below_fraction`, `low_complexity`, `params`, `limits`. Nessuna rete. 400 `sequence_too_long` oltre 5000 residui (come la modellazione), `empty_sequence`, `not_protein`, `multiple_sequences`; 422 oltre 200 000 caratteri |
+| `POST /api/bio/coverage` | `sequence`, `accession`, `templates` [{id, chains}] (al massimo 10), `alignment` (PIR), `ranges` [{label, start, end}] (al massimo 500), `plddt_min` | `disorder`, `domains`, `domains_info` (fonte o motivo dell'assenza), `templates` (per template o intervallo: copertura, avvisi, domini, suggerimento; `error` se il template non c'è o non ha la catena, gli altri si valutano lo stesso), `combined` |
+
+**Consenso** (`consensus.disorder_signal`): FoldIndex per catena sulle lettere dei residui presenti nel file, nell'ordine
+del rapporto (per un modello di MODELLER è la sequenza intera del bersaglio; in una struttura sperimentale con residui
+mancanti la finestra scorre sui residui presenti). Il campo `disorder` ha punteggi, residui nelle regioni, regioni e una
+frase; `informative: true`. Una regione problematica con almeno metà dei residui in una regione disordinata diventa
+`expected` e il testo lo dice ("…, in una regione disordinata predetta (attesa poco affidabile)"), come la coda di una
+proteina costruita senza template. Test: stesso rapporto con la sequenza dell'α-sinucleina e con una sequenza tutta I →
+stesso punteggio, stessi segnali e stesse regioni; su 1UBQ, `ubq_dimer.pdb` (per catena, stessi valori nelle due catene)
+e `ubq_zn.pdb` nessuna regione. `VERSION` passa a 2; i rapporti salvati prima (versione 1, senza `disorder`) funzionano: le
+rotte del consenso e del report lo ricalcolano.
+
+**Interfaccia:**
+
+- **Sequenze:** riquadro "Disordine, bassa complessità e domini" con la mappa delle caratteristiche (tracce Disordine,
+  Bassa complessità, Domini InterPro con l'accessione, Struttura secondaria GOR; le tracce vuote lo dicono), sintesi e
+  "Metodi e limiti". Una sola richiesta (`/api/bio/coverage` senza template).
+- **Modellazione:** sotto i template, gli avvisi (`combined`) appena bersaglio e template (o il PIR) sono scelti, con la
+  soglia pLDDT se c'è un template AlphaFold; richiesta dopo 0,6 s dall'ultimo cambio, risposte superate ignorate, nuovi
+  tentativi se un template si sta ancora scaricando. Non blocca il lancio.
+- **Ricerca:** per ogni hit un badge ("disordine scoperto · dominio scoperto"), gli avvisi nella riga espansa e, sopra la
+  tabella, quelli del template consigliato.
+- **Qualità:** la frase del disordine sotto le regioni problematiche e una riga "disordine (info)" nel grafico del consenso
+  per residuo; le regioni `expected` in arancione invece che in rosso.
+- Logica pura in `lib/disorder.ts` (tracce, richieste, badge, ordine degli avvisi), componente `CoverageAlerts`.
 
 ### Report del modello
 
@@ -629,12 +722,15 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
   - profili per residuo: DOPE (media mobile di MODELLER, soglia media + 1 DS del consenso: picco 73–76 su 1UBQ), QMEAN
     locale (sotto 0,6), energia ProSA sulla finestra di 10 residui (sopra 0) e pLDDT (linee a 50, 70 e 90). La linea
     si interrompe tra catene e dove la numerazione salta;
+  - accanto ai profili, il disordine predetto del consenso (F5.5): FoldIndex per residuo con la soglia 0 e, sullo sfondo,
+    le regioni disordinate lunghe (i singoli residui sotto 0 non si segnano); nel consenso una nota con le regioni,
+    "attese poco affidabili";
   - striscia della struttura secondaria a 3 stati.
 - **Legenda e fonti:** solo le metriche presenti, con le soglie usate da BioLoom, e solo le fonti dei metodi presenti
   (Šali & Blundell 1993, Shen & Sali 2006, Melo et al. 2002, John & Sali 2003, Benkert et al. 2011, Sippl 1993,
   Wiederstein & Sippl 2007, Laskowski et al. 1993, Jumper et al. 2021, Tunyasuvunakool et al. 2021, Mariani et al.
   2013, Ramachandran et al. 1963, Lovell et al. 2003, Word et al. 1999, Kabsch & Sander 1983, Shrake & Rupley 1973,
-  Tien et al. 2013, Rost 1999).
+  Tien et al. 2013, Rost 1999, Prilusky et al. 2005, Uversky et al. 2000, Kyte & Doolittle 1982, Ward et al. 2004).
 - **Stampa:** `@page` A4 e regole `@media print`: niente indice, intestazioni delle tabelle ripetute, nessuna
   interruzione dentro grafici, blocchi di allineamento, riquadri e righe, allineamento e qualità da una pagina nuova,
   colori conservati (`print-color-adjust: exact`).
@@ -1333,13 +1429,13 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 | Pagina | Funzione |
 |---|---|
 | Panoramica | flusso guidato, esempi, motori disponibili, risorse del computer |
-| Sequenze | import FASTA/UniProt, proprietà ProtParam, predizione GOR, annotazioni UniProt/InterPro/PDB |
-| Ricerca template | RCSB/NCBI/locale/AlphaFold DB (accessione UniProt facoltativa, precompilata dalle sequenze UniProt), tabella ordinabile (predefinito: punteggio), colonna Punteggio con fascia e motivazioni (suggerimento; per componente nella riga espansa, sopra l'allineamento dell'hit), riquadro dei template consigliati (principale e complementari, esclusi con il motivo) con «Usa i consigliati per la modellazione» (`lib/templateRank.modelingLink`: un `t=ID:CATENA` per template), righe consigliate evidenziate, download, "modella con"; badge "modello predetto" e pLDDT; nota "dalla cache (data)" e ricalcolo ignorando la cache |
+| Sequenze | import FASTA/UniProt, proprietà ProtParam, predizione GOR, annotazioni UniProt/InterPro/PDB; mappa di disordine (FoldIndex), bassa complessità (SEG), domini InterPro e GOR |
+| Ricerca template | RCSB/NCBI/locale/AlphaFold DB (accessione UniProt facoltativa, precompilata dalle sequenze UniProt), tabella ordinabile (predefinito: punteggio), colonna Punteggio con fascia e motivazioni (suggerimento; per componente nella riga espansa, sopra l'allineamento dell'hit), riquadro dei template consigliati (principale e complementari, esclusi con il motivo) con «Usa i consigliati per la modellazione» (`lib/templateRank.modelingLink`: un `t=ID:CATENA` per template), righe consigliate evidenziate, download, "modella con"; badge "modello predetto" e pLDDT; nota "dalla cache (data)" e ricalcolo ignorando la cache; per ogni hit gli avvisi su regioni disordinate e domini fuori dal tratto allineato |
 | Libreria template | download RCSB e "Da AlphaFold DB (UniProt)", upload PDB/mmCIF, catene, residui mancanti, ligandi classificati (metallo, cofattore noto, additivo, altro ligando, residuo modificato), DSSP, 3D; badge "AlphaFold", pLDDT medio e fasce di confidenza |
 | Allineamenti | pairwise, multiplo, strutturale (con il confronto per residuo e «Apri in Confronto»); esportazione FASTA/Clustal/PIR; salvataggio nel progetto; cache per multiplo e strutturale |
 | Editor PIR | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
-| Modellazione | input automatico o da PIR, parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job; «Trasferisci ligandi, cofattori e metalli dai template» con la scelta dei gruppi (additivi e ioni del tampone deselezionati per default, `LigandPicker`) e la verifica del modello migliore |
-| Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura; sezione Ligandi e metalli (esiti, coordinazione, confronto con il sito del template): il clic su un gruppo lo mostra nel 3D con i residui coordinanti e le linee di coordinazione (`LigandsPanel`, `lib/ligands.ts`; ioni metallici sempre a sfere) |
+| Modellazione | input automatico o da PIR, parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); avvisi prima del lancio su regioni disordinate e domini non coperti dai template, con suggerimento; modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job; «Trasferisci ligandi, cofattori e metalli dai template» con la scelta dei gruppi (additivi e ioni del tampone deselezionati per default, `LigandPicker`) e la verifica del modello migliore |
+| Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche, disordine predetto come segnale informativo), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura; sezione Ligandi e metalli (esiti, coordinazione, confronto con il sito del template): il clic su un gruppo lo mostra nel 3D con i residui coordinanti e le linee di coordinazione (`LigandsPanel`, `lib/ligands.ts`; ioni metallici sempre a sfere) |
 | Confronto | `/compare?a=&ca=&b=&cb=&job=`: B sovrapposta ad A (riferimento), metriche (TM-score su A e su B, RMSD, RMSD entro 5 Å, GDT-TS, GDT-HA, lDDT, lunghezza allineata), 3D con B colorata per distanza (0 → ≥ 5 Å) o lDDT e A in grigio chiaro, grafico di distanza e lDDT per posizione, tratti che deviano, tabella per coppia; clic ovunque → coppia evidenziata nel 3D |
 | Pipeline batch | multi-FASTA → modelli validati, template da ricerca automatica, «Più template complementari» (N da 2 a 5) o fissi; filtro zona crepuscolare, tabella paginata (template usati elencati, motivazioni nel suggerimento), CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
 | Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione e la posizione di quelli in coda ("2° in coda") |
@@ -1371,6 +1467,8 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   l'accessione UniProt, mai la sequenza né le coordinate. Senza accessione il motore invia la sequenza a NCBI
   (QBlast su Swiss-Prot), come il motore `ncbi`; nella pipeline ciò vale per le sequenze senza intestazione FASTA di
   UniProt. I file si scaricano solo da URL `https://alphafold.ebi.ac.uk/files/…`, qualunque URL contenga la risposta.
+- **Disordine e domini:** disordine e bassa complessità si calcolano nel container, senza rete. Per i domini, solo con
+  un'accessione UniProt, a UniProt e InterPro (EBI) va l'accessione, mai la sequenza.
 - **File caricati:** sequenze e allineamenti (`/api/files/sequences`) vengono solo letti e non salvati. Le
   strutture (`/api/files/structure`) vanno tra gli upload, validate e soggette alla pulizia automatica.
 
@@ -1488,6 +1586,19 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     errori); confronto con il sito del template (conservato, sostituito, non allineato, allineamento che non
     corrisponde); rapporto di qualità e report HTML solo con ligandi; con MODELLER, ubiquitina di lievito su
     `ubq_zn.pdb` con il solo Zn trasferito (PIR, HETATM, verifica, report) e lo stesso PIR con i ligandi spenti;
+  - disordine e domini (`test_disorder.py`, UniProt e InterPro simulati con `httpx.MockTransport`): formula di FoldIndex
+    calcolata a mano (I, K, A, cariche opposte, X, B), finestra centrata e accorciata alle estremità, FoldIndex globale
+    dell'ubiquitina uguale a quello dal GRAVY di Biopython (+0,090), ubiquitina ordinata (frazione 0) e perché la finestra
+    fissa al bordo sbaglierebbe, α-sinucleina 98–140 (tolleranza 90–105 sull'inizio), regioni di 30 residui con 3
+    tollerati, validazione (5000 residui compresi, 5001 no, acidi nucleici, FASTA con più record); SEG con entropia e P0
+    calcolate a mano, tratto poli-Q esatto, X, fusione dei segmenti; domini InterPro fusi e superfamiglie di riserva;
+    avvisi di copertura (disordine scoperto per metà, coperto, domini coperti, parziali, scoperti, suggerimenti);
+    consenso con le regioni `expected` (metà dei residui) senza variazione di punteggio, segnali e regioni rispetto a una
+    sequenza ordinata, 1UBQ, dimero e sito Zn; report con il profilo di FoldIndex, le regioni evidenziate e le fonti; rotte
+    `/api/bio/disorder` (errori 400 e 422) e `/api/bio/coverage` con template della libreria, InterPro e cache, tratto di
+    UniProt e sequenza diversa, servizi non raggiungibili, accessione sconosciuta o non valida, intervalli della ricerca,
+    PIR, template non valutabili, template AlphaFold con il ritaglio pLDDT, verifiche concorrenti sullo stesso template
+    senza analisi in cache;
   - verifica dell'installazione.
 
   `pytest -m network` prova i servizi reali. Oltre a 1UBQ, `tests/data` contiene strutture sintetiche generate
@@ -1533,6 +1644,11 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - ligandi (`ligands.test.ts`): candidati delle catene scelte, additivi e ioni monovalenti deselezionati per
     default, residui modificati non selezionabili, scelte dell'utente conservate, analisi in cache precedenti, testi
     della coordinazione, linee metallo → donatore colorate per esito (con sfera per le acque) e residui evidenziati.
+  - disordine e domini (`disorder.test.ts`, `CoverageAlerts.test.tsx`): tracce della mappa (disordine, bassa
+    complessità, domini solo con l'accessione, GOR con il colore dello stato, tracce vuote), sintesi, accessione del
+    bersaglio (sequenza del progetto o intestazione `sp|`), richieste di Modellazione (template senza catene esclusi, PIR,
+    soglia pLDDT) e Ricerca (un intervallo per hit), ordine degli avvisi, badge degli hit, riga di sintesi; markup degli
+    avvisi e della mappa.
 - **Profilazione:** `scripts/test.sh backend tests/perf_timing.py -s` (fuori dalla suite, vedi
   [Prestazioni](#prestazioni)).
 - **Esecuzione:** `scripts/test.sh` (ruff, pytest nell'immagine con MODELLER reale, typecheck e vitest). La CI
