@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { JobKind, JobSummary } from "../api/types";
+import type { JobKind, JobSummary, ResumeScope } from "../api/types";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { Card, Confirm, Empty, PageHead, Progress, StatusBadge } from "../components/ui";
@@ -26,14 +26,23 @@ const OPEN_IN: Record<JobKind, (id: string) => string> = {
   db_local_uniclust: () => "/settings?tab=databases",
 };
 
-function Detail({ id, onDeleted }: { id: string; onDeleted: () => void }) {
+function Detail({ id, onDeleted, onChanged }: { id: string; onDeleted: () => void; onChanged: () => void }) {
   const toast = useToast();
-  const { job, summary, log, cancel } = useJob(id, { withLog: true });
+  const { job, summary, log, cancel, resume } = useJob(id, { withLog: true });
   const [confirm, setConfirm] = useState(false);
   if (!summary) return null;
+  const doResume = async (scope: ResumeScope) => {
+    try {
+      await resume(scope);
+      toast.push(scope === "failed" ? "Nuovo tentativo sulle sequenze fallite" : "Pipeline ripresa");
+      onChanged();
+    } catch (e) {
+      toast.error(e);
+    }
+  };
   return (
     <div className="stack">
-      <JobPanel summary={summary} log={log} onCancel={cancel} compact defaultLogOpen />
+      <JobPanel summary={summary} log={log} onCancel={cancel} resume={job} onResume={doResume} compact defaultLogOpen />
       <Card
         title="Dettagli"
         right={
@@ -123,7 +132,7 @@ export default function Jobs() {
             </div>
           )}
         </Card>
-        <div>{selected ? <Detail key={selected} id={selected} onDeleted={() => { setParams({}); reload(); }} /> : <Card><Empty icon="activity" title="Seleziona un job per i dettagli" /></Card>}</div>
+        <div>{selected ? <Detail key={selected} id={selected} onDeleted={() => { setParams({}); reload(); }} onChanged={reload} /> : <Card><Empty icon="activity" title="Seleziona un job per i dettagli" /></Card>}</div>
       </div>
     </div>
   );

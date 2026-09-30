@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import type { JobSummary } from "../api/types";
+import type { JobSummary, ResumeItems, ResumeScope } from "../api/types";
 import { fmtDuration, isActive, KIND_LABEL } from "../lib/format";
+import { resumeOptions } from "../lib/status";
 import { Icon } from "./Icon";
 import { Alert, Progress, StatusBadge } from "./ui";
 
@@ -9,19 +10,33 @@ interface Props {
   summary: JobSummary | null;
   log?: string;
   onCancel?: () => void;
+  /** stato di ripresa del job completo (pipeline fallite o annullate) */
+  resume?: { resumable?: boolean; resumable_items?: ResumeItems | null } | null;
+  onResume?: (scope: ResumeScope) => Promise<void> | void;
   compact?: boolean;
   defaultLogOpen?: boolean;
 }
 
-/** Stato di un job: avanzamento, fase corrente, errore, log in tempo reale, annullamento. */
-export function JobPanel({ summary, log, onCancel, compact = false, defaultLogOpen = false }: Props) {
+/** Stato di un job: avanzamento, fase corrente, errore, log in tempo reale, annullamento e ripresa. */
+export function JobPanel({ summary, log, onCancel, resume, onResume, compact = false, defaultLogOpen = false }: Props) {
   const [showLog, setShowLog] = useState(defaultLogOpen);
+  const [resuming, setResuming] = useState(false);
   const logRef = useRef<HTMLPreElement>(null);
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [log, showLog]);
   if (!summary) return null;
   const running = isActive(summary.status);
+  const options = onResume ? resumeOptions(summary.status, resume) : null;
+  const doResume = async (scope: ResumeScope) => {
+    if (!onResume) return;
+    setResuming(true);
+    try {
+      await onResume(scope);
+    } finally {
+      setResuming(false);
+    }
+  };
   return (
     <div className="card flat stack">
       <div className="row">
@@ -56,6 +71,23 @@ export function JobPanel({ summary, log, onCancel, compact = false, defaultLogOp
         <Alert tone="err">
           <pre className="mono" style={{ margin: 0, whiteSpace: "pre-wrap" }}>{summary.error}</pre>
         </Alert>
+      )}
+      {options && (
+        <div className="row">
+          <span className="small text-2">{options.text}</span>
+          <div className="right row">
+            <button className="btn btn-sm btn-primary" disabled={resuming} onClick={() => doResume("incomplete")}
+              title="Rielabora le sequenze non concluse; quelle completate restano come sono">
+              <Icon name="play" size={12} /> Riprendi
+            </button>
+            {options.failedOnly && (
+              <button className="btn btn-sm" disabled={resuming} onClick={() => doResume("failed")}
+                title="Rielabora solo le sequenze fallite; le annullate restano da riprendere">
+                <Icon name="refresh" size={12} /> Riprova solo i falliti
+              </button>
+            )}
+          </div>
+        </div>
       )}
       {showLog && log !== undefined && (
         <pre className="log" ref={logRef}>{log || "Nessun output ancora."}</pre>

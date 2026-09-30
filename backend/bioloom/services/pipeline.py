@@ -2,6 +2,10 @@
 
 Ogni elemento è una riga di `pipeline_items` (interrogabile con paginazione e ordinamento lato
 server); il job padre esegue gli elementi in parallelo con un pool dedicato e aggiorna il progresso.
+
+Ripresa: una pipeline fallita, annullata o interrotta dal riavvio si riprende (`resume`) rimettendo in
+attesa solo gli elementi non conclusi (o solo i falliti); quelli completati restano come sono, con i
+loro file già salvati, e l'esecuzione elabora soltanto gli elementi in attesa.
 """
 
 from __future__ import annotations
@@ -16,14 +20,28 @@ from pathlib import Path
 from typing import Optional
 
 from ..core.db import Database, encode_json, now_iso
-from ..core.errors import AppError, NotFound
-from ..core.jobs import JobCancelled, JobContext, JobManager
+from ..core.errors import AppError, Conflict, NotFound
+from ..core.jobs import JobCancelled, JobContext, JobManager, requeue_error
+from ..core.storage import remove_tree, safe_join
 from ..domain import sequences
 from ..domain.sequences import SeqRecord
 from ..engines import search
 from .compute import ComputeService
 
 TERMINAL_ITEM = {"completed", "failed", "cancelled", "filtered"}
+# Elementi che una ripresa rielabora, per ambito: "incomplete" = tutto ciò che non è completato o filtrato
+# (falliti, annullati, interrotti, in corso o in attesa); "failed" = solo i falliti.
+RESUME_WHERE = {
+    "incomplete": "status NOT IN ('completed','filtered')",
+    "failed": "status='failed'",
+}
+RESUME_LABEL = {"incomplete": "elementi non conclusi", "failed": "solo i falliti"}
+# Un elemento rimesso in attesa torna com'era appena creato (nome e sequenza restano).
+RESET_ITEM = ("status='pending', stage='', template=NULL, template_source=NULL, identity=NULL, coverage=NULL, "
+              "evalue=NULL, twilight=0, best_model=NULL, dope=NULL, ga341=NULL, grade=NULL, grade_score=NULL, "
+              "rama_favored=NULL, clashscore=NULL, metrics='{}', error=NULL, started_at=NULL, finished_at=NULL")
+# Stati con cui un elemento conta come elaborato nel progresso (anche un fallimento è un esito).
+PROCESSED_ITEM = ("completed", "filtered", "failed")
 SORTABLE = {"idx", "name", "status", "identity", "coverage", "dope", "ga341", "grade_score", "rama_favored",
             "clashscore", "template"}
 ITEM_COLUMNS = ("idx, name, length(sequence) AS length, status, stage, template, template_source, identity, "
@@ -58,6 +76,54 @@ class PipelineService:
         title = params.get("name") or f"Pipeline di {len(records)} sequenze"
         return self.jobs.submit("pipeline", stored, project_id=project_id, title=title, prepare=prepare)
 
+    # ------------------------------------------------------------------------------ ripresa
+    def resume(self, job_id: str, scope: str = "incomplete") -> dict:
+        """Riprende una pipeline fallita o annullata rielaborando solo gli elementi dell'ambito scelto.
+
+        Gli elementi scelti tornano in attesa, azzerati, e i loro file già salvati vengono eliminati
+        (dopo il passaggio atomico a 'queued', così due richieste concorrenti non si sovrappongono).
+        """
+        where = RESUME_WHERE.get(scope)
+        if where is None:
+            raise AppError(f"Ambito di ripresa sconosciuto: '{scope}' (ammessi: {', '.join(RESUME_WHERE)}).")
+        job = self.jobs.get(job_id, include_result=False)
+        if job["kind"] != "pipeline":
+            raise AppError(f"Ripresa non supportata per i job di tipo '{job['kind']}': "
+                           "si possono riprendere solo le pipeline.", code="resume_unsupported")
+        blocked = requeue_error(job)
+        if blocked is not None:
+            raise blocked
+        todo = int(self.db.scalar(f"SELECT COUNT(*) FROM pipeline_items WHERE job_id=? AND {where}", (job_id,)))
+        if not todo:
+            raise Conflict("Nessun elemento fallito da riprovare." if scope == "failed" else
+                           "Nessun elemento da riprendere: tutte le sequenze sono già concluse.")
+
+        def prepare(_job_id: str, final_dir: Path) -> None:
+            with self.db.transaction() as conn:
+                rows = conn.execute(f"SELECT idx, name FROM pipeline_items WHERE job_id=? AND {where}",
+                                    (job_id,)).fetchall()
+                conn.execute(f"UPDATE pipeline_items SET {RESET_ITEM} WHERE job_id=? AND {where}", (job_id,))
+            # niente file vecchi accanto a quelli nuovi: la cartella dell'elemento riparte vuota
+            for row in rows:
+                remove_tree(safe_join(final_dir, "items", f"{row['idx']:04d}_{row['name']}"))
+
+        return self.jobs.requeue(job_id, prepare=prepare,
+                                 note=f"{_seqs(todo)} da rielaborare ({RESUME_LABEL[scope]})")
+
+    def resume_state(self, job: dict) -> dict:
+        """Indicazione per l'interfaccia: la pipeline si può riprendere, e con quali elementi.
+
+        Costa una sola query aggregata sulla chiave primaria, e solo per pipeline fallite o annullate.
+        """
+        if job.get("kind") != "pipeline" or requeue_error(job) is not None:
+            return {"resumable": False, "resumable_items": None}
+        row = self.db.query_one(
+            f"SELECT COUNT(*) AS total, COALESCE(SUM({RESUME_WHERE['incomplete']}), 0) AS incomplete, "
+            f"COALESCE(SUM({RESUME_WHERE['failed']}), 0) AS failed FROM pipeline_items WHERE job_id=?", (job["id"],))
+        counts = {k: int(row[k]) for k in ("total", "incomplete", "failed")} if row else \
+            {"total": 0, "incomplete": 0, "failed": 0}
+        return {"resumable": counts["incomplete"] > 0, "resumable_items": counts}
+
     @staticmethod
     def _records(params: dict) -> list[SeqRecord]:
         raw = params.get("fasta") or ""
@@ -82,18 +148,27 @@ class PipelineService:
 
     # ------------------------------------------------------------------------------ esecuzione
     def handle(self, ctx: JobContext, p: dict) -> dict:
-        items = self.db.query("SELECT idx, name, sequence FROM pipeline_items WHERE job_id=? ORDER BY idx",
-                              (ctx.job_id,))
-        total = len(items)
+        # Solo gli elementi in attesa: in una ripresa gli altri sono già conclusi (o esclusi dall'ambito
+        # scelto) e restano come sono. Una pipeline nuova ha tutti gli elementi in attesa.
+        items = self.db.query("SELECT idx, name, sequence FROM pipeline_items WHERE job_id=? AND status='pending' "
+                              "ORDER BY idx", (ctx.job_id,))
+        total = int(self.db.scalar("SELECT COUNT(*) FROM pipeline_items WHERE job_id=?", (ctx.job_id,)))
+        already = int(self.db.scalar(
+            f"SELECT COUNT(*) FROM pipeline_items WHERE job_id=? AND status IN ({','.join('?' * len(PROCESSED_ITEM))})",
+            (ctx.job_id, *PROCESSED_ITEM)))
         parallel = max(1, min(int(p.get("parallel", 2)), ctx.settings.effective_workers(), 8))
         done_lock = threading.Lock()
-        done = {"n": 0}
+        done = {"n": already}
         ctx.log(f"Pipeline di {total} sequenze, {parallel} in parallelo")
+        skipped = total - already - len(items)
+        if len(items) < total:
+            ctx.log(f"Ripresa: {_seqs(len(items))} da elaborare, {already} già elaborate"
+                    + (f", {skipped} lasciate come sono (annullate)" if skipped else ""))
 
         def finished_one() -> None:
             with done_lock:
                 done["n"] += 1
-                ctx.progress(done["n"] / total, f"{done['n']} di {total} sequenze elaborate")
+                ctx.progress(done["n"] / max(total, 1), f"{done['n']} di {total} sequenze elaborate")
 
         def work(item: dict) -> None:
             try:
@@ -104,12 +179,19 @@ class PipelineService:
             finally:
                 finished_one()
 
-        ctx.progress(0.0, f"0 di {total} sequenze elaborate")
+        ctx.progress(already / max(total, 1), f"{already} di {total} sequenze elaborate")
         with ThreadPoolExecutor(max_workers=parallel, thread_name_prefix=f"pipeline-{ctx.job_id[:6]}") as pool:
             list(pool.map(work, items))
         ctx.check()
         counts = {row["status"]: row["n"] for row in self.db.query(
             "SELECT status, COUNT(*) AS n FROM pipeline_items WHERE job_id=? GROUP BY status", (ctx.job_id,))}
+        # Una ripresa "solo i falliti" lascia com'erano gli annullati: la pipeline non si dichiara completata
+        # (un job completato non si riprende più) ma resta annullata e riprendibile per quegli elementi.
+        left = sum(n for status, n in counts.items() if status not in PROCESSED_ITEM)
+        if left:
+            one = left == 1
+            raise JobCancelled(f"{'Resta' if one else 'Restano'} {_seqs(left)} da elaborare "
+                               f"({'annullata' if one else 'annullate'} in precedenza): usa «Riprendi» per completarle.")
         return {"total": total, "counts": counts}
 
     def _update(self, job_id: str, idx: int, **fields) -> None:
@@ -258,6 +340,10 @@ class PipelineService:
                 if report.exists():
                     zf.write(report, f"qualita/{r['name']}.quality.json")
             zf.writestr("parametri.json", json.dumps(self.jobs.get(job_id)["params"], indent=2, ensure_ascii=False))
+
+
+def _seqs(n: int) -> str:
+    return f"{n} sequenza" if n == 1 else f"{n} sequenze"
 
 
 def _csv_safe(value):

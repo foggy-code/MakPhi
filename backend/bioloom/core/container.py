@@ -79,5 +79,6 @@ def build_core(paths: Paths) -> Core:
     housekeeping.start()
     core = Core(paths, settings, db, jobs, library, projects, compute, pipeline, housekeeping, licenses, databases)
     if recovered:
-        print(f"[BioLoom] {recovered} job interrotti dal precedente arresto sono stati marcati come falliti.")
+        print(f"[BioLoom] {recovered} job interrotti dal precedente arresto sono stati marcati come falliti "
+              "(le pipeline si possono riprendere).")
     return core

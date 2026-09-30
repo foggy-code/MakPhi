@@ -54,7 +54,8 @@ data/
     l'impostazione "Conserva file intermedi".
   - Job fallito: si conserva tutto, per la diagnosi.
 - **Pipeline:** ogni elemento viene salvato appena finisce (`JobContext.commit`), così un batch lungo non
-  perde lavoro e lo scratch resta piccolo.
+  perde lavoro e lo scratch resta piccolo. Per lo stesso motivo una pipeline fallita, annullata o interrotta
+  dal riavvio si riprende senza rifare gli elementi conclusi (vedi [Ripresa delle pipeline](#ripresa-delle-pipeline)).
 - **Archivi ZIP** (job e pipeline): vengono scritti in un file temporaneo dello scratch e inviati con
   `FileResponse`, che lo elimina dopo l'invio. Nessun archivio passa dalla memoria.
 - **SQLite:** `locking_mode=EXCLUSIVE` impostato prima del WAL, quindi nessun file `-shm`. È affidabile
@@ -106,7 +107,44 @@ Tutti i calcoli (`search`, `align`, `align2d`, `model`, `loop`, `quality`, `qmea
 - log incrementale (`GET /api/jobs/{id}/log?offset=`) con l'output dei sottoprocessi in tempo reale;
 - progresso e fase aggiornati dagli handler (per MODELLER tramite marcatori `@@BIOLOOM` stampati dallo script);
 - annullamento immediato (i processi registrati vengono terminati) e timeout configurabile;
-- al riavvio i job rimasti attivi vengono marcati come falliti (nessuno stato "fantasma").
+- al riavvio i job rimasti attivi vengono marcati come falliti (nessuno stato "fantasma"), con fase
+  "Interrotto"; gli elementi di pipeline non conclusi diventano falliti con lo stesso motivo;
+- un job fallito o annullato si può rimettere in coda (`JobManager.requeue`), oggi usato dalle pipeline.
+
+### Ripresa delle pipeline
+
+`POST /api/jobs/{id}/resume` con corpo facoltativo `{"scope": "incomplete" | "failed"}`, per i job `pipeline` in
+stato `failed` o `cancelled`:
+
+- **Ambito:** `incomplete` (predefinito) rimette in attesa tutti gli elementi non completati né filtrati
+  (falliti, annullati, interrotti, in corso o in attesa); `failed` solo i falliti.
+- **Azzeramento:** gli elementi scelti tornano `pending` con i campi di risultato vuoti (template, identità,
+  modello, metriche, errore, orari), in una transazione. La loro cartella `items/<idx>_<nome>` nei risultati
+  definitivi viene eliminata (`safe_join` + `remove_tree`), così non restano file del tentativo precedente.
+  Gli elementi conclusi e i loro file non si toccano.
+- **Concorrenza:** il passaggio a `queued` è un solo `UPDATE … WHERE status IN ('failed','cancelled')` con
+  controllo delle righe modificate: fra richieste concorrenti una sola riprende il job, le altre ricevono 409.
+  L'azzeramento avviene dopo quel passaggio e prima dell'esecuzione; anche il passaggio `queued → running` è
+  condizionato, così un job annullato in coda e poi ripreso (due esecuzioni in attesa nel pool) parte una volta
+  sola. Se l'esecuzione precedente ha già scritto lo stato finale ma non ha ancora chiuso log e scratch, la
+  ripresa aspetta fino a 10 s.
+- **Esecuzione:** `handle()` elabora solo gli elementi `pending`; il progresso parte dagli elementi già
+  elaborati ("12 di 40 sequenze elaborate") e il risultato conta tutti gli elementi. Il log del job si conserva:
+  si aggiungono "Ripresa del job: …" e il riepilogo della ripresa. Una pipeline nuova ha tutti gli elementi
+  `pending` e si comporta come prima.
+- **Esito con elementi lasciati indietro:** una ripresa "solo i falliti" di una pipeline annullata lascia gli
+  annullati come sono. In quel caso la pipeline finisce `cancelled` ("Restano N sequenze da elaborare…") e non
+  `completed`, perché un job completato non si riprende più e quegli elementi resterebbero irraggiungibili.
+- **Errori:** job attivo o completato → 409; nessun elemento nell'ambito → 409; job di altro tipo → 400
+  `resume_unsupported`; ambito non valido → 422.
+- **Interfaccia:** `GET /api/jobs/{id}` aggiunge `resumable` e `resumable_items` (`total`, `incomplete`,
+  `failed`), calcolati con una sola query aggregata e solo per pipeline fallite o annullate. `JobPanel` (pagine
+  Pipeline e Job) mostra "Riprendi" e, se ci sono falliti e anche altri elementi non conclusi, "Riprova solo i
+  falliti". `useJob` riprende il polling quando il job torna attivo e controlla ogni 5 s i job riprendibili, così
+  si accorge anche di una ripresa avviata da un'altra scheda.
+- **Nessuno stato nuovo:** non esiste uno stato `interrupted`. Un'interruzione per riavvio resta `failed` con il
+  suo motivo e la ripresa vale per `failed` e `cancelled`. Così `TERMINAL`/`ACTIVE`, i filtri per stato, i client
+  e i dati esistenti non cambiano, e lo schema SQLite resta lo stesso (nessuna migrazione).
 
 ### MODELLER
 
@@ -242,8 +280,8 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 | Editor PIR | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
 | Modellazione | input automatico o da PIR, parametri, vincoli, loop; modelli, 3D, PyMOL, archivio |
 | Qualità | voto, Ramachandran, profili, clash, residui problematici evidenziati in 3D, confronto analisi |
-| Pipeline batch | multi-FASTA → modelli validati, filtro zona crepuscolare, tabella paginata, CSV/ZIP |
-| Job | log e file di ogni calcolo |
+| Pipeline batch | multi-FASTA → modelli validati, filtro zona crepuscolare, tabella paginata, CSV/ZIP, ripresa (tutti gli elementi non conclusi o solo i falliti) |
+| Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate |
 | Impostazioni | schede Generale (esecuzione, QMEAN, email), Licenze (MODELLER, ProSA, PROCHECK), Database (pdbaa, MMseqs2, UniClust30), Strumenti (verifica dell'installazione), Spazio e file temporanei |
 | Login | solo in modalità server, quando l'API risponde 401 |
 
@@ -271,8 +309,11 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 
 ## Test
 
-- **`backend/tests` (pytest), circa 100 test,** eseguiti sia nativamente sia nel container:
+- **`backend/tests` (pytest), circa 120 test,** eseguiti sia nativamente sia nel container:
   - dominio, job manager, API, generazione script, MODELLER end-to-end;
+  - ripresa dei job e delle pipeline (`test_jobs.py`, `test_pipeline_resume.py`): solo gli elementi non
+    conclusi, riavvio simulato, ambito "solo i falliti", file vecchi eliminati, richieste concorrenti, nuovo
+    annullamento, progresso;
   - flusso dati: scratch, salvataggio definitivo, intermedi, blocco SQLite, pulizia, gruppi di processi;
   - licenze e accesso;
   - parser di PROCHECK e ProSA tarati su output reali di 1UBQ;
@@ -288,6 +329,7 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 - **`frontend/src/**/*.test.ts` (vitest):**
   - parser PIR e formattazione;
   - logica QMEAN locale/remoto/fallback e avvisi delle licenze;
+  - pulsanti di ripresa delle pipeline e ricarica del job quando cambia stato;
   - decodifica dei file, chiave MODELLER da file, vincoli da e verso file.
 - **Esecuzione:** `scripts/test.sh` (ruff, pytest nell'immagine con MODELLER reale, typecheck e vitest). La CI
   (`.github/workflows/ci.yml`) esegue gli stessi controlli: test rapidi senza strumenti esterni, frontend, e

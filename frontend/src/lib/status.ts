@@ -1,5 +1,6 @@
-// Logica pura per lo stato di licenze, database e QMEAN (testata con vitest).
-import type { DatabaseStatus, LicenseStatus, Settings } from "../api/types";
+// Logica pura per lo stato di licenze, database, QMEAN e job (testata con vitest).
+import type { DatabaseStatus, JobSummary, LicenseStatus, ResumeItems, Settings } from "../api/types";
+import { isActive } from "./format";
 
 export type QmeanRoute = {
   /** dove partirà il calcolo; null = non è possibile calcolare QMEAN */
@@ -60,6 +61,39 @@ export function licenseWarnings(s: LicenseStatus): string[] {
     out.push("ProSA: il MAC del container non coincide con quello della licenza. Riavvia BioLoom dall'avviatore per applicarlo.");
   }
   return out;
+}
+
+export type ResumeOptions = {
+  /** "Riprendi": tutti gli elementi non conclusi */
+  incomplete: number;
+  /** "Riprova solo i falliti": solo se diverso da "Riprendi" (ci sono anche elementi annullati o interrotti) */
+  failedOnly: boolean;
+  text: string;
+};
+
+/** Pulsanti di ripresa di una pipeline terminata; null se non c'è nulla da riprendere o il job è attivo. */
+export function resumeOptions(
+  status: string,
+  job: { resumable?: boolean; resumable_items?: ResumeItems | null } | null | undefined,
+): ResumeOptions | null {
+  const items = job?.resumable_items;
+  if (isActive(status) || !job?.resumable || !items || items.incomplete <= 0) return null;
+  const done = Math.max(0, items.total - items.incomplete);
+  const failed = items.failed > 0 ? ` (${items.failed} ${items.failed === 1 ? "fallita" : "fallite"})` : "";
+  return {
+    incomplete: items.incomplete,
+    failedOnly: items.failed > 0 && items.failed < items.incomplete,
+    text: `${done} di ${items.total} sequenze concluse · ${items.incomplete} da riprendere${failed}.`,
+  };
+}
+
+/**
+ * Il job va ricaricato per intero (risultato, file, log completo, riprendibilità)? Solo quando è
+ * terminato e prima non lo era, oppure quando è cambiato di nuovo (es. ripreso e concluso fra due letture).
+ */
+export function needsFullReload(prev: Pick<JobSummary, "status" | "updated_at"> | null, next: Pick<JobSummary, "status" | "updated_at">): boolean {
+  if (isActive(next.status)) return false;
+  return !prev || isActive(prev.status) || prev.status !== next.status || prev.updated_at !== next.updated_at;
 }
 
 /** Stima leggibile di una durata in secondi. */
