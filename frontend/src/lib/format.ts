@@ -107,6 +107,31 @@ export function fmtEta(seconds: number | null | undefined): string | null {
   return `circa ${h} h${m ? ` ${m} min` : ""} ${h === 1 && !m ? "rimanente" : "rimanenti"}`;
 }
 
+/**
+ * Posizione di un job in coda (`queue_position` del server, da 1, nella coda del suo pool): "2° in coda".
+ * null se il job non è in coda o la posizione non è nota (es. ripresa in preparazione).
+ */
+export function fmtQueuePosition(position: number | null | undefined): string | null {
+  if (position === null || position === undefined || !Number.isInteger(position) || position < 1) return null;
+  return `${position}° in coda`;
+}
+
+/**
+ * Budget di CPU condiviso fra i job (`cpu_slots` di /api/system/stats): "2 di 7 slot di calcolo in uso", con i
+ * processi in attesa se ce ne sono. null con un server che non lo riporta.
+ */
+export function fmtCpuSlots(slots: { total: number; used: number; waiting: number } | null | undefined): string | null {
+  if (!slots || !(slots.total > 0)) return null;
+  const used = `${Math.min(slots.used, slots.total)} di ${slots.total} slot di calcolo in uso`;
+  if (!(slots.waiting > 0)) return used;
+  return `${used}, ${slots.waiting} ${slots.waiting === 1 ? "processo" : "processi"} in attesa`;
+}
+
+/** Nota della posizione in coda per un riepilogo di job: solo per i job ancora in coda. */
+export function queueLabel(job: { status: string; queue_position?: number | null } | null | undefined): string | null {
+  return job?.status === "queued" ? fmtQueuePosition(job.queue_position) : null;
+}
+
 export function relTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   const diff = (Date.now() - new Date(iso).getTime()) / 1000;

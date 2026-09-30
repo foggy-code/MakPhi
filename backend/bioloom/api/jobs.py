@@ -1,7 +1,8 @@
 """Job: elenco, stato, log incrementale, file prodotti, annullamento, ripresa, eliminazione.
 
 I riepiloghi dei job (elenco, dettaglio, stato, annullamento, ripresa) hanno `eta_seconds`: tempo residuo
-stimato dei job in esecuzione, null se non stimabile. `GET /api/jobs/events` e `GET /api/jobs/{id}/events`
+stimato dei job in esecuzione, null se non stimabile; e `queue_position`: posizione (da 1) di un job in coda
+nella coda del suo pool, null per gli altri. `GET /api/jobs/events` e `GET /api/jobs/{id}/events`
 sono flussi Server-Sent Events (services/live.py) per seguire i job senza polling.
 """
 

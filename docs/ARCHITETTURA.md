@@ -20,7 +20,7 @@ Computer ospite (Windows, macOS, Linux; Apple Silicon in emulazione x86)
 Container "bioloom" (Ubuntu 24.04, Python 3.12, utente = proprietario di /data)
   Browser ──HTTP──▶ FastAPI (8765; pubblicata su 127.0.0.1, oppure in rete con chiave d'accesso)
                      ├─ /api/*   rotte REST (OpenAPI su /docs)      ├─ /*  interfaccia React compilata
-                     ├─ JobManager: pool "cpu" (core−1) + "io" (8) · stato su SQLite · lavoro in /scratch
+                     ├─ JobManager: code con priorità "cpu" (core−1) + "io" (8) · budget di CPU condiviso · stato su SQLite · lavoro in /scratch
                      │    └─ sottoprocessi: MODELLER 10.8, mkdssp, BLAST+, MMseqs2, Clustal Omega, MAFFT, MUSCLE,
                      │                      TM-align, US-align, PROCHECK, ProSA II
                      └─ servizi remoti: RCSB · UniProt · InterPro · NCBI QBlast · AlphaFold DB (EBI) · SWISS-MODEL (opt-in)
@@ -69,7 +69,9 @@ data/
   - cache remota e cache dei calcoli oltre i 30 giorni, più i file temporanei di scritture interrotte;
   - scratch orfano.
 - **Processi esterni:** ognuno ha il proprio gruppo di processi; annullamento e timeout terminano anche i
-  figli (mafft e PROCHECK sono script). Il timeout dei job vale per tutti gli strumenti.
+  figli (mafft e PROCHECK sono script). Il timeout dei job vale per tutti gli strumenti. I processi di calcolo
+  prendono gli slot del budget di CPU condiviso fra i job (vedi [Coda con priorità e budget di
+  CPU](#coda-con-priorità-e-budget-di-cpu)).
 - **MMseqs2:** il database (≈ 140 MB) sta nei dati. L'indice k-mer (≈ 1,5 GB) sta nel volume `/cache` di
   ogni computer, con un timbro dimensione/data che lo invalida quando il database cambia.
 
@@ -95,7 +97,7 @@ data/
 
 | Pacchetto | Contenuto |
 |---|---|
-| `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi), `eta` (stima del tempo residuo), `events` (notifiche in-process dei cambiamenti dei job) |
+| `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `dispatch` (coda con priorità di ogni pool), `budget` (budget di CPU condiviso fra i job), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi), `eta` (stima del tempo residuo), `events` (notifiche in-process dei cambiamenti dei job) |
 | `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file) |
 | `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB), `remote` (client HTTP), `tools` (rilevamento strumenti, preambolo di licenza) |
 | `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job) |
@@ -107,6 +109,8 @@ Tutti i calcoli (`search`, `align`, `align2d`, `model`, `loop`, `quality`, `qmea
 `JobManager`:
 
 - stato `queued → running → completed | failed | cancelled` (più `cancelling`) salvato su SQLite;
+- coda con priorità per tipo di job e budget di CPU condiviso dai processi esterni di tutti i job (vedi [Coda con
+  priorità e budget di CPU](#coda-con-priorità-e-budget-di-cpu)), con la posizione in coda `queue_position`;
 - log incrementale (`GET /api/jobs/{id}/log?offset=`) con l'output dei sottoprocessi in tempo reale;
 - progresso e fase aggiornati dagli handler (per MODELLER tramite marcatori `@@BIOLOOM` stampati dallo script),
   con la stima del tempo residuo `eta_seconds` e gli aggiornamenti in tempo reale via Server-Sent Events (vedi
@@ -252,6 +256,84 @@ aggiornamento di un elemento. Ogni cambiamento ha una versione crescente e resta
   questo l'elenco è condiviso e le schede nascoste chiudono i flussi e li riaprono quando tornano visibili. Una
   scheda ne usa al massimo due (elenco e job aperto; tre sulla pagina Qualità con QMEAN e analisi insieme).
 
+### Coda con priorità e budget di CPU
+
+**Coda** (`core/dispatch.py`). Ogni pool ha un dispatcher con un heap al posto del `ThreadPoolExecutor` FIFO: "cpu"
+con i job di calcolo in parallelo delle Impostazioni (`effective_workers`, core − 1 se automatico), "io" con 8. I
+worker prendono sempre il primo job avviabile in quest'ordine (`core/jobs.PRIORITY`):
+
+| Priorità | Tipi di job | Perché |
+|---|---|---|
+| 0 | `search`, `align`, `align2d`, `quality`, `qmean` (e `compare`) | interattivi brevi: l'utente aspetta davanti allo schermo |
+| 1 | `model`, `loop`, `selftest` e i tipi non elencati | minuti |
+| 2 | `pipeline`, `db_update_pdbaa`, `db_build_mmseqs`, `db_index_mmseqs`, `db_convert_uniclust`, `db_local_uniclust` | lavori lunghi in blocco |
+
+- **A parità:** `created_at`, poi il rowid della riga (ordine di creazione anche nello stesso secondo). Un job ripreso
+  rientra con la sua data di creazione e passa davanti ai job creati dopo di lui.
+- **Nessuna colonna nuova:** la priorità si ricava dal tipo; lo schema SQLite non cambia. La coda sta in memoria e lo
+  stato vero resta su SQLite: una voce dell'heap dice solo "prova ad avviare". `_execute` parte soltanto da `queued`,
+  con il passaggio condizionato di prima, quindi una voce rimasta indietro non avvia nulla due volte. Un job ha al
+  più una voce valida.
+- **Compatibilità:** annullare un job in coda scrive lo stato finale e lo toglie dalla coda nello stesso passo, sotto
+  il lock del gestore, così una ripresa successiva non può vedersi togliere la voce nuova. La ripresa lo rimette in
+  coda a preparazione finita. All'arresto la coda si svuota e il `recover` del prossimo avvio marca i job rimasti
+  `queued`, come prima.
+- **Eventi:** quelli di prima (`job` all'ingresso in coda, all'avvio, a ogni fase e alla fine; `idle` a esecuzione
+  chiusa); ETA invariata.
+- **Posizione:** `queue_position` in tutti i riepiloghi (elenco, dettaglio, `/status`, annullamento, ripresa, SSE). È
+  la posizione da 1 nella coda del pool, null per chi non è in coda (anche una ripresa in preparazione). I flussi SSE
+  la contano nella firma del riepilogo: quando parte il job davanti, il cambio arriva come `job` o `status`.
+  L'interfaccia mostra "2° in coda" in `JobPanel` e nell'elenco dei job (`queueLabel` in `lib/format.ts`).
+- **Capacità dinamica:** pool "cpu" e budget rileggono `effective_workers` a ogni scelta. `PUT /api/settings` con
+  `max_workers` li risveglia subito (`JobManager.reconfigure`): l'impostazione vale senza riavvio.
+- **Risorse esclusive** (`register(resource=...)`): il servizio QMEAN locale (`QMEAN_LOCAL`) esegue al massimo un
+  calcolo alla volta; lo chiedono i job `qmean` in modalità locale e le conversioni e copie di UniClust30, che nel
+  servizio passano dalla stessa coda. Un job con la risorsa occupata resta `queued`, con la sua posizione e la fase
+  "In coda: il servizio QMEAN locale sta eseguendo un altro calcolo", e il worker passa al successivo: il pool "io"
+  continua a servire gli altri job. La risorsa si calcola al momento della scelta (`mode` del job o delle
+  Impostazioni: un QMEAN su SWISS-MODEL non la chiede) e si tiene fino alla chiusura dell'esecuzione, compreso un
+  eventuale fallback su SWISS-MODEL. Prima i job QMEAN restavano `running` in attesa della coda del worker e
+  consumavano il loro timeout.
+
+**Budget di CPU** (`core/budget.py`). Senza coordinamento, pipeline × elementi in parallelo × strumenti saturavano la
+CPU. Gli slot sono `effective_workers`, condivisi da tutti i job. `JobContext.run(cpu=...)` li prende prima di avviare
+il processo e li restituisce quando termina: `True` (predefinito) = 1, un numero per i programmi multi-thread,
+`False` per i processi leggeri o di I/O.
+
+| Processo | Slot |
+|---|---|
+| MODELLER (allineamento, modelli, loop, DOPE) | 1: gli script non usano `parallel.Job`, un thread |
+| PROCHECK, ProSA II, TM-align, US-align, `blastp` (`-num_threads` predefinito 1), Clustal Omega (`--threads` predefinito 1), MAFFT (`--thread` predefinito 0 = un thread), MUSCLE 3, `mmseqs createdb` | 1 |
+| MMseqs2 `easy-search` e `createindex`, MUSCLE 5 (di suo userebbe tutti i processori) | da 1 a core − 1, uno per thread: al suo turno il processo prende gli slot liberi e parte con altrettanti thread (`--threads`/`-threads`) |
+| `blastdbcmd -entry all` (estrazione di pdbaa per MMseqs2) | 0: I/O |
+| mkdssp (da Biopython, non da `ctx.run`, meno di un secondo), servizio QMEAN (container a parte), download | fuori dal budget |
+
+- **Multi-thread:** un programma multi-thread occupa uno slot per thread, e i suoi thread li decidono gli slot che
+  ottiene. Il comando si costruisce dal numero di thread (`ctx.run(lambda n: [...], cpu=N)`) e la richiesta è
+  elastica: al suo turno prende da 1 a N slot, quelli liberi. Da solo resta veloce, insieme agli altri non satura, e
+  non tiene ferma la coda aspettando che se ne liberino N (con richieste fisse di N slot una ricerca MMseqs2 in una
+  pipeline avrebbe aspettato la fine di tutte le modellazioni in corso, bloccando anche quelle dietro di lei). Un
+  comando fisso con `cpu=N` aspetta invece tutti gli N slot (`ctx.cpu_threads` limita N alla capacità).
+- **Ordine:** priorità del job, poi arrivo. Niente sorpassi: il primo in ordine parte appena ha abbastanza slot, e
+  chi viene dopo aspetta anche se gli basterebbero. Così una richiesta fissa di N slot non resta indietro per sempre
+  dietro a quelle da uno.
+- **Nessun deadlock:**
+  - gli slot li tengono solo processi in esecuzione, che finiscono da soli, per timeout o per annullamento;
+  - la pipeline non ne prende mentre aspetta i suoi elementi: li prendono i processi degli elementi;
+  - ogni richiesta è limitata alla capacità, quindi si può sempre soddisfare.
+
+  Verificato con una pipeline di 4 elementi in parallelo su 2 slot, con passi in parallelo dentro ogni elemento.
+- **Attesa:** si interrompe con l'annullamento (`cancel` sveglia subito chi aspetta: il processo non parte) e con
+  l'arresto. Non conta nel timeout del processo, che parte con il processo.
+- **Fase:** "In attesa di CPU libera" al posto della fase del job se aspetta un suo processo (anche di un contesto
+  figlio senza fase propria, come l'analisi di qualità dentro la modellazione) e nessun altro suo processo è in
+  esecuzione. Altrimenti l'attesa compare in coda alla fase: passi in parallelo ("Validazione · in attesa di CPU
+  libera": il job non è fermo) ed elementi di pipeline ("3 di 5 sequenze elaborate · in attesa di CPU libera"), così
+  le fasi della pipeline restano. Finita l'attesa torna la fase dichiarata dall'handler.
+- **Thread dello stesso job:** i passi eseguiti in parallelo da thread diversi che chiamano `ctx.run` (validazione in
+  parallelo) sono governati allo stesso modo, senza codice apposito.
+- **Diagnostica:** `/api/system/stats` → `cpu_slots` (totali, usati, processi in attesa), nella Panoramica.
+
 ### MODELLER
 
 Il server non importa mai `modeller`: ogni operazione è uno script generato ed eseguito in un
@@ -330,6 +412,24 @@ indicare un altro interprete (`BIOLOOM_MODELLER_PYTHON`). Flusso di un job `mode
       - `ok` se il consigliato sta nel 90% della memoria;
       - `swap` (parte ma lento, con avviso e memoria consigliata) se il minimo sta in memoria + swap;
       - altrimenti `insufficient`: HHblits non parte e il backend passa al fallback, se attivo.
+    - **Controllo di BioLoom prima di partire** (`qmean_local.memory_problem`, nello stato: `available`, `message`,
+      `memory_required`): con `swap` il calcolo partiva e, come nella misura sopra, di solito si fermava a metà per il
+      timeout. Ora la memoria del container (`memory.total` del worker, senza lo swap: il cs219 va tenuto nella cache)
+      si confronta con il requisito del database scelto; se non basta, il job fallisce subito con il motivo in italiano
+      (quanta memoria serve, quanta ce n'è, come aumentarla) oppure passa al fallback su SWISS-MODEL, se attivo.
+
+      | Caso | Requisito | Fonte |
+      |---|---|---|
+      | UniRef30_2020_06 | 12 GB | misurato: 3,8 GB di indici in memoria + 6 GB di cs219 + 1 GB + 10% (README) |
+      | altre versioni | 12 GB × dimensione / 194 GB × 1,5, arrotondato al GB superiore, minimo 2 GB | stima: memoria e dimensione crescono insieme con il numero di cluster, ma le versioni vecchie hanno allineamenti meno profondi e quindi più indice e cs219 per GB; da qui il 50% in più |
+
+      - Il giudizio del worker vale per primo: `insufficient` blocca sempre; `ok` (calcolato sulle dimensioni vere
+        degli indici, con il 10% di margine) lascia partire anche quando la stima prudente direbbe di no.
+      - Tolleranza: si accetta il 95% del requisito, perché `/proc/meminfo` vede un po' meno della memoria assegnata
+        (con 12 GB per Docker circa 11,7 GB).
+      - Un worker di una versione che non riporta la memoria non viene controllato.
+      - Esempio: UniRef30_2020_06 con 8 GB per Docker → "memoria insufficiente per UniRef30_2020_06: servono circa
+        12 GB assegnati a Docker (valore misurato) e il servizio QMEAN ne ha 8,0…"; con 11,7 GB parte.
   - **Processori:** `run_qmean.py` lancia HHblits con `-cpu 1`; il wrapper ne passa di più.
     - Con memoria `ok` usa tutti i processori del container, fino a 8.
     - Con memoria al limite ne usa 1: a parità di tempo, 4 thread avevano letto 190 GB contro 35.
@@ -642,7 +742,7 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 | Modellazione | input automatico o da PIR, parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); modelli, 3D, PyMOL, archivio |
 | Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi |
 | Pipeline batch | multi-FASTA → modelli validati, filtro zona crepuscolare, tabella paginata, CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
-| Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione |
+| Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione e la posizione di quelli in coda ("2° in coda") |
 | Impostazioni | schede Generale (esecuzione, QMEAN, email), Licenze (MODELLER, ProSA, PROCHECK), Database (pdbaa, MMseqs2, UniClust30), Strumenti (verifica dell'installazione), Spazio e file temporanei (con la cache dei calcoli) |
 | Login | solo in modalità server, quando l'API risponde 401 |
 
@@ -685,7 +785,10 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - parser di PROCHECK e ProSA tarati su output reali di 1UBQ;
   - MMseqs2 e QMEAN locale con worker simulato;
   - riconoscimento di tutti i formati di UniClust30 (`test_uniclust_discovery.py`);
-  - scelta della versione e fallback su SWISS-MODEL (`test_qmean_fallback.py`);
+  - scelta della versione e fallback su SWISS-MODEL (`test_qmean_fallback.py`), memoria richiesta dal database
+    (12 GB misurati per UniRef30_2020_06, stima per le altre versioni, giudizio del worker, tolleranza del 95%): job
+    fallito subito o fallback con 8 GB, partenza con 11,7 GB; due QMEAN locali eseguiti uno alla volta, il secondo in
+    coda con posizione e fase, senza bloccare il pool "io"; QMEAN su SWISS-MODEL senza esclusione;
   - lettura dei formati di sequenza e caricamento di strutture (`test_fileformats.py`);
   - consenso tra i metodi (`test_consensus.py`):
     - scale, pesi, fasce, metodi mancanti, discordanze;
@@ -719,6 +822,16 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     chiusura dopo `end`, posto liberato alla disconnessione del client, arresto non bloccato dai flussi aperti.
     I test aspettano le condizioni, non tempi fissi: un flusso in attesa di notifiche (`ChangeFeed.waiting`) ha
     già inviato tutto ciò che era stato pubblicato prima;
+  - coda con priorità e budget di CPU (`test_scheduling.py`), con processi veri che scrivono inizio e fine: mai più
+    processi contemporanei degli slot (da job diversi e da thread dello stesso job), annullamento durante l'attesa,
+    timeout non consumato dall'attesa e ancora valido per il processo, impostazione dei job in parallelo cambiata
+    senza riavvio (budget e pool "cpu"), programmi multi-thread su più slot (fissi ed elastici: questi prendono subito
+    gli slot liberi), processi di I/O fuori dal budget, ordine
+    per priorità senza sorpassi, fase "In attesa di CPU libera" (job, elemento di pipeline, figlio senza fase, passi
+    in parallelo),
+    ordine di esecuzione per tipo con un solo worker e FIFO a parità, ripresa che torna al suo posto, annullamento e
+    ripresa di un job in coda, job in coda all'arresto marcati da `recover`, eventi invariati, posizione nel flusso
+    dell'elenco, pipeline con 4 elementi in parallelo su 2 slot senza deadlock;
   - verifica dell'installazione.
 
   `pytest -m network` prova i servizi reali. Oltre a 1UBQ, `tests/data` contiene strutture sintetiche generate
@@ -729,6 +842,8 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - logica QMEAN locale/remoto/fallback e avvisi delle licenze;
   - pulsanti di ripresa delle pipeline e ricarica del job quando cambia stato, dopo l'annullamento e dopo la
     ripresa;
+  - posizione in coda ("2° in coda", solo per i job in coda), slot di calcolo in uso (`format.test.ts`), memoria del
+    servizio QMEAN rispetto al requisito (`status.test.ts`);
   - tempo residuo leggibile (`fmtEta`); scelta fra flusso e polling, riconnessione con backoff, timeout di
     connessione, fine del flusso, flusso condiviso dell'elenco, ricomposizione del log (anche con polling e flusso
     sovrapposti) e aggiornamento degli elenchi, anche dopo una ricarica lenta (`live.test.ts`, con flussi e timer

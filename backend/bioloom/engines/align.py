@@ -5,6 +5,7 @@ Multiplo e strutturale passano dalla cache dei calcoli (`core/cache.py`); il pai
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Optional
@@ -171,8 +172,11 @@ def _run_cli_msa(ctx: JobContext, tool: str, exe: str, records: list[SeqRecord],
         cmd = [exe, "-i", str(in_path), "-o", str(out_path), "--force", "--outfmt=fasta"]
         result = ctx.run(cmd, env=default_env())
     elif tool == "muscle":
-        result = ctx.run([exe, "-align", str(in_path), "-output", str(out_path)], env=default_env())
-        if result.returncode != 0:  # MUSCLE 3.x
+        # MUSCLE 5 userebbe di suo tutti i processori: un thread per slot libero del budget di CPU condiviso
+        result = ctx.run(lambda threads: [exe, "-align", str(in_path), "-output", str(out_path),
+                                          "-threads", str(threads)],
+                         env=default_env(), cpu=max(1, (os.cpu_count() or 2) - 1))
+        if result.returncode != 0:  # MUSCLE 3.x, a un thread
             result = ctx.run([exe, "-in", str(in_path), "-out", str(out_path)], env=default_env())
     else:  # mafft scrive su stdout
         result = ctx.run([exe, "--auto", "--quiet", "--nuc" if kind == "nucleic" else "--amino", str(in_path)],

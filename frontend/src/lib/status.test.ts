@@ -1,8 +1,24 @@
 import { describe, expect, it } from "vitest";
 import type { JobStatus, JobSummary, LicenseStatus } from "../api/types";
 import {
-  cancelAndSync, fmtSeconds, type JobSync, licenseWarnings, needsFullReload, qmeanRoute, resumeAndSync, resumeOptions,
+  cancelAndSync, fmtSeconds, type JobSync, licenseWarnings, needsFullReload, qmeanMemoryNote, qmeanRoute, resumeAndSync,
+  resumeOptions,
 } from "./status";
+
+describe("qmeanMemoryNote", () => {
+  const GB = 1024 ** 3;
+  it("memoria del servizio e requisito del database scelto", () => {
+    expect(qmeanMemoryNote({ memory: { total: 15.6 * GB, swap: 0 }, memory_required: { bytes: 12 * GB, basis: "measured" } }))
+      .toBe("Memoria di Docker: 15,6 GB; richiesti circa 12 GB (valore misurato).");
+    expect(qmeanMemoryNote({ memory: { total: 8 * GB, swap: 2 * GB }, memory_required: { bytes: 24 * GB, basis: "estimate" } }))
+      .toBe("Memoria di Docker: 8 GB; richiesti circa 24 GB (stima dalla dimensione del database).");
+  });
+  it("nessuna nota senza i dati (worker o server di una versione precedente)", () => {
+    expect(qmeanMemoryNote(null)).toBeNull();
+    expect(qmeanMemoryNote({ memory: null, memory_required: { bytes: 12 * GB, basis: "measured" } })).toBeNull();
+    expect(qmeanMemoryNote({ memory: { total: 8 * GB, swap: 0 } })).toBeNull();
+  });
+});
 
 const base = { qmean_mode: "local" as const, qmean_remote: false, contact_email: "", qmean_fallback_remote: false };
 const remote = { qmean_remote: true, contact_email: "a@b.it" };

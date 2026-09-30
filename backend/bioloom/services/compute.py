@@ -9,7 +9,7 @@ from typing import Optional
 
 from ..core import cache
 from ..core.errors import AppError, Conflict, NotFound
-from ..core.jobs import JobCancelled, JobContext, JobManager
+from ..core.jobs import QMEAN_LOCAL, JobCancelled, JobContext, JobManager
 from ..core.storage import atomic_write_json, atomic_write_text, read_json, safe_join
 from ..domain import consensus, sequences
 from ..domain.sequences import SeqRecord
@@ -126,7 +126,13 @@ class ComputeService:
         jobs.register("model", self.handle_model)
         jobs.register("loop", self.handle_loop)
         jobs.register("quality", self.handle_quality)
-        jobs.register("qmean", self.handle_qmean, pool="io")
+        jobs.register("qmean", self.handle_qmean, pool="io", resource=self._qmean_resource)
+
+    def _qmean_resource(self, p: dict) -> Optional[str]:
+        """QMEAN locale: al massimo un calcolo alla volta (il servizio ha una coda sola e HHblits richiede molta
+        memoria). Gli altri restano in coda in BioLoom, senza occupare un worker del pool "io"; SWISS-MODEL no."""
+        mode = p.get("mode") or self.jobs.settings_provider().qmean_mode
+        return None if mode == "remote" else QMEAN_LOCAL
 
     # ------------------------------------------------------------------------------ risoluzione file
     def resolve_structure(self, source: dict) -> tuple[Path, str]:

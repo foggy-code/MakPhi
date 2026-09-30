@@ -57,7 +57,9 @@ COMPOSE_PROFILES=qmean BIOLOOM_QMEAN_URL=http://qmean:8080 \
   propone **Copia indici**, che copia indici e cs219 (7,3 GB per UniRef30_2020_06) nel volume
   `bioloom_qmean_cache`. Con un disco locale (`ext4`, `xfs`) non serve.
 - **Memoria:** HHblits deve tenere in memoria gli indici e l'intero cs219: circa 12 GB con UniRef30_2020_06.
-  Con meno il calcolo parte, ma rilegge il cs219 di continuo e può durare ore.
+  Con meno rilegge il cs219 di continuo e si fermerebbe a metà: BioLoom confronta prima la memoria del container
+  `qmean` con quella richiesta dal database scelto e, se non basta, il job fallisce subito con il motivo (o passa al
+  fallback su SWISS-MODEL, se attivo). Un calcolo QMEAN locale alla volta: gli altri restano in coda.
 - **Processori:** con memoria sufficiente HHblits usa fino a 8 processori, con memoria al limite uno solo.
   `QMEAN_HHBLITS_CPU` in `server.env` fissa il numero.
 - **Fallback su SWISS-MODEL:** va attivato esplicitamente in Impostazioni → Generale → QMEAN e servizi

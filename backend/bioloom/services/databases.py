@@ -20,7 +20,7 @@ from typing import Callable, Optional
 import httpx
 
 from ..core.errors import AppError, ToolUnavailable
-from ..core.jobs import JobContext, JobManager
+from ..core.jobs import QMEAN_LOCAL, JobContext, JobManager
 from ..core.storage import dir_size, remove_tree
 from ..engines import qmean_local, remote, search, tools
 
@@ -58,8 +58,11 @@ class DatabaseService:
         jobs.register("db_update_pdbaa", self.handle_update_pdbaa, pool="io")
         jobs.register("db_build_mmseqs", self.handle_build_mmseqs)
         jobs.register("db_index_mmseqs", self.handle_index_mmseqs)
-        jobs.register("db_convert_uniclust", self.handle_convert_uniclust, pool="io")
-        jobs.register("db_local_uniclust", self.handle_local_uniclust, pool="io")
+        # conversioni e copie passano dalla stessa coda dei calcoli nel servizio QMEAN (una cosa alla volta):
+        # in BioLoom restano in coda, invece di occupare un worker del pool "io" in attesa del servizio
+        jobs.register("db_convert_uniclust", self.handle_convert_uniclust, pool="io",
+                      resource=lambda _p: QMEAN_LOCAL)
+        jobs.register("db_local_uniclust", self.handle_local_uniclust, pool="io", resource=lambda _p: QMEAN_LOCAL)
 
     def _preferred_uniclust(self) -> str:
         settings = self.settings_provider() if self.settings_provider else None
@@ -147,7 +150,9 @@ class DatabaseService:
         tmp = ctx.tmp_dir
         fasta = tmp / "pdbaa.fasta"
         ctx.progress(0.05, "Estrazione delle sequenze da pdbaa")
-        res = ctx.run([blastdbcmd, "-db", str(db), "-entry", "all", "-out", str(fasta)], log_output=False)
+        # lettura e scrittura di file: processo di I/O, fuori dal budget di CPU
+        res = ctx.run([blastdbcmd, "-db", str(db), "-entry", "all", "-out", str(fasta)], log_output=False,
+                      cpu=False)
         if res.returncode != 0 or not fasta.exists():
             raise AppError(f"blastdbcmd non riuscito: {res.output[-400:]}")
         # il database (≈ 140 MB) si crea nello scratch e poi si copia nella cartella dati
@@ -184,9 +189,10 @@ class DatabaseService:
         remove_tree(staged)
         shutil.copytree(db.parent, staged)
         ctx.progress((progress[0] + progress[1]) / 2, "Indice k-mer MMseqs2 (ricerche più veloci)")
-        threads = max(1, (os.cpu_count() or 2) - 1)
-        res = ctx.run([mmseqs, "createindex", str(staged / "pdbaa"), str(ctx.tmp_dir / "mmseqs_idx"), "--threads",
-                       str(threads)], log_output=False)
+        # un thread per slot libero del budget di CPU condiviso (da 1 ai processori − 1)
+        res = ctx.run(lambda threads: [mmseqs, "createindex", str(staged / "pdbaa"), str(ctx.tmp_dir / "mmseqs_idx"),
+                                       "--threads", str(threads)],
+                      log_output=False, cpu=max(1, (os.cpu_count() or 2) - 1))
         shutil.rmtree(ctx.tmp_dir / "mmseqs_idx", ignore_errors=True)
         if res.returncode != 0:
             remove_tree(staged)

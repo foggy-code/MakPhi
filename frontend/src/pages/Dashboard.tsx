@@ -5,7 +5,7 @@ import type { Example, JobSummary, SystemInfo, SystemStats } from "../api/types"
 import { Icon } from "../components/Icon";
 import { Badge, Card, Empty, PageHead, Progress, Stat, StatusBadge } from "../components/ui";
 import { useProject, useToast } from "../lib/context";
-import { fmtBytes, KIND_LABEL, relTime } from "../lib/format";
+import { fmtBytes, fmtCpuSlots, KIND_LABEL, relTime } from "../lib/format";
 import { useAsync, useInterval, useLiveJobList } from "../lib/hooks";
 
 const FLOW = [
@@ -151,7 +151,7 @@ export default function Dashboard() {
               <Stat label="CPU" value={<>{stats.cpu_percent.toFixed(0)}<small>%</small></>} note={`${stats.cpu_count} core · ${info?.workers ?? "?"} job paralleli`} />
               <Stat label="Memoria" value={<>{stats.memory.percent.toFixed(0)}<small>%</small></>} note={`${fmtBytes(stats.memory.used)} di ${fmtBytes(stats.memory.total)}`} />
               <Stat label="Disco dati" value={<>{stats.disk.percent.toFixed(0)}<small>%</small></>} note={`${fmtBytes(stats.disk.free)} liberi`} />
-              <Stat label="Job attivi" value={stats.active_jobs} note={`Server: ${fmtBytes(stats.process_memory)}`} />
+              <Stat label="Job attivi" value={stats.active_jobs} note={[fmtCpuSlots(stats.cpu_slots), `Server: ${fmtBytes(stats.process_memory)}`].filter(Boolean).join(" · ")} />
             </div>
           )}
         </Card>

@@ -1,5 +1,5 @@
 // Logica pura per lo stato di licenze, database, QMEAN e job (testata con vitest).
-import type { DatabaseStatus, JobSummary, LicenseStatus, ResumeItems, Settings } from "../api/types";
+import type { DatabaseStatus, JobSummary, LicenseStatus, QmeanServiceStatus, ResumeItems, Settings } from "../api/types";
 import { isActive } from "./format";
 
 export type QmeanRoute = {
@@ -47,6 +47,20 @@ export function qmeanRoute(
     hint: remoteOk ? `${reason} Puoi usare il fallback su SWISS-MODEL.` : `${reason} In alternativa consenti SWISS-MODEL (con la tua email) nelle Impostazioni.`,
     canFallback: remoteOk,
   };
+}
+
+/**
+ * Memoria del servizio QMEAN rispetto al requisito del database scelto (controllato dal server prima di ogni
+ * calcolo): "Memoria di Docker: 15,6 GB; richiesti circa 12 GB (valore misurato)". null se il server non la riporta.
+ */
+export function qmeanMemoryNote(q: Pick<QmeanServiceStatus, "memory" | "memory_required"> | null | undefined): string | null {
+  const total = q?.memory?.total;
+  const need = q?.memory_required;
+  if (!total || !need?.bytes) return null;
+  // un decimale anche sopra i 10 GB: vicino alla soglia "11,6 GB" e "12 GB" devono restare distinguibili
+  const gb = (n: number) => `${(n / 1024 ** 3).toLocaleString("it-IT", { maximumFractionDigits: 1 })} GB`;
+  const basis = need.basis === "measured" ? "valore misurato" : "stima dalla dimensione del database";
+  return `Memoria di Docker: ${gb(total)}; richiesti circa ${gb(need.bytes)} (${basis}).`;
 }
 
 /** Avvisi da mostrare per le licenze (vuoto se tutto è a posto). */

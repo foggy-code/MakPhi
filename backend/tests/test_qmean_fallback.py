@@ -1,15 +1,21 @@
-"""QMEAN: scelta della versione di UniClust30, fallback facoltativo su SWISS-MODEL, migrazione impostazioni."""
+"""QMEAN: scelta della versione di UniClust30, fallback facoltativo su SWISS-MODEL, migrazione impostazioni,
+memoria richiesta dal database, un calcolo locale alla volta."""
 
 import json
+import threading
+import time
 
 import httpx
 import pytest
 
 from bioloom.config import UserSettings
+from bioloom.core.jobs import QMEAN_LOCAL, RESOURCE_STAGE
 from bioloom.engines import qmean_local, remote
 
 from .conftest import wait_job
 from .test_engines_extra import QMEAN_OUTPUT
+
+GIB = 1024 ** 3
 
 REMOTE_RESULT = {"qmean4_z": -1.5, "qmean4": 0.6, "qmean6_z": None, "qmeandisco": 0.7, "components": {},
                  "local": [], "url": "https://swissmodel.expasy.org/qmean/x", "source": "swissmodel"}
@@ -207,3 +213,156 @@ def test_insufficient_memory_is_reported_and_uses_the_fallback(client_with_ubq, 
     assert done["status"] == "completed" and done["result"]["source"] == "swissmodel"
     assert "memoria insufficiente" in done["result"]["fallback"]["reason"]
     assert not any(p == "/jobs" for _m, p, _q, _b in w.requests)  # HHblits non parte nemmeno
+
+
+# ------------------------------------------------------------------------------------------ memoria richiesta
+def test_memory_requirement_measured_and_estimated():
+    measured = qmean_local.memory_requirement({"prefix": "UniRef30_2020_06", "size": 194 * GIB})
+    assert measured == {"bytes": 12 * GIB, "basis": "measured"}  # README: circa 12 GB assegnati a Docker
+    # versione non misurata: 12 GB × 250/194 × 1,5 = 23,2 GB, arrotondati al GB superiore
+    assert qmean_local.memory_requirement({"prefix": "UniRef30_2023_02", "size": 250 * GIB}) == \
+        {"bytes": 24 * GIB, "basis": "estimate"}
+    # stessa dimensione di UniRef30_2020_06 ma non misurata: resta il margine del 50%
+    assert qmean_local.memory_requirement({"prefix": "UniRef30_2021_03", "size": 194 * GIB})["bytes"] == 18 * GIB
+    assert qmean_local.memory_requirement({"prefix": "mini", "size": 5 * 1024 ** 2})["bytes"] == 2 * GIB  # minimo
+    assert qmean_local.memory_requirement({"prefix": "senza_dimensione"}) is None
+    assert qmean_local.memory_requirement(None) is None
+
+
+def test_memory_problem_rules():
+    ref = {"prefix": "UniRef30_2020_06", "size": 194 * GIB}
+    # il giudizio del worker sulle dimensioni vere degli indici vale per primo
+    assert qmean_local.memory_problem({**ref, "memory": "ok"}, {"total": 4 * GIB, "swap": 0}) is None
+    assert qmean_local.memory_problem({**ref, "memory": "insufficient", "memory_message": "memoria insufficiente X"},
+                                      None) == "memoria insufficiente X"
+    low = qmean_local.memory_problem({**ref, "memory": "swap"}, {"total": 8 * GIB, "swap": 2 * GIB})
+    assert "memoria insufficiente per UniRef30_2020_06" in low and "circa 12 GB" in low
+    assert "valore misurato" in low and "ne ha 8,0" in low and "SWISS-MODEL" in low
+    # 12 GB assegnati a Docker: il container ne vede un po' meno (circa 11,7 GB) e il requisito è rispettato
+    assert qmean_local.memory_problem({**ref, "memory": "swap"}, {"total": int(11.7 * GIB), "swap": 0}) is None
+    assert qmean_local.memory_problem({**ref, "memory": "swap"}, {"total": int(11.3 * GIB), "swap": 0}) is not None
+    assert qmean_local.memory_problem({**ref, "memory": "swap"}, None) is None  # worker che non misura: nessun controllo
+    estimate = qmean_local.memory_problem({"prefix": "UniRef30_2023_02", "size": 250 * GIB, "memory": "swap"},
+                                          {"total": 16 * GIB, "swap": 0})
+    assert "circa 24 GB" in estimate and "stima dalla dimensione del database, 250 GB" in estimate
+
+
+class SmallDockerWorker(Worker):
+    """UniRef30_2020_06 con poca memoria per Docker: il worker lo farebbe partire (memoria al limite)."""
+
+    def __init__(self, total: float):
+        super().__init__()
+        self.total = total
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        response = super().__call__(request)
+        if request.url.path == "/status":
+            data = response.json()
+            data["uniclust"].update(prefix="UniRef30_2020_06", id="UniRef30_2020_06/UniRef30_2020_06",
+                                    size=194 * GIB, memory="swap",
+                                    memory_message="memoria al limite per UniRef30_2020_06")
+            data["memory"] = {"total": int(self.total), "swap": 2 * GIB}
+            return httpx.Response(200, json=data)
+        return response
+
+
+def test_local_qmean_fails_at_once_when_memory_is_below_the_requirement(client_with_ubq, worker, swissmodel):
+    w = worker(SmallDockerWorker(8 * GIB))
+    info = qmean_local.status(force=True)
+    assert info["available"] is False and "circa 12 GB" in info["message"]
+    assert info["memory_required"] == {"bytes": 12 * GIB, "basis": "measured"}
+    t0 = time.monotonic()
+    done = qmean(client_with_ubq)
+    assert done["status"] == "failed" and time.monotonic() - t0 < 10  # subito, non dopo il timeout
+    assert "memoria insufficiente per UniRef30_2020_06" in done["error"] and "circa 12 GB" in done["error"]
+    assert not any(p == "/jobs" for _m, p, _q, _b in w.requests) and not swissmodel  # HHblits non parte
+    # con il fallback attivo va subito a SWISS-MODEL, con il motivo
+    client_with_ubq.put("/api/settings", json={"qmean_remote": True, "contact_email": "a@b.it",
+                                               "qmean_fallback_remote": True})
+    done = qmean(client_with_ubq)
+    assert done["status"] == "completed" and done["result"]["source"] == "swissmodel"
+    assert "circa 12 GB" in done["result"]["fallback"]["reason"]
+
+
+def test_local_qmean_starts_with_the_required_memory(client_with_ubq, worker, swissmodel):
+    w = worker(SmallDockerWorker(11.7 * GIB))  # 12 GB assegnati a Docker, visti dal container
+    info = qmean_local.status(force=True)
+    assert info["available"] is True and info["message"] is None
+    done = qmean(client_with_ubq)
+    assert done["status"] == "completed" and done["result"]["source"] == "local"
+    assert any(p == "/jobs" for _m, p, _q, _b in w.requests) and not swissmodel
+
+
+# ------------------------------------------------------------------------------------------ un calcolo alla volta
+class OneAtATimeWorker(Worker):
+    """Worker che tiene ogni calcolo in esecuzione finché il test non lo libera e conta quelli contemporanei."""
+
+    def __init__(self):
+        super().__init__()
+        self.lock = threading.Lock()
+        self.gates: dict[str, threading.Event] = {}
+        self.active: set[str] = set()
+        self.peak = 0
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/jobs" and request.method == "POST":
+            with self.lock:
+                job_id = f"q{len(self.gates) + 1}"
+                self.gates[job_id] = threading.Event()
+                self.active.add(job_id)
+                self.peak = max(self.peak, len(self.active))
+            return httpx.Response(202, json={"id": job_id, "status": "queued"})
+        if path.startswith("/jobs/q"):
+            job_id = path.rsplit("/", 1)[-1]
+            if request.method == "DELETE" or self.gates[job_id].is_set():
+                with self.lock:
+                    self.active.discard(job_id)
+                if request.method == "DELETE":
+                    return httpx.Response(200, json={"status": "cancelled"})
+                return httpx.Response(200, json={"status": "completed", "result": {
+                    **QMEAN_OUTPUT, "bioloom_database": {"name": "UniRef30_2023_02", "version": "2023-02"}}})
+            return httpx.Response(200, json={"status": "running"})
+        return super().__call__(request)
+
+
+def until(condition, timeout: float = 20) -> None:
+    start = time.time()
+    while time.time() - start < timeout:
+        if condition():
+            return
+        time.sleep(0.02)
+    raise AssertionError("condizione non raggiunta in tempo")
+
+
+def test_local_qmean_runs_one_at_a_time_without_blocking_the_io_pool(client_with_ubq, worker):
+    w = worker(OneAtATimeWorker())
+    core = client_with_ubq.app.state.core
+    core.jobs.register("demo_io", lambda ctx, p: {"ok": True}, pool="io")
+    body = {"source": {"type": "template", "id": "1UBQ"}}
+    first = client_with_ubq.post("/api/qmean", json=body).json()["id"]
+    until(lambda: "q1" in w.gates)
+    second = client_with_ubq.post("/api/qmean", json=body).json()["id"]
+    until(lambda: client_with_ubq.get(f"/api/jobs/{second}").json()["stage"] == RESOURCE_STAGE[QMEAN_LOCAL])
+    queued = client_with_ubq.get(f"/api/jobs/{second}").json()
+    assert queued["status"] == "queued" and queued["queue_position"] == 1 and "q2" not in w.gates
+    # il pool "io" resta libero: un altro job parte e finisce mentre il secondo QMEAN aspetta il suo turno
+    other = core.jobs.submit("demo_io", {})["id"]
+    assert wait_job(client_with_ubq, other, timeout=20)["status"] == "completed"
+    assert client_with_ubq.get(f"/api/jobs/{second}").json()["status"] == "queued"
+    w.gates["q1"].set()
+    assert wait_job(client_with_ubq, first, timeout=20)["status"] == "completed"
+    until(lambda: "q2" in w.gates)  # parte solo dopo il primo
+    w.gates["q2"].set()
+    done = wait_job(client_with_ubq, second, timeout=20)
+    assert done["status"] == "completed", done["error"]
+    assert w.peak == 1
+
+
+def test_remote_qmean_is_not_serialized(client):
+    compute = client.app.state.core.compute
+    assert compute._qmean_resource({"mode": "remote"}) is None  # SWISS-MODEL: nessuna risorsa locale
+    assert compute._qmean_resource({}) == QMEAN_LOCAL  # Impostazioni predefinite: locale
+    assert compute._qmean_resource({"mode": "auto"}) == QMEAN_LOCAL
+    client.put("/api/settings", json={"qmean_mode": "remote"})
+    assert compute._qmean_resource({}) is None

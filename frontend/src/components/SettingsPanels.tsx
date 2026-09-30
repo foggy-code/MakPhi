@@ -6,7 +6,7 @@ import { useToast } from "../lib/context";
 import { fmtBytes } from "../lib/format";
 import { extractModellerKey } from "../lib/files";
 import { notifySystemChanged, useAsync, useJob } from "../lib/hooks";
-import { fmtSeconds, licenseWarnings } from "../lib/status";
+import { fmtSeconds, licenseWarnings, qmeanMemoryNote } from "../lib/status";
 import { TextFileButton } from "./FileLoad";
 import { Icon } from "./Icon";
 import { JobPanel } from "./JobPanel";
@@ -236,6 +236,7 @@ function UniclustCard({ status: q, running, onConvert, onLocal, onChanged }: {
         ) : (
           <Alert tone="warn">{q.message ?? "QMEAN locale non disponibile."}</Alert>
         )}
+        {qmeanMemoryNote(q) && <div className="small muted">{qmeanMemoryNote(q)}</div>}
         {q.uniclust?.memory_message && (
           <Alert tone={q.uniclust.memory === "insufficient" ? "err" : "warn"}>
             {q.uniclust.memory === "swap" && <>{q.uniclust.memory_message}<br /></>}
