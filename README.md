@@ -157,14 +157,19 @@ Le chiavi restano in `data/licenses/` e non entrano mai nelle immagini Docker. I
 ## Sviluppo
 
 ```bash
-# backend (dalla cartella backend/, con un Python che abbia le dipendenze di requirements.lock)
+# tutto: ruff, pytest nell'immagine di BioLoom (MODELLER reale), typecheck e vitest del frontend
+scripts/test.sh
+# solo il backend, con argomenti per pytest
+scripts/test.sh backend -k pipeline -x
+# backend senza Docker (dalla cartella backend/, con le dipendenze di requirements.lock): i test di
+# MODELLER e degli strumenti esterni vengono saltati
 python -m pytest
-# frontend (dalla cartella frontend/)
-npm test && npm run build
-# test del backend dentro l'immagine (Linux, MODELLER reale)
-docker run --rm --entrypoint sh -e MODELLER_KEY=... bioloom:4.1.0 -c "pip install -q pytest && python -m pytest -q"
 # immagini
 docker compose -f launcher/compose.yml build
 ```
+
+`scripts/test.sh` costruisce `bioloom-test:<versione>` sopra l'immagine locale (con pytest e ruff) e monta il
+repository. La chiave di MODELLER viene da `MODELLER_KEY` oppure da `data/licenses/modeller.key`; da un worktree
+indica la cartella dati con `BIOLOOM_DATA_PATH`. La stessa verifica gira in CI (`.github/workflows/ci.yml`).
 
 `bioloom.py` avvia il server senza Docker, utile solo per lo sviluppo.

@@ -1,8 +1,6 @@
 """PROCHECK, ProSA II, MMseqs2, QMEAN locale (worker simulato), database e verifica dell'installazione."""
 
 import json
-import threading
-from pathlib import Path
 
 import httpx
 import pytest

@@ -282,11 +282,16 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - lettura dei formati di sequenza e caricamento di strutture (`test_fileformats.py`);
   - verifica dell'installazione.
 
-  `pytest -m network` prova i servizi reali.
+  `pytest -m network` prova i servizi reali. Oltre a 1UBQ, `tests/data` contiene strutture sintetiche generate
+  da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con interfaccia di contatto) e `ubq_zn.pdb` (sito Zn²⁺
+  su His68 e due acque).
 - **`frontend/src/**/*.test.ts` (vitest):**
   - parser PIR e formattazione;
   - logica QMEAN locale/remoto/fallback e avvisi delle licenze;
   - decodifica dei file, chiave MODELLER da file, vincoli da e verso file.
+- **Esecuzione:** `scripts/test.sh` (ruff, pytest nell'immagine con MODELLER reale, typecheck e vitest). La CI
+  (`.github/workflows/ci.yml`) esegue gli stessi controlli: test rapidi senza strumenti esterni, frontend, e
+  immagine completa con i test al suo interno.
 - **Verifica nel container:** `python -m bioloom.selftest` (o Impostazioni → Strumenti).
 - **Verifica di QMEAN senza il disco reale:** mini-database creato con
   `docker/qmean/tests/make_mini_uniclust.sh` (punteggi non significativi).

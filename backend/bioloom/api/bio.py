@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
-from ..core.container import Core
 from ..core.errors import AppError
 from ..domain import secondary, sequences
 from ..engines import remote
-from .deps import get_core
 
 router = APIRouter(prefix="/api", tags=["Sequenze e banche dati"])
 

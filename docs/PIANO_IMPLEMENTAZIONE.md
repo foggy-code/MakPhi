@@ -1,6 +1,6 @@
 # Piano di implementazione — evoluzione di BioLoom v4
 
-Stato: **proposta**, nessun codice modificato. Deriva dall'analisi di `services/pipeline.py`, `core/jobs.py`,
+Stato: **in corso** — avanzamento nella sezione [Avanzamento](#avanzamento) in fondo. Deriva dall'analisi di `services/pipeline.py`, `core/jobs.py`,
 `engines/*`, `domain/*` e del frontend React. Le stime di effort sono relative (S ≈ 1–2 giorni, M ≈ 3–5, L ≈ 1–2
 settimane, XL > 2 settimane) e non sono state misurate.
 
@@ -40,9 +40,9 @@ F1, F2 e F3 sono indipendenti e possono procedere in parallelo. F8 è l'ultima p
 | Attività | Dettaglio |
 |---|---|
 | CI GitHub Actions | `pytest` (backend), `tsc --noEmit` + `vitest` (frontend), build Docker senza push |
-| Lint | `ruff` (backend), `eslint` già presente nel frontend |
+| Lint | `ruff` (backend, regole E4/E7/E9/F/B in `pyproject.toml`); nel frontend il controllo resta `tsc --noEmit` (ESLint non è installato) |
 | Dati di test | Aggiungere 1–2 strutture piccole oltre a 1UBQ (una multi-catena, una con ligando) in `backend/tests/data/` |
-| Marker dei test | `@pytest.mark.slow` per quelli che richiedono MODELLER; CI li salta, l'`selftest` del container li esegue |
+| Esecuzione | `scripts/test.sh`: pytest nell'immagine di BioLoom (MODELLER reale) e test del frontend; i test di MODELLER si saltano da soli senza MODELLER (`requires_modeller`, già presente) |
 
 **Accettazione:** CI verde su `main`; un PR che rompe un test viene bloccato.
 
@@ -254,3 +254,9 @@ Tutti come job `analysis` opzionali, con strumento rilevato o messaggio di indis
 10. **F7** → 11. **F8** → 12. **F9**.
 
 Le prime cinque tappe danno il beneficio più visibile con il rischio più basso.
+
+## Avanzamento
+
+| Fase | Stato | Note |
+|---|---|---|
+| F0 | fatto | CI (`.github/workflows/ci.yml`), `scripts/test.sh` + `docker/test/Dockerfile`, ruff configurato, strutture sintetiche `ubq_dimer.pdb` e `ubq_zn.pdb` |

@@ -123,7 +123,7 @@ def uniprot_entry(accession: str) -> dict:
         ctype = c.get("commentType", "")
         if ctype == "SUBCELLULAR LOCATION":
             locs = [loc.get("location", {}).get("value") for loc in c.get("subcellularLocations", [])]
-            text = ", ".join(l for l in locs if l)
+            text = ", ".join(loc for loc in locs if loc)
         elif ctype == "DISEASE":
             dis = c.get("disease", {})
             text = f"{dis.get('diseaseId', '')}: {dis.get('description', '')}".strip(": ")

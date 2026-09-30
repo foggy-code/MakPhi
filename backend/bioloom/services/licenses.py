@@ -21,7 +21,7 @@ from typing import Callable, Optional
 
 from ..core.errors import AppError
 from ..core.jobs import set_subprocess_env
-from ..core.storage import atomic_write_bytes, atomic_write_text
+from ..core.storage import atomic_write_bytes
 from ..engines import tools
 
 _KEY = re.compile(r"^[A-Za-z0-9_\-]{4,64}$")

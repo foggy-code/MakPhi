@@ -172,7 +172,7 @@ def build_model_script(knowns: list[str], target_code: str, opts: ModelOptions) 
                 body.append(f"        rsr.add(secondary_structure.{cls}(self.residue_range({r.start!r}, {r.end!r})))")
             elif r.type == "distance":
                 body += [
-                    f"        rsr.add(forms.Gaussian(group=physical.xy_distance,",
+                    "        rsr.add(forms.Gaussian(group=physical.xy_distance,",
                     f"                               feature=features.Distance(at[{r.atom1!r}], at[{r.atom2!r}]),",
                     f"                               mean={float(r.mean)!r}, stdev={float(r.stdev)!r}))",
                 ]

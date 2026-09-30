@@ -18,7 +18,7 @@ def _more_cpu(cpu):
     from ost.bindings import hhblits3
     original = hhblits3.HHblits.BuildQueryMSA
 
-    def build(self, nrdb, options={}, a3m_file=None, assign_ss=True):
+    def build(self, nrdb, options={}, a3m_file=None, assign_ss=True):  # noqa: B006 (firma di OpenStructure)
         merged = dict(options)
         merged.setdefault("cpu", cpu)
         return original(self, nrdb, merged, a3m_file, assign_ss)

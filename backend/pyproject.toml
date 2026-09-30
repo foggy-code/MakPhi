@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "ruff>=0.6"]
 
 [project.scripts]
 bioloom = "bioloom.__main__:main"
@@ -34,3 +34,13 @@ markers = [
     "network: test che richiedono accesso a servizi remoti",
 ]
 addopts = "-m 'not network'"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+# Errori reali (sintassi, nomi, import) e bug comuni. Esclusi: B008 (Depends() di FastAPI nei default),
+# B904 (i messaggi AppError sostituiscono volutamente l'eccezione originale), B905 (zip senza strict).
+select = ["E4", "E7", "E9", "F", "B"]
+ignore = ["B008", "B904", "B905"]
