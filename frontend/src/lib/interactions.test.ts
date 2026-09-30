@@ -3,7 +3,8 @@ import type { AnalysisResult, ConservationResult, InterfacePair, InterfacesResul
 import { colorFor, legendFor, NO_VALUE_COLOR } from "./colorscale";
 import {
   analysisColoring, analysisColorOptions, chainFilterOptions, CONSERVATION_SCALE, conservationColoring, endLabel, endMatches, fastaFromParsed, filterRows,
-  highlightFor, interactionCounts, interactionRows, INTERFACE_SCALE, interfaceColoring, interfaceHighlight, msaRequest, parseResidueQuery, residueFilterText,
+  followedAnalysis, highlightFor, initialPanelState, interactionCounts, interactionRows, INTERFACE_SCALE, interfaceColoring, interfaceHighlight, msaRequest,
+  parseResidueQuery, residueFilterText,
 } from "./interactions";
 import { coloringMap, describeResidue, hasMissing } from "./residueColoring";
 
@@ -191,6 +192,22 @@ describe("allineamento per la conservazione", () => {
     expect(msaRequest("text", "", ">a\nAAA\n", "").error).toBe("Servono almeno due sequenze.");
     expect(msaRequest("text", "", ">a\nAAA\n>b\nAAC\n", "")).toEqual({ msa: { text: ">a\nAAA\n>b\nAAC\n", row: undefined }, error: null });
     expect(msaRequest("text", "", "CLUSTAL W\n\na AAA\nb AAC\n", "").error).toBeNull();
+  });
+
+  it("scheda Interazioni: stato conservato cambiando scheda, per la stessa struttura", () => {
+    const memory = { sourceKey: "template:1UBQ", jobId: "j1", msaMode: "text" as const, msaJob: "", msaText: ">a\nAAA\n>b\nAAC\n", row: "a" };
+    expect(initialPanelState("template:1UBQ", memory)).toEqual(memory);
+    // un'altra struttura: niente job né allineamento della precedente; un link a un job vale sempre
+    expect(initialPanelState("template:2XYZ", memory)).toEqual({ sourceKey: "template:2XYZ", jobId: null, msaMode: "none", msaJob: "", msaText: "", row: "" });
+    expect(initialPanelState("template:1UBQ", memory, "j9").jobId).toBe("j9");
+    expect(initialPanelState("template:1UBQ", null).jobId).toBeNull();
+  });
+
+  it("job seguito: quello già seguito, poi l'analisi in corso, poi l'ultima completata", () => {
+    expect(followedAnalysis("j1", { job_id: "j0", active_job_id: "j2" })).toBe("j1");
+    expect(followedAnalysis(null, { job_id: "j0", active_job_id: "j2" })).toBe("j2");
+    expect(followedAnalysis(null, { job_id: "j0", active_job_id: null })).toBe("j0");
+    expect(followedAnalysis(null, { job_id: null })).toBeNull();
   });
 
   it("FASTA da un file letto dal server, con i gap delle righe allineate", () => {

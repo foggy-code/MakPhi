@@ -105,8 +105,8 @@ def prepare_template(source: Path, spec: TemplateSpec, dest_dir: Path) -> dict:
     (`ligands.pir_with_ligands`) corrispondono ai gruppi che MODELLER legge. `ligand_groups` li descrive con il sito
     nel file originale (donatori dei metalli, acque comprese, e legami covalenti) per il confronto dopo la
     modellazione; `ligands_excluded` elenca i gruppi delle catene scelte lasciati fuori, con il motivo. Le chiavi
-    interne `_chain_residues` (residui ATOM per catena nella copia) e `_hetero` (eteroatomi delle catene) servono
-    al PIR.
+    interne `_chain_residues` (residui ATOM per catena nella copia), `_chain_ids` (i loro numeri, nell'ordine: il
+    sito di un gruppo sulle colonne del PIR) e `_hetero` (eteroatomi delle catene) servono al PIR.
     """
     st = structure.load_structure(source, spec.id)
     model = structure.first_model(st)
@@ -175,6 +175,7 @@ def prepare_template(source: Path, spec: TemplateSpec, dest_dir: Path) -> dict:
             {k: g[k] for k in ("resname", "chain", "resnum", "class", "label", "reason")} for g in candidates
             if (g["chain"], g["resnum"], g["resname"]) not in chosen]
     info["_chain_residues"] = {c.id: sum(1 for r in c if r.id[0] == " ") for c in prepared}
+    info["_chain_ids"] = {c.id: [structure._resid(r) for r in c if r.id[0] == " "] for c in prepared}
     info["_hetero"] = [(g["chain"], g["resnum"]) for g in candidates]
     if trim is not None:
         values = [row[4] for row in trim["rows"]]

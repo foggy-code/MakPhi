@@ -676,7 +676,9 @@ rotte del consenso e del report lo ricalcolano.
   "Metodi e limiti". Una sola richiesta (`/api/bio/coverage` senza template).
 - **Modellazione:** sotto i template, gli avvisi (`combined`) appena bersaglio e template (o il PIR) sono scelti, con la
   soglia pLDDT se c'è un template AlphaFold; richiesta dopo 0,6 s dall'ultimo cambio, risposte superate ignorate, nuovi
-  tentativi se un template si sta ancora scaricando. Non blocca il lancio.
+  tentativi se un template si sta ancora scaricando. Non blocca il lancio. L'accessione per i domini
+  (`modelingAccession`) viene dal bersaglio della modalità in uso: in modalità PIR dalla voce `sequence` del documento
+  (sequenza del progetto uguale, oppure codice `sp|ACC|…`), non dal selettore della modalità automatica, nascosto.
 - **Ricerca:** per ogni hit un badge ("disordine scoperto · dominio scoperto"), gli avvisi nella riga espansa e, sopra la
   tabella, quelli del template consigliato.
 - **Qualità:** la frase del disordine sotto le regioni problematiche e una riga "disordine (info)" nel grafico del consenso
@@ -910,21 +912,29 @@ passa dalla cache dei calcoli: costa pochi secondi e resta nel job. Nessuna colo
   `gap_cutoff` di Capra & Singh 2007. Con meno di 10 sequenze un avviso (scelta BioLoom).
 - **Mappatura:** la sequenza della catena (residui della struttura, X per i non standard) si allinea (Needleman-Wunsch,
   BLOSUM62, gap 10/0,5, gap terminali gratuiti, come `align.pairwise`) alla riga senza gap: residuo → residuo della
-  riga → colonna. Residui mancanti, code in più e inserzioni non spostano la numerazione. Riga indicata (`row`) oppure,
-  per ogni catena, la più simile: candidate per 3-mer in comune, le prime 5 allineate; serve identità ≥ 90% e
-  copertura ≥ 50% (l'allineamento deve contenere la sequenza della catena). Una riga indicata vale anche sotto, con un
-  avviso; le catene senza riga corrispondente si elencano in `unmatched`; nessuna catena → job fallito
-  (`conservation_no_match`).
+  riga → colonna. Residui mancanti, code in più e inserzioni non spostano la numerazione. Le lettere che BLOSUM62 non
+  ha (U selenocisteina, O pirrolisina, J) si allineano come X nella riga e nella catena (prima un ValueError faceva
+  fallire tutto il job, interazioni comprese); l'identità confronta le lettere originali. Riga indicata (`row`) oppure,
+  per ogni catena, la più simile: candidate per 3-mer in comune (le righe di soli gap escluse), le prime 5 allineate;
+  serve identità ≥ 90% e copertura ≥ 50% (l'allineamento deve contenere la sequenza della catena). Una riga indicata
+  vale anche sotto, con un avviso; indicata di soli gap è un errore chiaro. Le catene senza riga corrispondente si
+  elencano in `unmatched`; nessuna catena → job fallito (`conservation_no_match`).
+- **Riga indicata:** i nomi delle righe del testo incollato sono sanificati (`sanitize_code`: `sp|P0CG47|UBB_HUMAN` →
+  `sp_P0CG47_UBB_HUMAN`) e resi univoci; `row` vale con il nome dell'allineamento, con quello del file (intestazione
+  intera o primo token; con nomi ripetuti la prima occorrenza) o con la sua forma sanificata, anche per le sequenze
+  non allineate e per i job di allineamento. Una riga che non c'è è un errore prima di accodare il job (400
+  `conservation_invalid`, con alcune righe disponibili), non un job fallito dopo interazioni e interfacce.
 - **Allineamento:** `msa.job_id` di un job `align` completato (righe `aligned`), oppure `msa.text` in un formato qualunque
   di `domain/fileformats` (righe già allineate usate così; sequenze di lunghezza diversa allineate con
-  `engines/align.multiple`, al massimo 200; testo fino a 10 MB, nei parametri del job).
+  `engines/align.multiple`, al massimo 200; testo fino a 10 MB, nei parametri del job). Il center-star integrato
+  allinea U, O e J come X e restituisce le lettere originali.
 
 **Rotte:**
 
 | Rotta | Funzione |
 |---|---|
-| `POST /api/analysis` | `{source, chains?, msa?: {job_id \| text, row?, tool?}}` → job `analysis`; errori subito: struttura assente 404, job di allineamento inesistente 404, non `align` o testo non valido 400 `conservation_invalid`, allineamento non completato 409 |
-| `GET /api/analysis/latest?type=&id=&job_id=&file=` | `{job_id, finished_at}` dell'analisi completata più recente sulla stessa struttura (`source_key` di `services/compute` e stessa impronta SHA-256 del file, se il file c'è ancora), altrimenti `null`: un template sostituito con lo stesso id non ha più analisi |
+| `POST /api/analysis` | `{source, chains?, msa?: {job_id \| text, row?, tool?}}` → job `analysis`; errori subito: struttura assente 404, sorgente senza file o job 400 `invalid_source`, job di allineamento inesistente 404, non `align`, testo non valido o riga indicata assente 400 `conservation_invalid`, allineamento non completato 409 |
+| `GET /api/analysis/latest?type=&id=&job_id=&file=` | `{job_id, finished_at, active_job_id}`: `job_id` è l'analisi completata più recente sulla stessa struttura (`source_key` di `services/compute` e stessa impronta SHA-256 del file, se il file c'è ancora), altrimenti `null` (un template sostituito con lo stesso id non ha più analisi); `active_job_id` l'analisi della stessa sorgente in coda o in corso lanciata dopo, altrimenti `null`. Parametri mancanti (es. `type=upload` senza `file`): nessuna analisi, non un errore interno |
 
 Il risultato (`GET /api/jobs/{id}`): `source`, `label`, `source_sha256`, `structure`, `interactions` (criteri, riepilogo,
 elenchi), `interfaces`, `conservation` (o null), `warnings`. Il log riporta la durata dei passi ("Analisi strutturale in
@@ -954,7 +964,10 @@ più recente della stessa struttura ha disolfuri o interfacce. Il report non ric
 
 - Scheda **Interazioni** della pagina Qualità: mostra l'analisi più recente della struttura del rapporto (`latest`) e la
   lancia o rilancia, con la conservazione facoltativa (job di allineamento del progetto, oppure testo o file letto da
-  `/api/files/sequences`, con la riga della struttura facoltativa).
+  `/api/files/sequences`, con la riga della struttura facoltativa). La pagina conserva il job seguito e le scelte
+  dell'allineamento quando si cambia scheda (`AnalysisPanelMemory`: il pannello si smonta); un'analisi in coda o in
+  corso sulla stessa struttura si riprende anche da `active_job_id` (pagina ricaricata), quindi «Analizza
+  interazioni» resta disabilitato invece di lanciarne un doppione.
 - Tabelle di legami idrogeno, ponti salini, disolfuri e interazioni aromatiche con righe uniformi (`interactionRows`),
   filtri per catena (tutte, solo fra catene diverse, una catena) e per residuo (`parseResidueQuery`: `27`, `K27` o `A27`
   — una lettera vale come catena o come amminoacido —, `LYS27`, `A:27`, `52A`, testo libero). Un clic su una riga
@@ -1045,9 +1058,12 @@ ha `rank_score`, `rank_band`, `rank_twilight` e `rank_reasons` (per componente `
   ridondanti come informazione (vincoli indipendenti). Senza le righe dell'allineamento si usano gli intervalli.
 - **Costrutto più lungo:** un candidato quasi identico a uno scelto nella regione comune entra se copre almeno 10
   residui nuovi (porta vincoli dove non ce ne sono; nella regione comune i vincoli coincidono), con una nota.
-- **Regioni senza residui in comune:** la motivazione avverte che l'orientamento relativo delle regioni non è vincolato
-  (nessun vincolo di distanza fra residui di template diversi).
-- **Risultato:** `templates` (con `role` principale/complementare, `reason`, `new_residues`, `ranges`), `excluded`
+- **Regioni con pochi residui in comune:** un complementare con meno di 10 residui del bersaglio in comune con
+  ciascuno dei template già scelti, e di un'altra voce PDB (le catene della stessa voce condividono le coordinate), ha
+  nella motivazione l'avviso che l'orientamento relativo delle regioni non è vincolato (nessun vincolo di distanza fra
+  residui di template diversi) e `unanchored: true`. La modellazione ripete l'avviso sull'allineamento usato (sotto).
+- **Risultato:** `templates` (con `role` principale/complementare, `reason`, `new_residues`, `ranges`,
+  `unanchored` per i complementari), `excluded`
   (con `reason`), `not_examined` (oltre il massimo), `coverage` e `covered_residues` dell'insieme. Costo: identità
   locale con somme prefisse, calcolata una volta per template scelto (400 candidati su 1000 residui: 0,12 s
   misurati nel container di test).
@@ -1095,14 +1111,29 @@ identici al bersaglio con `salign` e con `align2d`:
   nel suo allineamento a coppie, le inserzioni dei template vanno in colonne con un gap nel bersaglio. Il file PAP di
   `salign` si toglie;
 - altrimenti resta `salign`, come prima;
-- template a più catene o con ligandi ('/' e '.' da tenere in colonna) non si uniscono: resta `salign`, con un avviso
-  se un template risulta spostato.
+- template a più catene o con ligandi ('/' e '.' da tenere in colonna) non si uniscono: resta `salign`; se un template
+  risulta spostato (`displaced` nella scelta) il messaggio è un **avviso** del job (`warnings` del risultato della
+  modellazione e dell'allineamento align2d, pagina Modellazione, sezione Avvisi del report), non solo una riga del log:
+  il modello è costruito su un allineamento che BioLoom sa probabilmente spostato (con i frammenti di 1UBQ, TM-score
+  0,35). Il job non fallisce: l'allineamento si può correggere nell'Editor PIR.
 
 La scelta è nel log del job. Misurato con due frammenti di 1UBQ come template dell'ubiquitina di lievito
 (`test_template_rank.py`): con il solo `salign` il frammento 30–76 finiva allineato dal residuo 1 del bersaglio e il
 modello aveva TM-score 0,35 rispetto a 1UBQ (voto D); con gli `align2d` uniti 0,998 (frammenti 1–50 e 30–76) e 0,997
 (1–40 e 41–76, disgiunti ma nello stesso sistema di riferimento), come con 1UBQ intero (0,998). Con due template
 completi (1UBQ e una copia) `salign` è coerente e resta.
+
+**Orientamento relativo non vincolato** (`multitemplate.unanchored`, su ogni allineamento usato da MODELLER, anche
+quello dell'utente, e sull'align2d con più template): i template della stessa voce (stesso id: catene dello stesso
+file) condividono il sistema di riferimento; due voci sono *ancorate* se i loro template coprono almeno 10 residui del
+bersaglio in comune (`MIN_ANCHOR`, come `MIN_SHARED` della selezione). Se le voci ancorate fra loro formano più di un
+insieme, MODELLER costruisce ogni regione dal suo template e le unisce solo con la stereochimica del tratto che le
+collega: la posizione reciproca delle regioni (fra domini, per esempio) non viene da nessun template ed è in pratica
+arbitraria. Avviso nel risultato, nel log e nel report («Orientamento relativo non vincolato: UBQN_A (residui 1–40 del
+bersaglio) e UBQR_A (residui 41–76 del bersaglio) vengono da strutture diverse…»; test con MODELLER su 1–40 di 1UBQ e
+41–76 di una sua copia ruotata e traslata). Due frammenti dello stesso file caricati come template diversi (come nel
+test dei frammenti disgiunti sopra) hanno l'avviso anche se in realtà condividono le coordinate: BioLoom non può
+saperlo.
 
 ### Modelli AlphaFold DB
 
@@ -1212,8 +1243,13 @@ Il trasferimento dei gruppi eteroatomici dal template al modello è selettivo e 
   | metallo | un solo atomo di un elemento metallico (colonna element, altrimenti il nome: ZN, FE2, CU1…) | sì; no per Na⁺, K⁺ e altri monovalenti (spesso dal tampone) |
   | cofattore noto | codice CCD in `COFACTORS`: HEM, HEC, HEA, FAD, FMN, NAD, NAI, NAP, NDP, ATP, ADP, AMP, ANP, GTP, GDP, GNP, SAM, SAH, PLP, PMP, COA, ACO, TPP, TDP, BTN, LPA, FES, SF4, F3S, CLA, BCL, RET, B12, CNC, PQQ, H4B, MGD | sì |
   | additivo | `COMMON_ADDITIVES` di `domain/structure` più glicoli, tamponi, crioprotettori e piccoli anioni (MPD, PG4, PGE, EPE, MES, TRS, CIT, BME, ACY, IMD, SCN, AZI…) | no, con la motivazione: di solito senza ruolo biologico (come le esclusioni di BioLiP, Yang et al. 2013) |
-  | residuo modificato | ha N, CA e C dello scheletro (MSE, SEP, TPO…) | mai trasferibile: fa parte della catena |
-  | altro ligando | tutto il resto (inibitori, zuccheri…) | sì |
+  | residuo modificato | ha N, CA e C dello scheletro e un legame peptidico (C–N ≤ 1,9 Å) con il residuo precedente o seguente della catena (MSE, SEP, TPO…); mai un nome di `COFACTORS` | mai trasferibile: fa parte della catena |
+  | altro ligando | tutto il resto (inibitori, zuccheri, amminoacidi liberi legati come substrato…) | sì |
+
+  Il legame peptidico distingue i residui modificati da SAM, SAH e dagli amminoacidi liberi, che hanno gli stessi
+  atomi N, CA e C ma non sono nella catena: prima erano «residui modificati», quindi non trasferibili, esclusi dalla
+  scelta predefinita e dalla verifica e contati come proteina nei contatti. L'esito si conserva nel residuo (`xtra`):
+  la verifica lo chiede per ogni atomo vicino.
 
 - **Opzioni di modellazione:** `hetatm` attiva i ligandi per tutti i template con la scelta predefinita; `ligands` è
   l'elenco `[{template, chain, resnum, resname}]` dei gruppi da trasferire, esattamente quelli, e attiva i template che
@@ -1234,8 +1270,19 @@ Il trasferimento dei gruppi eteroatomici dal template al modello è selettivo e 
   Zn).
   1. I `.` già presenti (PIR dell'utente, allineamento salvato da una modellazione precedente) diventano gap e le colonne
      rimaste vuote si tolgono, con un avviso se non coincidono con la scelta: la scelta è quella delle opzioni.
-  2. Per ogni catena con gruppi trasferiti si aggiunge una colonna per gruppo alla fine del tratto di quella catena
-     (prima del `/`): `.` nel template e nel bersaglio, `-` negli altri template.
+  2. Per ogni catena con gruppi trasferiti si aggiungono le colonne dei gruppi alla fine del tratto di quella catena
+     (prima del `/`): `.` nel template e nel bersaglio, `-` negli altri template. **Più template con lo stesso
+     gruppo nello stesso sito** (due globine con l'eme, due omologhi con lo stesso Zn: capita con la modalità `multi`
+     e con la scelta predefinita della Modellazione) condividono la colonna: `.` in ciascuno di quei template e un solo
+     `.` nel bersaglio, quindi un solo gruppo nel modello, vincolato da tutti. Prima ogni template aveva la sua colonna
+     e il modello aveva due Zn a 2,6 Å (o due porfirine sovrapposte), senza avvisi. Stesso gruppo = stesso nome e sito
+     in comune: i residui dei donatori dei metalli e dei legami covalenti (altrimenti quelli entro 4 Å, `contacts` di
+     `ligand_groups`), riportati attraverso le righe del PIR sulle colonne con un residuo del bersaglio (servono i
+     numeri dei residui della copia preparata, `_chain_ids`). L'associazione rispetta in ogni riga l'ordine dei gruppi
+     nel file (MODELLER legge i `.` di un template in quell'ordine) e unisce più gruppi possibile (programmazione
+     dinamica, `_match_slots`); un gruppo senza corrispondente ha una colonna nuova prima di quella del gruppo unito
+     che lo segue nello stesso template. Con due template che hanno gli stessi gruppi in ordine opposto se ne unisce
+     solo uno. Una nota dice quali gruppi sono stati uniti.
   3. L'intervallo del template si aggiorna: fine sull'ultimo gruppo (se l'ultima catena ne ha), `+N` ricontato, una
      fine che indicava un eteroatomo tolto torna sull'ultimo residuo.
 
@@ -1256,27 +1303,43 @@ Il trasferimento dei gruppi eteroatomici dal template al modello è selettivo e 
   | geometria | gRMSD oltre 21,5° | problematico |
   | sito del template | meno di tutti i donatori della proteina conservati; meno della metà | da controllare; problematico |
 
-  **Distanze attese** (Å; Harding 2006, strutture proteiche a ≤ 1,25 Å; Ni dalla Tabella 3 di Zheng et al. 2017, CSD).
-  Le analisi più recenti differiscono di qualche centesimo (Zn–S(Cys) 2,32, Cu–S(Cys) 2,20, Na–O 2,35 Å in Bazayeva
-  et al. 2024), entro la tolleranza. Ser/Thr/Tyr usano il valore dell'acqua, Asn/Gln e i carbonili quello dello
-  scheletro, Met e gli S dei ligandi quello della Cys, gli O dei ligandi quello di Asp/Glu, gli N dei ligandi quello
-  dell'His.
+  **Distanze attese** (Å), verificate a settembre 2026 (`REFERENCE_DISTANCES`; test
+  `test_reference_distances_match_the_sources`):
+
+  - Na, Mg, K, Ca, Mn, Fe, Co, Cu, Zn: tabella «Metal-donor atom target distances (revised July 2006)» di Harding
+    (2006, Acta Cryst. D62:678–682), dal sito dell'autrice (`tanna.bch.ed.ac.uk/newtargs_06.html`, copia del
+    29/04/2009 nell'Internet Archive; il PDF della rivista non era raggiungibile), basata sul CSD e sulle strutture
+    proteiche a ≤ 1,25 Å. Tutti i valori coincidono con quelli di BioLoom. Le stelle (★) sono l'affidabilità indicata
+    dalla tabella (`REFERENCE_RELIABILITY`): ★★★ deviazione standard ~0,05 Å, ★★ 0,10, ★ 0,15–0,20, nessuna stella la
+    meno affidabile.
+  - Ni (assente in Harding): Tabella 3 di Zheng et al. (2017, CheckMyMetal, distanze del CSD), letta nel testo
+    completo di Europe PMC (PMC5349434): O dell'acqua 2,08(6); O legato a un carbonio 2,07(7) (moda più lunga; l'altra
+    è 1,86), usato per Asp/Glu e per lo scheletro; N 2,09(7) (moda più lunga; l'altra 1,89); S 2,18(3).
+  - Bazayeva et al. (2024, Acta Cryst. D80:362–376, MetalPDB a < 1,5 Å) non trovano differenze significative con
+    Harding et al. (2010) entro la dispersione (carbonile dello scheletro dei metalli alcalini e alcalino-terrosi
+    entro 0,05 Å; Zn–N(His) 2,05 ± 0,06 per Nδ1 e 2,03 ± 0,07 Å per Nε2). I loro valori per residuo sono nel
+    materiale supplementare, non consultato: nessun valore di BioLoom viene da lì.
+  - Donatori senza colonna propria, dalle note della tabella di Harding: Asn/Gln come Asp/Glu monodentato (prima di
+    questa verifica BioLoom usava lo scheletro); O, N e S dei ligandi come l'O dell'Asn (quindi Asp/Glu), l'N dell'His
+    e l'S della Cys. Scelte di BioLoom non verificate su una fonte: Ser/Thr/Tyr con il valore dell'acqua (per Harding
+    Ser/Thr stanno fra acqua e carbossilato, Tyr circa 0,1 Å sotto il carbossilato) e Met con quello della Cys.
 
   | Metallo | O acqua | O Asp/Glu | O scheletro | N His | S Cys | Numero di coordinazione tipico |
   |---|---|---|---|---|---|---|
-  | Na | 2,41 | 2,41 | 2,38 | — | — | 4–7 |
-  | Mg | 2,07 | 2,07 | 2,26 | — | — | 5–6 |
-  | K | 2,81 | 2,82 | 2,74 | — | — | 5–8 |
-  | Ca | 2,39 | 2,36 | 2,36 | — | — | 6–8 |
-  | Mn | 2,19 | 2,15 | 2,19 | 2,21 | 2,35 | 4–6 |
-  | Fe | 2,09 | 2,04 | 2,04 | 2,16 | 2,30 | 4–6 |
-  | Co | 2,09 | 2,05 | 2,08 | 2,14 | 2,25 | 4–6 |
-  | Ni | 2,08 | 2,07 | 2,07 | 2,09 | 2,18 | 4–6 |
-  | Cu | 2,13 | 1,99 | 2,04 | 2,02 | 2,15 | 3–6 |
-  | Zn | 2,09 | 1,99 | 2,07 | 2,03 | 2,31 | 4–6 |
+  | Na | 2,41 ★★ | 2,41 ★★ | 2,38 ★★ | — | — | 4–7 |
+  | Mg | 2,07 ★★★ | 2,07 ★★ | 2,26 | — | — | 5–6 |
+  | K | 2,81 ★ | 2,82 ★ | 2,74 ★ | — | — | 5–8 |
+  | Ca | 2,39 ★★ | 2,36 ★★ | 2,36 ★★ | — | — | 6–8 |
+  | Mn | 2,19 ★★★ | 2,15 ★★★ | 2,19 | 2,21 ★★ | 2,35 | 4–6 |
+  | Fe | 2,09 ★★ | 2,04 ★★ | 2,04 | 2,16 ★ | 2,30 ★★★ | 4–6 |
+  | Co | 2,09 ★★ | 2,05 ★★★ | 2,08 | 2,14 ★★ | 2,25 ★ | 4–6 |
+  | Ni (CSD) | 2,08 | 2,07 | 2,07 | 2,09 | 2,18 | 4–6 |
+  | Cu | 2,13 | 1,99 ★ | 2,04 | 2,02 ★★ | 2,15 | 3–6 |
+  | Zn | 2,09 ★★★ | 1,99 ★★★ | 2,07 | 2,03 ★★★ | 2,31 ★★ | 4–6 |
 
-  Gli intervalli del numero di coordinazione seguono le distribuzioni nei siti proteici (Mg²⁺ quasi sempre 6, Zn²⁺ di
-  solito 4); gli estremi sono una scelta di BioLoom. Altri metalli (Cd, Hg…): donatori entro 3,0 Å, geometria, esito
+  Gli intervalli del numero di coordinazione seguono quanto riportano le fonti (Zheng et al. 2017: Mg ottaedrico
+  stretto, siti con meno o più di 6 donatori rari; Na di solito 6, a volte 5 o 4; K di solito ottaedrico. Bazayeva et
+  al. 2024: Zn con 4 donatori nel 61% dei siti); gli estremi sono una scelta di BioLoom. Altri metalli (Cd, Hg…): donatori entro 3,0 Å, geometria, esito
   al più «da controllare».
 - **Geometria** (`geometry`, come CheckMyMetal, Zheng et al. 2017, con le geometrie ideali confrontate per angoli di
   Kuppuraj et al. 2009): per le geometrie ideali con m posizioni, da n a n + 2 (al massimo 7: lineare, trigonale
@@ -1295,7 +1358,10 @@ Il trasferimento dei gruppi eteroatomici dal template al modello è selettivo e 
   `run_modeling` lo ricalcola con il confronto per ogni modello analizzato, mette il riepilogo nel modello
   (`models[].ligands`: gruppi, esito peggiore, conteggi) e nel risultato `ligands` (`transferred`, `verification` del
   modello migliore anche senza analisi di qualità), scrive `REMARK 999 BIOLOOM LIGANDS n ZN:A101 …` e avvisa se il
-  modello ha meno gruppi di quelli trasferiti. Un errore inatteso della verifica va nel log e non fa fallire il job.
+  modello ha meno gruppi di quelli trasferiti. `transferred`, il REMARK e l'avviso contano i gruppi del modello (i `.`
+  del bersaglio, `ligands.model_groups`): un gruppo di più template compare una volta, con `template` = i codici
+  separati da virgole, il numero del template principale e i gruppi di ciascun template in `sources`. Il confronto
+  con il sito del template usa il principale (il primo). Un errore inatteso della verifica va nel log e non fa fallire il job.
   Voto e consenso non cambiano.
 - **Valori di riferimento** (test in `test_ligands.py`):
   - `ubq_zn.pdb`: Zn con NE2 di His68 (2,10 Å, attesa 2,03) e due acque (2,10 Å, attesa 2,09), angoli 67,2°, 81,1° e
@@ -1305,7 +1371,9 @@ Il trasferimento dei gruppi eteroatomici dal template al modello è selettivo e 
   - modello dell'ubiquitina di lievito (MODELLER, 1 modello `very_fast`) con il solo Zn trasferito da `ubq_zn.pdb` più
     un SO₄ escluso: Zn A77 a 2,10 Å da NE2 di His68, sito del template conservato (1 su 1), 2 acque non trasferite →
     numero di coordinazione 1 (3) → «da controllare»; lo stesso PIR con i ligandi spenti perde il `.` con un avviso e il
-    modello non ha HETATM.
+    modello non ha HETATM;
+  - due copie di `ubq_zn.pdb` come template, scelta predefinita: una colonna `.` condivisa, un solo HETATM Zn nel
+    modello, `transferred` con `ZNA_A, ZNB_A`.
 - **Limiti:** i gruppi di una catena senza residui proteici non sono trasferibili (si trasferiscono con la catena
   scelta); il carbonio non è considerato donatore (CO e CN⁻ legati al ferro dell'eme risultano scontri); i codici
   minuscoli di `restyp.lib` in un PIR dell'utente (`z`, `h`, `w`) vengono letti in maiuscolo come amminoacidi: per i
@@ -1554,10 +1622,10 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 | Libreria template | download RCSB e "Da AlphaFold DB (UniProt)", upload PDB/mmCIF, catene, residui mancanti, ligandi classificati (metallo, cofattore noto, additivo, altro ligando, residuo modificato), DSSP, 3D; badge "AlphaFold", pLDDT medio e fasce di confidenza |
 | Allineamenti | pairwise, multiplo, strutturale (con il confronto per residuo e «Apri in Confronto»); esportazione FASTA/Clustal/PIR; salvataggio nel progetto; cache per multiplo e strutturale |
 | Editor PIR | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
-| Modellazione | input automatico o da PIR, parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); avvisi prima del lancio su regioni disordinate e domini non coperti dai template, con suggerimento; modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job; «Trasferisci ligandi, cofattori e metalli dai template» con la scelta dei gruppi (additivi e ioni del tampone deselezionati per default, `LigandPicker`) e la verifica del modello migliore |
+| Modellazione | input automatico o da PIR, parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); avvisi prima del lancio su regioni disordinate e domini non coperti dai template, con suggerimento; modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job; «Trasferisci ligandi, cofattori e metalli dai template» con la scelta dei gruppi (additivi e ioni del tampone deselezionati per default, `LigandPicker`, che usa le analisi già lette dal selettore dei template anche dopo un download; una lettura non riuscita si mostra con «Riprova», un 404 di un template in download si riprova da sé, e sotto «Avvia modellazione» si dice quale template blocca) e la verifica del modello migliore |
 | Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche, disordine predetto come segnale informativo), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura; sezione Ligandi e metalli (esiti, coordinazione, confronto con il sito del template): il clic su un gruppo lo mostra nel 3D con i residui coordinanti e le linee di coordinazione (`LigandsPanel`, `lib/ligands.ts`; ioni metallici sempre a sfere); scheda Interazioni (analisi strutturale: legami H, ponti salini, disolfuri, aromatiche, interfacce, conservazione; `?ajob=`) |
 | Confronto | `/compare?a=&ca=&b=&cb=&job=`: B sovrapposta ad A (riferimento), metriche (TM-score su A e su B, RMSD, RMSD entro 5 Å, GDT-TS, GDT-HA, lDDT, lunghezza allineata), 3D con B colorata per distanza (0 → ≥ 5 Å) o lDDT e A in grigio chiaro, grafico di distanza e lDDT per posizione, tratti che deviano, tabella per coppia; clic ovunque → coppia evidenziata nel 3D |
-| Pipeline batch | multi-FASTA → modelli validati, template da ricerca automatica, «Più template complementari» (N da 2 a 5) o fissi; filtro zona crepuscolare, tabella paginata (template usati elencati, motivazioni nel suggerimento), CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
+| Pipeline batch | multi-FASTA → modelli validati, template da ricerca automatica, «Più template complementari» (N da 2 a 5) o fissi (casella «Ligandi» del template solo se la scelta predefinita trasferisce qualcosa dalle catene scelte, con i gruppi esclusi nel suggerimento: `lib/ligands.defaultTransfer`); filtro zona crepuscolare, tabella paginata (template usati elencati, motivazioni nel suggerimento), CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
 | Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione e la posizione di quelli in coda ("2° in coda") |
 | Impostazioni | schede Generale (esecuzione, QMEAN, email), Licenze (MODELLER, ProSA, PROCHECK), Database (pdbaa, MMseqs2, UniClust30), Strumenti (verifica dell'installazione), Spazio e file temporanei (con la cache dei calcoli) |
 | Login | solo in modalità server, quando l'API risponde 401 |

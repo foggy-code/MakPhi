@@ -19,8 +19,9 @@ Logica pura (numpy; `PairwiseAligner` di Biopython solo per la mappatura sulla s
 **Mappatura sulla struttura:** per ogni catena la sequenza dei residui della struttura (X per quelli non standard) si
 allinea (Needleman-Wunsch, BLOSUM62, gap terminali gratuiti) alla riga dell'allineamento senza gap: residuo della
 struttura → residuo della riga → colonna. Così residui mancanti nella struttura, code in più o piccole differenze non
-spostano la numerazione. La riga è quella indicata oppure, per ogni catena, quella con identità più alta (candidate
-scelte per 3-mer in comune, poi allineate). Scelta automatica: serve identità ≥ 90% e copertura ≥ 50% della catena
+spostano la numerazione. Le lettere che BLOSUM62 non ha (U selenocisteina, O pirrolisina, J) si allineano come X. La
+riga è quella indicata oppure, per ogni catena, quella con identità più alta (candidate scelte per 3-mer in comune,
+poi allineate; le righe di soli gap non sono candidate, e una riga indicata di soli gap è un errore). Scelta automatica: serve identità ≥ 90% e copertura ≥ 50% della catena
 (l'allineamento deve contenere la sequenza della catena); una riga indicata vale anche sotto, con un avviso. Con meno
 di 10 sequenze il risultato ha un avviso (scelta BioLoom: le frequenze di una colonna sono poco stimabili).
 """
@@ -70,7 +71,21 @@ def validate(ids: list[str], aligned: list[str]) -> list[str]:
     bad = sorted({c for s in rows for c in s if not ((c.isascii() and c.isalpha()) or c in GAPS)})
     if bad:
         raise AppError(f"Caratteri non validi nell'allineamento: {''.join(bad)}", code="conservation_invalid")
+    if all(c in GAPS for s in rows for c in s):
+        raise AppError("L'allineamento contiene solo gap.", code="conservation_invalid")
     return rows
+
+
+def row_index(ids: list[str], aligned: list[str], row: str) -> int:
+    """Indice della riga `row`: errore chiaro se non c'è o se contiene solo gap (nessun residuo da mappare)."""
+    if row not in ids:
+        shown = ", ".join(ids[:8]) + (" …" if len(ids) > 8 else "")
+        raise AppError(f"La riga {row} non è nell'allineamento (righe: {shown}).", code="conservation_invalid")
+    k = ids.index(row)
+    if all(c in GAPS for c in aligned[k]):
+        raise AppError(f"La riga {row} dell'allineamento contiene solo gap: indica la riga con la sequenza della "
+                       "struttura.", code="conservation_invalid")
+    return k
 
 
 def _encode(rows: list[str]) -> np.ndarray:
@@ -137,19 +152,31 @@ def _aligner():
     return aligner
 
 
+def _scorable(seq: str, alphabet: str) -> str:
+    """Lettere fuori dall'alfabeto della matrice (U, O, J per BLOSUM62) → X: stessa lunghezza, quindi le posizioni
+    restano quelle della sequenza originale (come `_BLOSUM_OTHER` di services/coverage)."""
+    return "".join(c if c in alphabet else "X" for c in seq)
+
+
 def _map(chain_seq: str, row_seq: str) -> tuple[list[Optional[int]], float, float]:
-    """Per ogni residuo della catena la posizione nella riga (o None); identità e copertura in percentuale."""
-    aln = _aligner().align(chain_seq, row_seq)[0]
+    """Per ogni residuo della catena la posizione nella riga (o None); identità e copertura in percentuale.
+
+    Selenocisteina (U), pirrolisina (O) e J si allineano come X (BLOSUM62 non le ha); l'identità confronta le lettere
+    originali."""
+    aligner = _aligner()
+    alphabet = aligner.substitution_matrix.alphabet
+    aln = aligner.align(_scorable(chain_seq, alphabet), _scorable(row_seq, alphabet))[0]
     top, bottom = str(aln[0]), str(aln[1])
     mapping: list[Optional[int]] = []
-    j = identical = pairs = 0
+    i = j = identical = pairs = 0
     for x, y in zip(top, bottom):
         if x != "-" and y != "-":
             mapping.append(j)
             pairs += 1
-            identical += x == y
+            identical += chain_seq[i] == row_seq[j]
         elif x != "-":
             mapping.append(None)
+        i += x != "-"
         if y != "-":
             j += 1
     identity = 100.0 * identical / pairs if pairs else 0.0
@@ -176,11 +203,7 @@ def compute(model, ids: list[str], aligned: list[str], *, chains: Optional[list[
     if len(rows) < FEW_SEQUENCES:
         warnings.append(f"L'allineamento ha solo {len(rows)} sequenze: con meno di {FEW_SEQUENCES} la conservazione "
                         "per colonna è poco affidabile.")
-    fixed = None
-    if row:
-        if row not in ids:
-            raise AppError(f"La riga {row} non è nell'allineamento.", code="conservation_invalid")
-        fixed = ids.index(row)
+    fixed = row_index(ids, rows, row) if row else None
     selected = _chains(model)
     if chains:
         wanted = set(chains)
@@ -201,7 +224,8 @@ def compute(model, ids: list[str], aligned: list[str], *, chains: Optional[list[
             candidates = [fixed]
         else:
             own = _kmers(seq)
-            ranked = sorted(range(len(rows)), key=lambda k: (-len(own & kmers[k]), k))
+            # righe di soli gap escluse: nessun residuo da allineare alla catena
+            ranked = sorted((k for k in range(len(rows)) if ungapped[k]), key=lambda k: (-len(own & kmers[k]), k))
             candidates = ranked[:CANDIDATES]
         best = None
         for k in candidates:

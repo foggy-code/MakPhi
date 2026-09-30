@@ -253,6 +253,21 @@ def test_two_halves_are_both_chosen():
     assert template_rank.modeling_templates(sel) == [{"id": "AAAA", "chains": ["A"]}, {"id": "BBBB", "chains": ["B"]}]
 
 
+def test_few_shared_residues_leave_the_orientation_unconstrained():
+    """Meno di 10 residui in comune con i template scelti (e un'altra voce PDB): nota nella motivazione; catene della
+    stessa voce condividono le coordinate e non hanno la nota."""
+    first, second = hit("AAAA_A", start=1, end=45), hit("BBBB_A", start=40, end=76, resolution=2.2)
+    sel = template_rank.select_complementary([first, second], 76)
+    comp = sel["templates"][1]
+    assert comp["template_id"] == "BBBB_A" and comp["unanchored"] is True
+    assert "solo 6 residui in comune con i template già scelti (minimo 10)" in comp["reason"]
+    assert "orientamento relativo delle regioni non è vincolato" in comp["reason"]
+    enough = template_rank.select_complementary([hit("AAAA_A", start=1, end=50), second], 76)["templates"][1]
+    assert enough["unanchored"] is False and "orientamento" not in enough["reason"]
+    same = template_rank.select_complementary([first, hit("AAAA_B", start=40, end=76, resolution=2.2)], 76)
+    assert same["templates"][1]["unanchored"] is False and "orientamento" not in same["templates"][1]["reason"]
+
+
 def test_nearly_identical_templates_give_one_only():
     a = hit("AAAA_A")
     b = hit("BBBB_A", resolution=2.0)  # stessa sequenza, stessa regione
@@ -711,8 +726,87 @@ def test_choose_salign_or_pairwise():
     # template a più catene: non si uniscono, resta salign con l'avviso
     multi_chain = _pair("M_A", 1, target[:40] + "/" + target[40:], HUMAN_UB[:40] + "/" + HUMAN_UB[40:])
     choice = multitemplate.choose(shifted, [n, multi_chain])
-    assert choice["strategy"] == "salign"
+    assert choice["strategy"] == "salign" and choice["displaced"] == ["M_A"]
+    assert "probabilmente spostato M_A" in choice["message"] and "Verificalo" in choice["message"]
     assert multitemplate.mergeable([n, c]) and not multitemplate.mergeable([n, multi_chain])
+    assert multitemplate.choose(good, [n, c])["displaced"] == []
+    assert multitemplate.choose(shifted, [n, c])["displaced"] == ["C_A"]  # corretto dall'unione
+
+
+class _Ctx:
+    """Contesto minimo per i passi del servizio che registrano solo log e progresso."""
+
+    def __init__(self, workdir: Path) -> None:
+        self.workdir = workdir
+        self.lines: list[str] = []
+
+    def log(self, text: str) -> None:
+        self.lines.append(text)
+
+    def progress(self, *_args, **_kwargs) -> None:
+        pass
+
+
+def test_displaced_salign_alignment_is_a_warning_not_only_a_log_line(client, tmp_path, monkeypatch):
+    """salign ha spostato un template e gli align2d non si possono unire (template a più catene): l'allineamento resta
+    quello di salign, ma il messaggio torna come avviso (risultato, pagina Modellazione, report), non solo nel log."""
+    target = YEAST_UB
+    n = _pair("N_A", 1, target, HUMAN_UB[:50] + "-" * 26)
+    multi_chain = _pair("M_A", 1, target[:40] + "/" + target[40:], HUMAN_UB[:40] + "/" + HUMAN_UB[40:])
+    salign = _pir(("N_A", "structureX:N_A.pdb:1:A:+50:A:::-1.00:-1.00", HUMAN_UB[:50] + "-" * 26),
+                  ("M_A", "structureX:M_A.pdb:1:A:+76:A:::-1.00:-1.00", HUMAN_UB[30:] + "-" * 30),
+                  ("a", "sequence:a:: :: ::: 0.00: 0.00", target))
+
+    def fake_run_script(ctx, script, name, *, workdir=None, **_kwargs):
+        (workdir / modeller.SALIGN_FILE).write_text(salign, encoding="utf-8")
+        (workdir / modeller.pair_file(0)).write_text(n, encoding="utf-8")
+        (workdir / modeller.pair_file(1)).write_text(multi_chain, encoding="utf-8")
+        return ""
+
+    monkeypatch.setattr(modeller, "run_script", fake_run_script)
+    service = client.app.state.core.compute
+    templates = [{"code": "N_A", "file": "N_A.pdb", "chains": ["A"]}, {"code": "M_A", "file": "M_A.pdb",
+                                                                        "chains": ["A", "B"]}]
+    ctx = _Ctx(tmp_path)
+    text, notes = service._run_alignment(ctx, sequences.SeqRecord("a", target), templates, tmp_path, (0.0, 1.0))
+    assert text == salign
+    assert len(notes) == 1 and "probabilmente spostato M_A" in notes[0] and notes[0] in ctx.lines
+    # salign coerente: nessun avviso
+    good = _pir(("N_A", "structureX:N_A.pdb:1:A:+50:A:::-1.00:-1.00", HUMAN_UB[:50] + "-" * 26),
+                ("M_A", "structureX:M_A.pdb:1:A:+76:A:::-1.00:-1.00", HUMAN_UB),
+                ("a", "sequence:a:: :: ::: 0.00: 0.00", target))
+    salign = good
+    assert service._run_alignment(ctx, sequences.SeqRecord("a", target), templates, tmp_path, (0.0, 1.0))[1] == []
+
+
+def test_unanchored_regions_from_different_structures():
+    def entries(*rows: tuple[str, str]) -> list[sequences.PirEntry]:
+        return [sequences.PirEntry(code, "structureX", ["FIRST", "A", "LAST", "A", "", "", "", ""], seq)
+                for code, seq in rows] + [sequences.PirEntry("a", "sequence", [], YEAST_UB)]
+
+    def templates(*pairs: tuple[str, str]) -> list[dict]:
+        return [{"code": code, "id": tid} for code, tid in pairs]
+
+    n, c = HUMAN_UB[:40] + "-" * 36, "-" * 40 + HUMAN_UB[40:]
+    note = multitemplate.unanchored(entries(("N_A", n), ("C_A", c)), templates(("N_A", "UBQN"), ("C_A", "UBQC")))
+    assert note.startswith("Orientamento relativo non vincolato: N_A (residui 1–40 del bersaglio) e C_A (residui "
+                           "41–76 del bersaglio) vengono da strutture diverse e hanno meno di 10 residui")
+    assert "AlphaFold" in note
+    # catene dello stesso file: stesso sistema di riferimento
+    assert multitemplate.unanchored(entries(("X_A", n), ("X_B", c)), templates(("X_A", "1ABC"), ("X_B", "1abc"))) \
+        is None
+    # 10 residui del bersaglio in comune bastano, 9 no
+    ten, nine = "-" * 30 + HUMAN_UB[30:], "-" * 31 + HUMAN_UB[31:]
+    pair = templates(("N_A", "UBQN"), ("C_A", "UBQC"))
+    assert multitemplate.unanchored(entries(("N_A", n), ("C_A", ten)), pair) is None
+    assert multitemplate.unanchored(entries(("N_A", n), ("C_A", nine)), pair) is not None
+    # tre template: due ancorati fra loro, il terzo da solo
+    mid = "-" * 20 + HUMAN_UB[20:45] + "-" * 31
+    tail = "-" * 60 + HUMAN_UB[60:]
+    three = multitemplate.unanchored(entries(("N_A", n), ("M_A", mid), ("T_A", tail)),
+                                     templates(("N_A", "UBQN"), ("M_A", "UBQM"), ("T_A", "UBQT")))
+    assert "N_A, M_A (residui 1–45 del bersaglio) e T_A (residui 61–76 del bersaglio)" in three
+    assert multitemplate.unanchored(entries(("N_A", n)), templates(("N_A", "UBQN"))) is None
 
 
 def test_alignment_script_writes_salign_and_pairwise_alignments():
@@ -807,3 +901,35 @@ def test_modeling_with_two_full_length_templates_keeps_salign(client, ubq_path):
     model = client.get(f"/api/jobs/{done['id']}/files/{done['result']['best_model']}").text
     assert _tm_to_1ubq(model) > 0.95
     assert client.get(f"/api/jobs/{done['id']}/files/alignment.pap").status_code == 200
+
+
+def _moved_frame(text: str) -> str:
+    """Stesse coordinate in un altro sistema di riferimento: rotazione di 90° attorno a z e traslazione di 30 Å."""
+    out = []
+    for ln in text.splitlines():
+        if ln.startswith(("ATOM", "HETATM")):
+            x, y, z = float(ln[30:38]), float(ln[38:46]), float(ln[46:54])
+            ln = f"{ln[:30]}{30.0 - y:8.3f}{x:8.3f}{z:8.3f}{ln[54:]}"
+        out.append(ln)
+    return "\n".join(out) + "\n"
+
+
+@requires_modeller
+def test_disjoint_fragments_of_different_structures_warn_about_the_orientation(client, ubq_path):
+    """Due frammenti disgiunti (1–40 di 1UBQ e 41–76 di una sua copia ruotata e traslata): MODELLER costruisce il
+    modello, ma la posizione reciproca delle due metà non viene da nessun template. Avviso nel risultato e nel report."""
+    for name, text in (("UBQN", _fragment(ubq_path, 1, 40)), ("UBQR", _moved_frame(_fragment(ubq_path, 41, 76)))):
+        r = client.post("/api/templates/upload", files={"file": (f"{name}.pdb", text.encode(), "chemical/x-pdb")})
+        assert r.status_code == 200, r.text
+    body = {"target": {"name": "yeast", "sequence": YEAST_UB},
+            "templates": [{"id": "UBQN", "chains": ["A"]}, {"id": "UBQR", "chains": ["A"]}],
+            "options": {"models": 1, "refinement": "very_fast"}, "quality": "none"}
+    job = client.post("/api/model", json=body).json()
+    done = wait_job(client, job["id"], timeout=600)
+    assert done["status"] == "completed", done.get("error")
+    note = next(w for w in done["result"]["warnings"] if w.startswith("Orientamento relativo non vincolato"))
+    assert "UBQN_A (residui 1–40 del bersaglio) e UBQR_A (residui 41–76 del bersaglio)" in note
+    log = client.get(f"/api/jobs/{job['id']}/log").json()["text"]
+    assert "Avviso: Orientamento relativo non vincolato" in log
+    html = client.get(f"/api/jobs/{job['id']}/report/{done['result']['best_model']}").text
+    assert "Orientamento relativo non vincolato" in html

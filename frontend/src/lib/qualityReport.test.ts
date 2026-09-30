@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ConsensusResult, QualityReport, ResidueRow, StructureSource } from "../api/types";
-import { alignedPerResidue, isProblemResidue, problemResidues, shownReportSource } from "./qualityReport";
+import type { ConsensusResult, LigandGroupCheck, QualityReport, ResidueRow, StructureSource } from "../api/types";
+import { alignedPerResidue, clashHighlight, isProblemResidue, ligandHighlight, problemResidues, residuesHighlight, shownReportSource } from "./qualityReport";
 
 function row(resnum: number, extra: Partial<ResidueRow> = {}): ResidueRow {
   return {
@@ -38,5 +38,33 @@ describe("struttura del rapporto mostrato", () => {
     const template: StructureSource = { type: "template", id: "1UBQ" };
     expect(shownReportSource("q1", template, { source: model })).toEqual(template);
     expect(shownReportSource("q1", undefined, null)).toBeUndefined();
+  });
+});
+
+describe("evidenza nel 3D", () => {
+  // Zn di ubq_zn.pdb coordinato da His68 (valori del backend)
+  const zinc = {
+    resname: "ZN", chain: "A", resnum: "101", atoms: 1, class: "metal", label: "metallo", status: "da controllare", summary: "", reasons: [],
+    contacts: [], clashes: [], links: [],
+    metals: [{
+      atom: "ZN", element: "ZN", symbol: "Zn", coord: [20.137, 35.131, 16.359], coordination_number: 1, geometry: null, cn_range: [4, 6], reference: true,
+      donors: [{ chain: "A", resnum: "68", resname: "HIS", atom: "NE2", protein: true, label: "His A68 NE2", category: "N_his", donor: "N (His)", distance: 2.1,
+        expected: 2.03, status: "nella norma", water: false, same_group: false, coord: [22.045, 35.455, 17.173] }],
+    }],
+  } as unknown as LigandGroupCheck;
+
+  it("solo la scelta di un ligando tiene linee e zoom sul sito; scontri e residui problematici lo tolgono", () => {
+    const site = ligandHighlight(zinc);
+    expect(site.ligand).toBe(zinc);
+    expect(site.lines).toHaveLength(1);
+    expect(site.focus).toEqual([{ chain: "A", resi: 101 }, { chain: "A", resi: 68 }]);
+    // clic su una riga dei contatti sterici dopo il ligando: i due residui, senza linee né ligando
+    expect(clashHighlight({ atom1: "A 43 LEU CB", atom2: "A 50 LEU CD1" })).toEqual({
+      focus: [{ chain: "A", resi: 43 }, { chain: "A", resi: 50 }], selected: { chain: "A", resnum: "43" }, ligand: null, lines: [],
+    });
+    // «Evidenzia tutti i residui problematici»: il residuo scelto resta, il ligando no
+    const problems = residuesHighlight([{ chain: "A", resi: 5 }, { chain: "A", resi: 9 }], { chain: "A", resnum: "5" });
+    expect(problems).toEqual({ focus: [{ chain: "A", resi: 5 }, { chain: "A", resi: 9 }], selected: { chain: "A", resnum: "5" }, ligand: null, lines: [] });
+    expect(residuesHighlight([])).toEqual({ focus: [], selected: null, ligand: null, lines: [] });
   });
 });

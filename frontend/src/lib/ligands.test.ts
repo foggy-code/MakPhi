@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { HeteroGroup, LigandGroupCheck, MetalSite, TemplateAnalysis } from "../api/types";
 import {
-  candidateGroups, coordinationLines, coordinationText, DONOR_COLOR, donorText, groupClass, isDefault, ligandFocus, ligandKey, ligandOptions, sameSelection,
-  selectionSummary, syncSelection,
+  candidateGroups, coordinationLines, coordinationText, defaultTransfer, DONOR_COLOR, donorText, groupClass, isDefault, ligandFocus, ligandKey, ligandOptions,
+  lookupState, sameSelection, selectionSummary, syncSelection,
 } from "./ligands";
 
 function group(resname: string, chain: string, resnum: string, extra: Partial<HeteroGroup> = {}): HeteroGroup {
@@ -62,6 +62,35 @@ describe("scelta dei gruppi da trasferire", () => {
     expect(old.map(isDefault)).toEqual([true, false]);
     const c = candidateGroups({ id: "OLD", chains: ["A"] }, analysis(old));
     expect(ligandOptions(c, syncSelection({}, c))).toEqual([{ template: "OLD", chain: "A", resnum: "101", resname: "ZN" }]);
+  });
+
+  it("casella «Ligandi» del template (Pipeline): solo i gruppi della scelta predefinita delle catene scelte", () => {
+    // ZN, GOL (additivo), HEM, NA (monovalente), MSE (residuo modificato) nella catena A; SO4 nella B
+    const onlyA = defaultTransfer({ id: "1ABC", chains: ["A"] }, analysis());
+    expect(onlyA.names).toEqual(["ZN", "HEM"]);
+    expect(onlyA.excluded).toEqual(["GOL A301 (additivo comune di cristallizzazione)", "NA A501 (ione monovalente)", "MSE A601"]);
+    // solo additivi o residui modificati: nessuna casella (spuntarla non trasferirebbe nulla)
+    const additives = analysis([LIGANDS[1], LIGANDS[5]]);
+    expect(defaultTransfer({ id: "1ABC", chains: ["A"] }, additives).names).toEqual([]);
+    // un gruppo di una catena non scelta non conta
+    expect(defaultTransfer({ id: "1ABC", chains: ["B"] }, analysis()).names).toEqual([]);
+    expect(defaultTransfer({ id: "1ABC", chains: ["A"] }, null)).toEqual({ names: [], excluded: [] });
+    // analisi in cache delle versioni precedenti (solo additive): nomi senza ripetizioni
+    const old = analysis([group("ZN", "A", "101"), group("ZN", "A", "102"), group("SO4", "A", "201", { additive: true })]);
+    expect(defaultTransfer({ id: "OLD", chains: ["A"] }, old).names).toEqual(["ZN"]);
+  });
+
+  it("lettura dei gruppi: analisi del selettore dei template prima di tutto, errori visibili e non «in corso»", () => {
+    const templates = [{ id: "1ABC", chains: ["A"] }, { id: "2XYZ", chains: ["A"] }];
+    // 1ABC in download (404, nuovo tentativo previsto), 2XYZ non riuscito: non pronto, 2XYZ da segnalare
+    const own = { "1ABC": { error: "Template 1ABC non trovato", retrying: true }, "2XYZ": { error: "Errore interno", retrying: false } };
+    expect(lookupState(templates, own)).toMatchObject({ ready: false, failed: ["2XYZ"] });
+    // il selettore dei template ha finito il download di 1ABC: la sua analisi vale al posto dell'errore
+    const known = { "1ABC": analysis(), "2XYZ": analysis([]) };
+    const state = lookupState(templates, own, known);
+    expect(state).toMatchObject({ ready: true, failed: [] });
+    expect(state.analyses["1ABC"]).toBe(known["1ABC"]);
+    expect(lookupState(templates, { "1ABC": "loading", "2XYZ": analysis() })).toMatchObject({ ready: false, failed: [] });
   });
 
   it("nessun candidato: messaggio chiaro", () => {

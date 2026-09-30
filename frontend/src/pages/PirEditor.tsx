@@ -23,7 +23,9 @@ function GenerateDialog({ onClose, onDone }: { onClose: () => void; onDone: (pir
   const [jobId, setJobId] = useState<string | null>(null);
   const { job, summary, log, cancel } = useJob<Align2dResult>(jobId, { withLog: true });
   useEffect(() => {
-    if (job?.status === "completed" && job.result) onDone(job.result.pir, templates, target.name || "target");
+    if (job?.status !== "completed" || !job.result) return;
+    for (const w of job.result.warnings ?? []) toast.push(w, "warn");
+    onDone(job.result.pir, templates, target.name || "target");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [job?.status]);
   const submit = async () => {
@@ -92,6 +94,7 @@ export default function PirEditor() {
     if (!from) return;
     api.job<Align2dResult>(from).then((j) => {
       if (!j.result) return;
+      for (const w of j.result.warnings ?? []) toast.push(w, "warn");
       setName(`Allineamento MODELLER (job ${from.slice(0, 6)})`);
       setContent(j.result.pir);
       setMeta({ templates: j.result.templates.map((t) => ({ id: t.id, chains: t.chains })) });

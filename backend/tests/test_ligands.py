@@ -60,7 +60,22 @@ def _offset(base: tuple, d: tuple) -> tuple:
     return tuple(a + b for a, b in zip(base, d))
 
 
+def _in_chain(tmp_path: Path, changes: dict[int, str], base: Path = ZN_PDB, name: str = "MOD.pdb") -> Path:
+    """Copia di `base` con alcuni residui della catena riscritti come HETATM con un altro nome (residui modificati
+    legati alla catena da legami peptidici): {numero: nuovo nome}."""
+    out = []
+    for line in base.read_text().splitlines():
+        if line.startswith("ATOM") and int(line[22:26]) in changes:
+            line = "HETATM" + line[6:17] + f"{changes[int(line[22:26])]:>3}" + line[20:]
+        out.append(line)
+    path = tmp_path / name
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    return path
+
+
 def _classification_pdb(tmp_path: Path) -> Path:
+    # MSE 1 e SEP 20 nella catena (legami peptidici con i vicini); SAM e un Glu libero lontani dalla proteina
+    base = _in_chain(tmp_path, {1: "MSE", 20: "SEP"})
     groups = [
         ("GOL", 301, [("C1", _offset(_far(0), (0, 0, 0)), "C"), ("O1", _offset(_far(0), (1.4, 0, 0)), "O"),
                       ("C2", _offset(_far(0), (0, 1.5, 0)), "C")]),
@@ -70,18 +85,24 @@ def _classification_pdb(tmp_path: Path) -> Path:
                       ("NB", _offset(_far(2), (0, 2.0, 0)), "N"), ("NC", _offset(_far(2), (-2.0, 0, 0)), "N"),
                       ("ND", _offset(_far(2), (0, -2.0, 0)), "N")]),
         ("NA", 501, [("NA", _far(3), "NA")]),
-        ("MSE", 601, [("N", _far(4), "N"), ("CA", _offset(_far(4), (1.46, 0, 0)), "C"),
-                      ("C", _offset(_far(4), (2.0, 1.4, 0)), "C"), ("SE", _offset(_far(4), (1.5, -1.5, 1.0)), "SE")]),
+        ("SAM", 601, [("N", _far(4), "N"), ("CA", _offset(_far(4), (1.46, 0, 0)), "C"),
+                      ("C", _offset(_far(4), (2.0, 1.4, 0)), "C"), ("O", _offset(_far(4), (3.2, 1.5, 0)), "O"),
+                      ("SD", _offset(_far(4), (1.5, -1.5, 1.0)), "S"), ("C5'", _offset(_far(4), (1.5, -3.3, 1.0)), "C"),
+                      ("N9", _offset(_far(4), (0.0, -5.0, 2.0)), "N")]),
+        ("GLU", 602, [("N", _far(6), "N"), ("CA", _offset(_far(6), (1.46, 0, 0)), "C"),
+                      ("C", _offset(_far(6), (2.0, 1.4, 0)), "C"), ("O", _offset(_far(6), (3.2, 1.5, 0)), "O"),
+                      ("CB", _offset(_far(6), (2.0, -1.4, 0)), "C"), ("OE1", _offset(_far(6), (3.0, -2.5, 0)), "O")]),
         ("LIG", 701, [("C1", _far(5), "C"), ("N1", _offset(_far(5), (1.4, 0, 0)), "N")]),
     ]
-    return _with_groups(tmp_path, groups, name="CLS.pdb")
+    return _with_groups(tmp_path, groups, base=base, name="CLS.pdb")
 
 
 # ---------------------------------------------------------------------------------------------- classificazione
 def test_classification_of_groups(tmp_path):
     model = _model(_classification_pdb(tmp_path))
     found = {g["resname"]: g for g in ligands.candidates(model)}
-    assert list(found) == ["ZN", "GOL", "SO4", "HEM", "NA", "MSE", "LIG"]  # HOH esclusa, ordine del file
+    # HOH esclusa, ordine del file
+    assert list(found) == ["MSE", "SEP", "ZN", "GOL", "SO4", "HEM", "NA", "SAM", "GLU", "LIG"]
     assert found["ZN"]["class"] == "metal" and found["ZN"]["element"] == "ZN" and found["ZN"]["default"]
     assert found["ZN"]["label"] == "metallo" and found["ZN"]["transferable"]
     for name in ("GOL", "SO4"):
@@ -89,19 +110,40 @@ def test_classification_of_groups(tmp_path):
         assert "cristallizzazione" in found[name]["reason"] and found[name]["additive"] is True
     assert found["HEM"]["class"] == "cofactor" and found["HEM"]["default"] and "eme" in found["HEM"]["description"]
     assert found["NA"]["class"] == "metal" and not found["NA"]["default"] and "monovalente" in found["NA"]["reason"]
-    assert found["MSE"]["class"] == "modified" and not found["MSE"]["transferable"]
+    # residui modificati: N, CA, C e un legame peptidico con la catena
+    for name in ("MSE", "SEP"):
+        assert found[name]["class"] == "modified" and not found[name]["transferable"] and not found[name]["default"]
+    # SAM ha N, CA e C (parte metioninica) ma nessun legame peptidico: cofattore, scelto per default
+    assert found["SAM"]["class"] == "cofactor" and found["SAM"]["default"] and found["SAM"]["transferable"]
+    assert found["SAM"]["description"] == "S-adenosilmetionina"
+    # un amminoacido libero (substrato) è un ligando
+    assert found["GLU"]["class"] == "ligand" and found["GLU"]["default"]
     assert found["LIG"]["class"] == "ligand" and found["LIG"]["default"]
     # scelta predefinita e scelta esplicita, sempre nell'ordine del file
-    assert [ligands.group_key(r)[2] for r in ligands.select(model, ["A"], None)] == ["ZN", "HEM", "LIG"]
+    assert [ligands.group_key(r)[2] for r in ligands.select(model, ["A"], None)] == ["ZN", "HEM", "SAM", "GLU", "LIG"]
+    assert [ligands.group_key(r)[2] for r in ligands.select(model, ["A"], [("A", "601", "SAM")])] == ["SAM"]
     chosen = ligands.select(model, ["A"], [("A", "701", "LIG"), ("A", "301", "GOL")])
     assert [ligands.group_key(r)[2] for r in chosen] == ["GOL", "LIG"]
     with pytest.raises(AppError, match="HEM A999 non è tra gli eteroatomi") as err:
         ligands.select(model, ["A"], [("A", "999", "HEM")])
     assert err.value.code == "ligand_not_found"
     with pytest.raises(AppError, match="residuo modificato") as err:
-        ligands.select(model, ["A"], [("A", "601", "MSE")])
+        ligands.select(model, ["A"], [("A", "20", "SEP")])
     assert err.value.code == "ligand_not_transferable"
     assert ligands.select(model, ["B"], None) == []  # nessun gruppo nelle catene non scelte
+    # la verifica comprende SAM e il Glu libero, non i residui modificati; nei contatti non sono proteina
+    checked = {g["resname"]: g for g in ligands.evaluate(model)["groups"]}
+    assert {"SAM", "GLU"} <= set(checked) and not {"MSE", "SEP"} & set(checked)
+    assert checked["SAM"]["class"] == "cofactor"
+    assert not ligands._is_protein(model["A"][("H_SAM", 601, " ")])
+    assert ligands._is_protein(model["A"][("H_SEP", 20, " ")])
+
+
+def test_cofactor_names_are_never_modified_residues(tmp_path):
+    """Un cofattore noto con N, CA e C legato alla catena resta un cofattore (qui SAH al posto del residuo 76)."""
+    model = _model(_in_chain(tmp_path, {76: "SAH"}))
+    (sah,) = [g for g in ligands.candidates(model) if g["resname"] == "SAH"]
+    assert sah["class"] == "cofactor" and sah["transferable"]
 
 
 def test_template_detail_lists_classified_candidates(client, tmp_path):
@@ -113,6 +155,7 @@ def test_template_detail_lists_classified_candidates(client, tmp_path):
     by_name = {g["resname"]: g for g in detail["ligands"]}
     assert by_name["ZN"]["class"] == "metal" and by_name["SO4"]["class"] == "additive"
     assert by_name["HEM"]["class"] == "cofactor" and by_name["MSE"]["transferable"] is False
+    assert by_name["SAM"]["class"] == "cofactor" and by_name["SAM"]["transferable"] is True
     assert "HOH" not in by_name
 
 
@@ -171,6 +214,36 @@ def test_zinc_site_of_ubq_zn_reference_values():
         "Geometria piramide a base quadrata con 2 posizioni vacanti su 5 (40%, oltre il 25%).",
     ]
     assert group["summary"] == " ".join(group["reasons"])
+
+
+def test_reference_distances_match_the_sources():
+    """Distanze attese verificate sulle fonti (settembre 2026): tabella «revised July 2006» di Harding (2006) per Na,
+    Mg, K, Ca, Mn, Fe, Co, Cu, Zn con le sue stelle di affidabilità; Tabella 3 di Zheng et al. (2017, CSD) per il Ni.
+    Colonne: O dell'acqua, O di Asp/Glu monodentato, O dello scheletro, N dell'His, S della Cys."""
+    harding = {  # metallo: [(valore, stelle)] nell'ordine delle colonne; None = donatore non in tabella
+        "NA": [(2.41, 2), (2.41, 2), (2.38, 2), None, None],
+        "MG": [(2.07, 3), (2.07, 2), (2.26, 0), None, None],
+        "K": [(2.81, 1), (2.82, 1), (2.74, 1), None, None],
+        "CA": [(2.39, 2), (2.36, 2), (2.36, 2), None, None],
+        "MN": [(2.19, 3), (2.15, 3), (2.19, 0), (2.21, 2), (2.35, 0)],
+        "FE": [(2.09, 2), (2.04, 2), (2.04, 0), (2.16, 1), (2.30, 3)],
+        "CO": [(2.09, 2), (2.05, 3), (2.08, 0), (2.14, 2), (2.25, 1)],
+        "CU": [(2.13, 0), (1.99, 1), (2.04, 0), (2.02, 2), (2.15, 0)],
+        "ZN": [(2.09, 3), (1.99, 3), (2.07, 0), (2.03, 3), (2.31, 2)],
+    }
+    columns = ("O_water", "O_carboxyl", "O_backbone", "N_his", "S_cys")
+    for metal, row in harding.items():
+        expected = {c: v[0] for c, v in zip(columns, row) if v}
+        assert ligands.REFERENCE_DISTANCES[metal] == expected, metal
+        assert ligands.REFERENCE_RELIABILITY[metal] == {c: v[1] for c, v in zip(columns, row) if v}, metal
+    # Ni: acqua 2,08(6), O–C 2,07(7) e N 2,09(7) delle mode più lunghe, S 2,18(3)
+    assert ligands.REFERENCE_DISTANCES["NI"] == {"O_water": 2.08, "O_carboxyl": 2.07, "O_backbone": 2.07,
+                                                 "N_his": 2.09, "S_cys": 2.18}
+    assert set(ligands.REFERENCE_DISTANCES) == set(harding) | {"NI"} and "NI" not in ligands.REFERENCE_RELIABILITY
+    # note della tabella di Harding: Asn/Gln e gli O dei ligandi come il carbossilato monodentato
+    assert ligands.expected_distance("ZN", "O_amide") == ligands.expected_distance("ZN", "O_carboxyl") == 1.99
+    assert ligands.expected_distance("ZN", "O_ligand") == 1.99 and ligands.expected_distance("CU", "S_ligand") == 2.15
+    assert ligands.expected_distance("CA", "N_his") is None  # donatore insolito per il calcio
 
 
 def _moved(tmp_path: Path, changes: dict[tuple[str, int], tuple]) -> Path:
@@ -392,6 +465,70 @@ def test_pir_ligand_columns_with_chains_and_several_templates():
         ligands.pir_with_ligands(partial, [_zn_template()])
 
 
+def _site_group(resname: str, resnum: str, donors=(), contacts=()) -> dict:
+    """Gruppo di `ligand_groups` con il sito: donatori della proteina (metalli) o residui entro 4 Å."""
+    metal = [{"atom": resname, "element": resname,
+              "donors": [{"chain": "A", "resnum": str(r), "resname": "HIS", "atom": "NE2", "protein": True}
+                         for r in donors]}] if donors else []
+    return {"resname": resname, "chain": "A", "resnum": resnum, "metals": metal, "links": [],
+            "contacts": [{"chain": "A", "resnum": str(r), "resname": "X"} for r in contacts]}
+
+
+def _site_template(code: str, groups: list[dict]) -> dict:
+    return {"code": code, "chains": ["A"], "last": "76", "_chain_residues": {"A": 76},
+            "_chain_ids": {"A": [str(n) for n in range(1, 77)]}, "_hetero": [("A", g["resnum"]) for g in groups],
+            "ligand_groups": groups}
+
+
+def _two_templates(first: list[dict], second: list[dict]) -> tuple[list[PirEntry], list[str]]:
+    entries = [PirEntry("ZNA_A", "structureX", ["FIRST", "A", "LAST", "A", "", "", "", ""], HUMAN_UB),
+               PirEntry("ZNB_A", "structureX", ["FIRST", "A", "LAST", "A", "", "", "", ""], HUMAN_UB),
+               PirEntry("yeast", "sequence", ["", "", "", "", "", "", "0.00", "0.00"], YEAST_UB)]
+    return ligands.pir_with_ligands(entries, [_site_template("ZNA_A", first), _site_template("ZNB_A", second)])
+
+
+def test_same_group_of_two_templates_shares_the_column():
+    """Lo stesso Zn (His68) in due template: una sola colonna, '.' in entrambi i template e uno solo nel bersaglio;
+    MODELLER costruisce un solo Zn con i vincoli dei due template, non due copie sovrapposte."""
+    zn = _site_group("ZN", "101", donors=[68])
+    out, notes = _two_templates([zn], [dict(zn)])
+    assert [e.sequence for e in out] == [HUMAN_UB + ".", HUMAN_UB + ".", YEAST_UB + "."]
+    assert notes == ["ZN A101 di ZNA_A e ZN A101 di ZNB_A: stesso gruppo nello stesso sito, un solo ZN nel modello con "
+                     "i vincoli di entrambi i template."]
+    groups = ligands.model_groups(out, [_site_template("ZNA_A", [zn]), _site_template("ZNB_A", [zn])])
+    assert [[code for code, _g in members] for members in groups] == [["ZNA_A", "ZNB_A"]]
+    # altro sito (His10) o altro nome: colonne distinte, come prima
+    out, notes = _two_templates([zn], [_site_group("ZN", "101", donors=[10])])
+    assert [e.sequence[-2:] for e in out] == [".-", "-.", ".."] and notes == []
+    out, _ = _two_templates([zn], [_site_group("CU", "101", donors=[68])])
+    assert [e.sequence[-2:] for e in out] == [".-", "-.", ".."]
+    # gruppo senza donatori né legami: il sito sono i residui entro 4 Å
+    hem = _site_group("HEM", "201", contacts=[20, 21, 22])
+    out, _ = _two_templates([hem], [_site_group("HEM", "301", contacts=[22, 23])])
+    assert [e.sequence[-1:] for e in out] == [".", ".", "."]
+
+
+def test_shared_columns_keep_the_file_order_of_each_template():
+    """MODELLER legge i '.' di un template nell'ordine dei gruppi nel file: le colonne condivise lo rispettano, e un
+    gruppo in più di un template ha la sua colonna al posto giusto."""
+    zn, hem = _site_group("ZN", "101", donors=[68]), _site_group("HEM", "201", contacts=[20, 21])
+    lig = _site_group("LIG", "150", contacts=[40])
+    # ZNB_A ha un ligando in più prima dello Zn: lo Zn si unisce lo stesso
+    out, notes = _two_templates([zn, hem], [lig, dict(zn)])
+    rows = {e.code: e.sequence[len(HUMAN_UB):] for e in out}
+    assert rows == {"ZNA_A": "-..", "ZNB_A": "..-", "yeast": "..."}
+    assert len(notes) == 1 and "un solo ZN" in notes[0]
+    templates = [_site_template("ZNA_A", [zn, hem]), _site_template("ZNB_A", [lig, zn])]
+    groups = ligands.model_groups(out, templates)
+    assert [[(code, g["resname"]) for code, g in m] for m in groups] == [
+        [("ZNB_A", "LIG")], [("ZNA_A", "ZN"), ("ZNB_A", "ZN")], [("ZNA_A", "HEM")]]
+    # ordine opposto nei due template: se ne unisce uno solo, l'altro resta in due colonne
+    out, _ = _two_templates([zn, hem], [dict(hem), dict(zn)])
+    a, b, t = (e.sequence[len(HUMAN_UB):] for e in out)
+    assert t == "..." and a.count(".") == b.count(".") == 2
+    assert sequences.validate_pir(sequences.format_pir(out))["valid"]
+
+
 # ---------------------------------------------------------------------------------------------- sito del template
 def _site_setup(tmp_path: Path, model_path: Path = None, target_seq: str = HUMAN_UB) -> tuple:
     """Template ubq_zn preparato con lo Zn; il "modello" è la copia preparata (senza acque, come un modello)."""
@@ -486,8 +623,13 @@ def test_report_has_ligand_section_only_with_ligands(ubq_path):
     assert "da controllare" in html and "His A68 NE2 2,10 Å" in html and "piramide a base quadrata" in html
     assert "<script>x" not in html and "&lt;script&gt;x" in html
     assert "Harding M.M. (2006)" in html and "CheckMyMetal" in html
+    # la sezione si chiude: le successive non restano annidate dentro #ligandi
+    assert html.count("<section") == html.count("</section>")
+    tail = html[html.index('id="ligandi"'):]
+    assert tail.index("</section>") < tail.index("<section")
     plain = report.render({**base, "quality": quality.analyze(ubq_path, with_dope=False)})
     assert 'id="ligandi"' not in plain and "Harding" not in plain
+    assert plain.count("<section") == plain.count("</section>")
 
 
 # ---------------------------------------------------------------------------------------------- MODELLER
@@ -508,7 +650,8 @@ def test_yeast_model_on_ubq_zn_transfers_only_the_zinc(client, tmp_path):
     assert done["status"] == "completed", done.get("error")
     res = done["result"]
     assert res["ligands"]["transferred"] == [{"template": "ZNS_A", "resname": "ZN", "chain": "A", "resnum": "101",
-                                             "class": "metal", "label": "metallo"}]
+                                             "class": "metal", "label": "metallo", "sources": [
+                                                 {"template": "ZNS_A", "chain": "A", "resnum": "101", "resname": "ZN"}]}]
     assert [g["resname"] for g in res["templates"][0]["ligand_groups"]] == ["ZN"]
     assert {g["resname"] for g in res["templates"][0]["ligands_excluded"]} == {"SO4"}
     # PIR: un solo '.' per template e bersaglio, nella stessa colonna, in fondo alla catena
@@ -543,3 +686,39 @@ def test_yeast_model_on_ubq_zn_transfers_only_the_zinc(client, tmp_path):
     best = next(m for m in done["result"]["models"] if m["best"])
     assert "HETATM" not in client.get(f"/api/jobs/{again['id']}/files/{best['file']}").text
     assert "ligands" not in done["result"]
+
+
+@pytest.mark.modeller
+@requires_modeller
+def test_two_templates_with_the_same_zinc_give_one_zinc(client):
+    """Due template omologhi con lo stesso Zn (ubq_zn.pdb caricato due volte) e la scelta predefinita: una sola
+    colonna '.' condivisa, un solo Zn nel modello (prima: due Zn a 2,6 Å, uno per template)."""
+    for name in ("ZNA", "ZNB"):
+        with open(ZN_PDB, "rb") as fh:
+            r = client.post("/api/templates/upload", files={"file": (f"{name}.pdb", fh, "chemical/x-pdb")})
+        assert r.status_code == 200, r.text
+    body = {"target": {"name": "yeast", "sequence": YEAST_UB},
+            "templates": [{"id": "ZNA", "chains": ["A"]}, {"id": "ZNB", "chains": ["A"]}],
+            "options": {"models": 1, "refinement": "very_fast", "hetatm": True}, "quality": "best"}
+    job = client.post("/api/model", json=body).json()
+    done = wait_job(client, job["id"], timeout=600)
+    assert done["status"] == "completed", done.get("error")
+    res = done["result"]
+    rows = {e.code: e.sequence for e in sequences.parse_pir(res["alignment"])}
+    assert rows["ZNA_A"].endswith("GG.") and rows["ZNB_A"].endswith("GG.") and rows["yeast"].endswith("GG.")
+    assert all(row.count(".") == 1 for row in rows.values())
+    assert res["ligands"]["transferred"] == [{
+        "template": "ZNA_A, ZNB_A", "resname": "ZN", "chain": "A", "resnum": "101", "class": "metal",
+        "label": "metallo", "sources": [{"template": "ZNA_A", "chain": "A", "resnum": "101", "resname": "ZN"},
+                                        {"template": "ZNB_A", "chain": "A", "resnum": "101", "resname": "ZN"}]}]
+    assert any("un solo ZN nel modello" in w for w in res["warnings"])
+    assert not any("Il modello migliore contiene" in w for w in res["warnings"])
+    best = next(m for m in res["models"] if m["best"])
+    pdb = client.get(f"/api/jobs/{job['id']}/files/{best['file']}").text
+    hetatm = [ln for ln in pdb.splitlines() if ln.startswith("HETATM")]
+    assert len(hetatm) == 1 and hetatm[0][17:20] == " ZN"
+    assert "REMARK 999 BIOLOOM LIGANDS 1 ZN:A101" in pdb
+    # verifica con il sito del template principale: His68 coordina lo Zn
+    (group,) = res["ligands"]["verification"]["groups"]
+    assert group["template"] == {"code": "ZNA_A", "group": "ZN A101"}
+    assert group["metals"][0]["template_site"]["conserved"] == 1

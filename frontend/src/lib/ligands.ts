@@ -80,6 +80,47 @@ export function ligandOptions(candidates: LigandCandidate[], selection: Record<s
     .map((c) => ({ template: c.template, chain: c.group.chain, resnum: c.group.resnum, resname: c.group.resname }));
 }
 
+/** Casella «Ligandi» di un template (Pipeline con template fisso): i gruppi che la scelta predefinita del backend
+ *  trasferisce dalle catene scelte (niente additivi, ioni monovalenti, residui modificati; nomi senza ripetizioni) e
+ *  quelli lasciati fuori, con il motivo. Nessun nome = nessuna casella: spuntarla non trasferirebbe nulla. */
+export function defaultTransfer(ref: TemplateRef, analysis: TemplateAnalysis | null | undefined): { names: string[]; excluded: string[] } {
+  const groups = candidateGroups(ref, analysis).map((c) => c.group);
+  const chosen = groups.filter((g) => isDefault(g) && isTransferable(g));
+  return {
+    names: [...new Set(chosen.map((g) => g.resname))],
+    excluded: groups.filter((g) => !chosen.includes(g)).map((g) => `${groupTitle(g)}${g.reason ? ` (${g.reason})` : ""}`),
+  };
+}
+
+/** Lettura dei gruppi di un template nella Modellazione: analisi arrivata, in corso, oppure non riuscita (con il
+ *  motivo e se è previsto un nuovo tentativo: 404 di un codice PDB o AlphaFold che il selettore sta scaricando). */
+export type LigandLookup = TemplateAnalysis | "loading" | LookupError;
+export interface LookupError {
+  error: string;
+  retrying: boolean;
+}
+
+export function isLookupError(a: LigandLookup | undefined): a is LookupError {
+  return typeof a === "object" && a !== null && "error" in a;
+}
+
+/** Stato della lettura per i template scelti: analisi note (quelle del selettore dei template prima di tutto),
+ *  pronto se tutte sono arrivate, template in errore senza altri tentativi (da mostrare sotto «Avvia modellazione»). */
+export function lookupState(templates: TemplateRef[], own: Record<string, LigandLookup>, known: Record<string, TemplateAnalysis> = {}): {
+  analyses: Record<string, LigandLookup | undefined>;
+  ready: boolean;
+  failed: string[];
+} {
+  const analyses: Record<string, LigandLookup | undefined> = {};
+  for (const t of templates) analyses[t.id] = known[t.id] ?? own[t.id];
+  const ok = (a: LigandLookup | undefined) => !!a && a !== "loading" && !isLookupError(a);
+  return {
+    analyses,
+    ready: templates.every((t) => ok(analyses[t.id])),
+    failed: templates.filter((t) => { const a = analyses[t.id]; return isLookupError(a) && !a.retrying; }).map((t) => t.id),
+  };
+}
+
 /** Riepilogo della scelta: "2 di 4 gruppi scelti (additivi esclusi)". */
 export function selectionSummary(candidates: LigandCandidate[], selection: Record<string, boolean>): string {
   const usable = candidates.filter((c) => isTransferable(c.group));

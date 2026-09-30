@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { DocumentItem, JobSummary, LigandRef, LoopResult, ModelEntry, ModelResult, PreparedTemplate, Sequence, StructureSource, SystemInfo, TemplateItem, TemplateRef } from "../api/types";
+import type {
+  DocumentItem, JobSummary, LigandRef, LoopResult, ModelEntry, ModelResult, PreparedTemplate, Sequence, StructureSource, SystemInfo, TemplateAnalysis, TemplateItem,
+  TemplateRef,
+} from "../api/types";
 import { LigandPicker } from "../components/LigandPicker";
 import { LigandTable } from "../components/LigandsPanel";
 import { groupTitle, STATUS_TONE } from "../lib/ligands";
@@ -19,7 +22,7 @@ import { PlddtOption } from "../components/PlddtOption";
 import { hasPredictedTemplate, PLDDT_DEFAULT, removedRanges, trimSummary } from "../lib/alphafold";
 import { compareTargets } from "../lib/compare";
 import { useProject, useToast } from "../lib/context";
-import { modelingCoverageRequest, targetAccession } from "../lib/disorder";
+import { modelingAccession, modelingCoverageRequest } from "../lib/disorder";
 import { fileStem, formatRestraints, parseRestraints, type RestraintRow } from "../lib/files";
 import { downloadText, fmtNum, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
@@ -246,6 +249,9 @@ export default function Modeling() {
   const [ligandSel, setLigandSel] = useState<Record<string, boolean>>({});
   const [ligandRefs, setLigandRefs] = useState<LigandRef[]>([]);
   const [ligandsReady, setLigandsReady] = useState(false);
+  const [ligandsFailed, setLigandsFailed] = useState<string[]>([]);
+  // analisi dei template lette dal selettore (anche dopo un download): il riquadro dei ligandi non le rilegge
+  const [templateInfo, setTemplateInfo] = useState<Record<string, TemplateAnalysis>>({});
   const [loopSource, setLoopSource] = useState<StructureSource | null>(null);
   const [loopOpen, setLoopOpen] = useState(false);
   const { data: info } = useAsync<SystemInfo>(() => api.systemInfo(), []);
@@ -269,7 +275,7 @@ export default function Modeling() {
     };
   }, [mode, docId, projectId]);
   const coverageRequest = useMemo(() => modelingCoverageRequest({
-    mode, target, templates, pirText, accession: targetAccession(target, projectSeqs),
+    mode, target, templates, pirText, accession: modelingAccession({ mode, target, pirText }, projectSeqs),
     plddtMin: predictedChosen && plddtTrim ? plddtMin : null,
   }), [mode, target, templates, pirText, projectSeqs, predictedChosen, plddtTrim, plddtMin]);
   const coverage = useCoverageCheck(coverageRequest);
@@ -402,7 +408,7 @@ export default function Modeling() {
               )}
               <div className="stack-sm">
                 <span className="small text-2" style={{ fontWeight: 550 }}>Template {mode === "pir" && "(stessi del PIR, nello stesso ordine)"}</span>
-                <TemplatePicker value={templates} onChange={setTemplates} ligands={false} />
+                <TemplatePicker value={templates} onChange={setTemplates} ligands={false} onAnalysis={(id, a) => setTemplateInfo((prev) => ({ ...prev, [id]: a }))} />
               </div>
               {coverageRequest && (
                 <div className="stack-sm">
@@ -431,8 +437,8 @@ export default function Modeling() {
                 <Segmented value={refinement} onChange={setRefinement} options={REFINEMENT.map((r) => ({ value: r.value, label: r.label }))} />
               </Field>
               {predictedChosen && <PlddtOption enabled={plddtTrim} threshold={plddtMin} onEnabled={setPlddtTrim} onThreshold={setPlddtMin} />}
-              <LigandPicker templates={templates} enabled={ligandsOn} onEnabled={setLigandsOn} selection={ligandSel}
-                onSelection={(sel, refs, ready) => { setLigandSel(sel); setLigandRefs(refs); setLigandsReady(ready); }} />
+              <LigandPicker templates={templates} known={templateInfo} enabled={ligandsOn} onEnabled={setLigandsOn} selection={ligandSel}
+                onSelection={(sel, refs, ready, failed) => { setLigandSel(sel); setLigandRefs(refs); setLigandsReady(ready); setLigandsFailed(failed); }} />
               <button className="btn btn-ghost btn-sm" style={{ justifySelf: "start" }} onClick={() => setAdvanced(!advanced)}>
                 <Icon name="chevron" size={13} /> Opzioni avanzate
               </button>
@@ -487,7 +493,9 @@ export default function Modeling() {
               )}
               <button className="btn btn-primary" disabled={!canSubmit || !!modellerMissing} onClick={submit}><Icon name="play" size={14} /> Avvia modellazione</button>
               {templates.some((t) => !t.chains.length) && <span className="tiny" style={{ color: "var(--warn)" }}>Seleziona almeno una catena per ogni template.</span>}
-              {ligandsOn && !ligandsReady && templates.length > 0 && <span className="tiny muted">Lettura dei ligandi dei template in corso…</span>}
+              {ligandsOn && !ligandsReady && templates.length > 0 && (ligandsFailed.length
+                ? <span className="tiny" style={{ color: "var(--warn)" }}>Ligandi di {ligandsFailed.join(", ")} non letti: usa «Riprova» nel riquadro dei ligandi oppure togli la spunta.</span>
+                : <span className="tiny muted">Lettura dei ligandi dei template in corso…</span>)}
             </div>
           </Card>
           <Card title="Raffinamento dei loop" sub="di un modello, un template o un file PDB/mmCIF">

@@ -4,6 +4,7 @@ import type { JobSummary, ParsedFile, Sequence, StructureSource, TemplateAnalysi
 import { isAlphaFoldId, plddtLabel, plddtTone } from "../lib/alphafold";
 import { useProject, useToast } from "../lib/context";
 import { useAsync } from "../lib/hooks";
+import { defaultTransfer } from "../lib/ligands";
 import { jobChoices, modelChoices, modelFiles } from "../lib/picker";
 import { FileButton, SequenceFileButton } from "./FileLoad";
 import { Icon } from "./Icon";
@@ -99,8 +100,15 @@ export function SequencePicker({ value, onChange, label = "Sequenza bersaglio" }
 
 /** Selezione di uno o più template della libreria con catene e ligandi. `ligands` = false nasconde la casella
  *  "Ligandi" del singolo template: in Modellazione la scelta dei gruppi da trasferire ha un riquadro proprio
- *  (LigandPicker), nell'Editor PIR i ligandi non entrano nell'allineamento (li aggiunge la modellazione). */
-export function TemplatePicker({ value, onChange, max = 10, ligands = true }: { value: TemplateRef[]; onChange: (v: TemplateRef[]) => void; max?: number; ligands?: boolean }) {
+ *  (LigandPicker), nell'Editor PIR i ligandi non entrano nell'allineamento (li aggiunge la modellazione).
+ *  `onAnalysis`: ogni analisi letta (anche dopo il download da RCSB o AlphaFold DB), per chi ne ha bisogno accanto. */
+export function TemplatePicker({ value, onChange, max = 10, ligands = true, onAnalysis }: {
+  value: TemplateRef[];
+  onChange: (v: TemplateRef[]) => void;
+  max?: number;
+  ligands?: boolean;
+  onAnalysis?: (id: string, analysis: TemplateAnalysis) => void;
+}) {
   const toast = useToast();
   const { data: templates, reload } = useAsync<TemplateItem[]>(() => api.templates(), []);
   const [adding, setAdding] = useState("");
@@ -132,6 +140,7 @@ export function TemplatePicker({ value, onChange, max = 10, ligands = true }: { 
         .then((a) => {
           setAnalysis((prev) => ({ ...prev, [t.id]: a }));
           setStatus((s) => ({ ...s, [t.id]: "ok" }));
+          onAnalysis?.(t.id, a);
           const current = valueRef.current.find((v) => v.id === t.id);
           if (current && !current.chains.length && a.chains.length) {
             onChange(valueRef.current.map((v) => (v.id === t.id ? { ...v, chains: [a.chains[0].chain] } : v)));
@@ -181,6 +190,8 @@ export function TemplatePicker({ value, onChange, max = 10, ligands = true }: { 
       </div>
       {value.map((t) => {
         const a = analysis[t.id];
+        // casella «Ligandi»: solo con gruppi che la scelta predefinita trasferisce davvero dalle catene scelte
+        const transfer = ligands && a ? defaultTransfer(t, a) : null;
         return (
           <div key={t.id} className="card flat" style={{ padding: "10px 12px" }}>
             <div className="row">
@@ -212,10 +223,10 @@ export function TemplatePicker({ value, onChange, max = 10, ligands = true }: { 
                   {c.chain} <span className="muted">({c.residues} aa)</span>
                 </label>
               ))}
-              {ligands && (a?.ligands.filter((l) => !l.additive).length ?? 0) > 0 && (
-                <label className="check right" title="Copia i ligandi HETATM del template nel modello">
+              {transfer && transfer.names.length > 0 && (
+                <label className="check right" title={`Copia nel modello ligandi, cofattori e metalli della scelta predefinita${transfer.excluded.length ? `; esclusi: ${transfer.excluded.join("; ")}` : ""}`}>
                   <input type="checkbox" checked={!!t.hetatm} onChange={(e) => onChange(value.map((v) => (v.id === t.id ? { ...v, hetatm: e.target.checked } : v)))} />
-                  Ligandi ({a!.ligands.filter((l) => !l.additive).map((l) => l.resname).filter((x, i, arr) => arr.indexOf(x) === i).join(", ")})
+                  Ligandi ({transfer.names.join(", ")})
                 </label>
               )}
             </div>

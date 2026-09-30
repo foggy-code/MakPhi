@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { CoverageAssessment, CoverageCheck, DisorderPrediction, Sequence, TargetDomain } from "../api/types";
 import {
-  assessmentMap, coverageBadge, coverageFootnote, disorderSummary, featureTracks, hitAssessment, hitRanges, lowComplexitySummary, modelingCoverageRequest,
-  sortedWarnings, span, targetAccession, TRACK_COLOR,
+  assessmentMap, coverageBadge, coverageFootnote, disorderSummary, featureTracks, hitAssessment, hitRanges, lowComplexitySummary, modelingAccession,
+  modelingCoverageRequest, sortedWarnings, span, targetAccession, TRACK_COLOR,
 } from "./disorder";
 
 // Risposte di /api/bio/disorder come le calcola il backend (tests/test_disorder.py): α-sinucleina (P37840) e ubiquitina
@@ -71,6 +71,20 @@ describe("richieste di verifica", () => {
     expect(targetAccession({ name: "sp|P0CG48|UBC_HUMAN", sequence: "MQIFVKTLTG" }, seqs)).toBe("P0CG48");
     expect(targetAccession({ name: "target", sequence: "MQIFVKTLTG" }, seqs)).toBe("");
     expect(targetAccession({ name: "x", sequence: "" }, null)).toBe("");
+  });
+  it("modellazione con un PIR: l'accessione è quella del bersaglio del documento, non del selettore nascosto", () => {
+    const pir = `>P1;1ABC_A\nstructureX:1ABC_A:1:A:+64:A:::-1.00:-1.00\n${SNCA}*\n\n>P1;target\nsequence:target:::::::0.00:0.00\n`
+      + `${SNCA.slice(0, 30)}-\n${SNCA.slice(30)}*\n`;
+    // arrivo dall'Editor PIR: selettore vuoto, bersaglio del PIR = sequenza del progetto importata da UniProt
+    expect(modelingAccession({ mode: "pir", target: { name: "", sequence: "" }, pirText: pir }, seqs)).toBe("P37840");
+    // una sequenza scelta prima in modalità automatica (un'altra proteina) non conta in modalità PIR
+    const other = { name: "sp|P0CG48|UBC_HUMAN", sequence: "MQIFVKTLTG" };
+    expect(modelingAccession({ mode: "pir", target: other, pirText: pir }, seqs)).toBe("P37840");
+    expect(modelingAccession({ mode: "auto", target: other, pirText: pir }, seqs)).toBe("P0CG48");
+    // intestazione UniProt nel codice del bersaglio; nessun PIR: nessuna accessione
+    const named = ">P1;sp|P0CG48|UBC_HUMAN\nsequence:x:::::::0.00:0.00\nMQIF*\n";
+    expect(modelingAccession({ mode: "pir", target: other, pirText: named }, [])).toBe("P0CG48");
+    expect(modelingAccession({ mode: "pir", target: other, pirText: null }, seqs)).toBe("");
   });
   it("modellazione: sequenza e template con catene, oppure il PIR; null finché non è pronta", () => {
     const base = { mode: "auto" as const, target: { name: "t", sequence: "mqif vktl\n" }, pirText: null, accession: "", plddtMin: null };

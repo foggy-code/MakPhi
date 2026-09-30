@@ -83,6 +83,51 @@ def test_conservation_from_unaligned_sequences(client_with_ubq):
     assert "allineamento multiplo di 4 sequenze" in log
 
 
+def test_conservation_with_selenocysteine(client_with_ubq):
+    """Una selenoproteina (U) nel FASTA: il job completa, sia con le righe già allineate sia con l'allineamento
+    center-star integrato, che conserva le lettere originali."""
+    c = client_with_ubq
+    seleno = HUMAN_UB[:10] + "U" + HUMAN_UB[11:]
+    job = _analysis(c, {"source": UBQ, "msa": {"text": _fasta([seleno, *_aligned_rows()[1:]])}})
+    assert job["result"]["interactions"]["summary"]["salt_bridges"] == 3
+    assert job["result"]["conservation"]["chains"][0]["mapped"] == 76
+    text = _fasta([seleno, YEAST_UB, HUMAN_UB[5:], YEAST_UB[:60]])
+    job = _analysis(c, {"source": UBQ, "msa": {"text": text, "tool": "builtin", "row": "s0"}})
+    cons = job["result"]["conservation"]
+    assert cons["source"].startswith("allineamento multiplo calcolato") and cons["chains"][0]["row"] == "s0"
+    assert {r["resnum"]: r for r in cons["residues"]}["11"]["row_aa"] == "U"
+
+
+def test_row_by_the_name_in_the_file(client_with_ubq):
+    """La riga si indica anche con il nome del FASTA (le righe sono rinominate con sanitize_code); una riga che non
+    c'è è un errore prima di accodare il job."""
+    c = client_with_ubq
+    rows = _aligned_rows()
+    text = f">sp|P0CG47|UBB_HUMAN Polyubiquitin-B\n{rows[0]}\n" + _fasta(rows[1:])
+    for row in ("sp|P0CG47|UBB_HUMAN", "sp_P0CG47_UBB_HUMAN", "sp|P0CG47|UBB_HUMAN Polyubiquitin-B",
+                ">sp|P0CG47|UBB_HUMAN"):
+        job = _analysis(c, {"source": UBQ, "msa": {"text": text, "row": row}})
+        assert job["result"]["conservation"]["chains"][0]["row"] == "sp_P0CG47_UBB_HUMAN", row
+    r = c.post("/api/analysis", json={"source": UBQ, "msa": {"text": text, "row": "sp|Q00000|NOPE"}})
+    assert r.status_code == 400 and r.json()["error"]["code"] == "conservation_invalid"
+    assert "non è nell'allineamento" in r.json()["error"]["message"] and "sp_P0CG47_UBB_HUMAN" in \
+        r.json()["error"]["message"]
+    # sequenze non allineate: i nomi restano quelli dei record nell'allineamento multiplo
+    unaligned = f">sp|P0CG47|UBB_HUMAN\n{HUMAN_UB}\n>yeast\n{YEAST_UB[:60]}\n"
+    job = _analysis(c, {"source": UBQ, "msa": {"text": unaligned, "tool": "builtin", "row": "sp|P0CG47|UBB_HUMAN"}})
+    assert job["result"]["conservation"]["chains"][0]["row"] == "sp_P0CG47_UBB_HUMAN"
+    r = c.post("/api/analysis", json={"source": UBQ, "msa": {"text": unaligned, "row": "human"}})
+    assert r.status_code == 400 and r.json()["error"]["code"] == "conservation_invalid"
+    # job di allineamento: i nomi del job sono già sanificati
+    records = [{"name": "sp|P0CG47|UBB_HUMAN", "sequence": rows[0]}, {"name": "b", "sequence": rows[1]}]
+    aln = c.post("/api/align", json={"mode": "multiple", "records": records, "tool": "builtin"}).json()
+    assert wait_job(c, aln["id"])["status"] == "completed"
+    job = _analysis(c, {"source": UBQ, "msa": {"job_id": aln["id"], "row": "sp|P0CG47|UBB_HUMAN"}})
+    assert job["result"]["conservation"]["chains"][0]["row"] == "sp_P0CG47_UBB_HUMAN"
+    r = c.post("/api/analysis", json={"source": UBQ, "msa": {"job_id": aln["id"], "row": "zzz"}})
+    assert r.status_code == 400 and r.json()["error"]["code"] == "conservation_invalid"
+
+
 def test_conservation_from_alignment_job(client_with_ubq):
     c = client_with_ubq
     records = [{"name": f"s{k}", "sequence": row} for k, row in enumerate(_aligned_rows())]
@@ -113,6 +158,18 @@ def test_request_errors(client_with_ubq):
     assert r.status_code == 422
 
 
+def test_incomplete_sources_are_clear_errors(client_with_ubq):
+    """Sorgenti senza il file o il job (campi facoltativi nulli): errore chiaro o nessuna analisi, mai un 500."""
+    c = client_with_ubq
+    for params in ({"type": "upload"}, {"type": "job", "job_id": "abc"}, {"type": "job"}, {"type": "template"}):
+        r = c.get("/api/analysis/latest", params=params)
+        assert r.status_code == 200 and r.json()["job_id"] is None, (params, r.text)
+    for source in ({"type": "upload"}, {"type": "job", "job_id": "abc"}, {"type": "job", "file": "m.pdb"}):
+        for route in ("/api/analysis", "/api/quality"):
+            r = c.post(route, json={"source": source})
+            assert r.status_code == 400 and r.json()["error"]["code"] == "invalid_source", (route, source, r.text)
+
+
 def test_conservation_failure_fails_the_job(client_with_ubq):
     """Allineamento che non contiene la sequenza della struttura: job fallito con il motivo."""
     unrelated = "ACDEFGHIKLMNPQRSTVWY" * 4
@@ -135,6 +192,36 @@ def test_latest_by_source_and_fingerprint(client_with_ubq):
     assert c.get("/api/analysis/latest", params={"type": "template", "id": tid}).json()["job_id"] == dimer["id"]
     _upload(c, "1UBQ.pdb", tid)
     assert c.get("/api/analysis/latest", params={"type": "template", "id": tid}).json()["job_id"] is None
+
+
+def test_latest_reports_the_running_analysis(client_with_ubq, monkeypatch):
+    """Un'analisi in corso sulla stessa struttura è `active_job_id` (la pagina Qualità la riprende invece di proporne
+    un'altra); finita, diventa `job_id`."""
+    from bioloom.services import analysis as analysis_service
+
+    c = client_with_ubq
+    first = _analysis(c, {"source": UBQ})
+    gate, started = threading.Event(), threading.Event()
+    original = analysis_service.interactions.analyze
+
+    def slow(model):
+        started.set()
+        assert gate.wait(30)
+        return original(model)
+
+    monkeypatch.setattr(analysis_service.interactions, "analyze", slow)
+    job = c.post("/api/analysis", json={"source": UBQ}).json()
+    try:
+        assert started.wait(30)
+        latest = c.get("/api/analysis/latest", params={"type": "template", "id": "1UBQ"}).json()
+        assert latest["job_id"] == first["id"] and latest["active_job_id"] == job["id"]
+        other = c.get("/api/analysis/latest", params={"type": "template", "id": "2XYZ"}).json()
+        assert other == {"job_id": None, "finished_at": None, "active_job_id": None}
+    finally:
+        gate.set()
+    assert wait_job(c, job["id"])["status"] == "completed"
+    latest = c.get("/api/analysis/latest", params={"type": "template", "id": "1UBQ"}).json()
+    assert latest["job_id"] == job["id"] and latest["active_job_id"] is None
 
 
 def test_latest_reads_only_the_source(client_with_ubq, monkeypatch):
@@ -245,6 +332,7 @@ def test_report_section_render_and_escape():
     assert "&lt;b&gt;X&lt;/b&gt;" in html and "<b>X</b>" not in html and "limiti &amp; note" in html
     assert '<span class="tag ok">compatibile</span>' in html and "812" in html and "61%" in html
     assert "Richardson" in html
+    assert html.count("<section") == html.count("</section>")
     assert 'id="analisi"' not in report.render({**data, "analysis": None})
     assert 'id="analisi"' not in report.render({**data, "analysis": {"disulfides": [], "interfaces": []}})
 

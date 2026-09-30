@@ -261,6 +261,33 @@ export function analysisColoring(result: AnalysisResult | null | undefined, by: 
 // ---------------------------------------------------------------------------------- allineamento per la conservazione
 export type MsaMode = "none" | "job" | "text";
 
+/** Stato della scheda Interazioni conservato dalla pagina Qualità, che smonta il pannello cambiando scheda: job
+ *  seguito (anche in coda o in corso) e scelte dell'allineamento, per la struttura `sourceKey`. */
+export interface AnalysisPanelMemory {
+  sourceKey: string;
+  jobId: string | null;
+  msaMode: MsaMode;
+  msaJob: string;
+  msaText: string;
+  row: string;
+}
+
+/** Stato iniziale del pannello: quello conservato per la stessa struttura, altrimenti vuoto; `initialJob` (link a un
+ *  job) vale sempre. */
+export function initialPanelState(sourceKey: string, memory: AnalysisPanelMemory | null | undefined, initialJob?: string | null): AnalysisPanelMemory {
+  const kept = memory && memory.sourceKey === sourceKey ? memory : null;
+  return {
+    sourceKey, jobId: initialJob ?? kept?.jobId ?? null, msaMode: kept?.msaMode ?? "none", msaJob: kept?.msaJob ?? "",
+    msaText: kept?.msaText ?? "", row: kept?.row ?? "",
+  };
+}
+
+/** Job da seguire dopo la ricerca dell'analisi più recente: quello già seguito, poi quello in coda o in corso sulla
+ *  stessa struttura (lanciato dopo l'ultima completata), poi l'ultimo completato. */
+export function followedAnalysis(current: string | null, latest: { job_id: string | null; active_job_id?: string | null }): string | null {
+  return current ?? latest.active_job_id ?? latest.job_id ?? null;
+}
+
 /** Allineamento della richiesta, oppure il motivo per cui non si può ancora lanciare. */
 export function msaRequest(mode: MsaMode, jobId: string, text: string, row: string): { msa: AnalysisRequest["msa"]; error: string | null } {
   const r = row.trim() || undefined;

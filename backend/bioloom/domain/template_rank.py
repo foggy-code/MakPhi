@@ -619,8 +619,10 @@ def select_complementary(hits: list[dict], query_length: int, *, max_templates: 
          scartano;
        - altrimenti entrano se migliorano l'identità locale (+20 punti sulla finestra di 9 residui) in almeno
          `min_new` residui, e si scartano se non aggiungono nulla.
-    Due template scelti senza residui in comune restano senza vincoli reciproci: MODELLER costruisce ogni regione dal
-    suo template, ma l'orientamento relativo delle due regioni non è vincolato (nota nella motivazione).
+    Un template scelto con meno di `MIN_SHARED` residui in comune con ciascuno di quelli già scelti (e da un'altra
+    voce PDB: le catene della stessa voce condividono le coordinate) resta senza vincoli reciproci: MODELLER costruisce
+    ogni regione dal suo template, ma l'orientamento relativo delle regioni non è vincolato (nota nella motivazione,
+    `unanchored` nella scelta; la modellazione lo ripete negli avvisi, `domain/multitemplate.unanchored`).
     """
     length = max(1, int(query_length or 0))
     max_templates = max(1, min(int(max_templates), MAX_TEMPLATES_LIMIT))
@@ -668,16 +670,22 @@ def select_complementary(hits: list[dict], query_length: int, *, max_templates: 
             if shared >= MIN_SHARED and mutual is not None and mutual > REDUNDANT_IDENTITY:
                 twin = (other["template_id"], mutual, shared)
                 break
-        overlap = any(p in covered for p in cov)
+        # ancoraggio: residui in comune con un solo template scelto (la regione da sovrapporre), o la stessa voce
+        shared_max = max((sum(1 for p in cov if p in other_map) for other_map in chosen_maps), default=0)
+        same_entry = bool(hit.get("pdb_id")) and any(o.get("pdb_id") == hit.get("pdb_id") for o in chosen)
         if len(new) >= min_new:
             reason = f"copre {len(new)} residui del bersaglio non coperti ({_ranges(new)})"
             if twin:
                 reason += (f"; nella regione comune è quasi identico a {twin[0]} (identità reciproca {_n(twin[1])}% "
                            f"su {twin[2]} residui)")
-            if not overlap:
-                reason += ("; nessun residuo in comune con i template già scelti: l'orientamento relativo delle "
-                           "regioni non è vincolato")
+            unanchored = shared_max < MIN_SHARED and not same_entry
+            if unanchored:
+                common = "nessun residuo" if not shared_max else \
+                    f"solo {shared_max} {'residuo' if shared_max == 1 else 'residui'}"
+                reason += (f"; {common} in comune con i template già scelti (minimo {MIN_SHARED}) e un'altra "
+                           "struttura: l'orientamento relativo delle regioni non è vincolato")
             choose(hit, cov, "complementare", reason + ".", new)
+            chosen[-1]["unanchored"] = unanchored
             continue
         if twin:
             excluded.append({"template_id": tid, "reason": f"ridondante: quasi identico a {twin[0]} (identità "

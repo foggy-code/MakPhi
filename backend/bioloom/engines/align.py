@@ -74,11 +74,24 @@ def _restore(aligned: str, original: str) -> str:
     return "".join(c if c == "-" else next(it, c) for c in aligned)
 
 
+def _scorable(seq: str, aligner, kind: str) -> str:
+    """Sequenza con le sole lettere della matrice (stessa lunghezza): U, O, J delle proteine → X (BLOSUM62 non le
+    ha), U degli acidi nucleici → T come nel pairwise, altre lettere → N."""
+    alphabet = aligner.substitution_matrix.alphabet
+    if kind == "nucleic":
+        seq = seq.replace("U", "T")
+    other = "N" if kind == "nucleic" else "X"
+    return "".join(c if c in alphabet else other for c in seq)
+
+
 def center_star(records: list[SeqRecord], kind: str = "protein", ctx: Optional[JobContext] = None) -> list[str]:
-    """MSA center-star: sequenza centrale = massimo punteggio totale, poi fusione dei gap progressiva."""
+    """MSA center-star: sequenza centrale = massimo punteggio totale, poi fusione dei gap progressiva.
+
+    Le lettere assenti dalla matrice (selenocisteina U, pirrolisina O…) si allineano come X; le righe restituite
+    hanno le lettere originali."""
     aligner = _aligner("global", "", 10.0, 0.5, kind)
     n = len(records)
-    seqs = [r.sequence for r in records]
+    seqs = [_scorable(r.sequence, aligner, kind) for r in records]
     scores = np.zeros((n, n))
     for i in range(n):
         for j in range(i + 1, n):
@@ -121,7 +134,7 @@ def center_star(records: list[SeqRecord], kind: str = "protein", ctx: Optional[J
         msa = {idx: "".join(row) for idx, row in new_rows.items()}
         msa[k] = "".join(new_k)
         msa_center = msa[center]
-    return [msa[i] for i in range(n)]
+    return [_restore(msa[i], records[i].sequence) for i in range(n)]
 
 
 def multiple(records: list[SeqRecord], ctx: JobContext, tool: str = "auto", kind: str = "protein",

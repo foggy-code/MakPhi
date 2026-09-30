@@ -178,9 +178,10 @@ esclusi) in pochi secondi:
 - **Conservazione:** con un allineamento multiplo (un job di Allineamenti del progetto, oppure sequenze o un file
   FASTA/Clustal/Stockholm incollati o caricati; le sequenze non allineate si allineano prima) la conservazione di ogni
   colonna (0–1, entropia di Shannon con la penalità per i gap) viene riportata sui residui della struttura e colora il
-  3D con la tavolozza di ConSurf.
+  3D con la tavolozza di ConSurf. La riga della struttura si può indicare con il nome del FASTA (`sp|P0CG47|UBB_HUMAN`)
+  o con quello mostrato da BioLoom (`sp_P0CG47_UBB_HUMAN`); selenocisteina (U) e pirrolisina (O) sono ammesse.
 - L'analisi è un job ("Analisi strutturale" nella pagina Job, link stabile `/quality?ajob=<id>`); la scheda mostra la
-  più recente per la stessa struttura. Il **report HTML** del modello o dell'analisi di qualità riassume interfacce e
+  più recente per la stessa struttura, oppure quella in corso (anche dopo aver cambiato scheda o ricaricato la pagina). Il **report HTML** del modello o dell'analisi di qualità riassume interfacce e
   ponti disolfuro, se l'analisi della stessa struttura li ha trovati.
 
 ## Report del modello
@@ -218,7 +219,11 @@ L'archivio ZIP della pipeline contiene un report per ogni sequenza completata (c
   copertura è quella complessiva, l'identità quella del template principale.
 - Con più template MODELLER allinea i template fra loro (`salign`); se questo sposta un template rispetto al bersaglio
   (succede con template che coprono regioni diverse), BioLoom usa l'allineamento di ogni template sul bersaglio
-  (`align2d`) e lo scrive nel log.
+  (`align2d`) e lo scrive nel log. Se l'unione non è possibile (template a più catene) l'allineamento spostato resta,
+  con un avviso nel risultato e nel report.
+- Template di strutture diverse con meno di 10 residui del bersaglio in comune non vincolano la posizione reciproca
+  delle loro regioni: la motivazione dei consigliati e gli avvisi della modellazione lo dicono («Orientamento relativo
+  non vincolato»).
 - Le ricerche salvate nella cache dalle versioni precedenti (senza R-free e stato oligomerico) si rifanno la prima
   volta; senza rete i metadati RCSB già in cache restano utilizzabili.
 
@@ -250,11 +255,13 @@ sperimentale**, con il pLDDT medio (confidenza della predizione, 0–100).
   delle catene scelte con la classe (metallo, cofattore noto come eme, FAD, NAD, ATP, SAM, PLP, CoA…, additivo, altro
   ligando). Gli additivi di cristallizzazione (SO₄, glicerolo, PEG, tamponi…) e gli ioni Na⁺/K⁺ del tampone sono
   deselezionati per default, con il motivo; le acque non si trasferiscono. MODELLER copia nel modello solo i gruppi
-  scelti, anche partendo da un documento PIR (le colonne «.» dell'allineamento si aggiornano da sole). La Libreria
-  template mostra la classe di ogni gruppo.
+  scelti, anche partendo da un documento PIR (le colonne «.» dell'allineamento si aggiornano da sole). Con più
+  template, lo stesso gruppo nello stesso sito (per esempio l'eme di due globine) diventa un solo gruppo del modello,
+  vincolato da tutti i template. SAM, SAH e gli amminoacidi liberi sono ligandi; i residui modificati legati alla
+  catena (MSE, SEP…) no. La Libreria template mostra la classe di ogni gruppo.
 - **Verifica:** dopo la modellazione, e in ogni analisi di qualità di una struttura con ligandi, BioLoom controlla per
   ogni gruppo i residui vicini (entro 4 Å), gli scontri (sotto 2,2 Å) e, per i metalli, gli atomi che li coordinano:
-  distanze rispetto ai valori attesi (Harding 2006), numero di coordinazione e geometria più probabile
+  distanze rispetto ai valori attesi (Harding 2006; Ni da CheckMyMetal), numero di coordinazione e geometria più probabile
   (tetraedrica, ottaedrica…, come CheckMyMetal). Nei modelli confronta il sito con quello del template: i residui che
   coordinavano il metallo lo coordinano ancora? L'esito è **buono**, **da controllare** o **problematico**, con la
   motivazione. Il voto A–D non cambia.

@@ -45,26 +45,54 @@ MAX_UNALIGNED = 200  # come l'allineamento multiplo della pagina Allineamenti
 LOOKUP_LIMIT = 200  # analisi completate esaminate per trovare la più recente di una struttura
 
 
-def _records(text: str) -> tuple[list[str], list[str], bool]:
-    """(nomi univoci, sequenze, già allineate) da un testo in un formato qualunque di `domain/fileformats`."""
+def _records(text: str) -> tuple[list[str], list[str], bool, dict[str, str]]:
+    """(nomi univoci, sequenze, già allineate, alias) da un testo in un formato qualunque di `domain/fileformats`.
+
+    I nomi sono sanificati (`sanitize_code`, poi resi univoci): `alias` porta dal nome del file (intestazione intera,
+    primo token, forma sanificata) al nome univoco, così la riga indicata con il nome del FASTA si ritrova. Con nomi
+    ripetuti vale la prima occorrenza."""
     parsed = fileformats.parse_records(text.encode("utf-8"), "allineamento")
     names: list[str] = []
     rows: list[str] = []
+    aliases: dict[str, str] = {}
     used: set[str] = set()
     for k, rec in enumerate(parsed["records"]):
+        raw = str(rec.get("name") or "").strip()
         base = sequences.sanitize_code(rec.get("name"), default=f"seq{k + 1}")
         name, n = base, 2
         while name in used:
             name, n = f"{base}_{n}", n + 1
         used.add(name)
         names.append(name)
+        full = f"{raw} {rec.get('description') or ''}".strip()
+        for alias in (full, raw, raw.split()[0] if raw.split() else "", base):
+            if alias:
+                aliases.setdefault(alias, name)
         rows.append(str(rec.get("aligned") or rec.get("sequence") or "").upper())
     aligned = bool(parsed["aligned"]) and len({len(r) for r in rows}) == 1
     if not aligned and len({len(r) for r in rows}) == 1 and all(r.isalpha() for r in rows):
         aligned = True  # stessa lunghezza senza gap: un allineamento senza inserzioni
     if not aligned:
         rows = ["".join(c for c in r if c.isalpha()) for r in rows]
-    return names, rows, aligned
+    return names, rows, aligned, aliases
+
+
+def _resolve_row(row: Optional[str], names: list[str], aliases: Optional[dict[str, str]] = None) -> Optional[str]:
+    """Nome della riga indicata dall'utente fra quelli dell'allineamento (None = scelta automatica).
+
+    Vale il nome dell'allineamento, il nome originale del file (intestazione intera o primo token) oppure la sua forma
+    sanificata (`sp|P0CG47|UBB_HUMAN` → `sp_P0CG47_UBB_HUMAN`, come i nomi delle righe). Errore chiaro altrimenti."""
+    row = str(row or "").strip()
+    if not row:
+        return None
+    aliases = aliases or {}
+    for candidate in (row, row.split()[0], sequences.sanitize_code(row, default="")):
+        if candidate in names:
+            return candidate
+        if candidate in aliases:
+            return aliases[candidate]
+    shown = ", ".join(names[:8]) + (" …" if len(names) > 8 else "")
+    raise AppError(f"La riga {row} non è nell'allineamento (righe: {shown}).", code="conservation_invalid")
 
 
 class AnalysisService:
@@ -82,10 +110,12 @@ class AnalysisService:
         msa = params.get("msa")
         if not msa:
             return
+        aliases: dict[str, str] = {}
         if msa.get("job_id"):
-            self._job_alignment(str(msa["job_id"]))
+            names, rows, _description = self._job_alignment(str(msa["job_id"]))
+            aligned = True
         elif msa.get("text"):
-            names, rows, aligned = _records(str(msa["text"]))
+            names, rows, aligned, aliases = _records(str(msa["text"]))
             if len(rows) < 2:
                 raise AppError("Per la conservazione servono almeno due sequenze.", code="conservation_invalid")
             if aligned:
@@ -99,6 +129,11 @@ class AnalysisService:
         else:
             raise AppError("Indica un job di allineamento oppure le sequenze per la conservazione.",
                            code="conservation_invalid")
+        # riga indicata: deve esserci (con il nome dell'allineamento o quello del file) e avere dei residui; le
+        # sequenze non allineate mantengono i loro nomi nell'allineamento multiplo
+        row = _resolve_row(msa.get("row"), names, aliases)
+        if row is not None and aligned:
+            conservation.row_index(names, [str(r).upper() for r in rows], row)
 
     def _job_alignment(self, job_id: str) -> tuple[list[str], list[str], str]:
         job = self.jobs.get(job_id)
@@ -114,12 +149,13 @@ class AnalysisService:
         return [str(i) for i in ids], [str(s) for s in aligned], \
             f"job di allineamento {job_id}: {result.get('method') or result.get('mode') or 'allineamento'}"
 
-    def _alignment(self, ctx: JobContext, msa: dict) -> tuple[list[str], list[str], str]:
+    def _alignment(self, ctx: JobContext, msa: dict) -> tuple[list[str], list[str], str, dict[str, str]]:
+        """(nomi, righe allineate, descrizione, alias dei nomi originali) dell'allineamento della conservazione."""
         if msa.get("job_id"):
-            return self._job_alignment(str(msa["job_id"]))
-        names, rows, aligned = _records(str(msa.get("text") or ""))
+            return (*self._job_alignment(str(msa["job_id"])), {})
+        names, rows, aligned, aliases = _records(str(msa.get("text") or ""))
         if aligned:
-            return names, rows, "allineamento fornito"
+            return names, rows, "allineamento fornito", aliases
         if len(rows) > MAX_UNALIGNED:
             raise AppError(f"Da allineare al massimo {MAX_UNALIGNED} sequenze.", code="conservation_invalid")
         records = []
@@ -129,7 +165,8 @@ class AnalysisService:
         ctx.log(f"Sequenze non allineate: allineamento multiplo di {len(records)} sequenze")
         res = align.multiple(records, ctx, tool=str(msa.get("tool") or "auto"),
                              use_cache=bool(msa.get("use_cache", True)))
-        return list(res["ids"]), list(res["aligned"]), f"allineamento multiplo calcolato: {res.get('method')}"
+        return (list(res["ids"]), list(res["aligned"]), f"allineamento multiplo calcolato: {res.get('method')}",
+                aliases)
 
     # ------------------------------------------------------------------------------ job
     def handle(self, ctx: JobContext, p: dict) -> dict:
@@ -162,10 +199,10 @@ class AnalysisService:
         if msa:
             ctx.progress(0.7, "Allineamento per la conservazione")
             t = time.perf_counter()
-            ids, rows, description = self._alignment(ctx, msa)
+            ids, rows, description, aliases = self._alignment(ctx, msa)
             ctx.progress(0.85, "Conservazione per residuo")
             cons = conservation.compute(model, ids, rows, chains=list(p.get("chains") or []) or None,
-                                        row=str(msa.get("row") or "").strip() or None, source=description,
+                                        row=_resolve_row(msa.get("row"), ids, aliases), source=description,
                                         check=ctx.check)
             timings["conservazione"] = time.perf_counter() - t
         total = time.perf_counter() - started
@@ -187,7 +224,7 @@ class AnalysisService:
         key = source_key(source)
         if key == ("?",):
             return None
-        for row in self._completed_sources():
+        for row in self._sources():
             if source_key(row["source"]) != key:
                 continue
             try:
@@ -202,11 +239,26 @@ class AnalysisService:
             return job
         return None
 
-    def _completed_sources(self) -> list[dict]:
-        """(id, sorgente) delle analisi completate, dalla più recente. Si legge solo `params.source` (json_extract):
-        i parametri possono contenere un allineamento incollato fino a 10 MB. Senza le funzioni JSON di SQLite si
-        leggono i parametri interi."""
-        sql = ("FROM jobs WHERE kind=? AND status='completed' ORDER BY finished_at DESC, rowid DESC LIMIT ?")
+    def active(self, source: dict) -> Optional[dict]:
+        """Job `analysis` in coda o in corso più recente sulla stessa sorgente, oppure None: la pagina Qualità lo
+        riprende a seguire (cambio di scheda, pagina ricaricata) invece di proporre di lanciarne un altro."""
+        key = source_key(source)
+        if key == ("?",):
+            return None
+        for row in self._sources("status IN ('queued','running')", "created_at DESC"):
+            if source_key(row["source"]) != key:
+                continue
+            try:
+                return self.jobs.get(row["id"])
+            except AppError:  # eliminato nel frattempo
+                continue
+        return None
+
+    def _sources(self, where: str = "status='completed'", order: str = "finished_at DESC") -> list[dict]:
+        """(id, sorgente) delle analisi nello stato `where` (predefinito: completate), dalla più recente. Si legge
+        solo `params.source` (json_extract): i parametri possono contenere un allineamento incollato fino a 10 MB.
+        Senza le funzioni JSON di SQLite si leggono i parametri interi. `where` e `order` sono costanti del modulo."""
+        sql = f"FROM jobs WHERE kind=? AND {where} ORDER BY {order}, rowid DESC LIMIT ?"
         try:
             rows = self.jobs.db.query(f"SELECT id, json_extract(params, '$.source') AS source {sql}",
                                       (KIND, LOOKUP_LIMIT))

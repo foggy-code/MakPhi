@@ -284,7 +284,7 @@ export const api = {
   latestAnalysis: (source: StructureSource) => {
     const params = new URLSearchParams({ type: source.type });
     for (const key of ["id", "job_id", "file"] as const) if (source[key]) params.set(key, String(source[key]));
-    return get<{ job_id: string | null; finished_at: string | null }>(`/api/analysis/latest?${params}`);
+    return get<{ job_id: string | null; finished_at: string | null; active_job_id?: string | null }>(`/api/analysis/latest?${params}`);
   },
 };
 

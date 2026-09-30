@@ -18,8 +18,11 @@ import { compareLink } from "../lib/compare";
 import { useProject, useToast } from "../lib/context";
 import { fmtNum, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
-import { coordinationLines, ligandFocus, type CoordinationLine } from "../lib/ligands";
-import { alignedPerResidue, isProblemResidue, problemResidues, shownReportSource } from "../lib/qualityReport";
+import type { AnalysisPanelMemory } from "../lib/interactions";
+import type { CoordinationLine } from "../lib/ligands";
+import {
+  alignedPerResidue, clashHighlight, type Highlight, isProblemResidue, ligandHighlight, problemResidues, residuesHighlight, shownReportSource,
+} from "../lib/qualityReport";
 import {
   colorOptions, isPlddt, QMEAN_LOCAL_THRESHOLD, regionResidues, residueColoring, resiNumber, SIGNAL_LABEL, type ColorBy, type ColorOption, type ResidueRef,
 } from "../lib/residueColoring";
@@ -364,6 +367,8 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
   // ligando scelto nella sezione "Ligandi e metalli": evidenziato nel 3D con le linee di coordinazione
   const [ligand, setLigand] = useState<LigandGroupCheck | null>(null);
   const [lines, setLines] = useState<CoordinationLine[]>([]);
+  // scheda Interazioni: job seguito e scelte dell'allineamento, conservati quando si cambia scheda
+  const [analysisMemory, setAnalysisMemory] = useState<AnalysisPanelMemory | null>(null);
   // vista 3D per il report: c'è solo con la scheda 3D aperta
   const viewer = useRef<Viewer3DHandle>(null);
   const g = report.grade;
@@ -396,13 +401,17 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
     setColorBy("qmean");
   };
 
+  /** Evidenza nel 3D (lib/qualityReport: solo la scelta di un ligando tiene linee e zoom sul sito), centrata. */
+  const show = (h: Highlight, center = true) => {
+    setFocus(h.focus);
+    setSelected(h.selected);
+    setLigand(h.ligand);
+    setLines(h.lines);
+    if (center) setCenterKey((k) => k + 1);
+  };
   /** Dal grafico o dalla tabella: evidenzia e centra nel 3D. */
   const pick = (r: ResidueRef) => {
-    setLigand(null);
-    setLines([]);
-    setSelected({ chain: r.chain, resnum: r.resnum });
-    setFocus([{ chain: r.chain, resi: resiNumber(r.resnum) }]);
-    setCenterKey((k) => k + 1);
+    show(residuesHighlight([{ chain: r.chain, resi: resiNumber(r.resnum) }], { chain: r.chain, resnum: r.resnum }));
     setTab("3d");
   };
   /** Dal 3D: seleziona il residuo (tabella, grafici, scheda) senza spostare la vista. */
@@ -411,21 +420,13 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
     setFocus([{ chain: r.chain, resi: resiNumber(r.resnum) }]);
   };
   const pickLigand = (g: LigandGroupCheck) => {
-    setLigand(g);
-    setSelected(null);
-    setFocus(ligandFocus(g));
-    setLines(coordinationLines(g));
-    setCenterKey((k) => k + 1);
+    show(ligandHighlight(g));
     setTab("3d");
   };
   const pickRegion = (region: ConsensusRegion) => {
-    setLigand(null);
-    setLines([]);
     const res = regionResidues(report, region);
-    setSelected(res[0] ?? null);
-    setFocus(res.map((r) => ({ chain: r.chain, resi: resiNumber(r.resnum) })));
+    show(residuesHighlight(res.map((r) => ({ chain: r.chain, resi: resiNumber(r.resnum) })), res[0] ?? null));
     setColorBy("consensus");
-    setCenterKey((k) => k + 1);
     setTab("3d");
   };
   // stessa definizione del filtro "Solo residui problematici" della tabella
@@ -539,11 +540,7 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
                 <tbody>
                   {report.clashes.clashes.map((c, i) => (
                     <tr key={i} className="clickable" onClick={() => {
-                      const [c1, r1] = c.atom1.split(" ");
-                      const [c2, r2] = c.atom2.split(" ");
-                      setSelected({ chain: c1, resnum: r1 });
-                      setFocus([{ chain: c1, resi: resiNumber(r1) }, { chain: c2, resi: resiNumber(r2) }]);
-                      setCenterKey((k) => k + 1);
+                      show(clashHighlight(c));
                       setTab("3d");
                     }}>
                       <td className="mono">{c.atom1}</td><td className="mono">{c.atom2}</td><td className="num">{c.distance.toFixed(2)}</td><td className="num">{c.overlap.toFixed(2)}</td>
@@ -560,8 +557,8 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
             <div className="stack-sm">
               <div className="row small">
                 <ColorBySelect options={options} value={shownBy} onChange={setColorBy} />
-                <button className="btn btn-sm" onClick={() => { setFocus(problems); setCenterKey((k) => k + 1); }}>Evidenzia tutti i residui problematici ({problems.length})</button>
-                <button className="btn btn-sm btn-ghost" onClick={() => { setFocus([]); setSelected(null); setLigand(null); setLines([]); }}>Nessuna evidenza</button>
+                <button className="btn btn-sm" onClick={() => show(residuesHighlight(problems, selected))}>Evidenzia tutti i residui problematici ({problems.length})</button>
+                <button className="btn btn-sm btn-ghost" onClick={() => show(residuesHighlight([]), false)}>Nessuna evidenza</button>
                 <span className="muted">Evidenziati a bastoncini arancioni · clic su un residuo per selezionarlo.{lines.length > 0 && ligand && ` Linee tratteggiate: coordinazione di ${ligand.resname} ${ligand.chain}${ligand.resnum}.`}</span>
               </div>
               <Viewer3D url={url} highlight={focus} format={url.endsWith(".cif") ? "cif" : "pdb"} coloring={coloring} onPickResidue={pick3d} centerKey={centerKey} handle={viewer} lines={lines} centerZoom={!!ligand} />
@@ -572,7 +569,7 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
         )}
         {/* analisi strutturale (F7): interazioni, interfacce, conservazione della stessa struttura */}
         {tab === "interactions" && (
-          (source ?? report.source) ? <StructuralAnalysisPanel source={(source ?? report.source)!} url={url} />
+          (source ?? report.source) ? <StructuralAnalysisPanel source={(source ?? report.source)!} url={url} memory={analysisMemory} onMemory={setAnalysisMemory} />
             : <p className="small muted">Struttura del rapporto non disponibile: rilancia l'analisi di qualità.</p>
         )}
       </Card>

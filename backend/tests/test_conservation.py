@@ -140,3 +140,35 @@ def test_invalid_alignments(ids, rows):
     with pytest.raises(AppError) as err:
         conservation.validate(ids, rows)
     assert err.value.code == "conservation_invalid"
+
+
+def test_letters_outside_blosum62_are_mapped_as_x(ubq):
+    """Selenocisteina (U), pirrolisina (O) e J non sono in BLOSUM62: la mappatura le allinea come X invece di fallire
+    con un ValueError (tipico delle famiglie GPX/TXNRD di UniProt); l'identità confronta le lettere originali."""
+    seleno = HUMAN_UB[:10] + "U" + HUMAN_UB[11:]
+    rows = [seleno, YEAST_UB[:5] + "O" + YEAST_UB[6:15] + "J" + YEAST_UB[16:], HUMAN_UB]
+    res = conservation.compute(ubq, ["seleno", "yeast", "human"], rows)
+    assert res["chains"][0]["row"] == "human" and res["chains"][0]["mapped"] == 76
+    forced = conservation.compute(ubq, ["seleno", "yeast", "human"], rows, row="seleno")
+    by = {r["resnum"]: r for r in forced["residues"]}
+    assert by["11"]["row_aa"] == "U" and by["12"]["row_aa"] == HUMAN_UB[11]
+    assert forced["chains"][0]["identity"] == pytest.approx(100 * 75 / 76, abs=0.1)
+    # anche nella sequenza della catena (SEC → U, PYL → O con le lettere estese)
+    mapping, identity, coverage = conservation._map("ACDEUFGHIK", "ACDEUFGHIK")
+    assert mapping == list(range(10)) and identity == 100.0 and coverage == 100.0
+    mapping, identity, _ = conservation._map("ACDEFGHIK", "ACDEUFGHIK")
+    assert mapping == [0, 1, 2, 3, 5, 6, 7, 8, 9] and identity == 100.0
+
+
+def test_gap_only_rows(ubq):
+    """Una riga di soli gap non è candidata nella scelta automatica; indicata, è un errore chiaro."""
+    rows = [HUMAN_UB, "-" * len(HUMAN_UB), YEAST_UB]
+    res = conservation.compute(ubq, ["human", "empty", "yeast"], rows)
+    assert res["chains"][0]["row"] == "human"
+    with pytest.raises(AppError, match="solo gap") as err:
+        conservation.compute(ubq, ["human", "empty", "yeast"], rows, row="empty")
+    assert err.value.code == "conservation_invalid"
+    with pytest.raises(AppError, match="non è nell'allineamento"):
+        conservation.compute(ubq, ["human", "empty", "yeast"], rows, row="missing")
+    with pytest.raises(AppError, match="solo gap"):
+        conservation.validate(["a", "b"], ["---", "-.-"])

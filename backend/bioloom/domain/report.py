@@ -1438,7 +1438,10 @@ def _ligands(doc: _Doc, data: dict) -> None:
     doc.cite("harding", "cmm", "kuppuraj")
     if any(g.get("template") for g in groups):
         doc.cite("biolip")
-PLAUSIBILITY_TONE = {"bassa": "err", "incerta": "warn", "compatibile": "ok"}
+    doc.end()
+
+
+PLAUSIBILITY_TONE ={"bassa": "err", "incerta": "warn", "compatibile": "ok"}
 
 
 def _structural(doc: _Doc, data: dict) -> None:

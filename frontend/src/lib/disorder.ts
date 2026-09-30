@@ -7,6 +7,7 @@ import type {
 import type { Track } from "../components/charts";
 import { accessionFromName, sequenceAccession } from "./alphafold";
 import { fmtNum } from "./format";
+import { parsePir } from "./pir";
 
 export const TRACK_COLOR = {
   disorder: "#f87171",
@@ -100,6 +101,16 @@ export function targetAccession(target: { name: string; sequence: string }, proj
   const seq = cleanSequence(target.sequence);
   const match = seq ? projectSeqs?.find((s) => cleanSequence(s.sequence) === seq && sequenceAccession(s)) : undefined;
   return match ? sequenceAccession(match) : accessionFromName(target.name);
+}
+
+/** Accessione del bersaglio della Modellazione. In modalità PIR è quella della sequenza bersaglio del documento (voce
+ *  `sequence`, con il suo codice come nome), non quella del selettore della modalità automatica, che è nascosto e può
+ *  contenere un'altra proteina (o niente, arrivando dall'Editor PIR). */
+export function modelingAccession(o: { mode: "auto" | "pir"; target: { name: string; sequence: string }; pirText: string | null },
+  projectSeqs?: Pick<Sequence, "sequence" | "meta">[] | null): string {
+  if (o.mode === "auto") return targetAccession(o.target, projectSeqs);
+  const entry = o.pirText ? parsePir(o.pirText).find((e) => e.kind === "sequence") : undefined;
+  return entry ? targetAccession({ name: entry.code, sequence: entry.sequence }, projectSeqs) : "";
 }
 
 /** Richiesta di verifica per la Modellazione; null finché bersaglio e template (o PIR) non sono pronti. */

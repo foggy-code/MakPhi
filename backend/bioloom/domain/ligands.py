@@ -5,8 +5,10 @@ Logica pura su modelli di Biopython e voci PIR: nessun file, nessun processo.
 
 **Classificazione** (`classify`): ogni gruppo eteroatomico non d'acqua è un *metallo* (ione di un solo atomo di un
 elemento metallico), un *cofattore noto* (`COFACTORS`), un *additivo* di cristallizzazione (`ADDITIVES`), un *residuo
-modificato* della catena (ha N, CA e C dello scheletro: MSE, SEP… non è un ligando e non si trasferisce) oppure un
-*altro ligando*. Nella modellazione gli additivi e gli ioni monovalenti (Na⁺, K⁺, spesso dal tampone) sono esclusi per
+modificato* della catena (MSE, SEP…: non è un ligando e non si trasferisce) oppure un *altro ligando*. Un residuo
+modificato ha N, CA e C dello scheletro *e* un legame peptidico con il residuo precedente o seguente della catena: SAM,
+SAH o un amminoacido libero legato come substrato hanno gli stessi atomi ma nessun legame, e sono ligandi. Nella
+modellazione gli additivi e gli ioni monovalenti (Na⁺, K⁺, spesso dal tampone) sono esclusi per
 default: come nelle banche dati dei ligandi biologicamente rilevanti (BioLiP, Yang et al. 2013), che scartano gli
 artefatti di cristallizzazione, di solito non hanno un ruolo biologico e trasferirli aggiungerebbe solo vincoli.
 
@@ -14,7 +16,9 @@ artefatti di cristallizzazione, di solito non hanno un ruolo biologico e trasfer
 residui '.' (BLK) e li copia nel modello solo se anche il bersaglio ha '.' nella stessa colonna. BioLoom scrive i
 gruppi scelti in fondo alla loro catena nella copia preparata del template e aggiunge le colonne corrispondenti alla
 fine del tratto di catena nel PIR: la stessa regola vale per l'allineamento automatico e per quello dell'utente, i
-cui eventuali '.' vengono prima tolti (la scelta dei ligandi è quella delle opzioni).
+cui eventuali '.' vengono prima tolti (la scelta dei ligandi è quella delle opzioni). Con più template, lo stesso gruppo
+nello stesso sito (stesso nome, residui del sito allineati agli stessi residui del bersaglio) occupa una sola colonna:
+nel modello c'è un solo gruppo, con i vincoli di tutti quei template, e non una copia per template.
 
 **Verifica** (`evaluate`), per ogni gruppo:
 - contatti: residui della proteina con un atomo pesante entro 4 Å;
@@ -30,10 +34,13 @@ Esito: *buono*, *da controllare* o *problematico*, con le motivazioni in italian
 
 Fonti:
 - Harding M.M. (2006) Small revisions to predicted distances around metal sites in proteins. Acta Cryst. D62:678–682
-  (distanze attese metallo–donatore da strutture proteiche a ≤ 1,25 Å, `REFERENCE_DISTANCES`);
+  (distanze attese metallo–donatore dal CSD e da strutture proteiche a ≤ 1,25 Å, `REFERENCE_DISTANCES`: valori
+  verificati sulla tabella «revised July 2006» del sito dell'autrice, con l'affidabilità di ciascuno);
 - Zheng H., Cooper D.R., Porebski P.J., Shabalin I.G., Handing K.B., Minor W. (2017) CheckMyMetal: a
   macromolecular metal-binding validation tool. Acta Cryst. D73:223–233 (geometria con posizioni vacanti, soglie di
-  gRMSD 13,5° e 21,5° e di vacanza 25%; distanze del Ni dalla Tabella 3, CSD);
+  gRMSD 13,5° e 21,5° e di vacanza 25%; distanze del Ni dalla Tabella 3, CSD, verificate su PMC5349434);
+- Bazayeva M., Andreini C., Rosato A. (2024) A database overview of metal-coordination distances in metalloproteins.
+  Acta Cryst. D80:362–376 (confronto con Harding);
 - Kuppuraj G., Dudev M., Lim C. (2009) Factors governing metal–ligand distances and coordination geometries of metal
   complexes. J. Phys. Chem. B 113:2952–2960 (confronto degli angoli con le geometrie ideali);
 - Yang J., Roy A., Zhang Y. (2013) BioLiP: a semi-manually curated database for biologically relevant ligand–protein
@@ -98,16 +105,25 @@ DISTANCE_TOLERANCE = 0.25  # distanza metallo–donatore "nella norma": atteso �
 SHELL_TOLERANCE = 0.5    # sfera di coordinazione: donatori entro atteso + 0,5 Å
 FALLBACK_SHELL = 3.0     # metalli senza distanze di riferimento: donatori entro 3,0 Å
 COVALENT_TOLERANCE = 0.45  # legame covalente: somma dei raggi covalenti + 0,45 Å (come domain/clashes)
+PEPTIDE_BOND = 1.9       # legame peptidico C–N (circa 1,33 Å) con margine: il residuo modificato è nella catena
 GRMSD_BORDERLINE = 13.5  # CheckMyMetal: gRMSD oltre 13,5° al limite, oltre 21,5° anomalo (gradi)
 GRMSD_OUTLIER = 21.5
 VACANCY_LIMIT = 0.25     # CheckMyMetal: oltre il 25% di posizioni vacanti anomalo
 GEOMETRY_TIE = 1.0       # geometrie entro 1° di gRMSD: si preferisce quella con meno posizioni vacanti
 
-# Distanze attese metallo–donatore (Å) dalle tabelle di Harding (2006) per strutture proteiche; il Ni (assente in
-# Harding) dalla Tabella 3 di Zheng et al. (2017, CSD). Categorie: O dell'acqua, O carbossilico di Asp/Glu,
-# O carbonilico dello scheletro, N imidazolico dell'His, S della Cys. Le fonti più recenti differiscono di qualche
-# centesimo (es. Zn–S(Cys) 2,32 Å, Cu–S(Cys) 2,20 Å, Na–O 2,35 Å nelle strutture a < 1,5 Å di Bazayeva et al. 2024),
-# entro la tolleranza di ± 0,25 Å. Una categoria assente = donatore insolito per quel metallo.
+# Distanze attese metallo–donatore (Å). Categorie: O dell'acqua, O carbossilico di Asp/Glu monodentato, O carbonilico
+# dello scheletro, N imidazolico dell'His, S della Cys. Una categoria assente = donatore insolito per quel metallo.
+# - Na, Mg, K, Ca, Mn, Fe, Co, Cu, Zn: tabella «Metal-donor atom target distances (revised July 2006)» di Harding
+#   (2006), dal sito dell'autrice (tanna.bch.ed.ac.uk/newtargs_06.html, copia del 29/04/2009 nell'Internet Archive),
+#   basata sul CSD e sulle strutture proteiche a risoluzione ≤ 1,25 Å; tutti i valori verificati (settembre 2026). La
+#   tabella indica l'affidabilità (`REFERENCE_RELIABILITY`): *** deviazione standard ~0,05 Å, ** 0,10, * 0,15–0,20,
+#   nessuna stella la meno affidabile (Mg–O dello scheletro, Cu–O dell'acqua e dello scheletro, Cu–S della Cys…).
+# - Ni (assente in Harding): Tabella 3 di Zheng et al. (2017, CheckMyMetal, CSD), verificata sul testo completo di
+#   Europe PMC (PMC5349434): O dell'acqua 2,08(6); O di un carbonio (carbossilato, carbonile) 2,07(7) della moda più
+#   lunga, usato per Asp/Glu e per lo scheletro; N 2,09(7) della moda più lunga; S 2,18(3).
+# Bazayeva et al. (2024, MetalPDB, strutture < 1,5 Å) non trovano differenze significative con Harding et al. (2010)
+# entro la dispersione (carbonile dello scheletro dei metalli alcalini e alcalino-terrosi entro 0,05 Å; Zn–N(His)
+# 2,05 ± 0,06 Å per Nδ1 e 2,03 ± 0,07 Å per Nε2): la tolleranza di ± 0,25 Å le comprende.
 REFERENCE_DISTANCES: dict[str, dict[str, float]] = {
     "NA": {"O_water": 2.41, "O_carboxyl": 2.41, "O_backbone": 2.38},
     "MG": {"O_water": 2.07, "O_carboxyl": 2.07, "O_backbone": 2.26},
@@ -120,18 +136,35 @@ REFERENCE_DISTANCES: dict[str, dict[str, float]] = {
     "ZN": {"O_water": 2.09, "O_carboxyl": 1.99, "O_backbone": 2.07, "N_his": 2.03, "S_cys": 2.31},
     "NI": {"O_water": 2.08, "O_carboxyl": 2.07, "O_backbone": 2.07, "N_his": 2.09, "S_cys": 2.18},
 }
-# Numero di coordinazione tipico nei siti proteici (estremi compresi): Mg²⁺ quasi sempre 6 (5–6), Zn²⁺ di solito 4
-# (tetraedrico, anche 5–6 con acque), Ca²⁺ 6–8, K⁺ 6–8 (Harding 2006; Zheng et al. 2017). Estremi scelti da BioLoom.
+# Affidabilità di Harding (2006) per valore (numero di stelle, 0 = la meno affidabile); il Ni non ne ha (CSD).
+REFERENCE_RELIABILITY: dict[str, dict[str, int]] = {
+    "NA": {"O_water": 2, "O_carboxyl": 2, "O_backbone": 2},
+    "MG": {"O_water": 3, "O_carboxyl": 2, "O_backbone": 0},
+    "K": {"O_water": 1, "O_carboxyl": 1, "O_backbone": 1},
+    "CA": {"O_water": 2, "O_carboxyl": 2, "O_backbone": 2},
+    "MN": {"O_water": 3, "O_carboxyl": 3, "O_backbone": 0, "N_his": 2, "S_cys": 0},
+    "FE": {"O_water": 2, "O_carboxyl": 2, "O_backbone": 0, "N_his": 1, "S_cys": 3},
+    "CO": {"O_water": 2, "O_carboxyl": 3, "O_backbone": 0, "N_his": 2, "S_cys": 1},
+    "CU": {"O_water": 0, "O_carboxyl": 1, "O_backbone": 0, "N_his": 2, "S_cys": 0},
+    "ZN": {"O_water": 3, "O_carboxyl": 3, "O_backbone": 0, "N_his": 3, "S_cys": 2},
+}
+# Numero di coordinazione tipico nei siti proteici (estremi compresi). Zheng et al. (2017): Mg ottaedrico stretto,
+# siti con meno o più di 6 donatori rari; Na di solito 6, a volte 5 o 4; K di solito ottaedrico. Bazayeva et al.
+# (2024): Zn con 4 donatori nel 61% dei siti. Gli estremi degli intervalli sono una scelta di BioLoom.
 CN_RANGE = {"ZN": (4, 6), "FE": (4, 6), "CU": (3, 6), "MN": (4, 6), "CO": (4, 6), "NI": (4, 6), "MG": (5, 6),
             "CA": (6, 8), "NA": (4, 7), "K": (5, 8)}
 ELEMENT_LABEL = {"ZN": "Zn", "MG": "Mg", "CA": "Ca", "MN": "Mn", "FE": "Fe", "CU": "Cu", "CO": "Co", "NI": "Ni",
                  "NA": "Na", "K": "K", "CD": "Cd", "HG": "Hg"}
 
-# Donatori: categoria del donatore → (etichetta, categoria delle distanze attese, tipico?)
+# Donatori: categoria del donatore → (etichetta, categoria delle distanze attese, tipico?). Dalle note della tabella di
+# Harding (2006): Asn/Gln come il carbossilato monodentato («perhaps very slightly longer»); O, N e S dei ligandi come
+# l'O dell'Asn (quindi il carbossilato), l'N dell'His e l'S della Cys. Scelte di BioLoom, non da Harding: Ser/Thr/Tyr
+# con il valore dell'acqua (per Harding Ser/Thr stanno fra acqua e carbossilato, Tyr circa 0,1 Å sotto il
+# carbossilato: differenze entro la tolleranza), Met con quello della Cys.
 DONORS = {
     "N_his": ("N (His)", "N_his", True), "S_cys": ("S (Cys)", "S_cys", True),
     "S_met": ("S (Met)", "S_cys", True), "O_carboxyl": ("O (Asp/Glu)", "O_carboxyl", True),
-    "O_backbone": ("O (scheletro)", "O_backbone", True), "O_amide": ("O (Asn/Gln)", "O_backbone", True),
+    "O_backbone": ("O (scheletro)", "O_backbone", True), "O_amide": ("O (Asn/Gln)", "O_carboxyl", True),
     "O_hydroxyl": ("O (Ser/Thr/Tyr)", "O_water", True), "O_water": ("O (acqua)", "O_water", True),
     "O_ligand": ("O (ligando)", "O_carboxyl", True), "N_ligand": ("N (ligando)", "N_his", True),
     "S_ligand": ("S (ligando)", "S_cys", True), "N_other": ("N (altro)", "N_his", False),
@@ -180,10 +213,37 @@ def is_hetero(residue) -> bool:
     return residue.id[0] not in (" ", "W") and not is_water(residue)
 
 
+def _peptide_linked(residue) -> bool:
+    """Legame peptidico con il residuo precedente o seguente della catena, nell'ordine del file: C del precedente–N
+    oppure C–N del seguente entro `PEPTIDE_BOND`."""
+    chain = residue.get_parent()
+    siblings = chain.child_list if chain is not None else [residue]
+    k = next((i for i, r in enumerate(siblings) if r is residue), None)
+    if k is None:
+        return False
+    for other, theirs, mine in ((siblings[k - 1] if k > 0 else None, "C", "N"),
+                                (siblings[k + 1] if k + 1 < len(siblings) else None, "N", "C")):
+        if other is not None and theirs in other and mine in residue \
+                and other[theirs] - residue[mine] <= PEPTIDE_BOND:
+            return True
+    return False
+
+
 def is_modified_residue(residue) -> bool:
-    """Residuo modificato della catena (MSE, SEP, TPO…): ha gli atomi N, CA e C dello scheletro."""
+    """Residuo modificato della catena (MSE, SEP, TPO…): ha gli atomi N, CA e C dello scheletro ed è legato con un
+    legame peptidico al residuo precedente o seguente. Gli stessi atomi senza legame (SAM, SAH, un amminoacido libero
+    legato come substrato) non bastano, e i cofattori noti non sono mai residui modificati.
+
+    L'esito si conserva nel residuo (`xtra`): la verifica lo chiede per ogni atomo vicino, e la copia preparata del
+    template sposta i gruppi in fondo alla catena solo dopo averli classificati."""
+    cached = residue.xtra.get("bioloom_modified")
+    if cached is not None:
+        return cached
     names = {a.get_id() for a in residue}
-    return {"N", "CA", "C"} <= names
+    value = ({"N", "CA", "C"} <= names and residue.get_resname().strip().upper() not in COFACTORS
+             and _peptide_linked(residue))
+    residue.xtra["bioloom_modified"] = value
+    return value
 
 
 def group_key(residue) -> tuple[str, str, str]:
@@ -435,7 +495,9 @@ def describe_groups(model, residues: list) -> list[dict]:
     """Siti dei gruppi di un template (con le acque del file originale) per il confronto dopo la modellazione.
 
     Per ogni gruppo: resname, chain, resnum, atoms, classificazione; `metals` con i donatori di ogni atomo metallico
-    (residuo, atomo, categoria, distanza, acqua) e `links` con i legami covalenti verso la proteina o altri gruppi.
+    (residuo, atomo, categoria, distanza, acqua), `links` con i legami covalenti verso la proteina o altri gruppi e
+    `contacts` con i residui della proteina entro 4 Å (sito di un gruppo senza donatori né legami, per riconoscere lo
+    stesso gruppo in più template: `pir_with_ligands`).
     """
     neighbors = _Neighbors(model)
     out = []
@@ -444,7 +506,13 @@ def describe_groups(model, residues: list) -> list[dict]:
         info = classify(res)
         metals = []
         links = []
+        contacts: dict[tuple[str, str], dict] = {}
         for atom in _heavy(res):
+            for other in neighbors.near(atom, CONTACT_DISTANCE):
+                ores = other.get_parent()
+                if ores is not res and _is_protein(ores):
+                    key = (ores.get_parent().id, _resid(ores))
+                    contacts.setdefault(key, {"chain": key[0], "resnum": key[1], "resname": ores.get_resname().strip()})
             if element_of(atom) in METAL_ELEMENTS:
                 donors = [{**_atom_ref(d), "category": cat, "distance": round(dist, 2),
                            "water": is_water(d.get_parent())}
@@ -459,7 +527,8 @@ def describe_groups(model, residues: list) -> list[dict]:
                     links.append({"atom": atom.get_id().strip(), "partner": _atom_ref(other),
                                   "distance": round(distance, 2)})
         out.append({"resname": resname, "chain": chain, "resnum": resnum, "atoms": len(res), "class": info["class"],
-                    "label": CLASS_LABEL[info["class"]], "metals": metals, "links": links})
+                    "label": CLASS_LABEL[info["class"]], "metals": metals, "links": links,
+                    "contacts": list(contacts.values())})
     return out
 
 
@@ -467,6 +536,69 @@ def describe_groups(model, residues: list) -> list[dict]:
 def _segments(seq: str) -> list[int]:
     """Indici di fine dei tratti di catena (posizione di ogni '/' e lunghezza della riga)."""
     return [i for i, c in enumerate(seq) if c == "/"] + [len(seq)]
+
+
+def _site(group: dict) -> set[tuple[str, str]]:
+    """Residui della proteina (catena, numero) che definiscono il sito di un gruppo del template: donatori dei metalli
+    e partner dei legami covalenti, altrimenti i residui entro 4 Å."""
+    keys = {(d["chain"], d["resnum"]) for m in group.get("metals") or [] for d in m.get("donors") or []
+            if d.get("protein")}
+    keys |= {(lk["partner"]["chain"], lk["partner"]["resnum"]) for lk in group.get("links") or []
+             if (lk.get("partner") or {}).get("protein")}
+    return keys or {(c["chain"], c["resnum"]) for c in group.get("contacts") or []}
+
+
+def _site_columns(entry: PirEntry, t: dict, target: PirEntry) -> dict[tuple[str, str], int]:
+    """Colonna del PIR di ogni residuo (catena, numero) del template allineato a un residuo del bersaglio.
+
+    Solo per le catene la cui voce comprende tutti i residui della copia preparata (`_chain_ids`): le lettere del
+    tratto sono allora quei residui, nell'ordine. Le altre catene non contribuiscono al sito."""
+    ids = t.get("_chain_ids") or {}
+    out: dict[tuple[str, str], int] = {}
+    offset = 0
+    for k, piece in enumerate(entry.sequence.split("/")):
+        chain = t["chains"][k] if k < len(t["chains"]) else None
+        residues = ids.get(chain) if chain is not None else None
+        letters = [i for i, c in enumerate(piece) if c.isalpha()]
+        if residues is not None and len(letters) == len(residues):
+            for i, resid in zip(letters, residues):
+                if target.sequence[offset + i:offset + i + 1].isalpha():
+                    out[(chain, str(resid))] = offset + i
+        offset += len(piece) + 1
+    return out
+
+
+def _match_slots(found: list[tuple[str, set[int]]], slots: list[dict]) -> list[Optional[dict]]:
+    """Colonna già presente (di altri template) per ogni gruppo di un template, o None: associazione che rispetta
+    l'ordine (gruppi e colonne nello stesso ordine) e massimizza i gruppi uniti e poi i residui del sito in comune
+    (programmazione dinamica, come l'allineamento di due sequenze). Si uniscono solo gruppi con lo stesso nome e
+    almeno un residuo del bersaglio del sito in comune."""
+    n, m = len(found), len(slots)
+
+    def weight(i: int, j: int) -> int:
+        name, site = found[i]
+        return len(site & slots[j]["site"]) if slots[j]["resname"] == name else 0
+
+    best = [[(0, 0)] * (m + 1) for _ in range(n + 1)]
+    for i in range(n - 1, -1, -1):
+        for j in range(m - 1, -1, -1):
+            options = [best[i + 1][j], best[i][j + 1]]
+            w = weight(i, j)
+            if w:
+                options.append((best[i + 1][j + 1][0] + 1, best[i + 1][j + 1][1] + w))
+            best[i][j] = max(options)
+    out: list[Optional[dict]] = [None] * n
+    i = j = 0
+    while i < n and j < m:
+        w = weight(i, j)
+        if w and best[i][j] == (best[i + 1][j + 1][0] + 1, best[i + 1][j + 1][1] + w):
+            out[i] = slots[j]
+            i, j = i + 1, j + 1
+        elif best[i][j] == best[i + 1][j]:
+            i += 1
+        else:
+            j += 1
+    return out
 
 
 def pir_with_ligands(entries: list[PirEntry], templates: list[dict]) -> tuple[list[PirEntry], list[str]]:
@@ -478,8 +610,14 @@ def pir_with_ligands(entries: list[PirEntry], templates: list[dict]) -> tuple[li
     1. I '.' già presenti (PIR dell'utente, allineamento di una modellazione precedente) diventano gap e le colonne
        rimaste vuote si tolgono: i ligandi trasferiti sono quelli scelti nelle opzioni.
     2. Per ogni template e ogni sua catena con gruppi trasferiti si aggiungono, alla fine del tratto di quella catena
-       (prima del '/' o della fine), una colonna per gruppo con '.' nel template e nel bersaglio e '-' negli altri
-       template. MODELLER legge i gruppi in fondo alla catena nella copia preparata, nello stesso ordine.
+       (prima del '/' o della fine), le colonne dei gruppi con '.' nel template e nel bersaglio e '-' negli altri
+       template. MODELLER legge i gruppi in fondo alla catena nella copia preparata, nello stesso ordine. Lo stesso
+       gruppo di template diversi (stesso nome, sito — donatori, legami o residui entro 4 Å, `_site` — riportato
+       attraverso le righe del PIR su residui del bersaglio in comune) condivide la colonna: un solo '.' nel bersaglio,
+       quindi un solo gruppo nel modello con i vincoli di tutti quei template. L'associazione rispetta in ogni riga
+       l'ordine dei gruppi nel file (le colonne di un template si susseguono come i suoi gruppi) e unisce più gruppi
+       possibile (`_match_slots`); un gruppo senza corrispondente ha una colonna nuova prima di quella del gruppo
+       unito che lo segue nello stesso template, altrimenti in fondo. Una nota elenca i gruppi uniti.
     3. L'intervallo del template si aggiorna: fine sull'ultimo gruppo se la sua ultima catena ne ha, "+N" ricontato,
        una fine che indicava un eteroatomo tolto torna sull'ultimo residuo.
 
@@ -515,8 +653,8 @@ def pir_with_ligands(entries: list[PirEntry], templates: list[dict]) -> tuple[li
                              f"{'nessuno è trasferito' if not chosen else f'si trasferiscono i {chosen} scelti'} "
                              "nelle opzioni di modellazione (Ligandi, cofattori e metalli).")
 
-    # 2. colonne dei gruppi scelti, per tratto di catena
-    inserts: dict[int, list[tuple[str, int]]] = {}  # tratto → [(codice del template, numero di gruppi)]
+    # 2. colonne dei gruppi scelti, per tratto di catena; lo stesso gruppo di template diversi in una sola colonna
+    slots: dict[int, list[dict]] = {}  # tratto → colonne [{"resname", "site": colonne, "members": {codice: gruppo}}]
     for t in templates:
         groups = t.get("ligand_groups") or []
         if not groups:
@@ -529,9 +667,10 @@ def pir_with_ligands(entries: list[PirEntry], templates: list[dict]) -> tuple[li
                            "colonne del PIR: i ligandi si trasferiscono solo con catene allineate.", code="invalid_pir")
         pieces = entry.sequence.split("/")
         chain_residues = t.get("_chain_residues") or {}
+        columns = _site_columns(entry, t, target)
         for k, chain in enumerate(t["chains"]):
-            count = sum(1 for g in groups if g["chain"] == chain)
-            if not count:
+            mine = [g for g in groups if g["chain"] == chain]
+            if not mine:
                 continue
             letters = sum(1 for c in pieces[k] if c.isalpha()) if k < len(pieces) else 0
             expected = chain_residues.get(chain)
@@ -540,14 +679,35 @@ def pir_with_ligands(entries: list[PirEntry], templates: list[dict]) -> tuple[li
                                f"comprendere tutti i {expected} residui della catena (ne ha {letters}): i gruppi "
                                "eteroatomici stanno dopo l'ultimo residuo. Estendi l'allineamento o togli quei "
                                "ligandi dalla scelta.", code="invalid_pir")
-            inserts.setdefault(k, []).append((t["code"], count))
+            column_slots = slots.setdefault(k, [])
+            found = [(str(g["resname"]).strip().upper(), {columns[key] for key in _site(g) if key in columns})
+                     for g in mine]
+            matched = _match_slots(found, column_slots)
+            for n, (g, (name, site), slot) in enumerate(zip(mine, found, matched)):
+                if slot is None:
+                    # gruppo senza corrispondente: colonna nuova prima di quella del prossimo gruppo unito dello
+                    # stesso template (le associazioni sono in ordine), altrimenti in fondo
+                    following = next((s for s in matched[n + 1:] if s is not None), None)
+                    at = len(column_slots) if following is None else \
+                        next(i for i, s in enumerate(column_slots) if s is following)
+                    column_slots.insert(at, {"resname": name, "site": set(site), "members": {t["code"]: g}})
+                else:
+                    slot["members"][t["code"]] = g
+                    slot["site"] |= site
     ends = _segments(target.sequence)
-    for k in sorted(inserts, reverse=True):
+    for k in sorted(slots, reverse=True):
         at = ends[k]
-        columns = [(code, n) for code, n in inserts[k] for _ in range(n)]
         for e in entries:
-            add = "".join("." if e.kind == "sequence" or e.code == code else "-" for code, _n in columns)
+            add = "".join("." if e.kind == "sequence" or e.code in slot["members"] else "-" for slot in slots[k])
             e.sequence = e.sequence[:at] + add + e.sequence[at:]
+    for k in sorted(slots):
+        for slot in slots[k]:
+            if len(slot["members"]) > 1:
+                labels = " e ".join(f"{group_label(g['chain'], g['resnum'], g['resname'])} di {code}"
+                                    for code, g in slot["members"].items())
+                n = len(slot["members"])
+                notes.append(f"{labels}: stesso gruppo nello stesso sito, un solo {slot['resname']} nel modello con i "
+                             f"vincoli di {'entrambi i template' if n == 2 else f'tutti i {n} template'}.")
 
     # 3. intervalli dei template
     for t in templates:
@@ -567,6 +727,32 @@ def pir_with_ligands(entries: list[PirEntry], templates: list[dict]) -> tuple[li
             fields[2], fields[3] = t["last"], t["chains"][-1]
         entry.fields = fields
     return entries, notes
+
+
+def model_groups(entries: list[PirEntry], templates: list[dict]) -> list[list[tuple[str, dict]]]:
+    """Gruppi eteroatomici del modello: per ogni '.' del bersaglio, nell'ordine (come MODELLER li scrive), i gruppi
+    dei template con '.' nella stessa colonna come (codice, gruppo di `ligand_groups`), nell'ordine dei template (il
+    principale per primo). Il n-esimo '.' di una riga di template è il suo n-esimo gruppo."""
+    target = next((e for e in entries if e.kind == "sequence"), None)
+    if target is None:
+        return []
+    order = {t["code"]: i for i, t in enumerate(templates)}
+    groups = {t["code"]: t.get("ligand_groups") or [] for t in templates}
+    rows = sorted((e for e in entries if e.is_template), key=lambda e: order.get(e.code, len(order)))
+    seen = {e.code: 0 for e in rows}
+    out: list[list[tuple[str, dict]]] = []
+    for col, c in enumerate(target.sequence):
+        members = []
+        for e in rows:
+            if e.sequence[col:col + 1] != ".":
+                continue
+            n = seen[e.code]
+            seen[e.code] = n + 1
+            if n < len(groups.get(e.code) or []):
+                members.append((e.code, groups[e.code][n]))
+        if c == ".":
+            out.append(members)
+    return out
 
 
 # ---------------------------------------------------------------------------------------------- template → modello
@@ -616,7 +802,8 @@ def template_contexts(entries: list[PirEntry], templates: list[dict], template_m
     `template_models`: codice del template → modello di Biopython della copia preparata. Le colonne del PIR finale
     (quello usato da MODELLER) legano i residui: le lettere del template ai residui ATOM della copia preparata (dal
     residuo iniziale dell'intervallo), le lettere del bersaglio ai residui del modello, i '.' ai gruppi in ordine.
-    Restituisce {(catena, numero) del gruppo nel modello: contesto} e le note per i template non confrontabili.
+    Restituisce {(catena, numero) del gruppo nel modello: contesto} e le note per i template non confrontabili. Un
+    gruppo del modello vincolato da più template (stessa colonna) si confronta con il sito del primo, il principale.
     """
     notes: list[str] = []
     target = next((e for e in entries if e.kind == "sequence"), None)
@@ -657,7 +844,7 @@ def template_contexts(entries: list[PirEntry], templates: list[dict], template_m
         for tkey, mkey in pairs:
             group = by_key.get(tkey)
             if group is not None:
-                contexts[mkey[:2]] = {"template": t["code"], "group": group, "map": residue_map}
+                contexts.setdefault(mkey[:2], {"template": t["code"], "group": group, "map": residue_map})
     return contexts, notes
 
 

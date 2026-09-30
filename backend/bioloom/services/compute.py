@@ -250,16 +250,28 @@ class ComputeService:
 
     # ------------------------------------------------------------------------------ risoluzione file
     def resolve_structure(self, source: dict) -> tuple[Path, str]:
-        """Restituisce (percorso, etichetta) per una sorgente {type: template|job|upload}."""
+        """Restituisce (percorso, etichetta) per una sorgente {type: template|job|upload}.
+
+        I campi mancanti o nulli (`StructureSource.model_dump()` scrive `"file": None`, le query di
+        `/api/analysis/latest` sono facoltative) sono un errore chiaro, mai un errore interno."""
         kind = source.get("type")
+        ident = str(source.get("id") or "").strip()
+        job_id = str(source.get("job_id") or "").strip()
+        file = str(source.get("file") or "")
         if kind == "template":
-            path = self.library.path(source.get("id", ""))
+            if not ident:
+                raise AppError("Indica l'identificativo del template da analizzare.", code="invalid_source")
+            path = self.library.path(ident)
             return path, path.stem
         if kind == "job":
-            path = self.jobs.file_path(source.get("job_id", ""), source.get("file", ""))
+            if not job_id or not file.strip():
+                raise AppError("Indica il job e il file della struttura da analizzare.", code="invalid_source")
+            path = self.jobs.file_path(job_id, file)
             return path, path.stem
         if kind == "upload":
-            path = safe_join(self.uploads_dir, source.get("file", ""))
+            if not file.strip():
+                raise AppError("Indica il file caricato da analizzare.", code="invalid_source")
+            path = safe_join(self.uploads_dir, file)
             if not path.is_file():
                 raise AppError("File caricato non trovato.")
             return path, path.stem
@@ -409,7 +421,10 @@ class ComputeService:
         return notes
 
     def _run_alignment(self, ctx: JobContext, target: SeqRecord, templates: list[dict], workdir: Path,
-                       progress: tuple[float, float]) -> str:
+                       progress: tuple[float, float]) -> tuple[str, list[str]]:
+        """Allineamento del bersaglio sui template (`alignment.ali`) e avvisi: con più template, salign che ha
+        spostato un template senza poter unire gli align2d (`_choose_multi_alignment`)."""
+        notes: list[str] = []
         if target.name in {t["code"] for t in templates}:
             target = SeqRecord(f"{target.name}_target", target.sequence)
         atomic_write_text(workdir / "target.ali", modeller.target_ali(target.name, target.sequence))
@@ -417,13 +432,15 @@ class ComputeService:
         modeller.run_script(ctx, modeller.build_alignment_script(templates, target.name), "align.py",
                             workdir=workdir, progress_range=progress)
         if len(templates) > 1:
-            self._choose_multi_alignment(ctx, templates, workdir)
-        return (workdir / "alignment.ali").read_text(encoding="utf-8")
+            choice = self._choose_multi_alignment(ctx, templates, workdir)
+            if choice["strategy"] == "salign" and choice.get("displaced"):
+                notes.append(choice["message"])
+        return (workdir / "alignment.ali").read_text(encoding="utf-8"), notes
 
     @staticmethod
-    def _choose_multi_alignment(ctx: JobContext, templates: list[dict], workdir: Path) -> None:
+    def _choose_multi_alignment(ctx: JobContext, templates: list[dict], workdir: Path) -> dict:
         """Più template: salign oppure gli align2d di ogni template uniti sul bersaglio, se salign ha spostato un
-        template rispetto al bersaglio o non è riuscito (`domain/multitemplate.choose`)."""
+        template rispetto al bersaglio o non è riuscito (`domain/multitemplate.choose`). Restituisce la scelta."""
         salign_path = workdir / modeller.SALIGN_FILE
         salign = salign_path.read_text(encoding="utf-8") if salign_path.exists() else None
         pairs = []
@@ -441,6 +458,7 @@ class ComputeService:
         if choice["strategy"] == "pairwise":
             (workdir / "alignment.pap").unlink(missing_ok=True)  # vista di salign, non più quella usata
         atomic_write_text(workdir / "alignment.ali", choice["text"])
+        return choice
 
     @staticmethod
     def _normalize_pir(text: str, templates: list[dict]) -> tuple[str, str, list[str]]:
@@ -504,9 +522,9 @@ class ComputeService:
         else:
             if target is None:
                 raise AppError("Indica la sequenza bersaglio oppure un allineamento PIR.")
-            pir = self._run_alignment(ctx, target, templates, workdir, (0.05, 0.12))
+            pir, alignment_notes = self._run_alignment(ctx, target, templates, workdir, (0.05, 0.12))
             report = sequences.validate_pir(pir)
-            warnings = report["warnings"]
+            warnings = [*report["warnings"], *alignment_notes]
             target_code = next(e.code for e in sequences.parse_pir(pir) if e.kind == "sequence")
         # ligandi: colonne '.' dei gruppi scelti, uguali per l'allineamento automatico e per quello dell'utente
         transfer = any(t.get("ligand_groups") for t in templates)
@@ -517,6 +535,10 @@ class ComputeService:
             atomic_write_text(workdir / "alignment.ali", pir)
             warnings = [*warnings, *ligand_notes]
         warnings = [*warnings, *self._predicted_notes(templates)]
+        # template di strutture diverse senza residui comuni a sufficienza: orientamento relativo arbitrario
+        anchor = multitemplate.unanchored(entries, templates) if len(templates) > 1 else None
+        if anchor:
+            warnings.append(anchor)
         for w in warnings:
             ctx.log(f"Avviso: {w}")
         ctx.progress(0.15, "Costruzione dei modelli")
@@ -536,8 +558,11 @@ class ComputeService:
             m["best"] = m is best
         targets = ok if quality_mode == "all" else ([best] if quality_mode == "best" else [])
         verify = self._ligand_verifier(workdir, entries, templates) if transfer else None
-        transferred = [f"{g['resname']} {g['chain']}{g['resnum']}" for t in templates
-                       for g in t.get("ligand_groups") or []]
+        # gruppi del modello: un '.' del bersaglio ciascuno; lo stesso gruppo di più template (stessa colonna) conta
+        # una volta, con il numero del template principale
+        model_groups = [m for m in ligands.model_groups(entries, templates) if m] if transfer else []
+        transferred = [ligands.group_label(g["chain"], g["resnum"], g["resname"])
+                       for g in (members[0][1] for members in model_groups)]
 
         def assess(m: dict) -> None:
             """Analisi di un modello: rapporto accanto al modello, metriche nel riepilogo, REMARK nel PDB."""
@@ -611,8 +636,11 @@ class ComputeService:
                 warnings.append(text)
                 ctx.log(f"Avviso: {text}")
             result["ligands"] = {"transferred": [
-                {"template": t["code"], **{k: g[k] for k in ("resname", "chain", "resnum", "class", "label")}}
-                for t in templates for g in t.get("ligand_groups") or []], "verification": checked}
+                {"template": ", ".join(code for code, _g in members),
+                 **{k: members[0][1][k] for k in ("resname", "chain", "resnum", "class", "label")},
+                 "sources": [{"template": code, "chain": g["chain"], "resnum": g["resnum"], "resname": g["resname"]}
+                             for code, g in members]}
+                for members in model_groups], "verification": checked}
         return result
 
     @staticmethod
@@ -646,9 +674,15 @@ class ComputeService:
         target = _record(p.get("target", {}))
         modeller.modeller_python(ctx)
         templates = self._prepare_templates(ctx, _template_specs(p.get("templates", [])), ctx.workdir)
-        pir = self._run_alignment(ctx, target, templates, ctx.workdir, (0.1, 0.9))
+        pir, warnings = self._run_alignment(ctx, target, templates, ctx.workdir, (0.1, 0.9))
+        if len(templates) > 1:
+            anchor = multitemplate.unanchored(sequences.parse_pir(pir), templates)
+            warnings = [*warnings, *([anchor] if anchor else [])]
+        for w in warnings:
+            ctx.log(f"Avviso: {w}")
         # Template AlphaFold interi: in modellazione, con il ritaglio pLDDT, i residui tolti diventano gap del PIR
         return {"pir": pir, "report": sequences.validate_pir(pir), "templates": self._public(templates),
+                "warnings": warnings,
                 "pap": (ctx.workdir / "alignment.pap").read_text(encoding="utf-8", errors="replace")
                 if (ctx.workdir / "alignment.pap").exists() else ""}
 

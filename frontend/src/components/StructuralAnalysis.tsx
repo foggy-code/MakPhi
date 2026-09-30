@@ -2,7 +2,7 @@
 // Tabelle filtrabili di legami idrogeno, ponti salini, disolfuri e interazioni aromatiche, interfacce fra catene,
 // conservazione da un allineamento multiplo; il 3D si colora per interfaccia o conservazione (API di colorazione di
 // Viewer3D) e un clic su un'interazione evidenzia i due residui. La logica sta in lib/interactions.ts.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { AnalysisResult, InterfacePair, JobSummary, StructureSource } from "../api/types";
 import { encodeSource } from "../lib/compare";
@@ -10,9 +10,9 @@ import { useProject, useToast } from "../lib/context";
 import { fmtNum, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
 import {
-  analysisColoring, analysisColorOptions, chainFilterOptions, conservationStripRows, endLabel, fastaFromParsed, filterRows, highlightFor, INTERACTION_LABEL,
-  interactionCounts, interactionRows, interfaceHighlight, msaRequest, PLAUSIBILITY_TONE, residueFilterText, type AnalysisColorBy, type InteractionKind,
-  type InteractionRow, type MsaMode,
+  analysisColoring, analysisColorOptions, chainFilterOptions, conservationStripRows, endLabel, fastaFromParsed, filterRows, followedAnalysis, highlightFor,
+  initialPanelState, INTERACTION_LABEL, interactionCounts, interactionRows, interfaceHighlight, msaRequest, PLAUSIBILITY_TONE, residueFilterText,
+  type AnalysisColorBy, type AnalysisPanelMemory, type InteractionKind, type InteractionRow, type MsaMode,
 } from "../lib/interactions";
 import { resiNumber, type ResidueRef } from "../lib/residueColoring";
 import { ResidueStrip } from "./charts";
@@ -202,25 +202,42 @@ export function AnalysisView({ result, url }: { result: AnalysisResult; url: str
   );
 }
 
-/** Scheda "Interazioni" per una struttura: mostra l'analisi più recente (o quella indicata) e la rilancia. */
-export function StructuralAnalysisPanel({ source, url, initialJob }: { source: StructureSource; url: string | null; initialJob?: string | null }) {
+/** Scheda "Interazioni" per una struttura: mostra l'analisi più recente (o quella indicata) e la rilancia.
+ *  `memory`/`onMemory`: stato conservato dalla pagina (job seguito e scelte dell'allineamento), perché il pannello si
+ *  smonta cambiando scheda; un'analisi in coda o in corso si riprende anche da `/api/analysis/latest`. */
+export function StructuralAnalysisPanel({ source, url, initialJob, memory, onMemory }: {
+  source: StructureSource;
+  url: string | null;
+  initialJob?: string | null;
+  memory?: AnalysisPanelMemory | null;
+  onMemory?: (memory: AnalysisPanelMemory) => void;
+}) {
   const { projectId } = useProject();
   const toast = useToast();
   const sourceKey = encodeSource(source) ?? "";
-  const [jobId, setJobId] = useState<string | null>(initialJob ?? null);
-  const [msaMode, setMsaMode] = useState<MsaMode>("none");
-  const [msaJob, setMsaJob] = useState("");
-  const [msaText, setMsaText] = useState("");
-  const [row, setRow] = useState("");
+  const restored = useRef(initialPanelState(sourceKey, memory, initialJob));
+  const [jobId, setJobId] = useState<string | null>(restored.current.jobId);
+  const [msaMode, setMsaMode] = useState<MsaMode>(restored.current.msaMode);
+  const [msaJob, setMsaJob] = useState(restored.current.msaJob);
+  const [msaText, setMsaText] = useState(restored.current.msaText);
+  const [row, setRow] = useState(restored.current.row);
   const { data: alignJobs } = useAsync<JobSummary[]>(() => api.jobs({ project_id: projectId ?? undefined, kind: "align", status: "completed", limit: 30 }), [projectId]);
   const { job, summary, cancel } = useJob<AnalysisResult>(jobId);
+  useEffect(() => {
+    onMemory?.({ sourceKey, jobId, msaMode, msaJob, msaText, row });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceKey, jobId, msaMode, msaJob, msaText, row]);
 
   useEffect(() => {
     if (initialJob) return;
     let stop = false;
-    setJobId(null); // un'altra struttura: la sua analisi più recente, non quella della precedente
+    // la stessa struttura di prima (ritorno alla scheda): il job seguito; un'altra: la sua analisi, non quella della
+    // precedente
+    const kept = restored.current.sourceKey === sourceKey ? restored.current.jobId : null;
+    restored.current = { ...restored.current, sourceKey: "" };
+    setJobId(kept);
     api.latestAnalysis(source)
-      .then((r) => { if (!stop && r.job_id) setJobId((cur) => cur ?? r.job_id); })
+      .then((r) => { if (!stop) setJobId((cur) => followedAnalysis(cur, r)); })
       .catch(() => undefined);
     return () => {
       stop = true;

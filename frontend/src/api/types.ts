@@ -585,6 +585,8 @@ export interface TransferredGroup {
   label: string;
   metals: { atom: string; element: string; donors: TemplateSiteDonor[] }[];
   links: { atom: string; partner: { chain: string; resnum: string; resname: string; atom: string }; distance: number }[];
+  /** residui della proteina entro 4 Å nel template */
+  contacts?: { chain: string; resnum: string; resname: string }[];
 }
 
 export interface LigandDonor {
@@ -902,7 +904,12 @@ export interface ModelResult {
   plddt_removed?: number;
   /** solo con ligandi trasferiti: gruppi e verifica del modello migliore */
   ligands?: {
-    transferred: { template: string; resname: string; chain: string; resnum: string; class: LigandClass; label: string }[];
+    /** un gruppo per ogni gruppo del modello: lo stesso gruppo di più template (stesso sito) una volta, con
+     *  `template` = i codici separati da virgole e i gruppi di ciascun template in `sources` */
+    transferred: {
+      template: string; resname: string; chain: string; resnum: string; class: LigandClass; label: string;
+      sources?: { template: string; chain: string; resnum: string; resname: string }[];
+    }[];
     verification: LigandReport | null;
   };
 }
@@ -912,6 +919,9 @@ export interface Align2dResult {
   pap: string;
   report: PirReport;
   templates: PreparedTemplate[];
+  /** con più template: salign che ha spostato un template senza poter unire gli align2d, orientamento relativo non
+   *  vincolato fra template di strutture diverse */
+  warnings?: string[];
 }
 
 export interface LoopResult {
