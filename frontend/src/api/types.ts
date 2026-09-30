@@ -22,6 +22,8 @@ export interface JobSummary {
   updated_at: string;
   /** secondi rimanenti stimati, solo per i job in esecuzione; null se non stimabile */
   eta_seconds?: number | null;
+  /** posizione (da 1) di un job in coda nella coda del suo pool, in ordine di partenza; null per gli altri */
+  queue_position?: number | null;
 }
 
 /** Evento "log" del flusso SSE di un job: righe complete dal byte `start` al byte `offset` del log. */
@@ -183,6 +185,8 @@ export interface QmeanServiceStatus {
   };
   /** memoria del container QMEAN (byte) */
   memory?: { total: number; swap: number } | null;
+  /** memoria da assegnare a Docker per il database scelto: misurata (UniRef30_2020_06) o stimata dalla dimensione */
+  memory_required?: { bytes: number; basis: "measured" | "estimate" } | null;
   selected?: string | null;
   preferred?: string | null;
   databases: UniclustDatabase[];
@@ -243,6 +247,8 @@ export interface SystemStats {
   disk: { total: number; free: number; percent: number };
   process_memory: number;
   active_jobs: number;
+  /** budget di CPU condiviso fra i job: slot totali, occupati dai processi di calcolo, processi in attesa */
+  cpu_slots?: { total: number; used: number; waiting: number };
 }
 
 export interface Settings {

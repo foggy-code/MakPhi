@@ -6,7 +6,7 @@ import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { Card, Confirm, Empty, PageHead, Progress, StatusBadge } from "../components/ui";
 import { useProject, useToast } from "../lib/context";
-import { fmtBytes, fmtDate, fmtDuration, fmtEta, isActive, KIND_LABEL } from "../lib/format";
+import { fmtBytes, fmtDate, fmtDuration, fmtEta, isActive, KIND_LABEL, queueLabel } from "../lib/format";
 import { useAsync, useInterval, useJob, useLiveJobList } from "../lib/hooks";
 import { listPollInterval } from "../lib/live";
 
@@ -129,6 +129,7 @@ export default function Jobs() {
                         <div className="ellipsis small" style={{ maxWidth: 330, marginTop: 3 }}>{j.title}</div>
                         {isActive(j.status) && <div style={{ marginTop: 4 }}><Progress value={j.progress} /></div>}
                         {isActive(j.status) && fmtEta(j.eta_seconds) && <div className="tiny muted" style={{ marginTop: 2 }}>{fmtEta(j.eta_seconds)}</div>}
+                        {queueLabel(j) && <div className="tiny muted" style={{ marginTop: 2 }}>{queueLabel(j)}</div>}
                       </td>
                       <td className="tiny muted nowrap">{fmtDate(j.created_at)}</td>
                     </tr>

@@ -403,11 +403,12 @@ def search(ctx: JobContext, sequence: str, *, engine: str = "rcsb", evalue: floa
             query = ctx.path("query.fasta")
             query.write_text(f">query\n{sequence}\n", encoding="utf-8")
             out = ctx.path("mmseqs_hits.m8")
-            threads = max(1, (os.cpu_count() or 2) - 1)
-            result = ctx.run([exe, "easy-search", str(query), str(fast or db), str(out), str(ctx.tmp_dir / "mmseqs"),
-                              "-e", str(evalue), "-s", "7.5", "--max-seqs", str(max(300, max_hits * 6)),
-                              "--threads", str(threads), "--format-output", ",".join(MMSEQS_FIELDS)],
-                             log_output=False)
+            # multi-thread: un thread per slot libero del budget di CPU condiviso (da 1 ai processori − 1)
+            result = ctx.run(lambda threads: [
+                exe, "easy-search", str(query), str(fast or db), str(out), str(ctx.tmp_dir / "mmseqs"),
+                "-e", str(evalue), "-s", "7.5", "--max-seqs", str(max(300, max_hits * 6)),
+                "--threads", str(threads), "--format-output", ",".join(MMSEQS_FIELDS)],
+                log_output=False, cpu=max(1, (os.cpu_count() or 2) - 1))
             if result.returncode != 0 or not out.exists():
                 raise AppError(f"MMseqs2 è terminato con errore: {result.output[-500:]}")
             hits = parse_mmseqs_m8(out.read_text(encoding="utf-8", errors="replace"))[:max_hits]

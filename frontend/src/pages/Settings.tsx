@@ -100,7 +100,7 @@ export default function SettingsPage() {
               </Card>
               <Card title="Esecuzione">
                 <div className="grid grid-2">
-                  <Field label="Job di calcolo in parallelo" hint={`0 = automatico (${info?.workers ?? "core − 1"}). Richiede il riavvio.`}>
+                  <Field label="Job di calcolo in parallelo" hint={`0 = automatico (${info?.workers ?? "core − 1"}). Limita anche i programmi di calcolo contemporanei di tutti i job (MODELLER, PROCHECK, BLAST…); vale subito.`}>
                     <input className="input" type="number" min={0} max={64} value={form.max_workers} onChange={(e) => set("max_workers", Number(e.target.value))} />
                   </Field>
                   <Field label="Timeout per processo (minuti)" hint="MODELLER e strumenti esterni">

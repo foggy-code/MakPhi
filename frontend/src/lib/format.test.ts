@@ -1,5 +1,44 @@
 import { describe, expect, it } from "vitest";
-import { cachedLabel, fmtEta, searchCacheHitsLabel } from "./format";
+import { cachedLabel, fmtCpuSlots, fmtEta, fmtQueuePosition, queueLabel, searchCacheHitsLabel } from "./format";
+
+describe("fmtCpuSlots", () => {
+  it("slot in uso e processi in attesa", () => {
+    expect(fmtCpuSlots({ total: 7, used: 2, waiting: 0 })).toBe("2 di 7 slot di calcolo in uso");
+    expect(fmtCpuSlots({ total: 2, used: 2, waiting: 1 })).toBe("2 di 2 slot di calcolo in uso, 1 processo in attesa");
+    expect(fmtCpuSlots({ total: 2, used: 2, waiting: 3 })).toBe("2 di 2 slot di calcolo in uso, 3 processi in attesa");
+  });
+  it("capacità ridotta mentre i processi girano: mai oltre il totale", () => {
+    expect(fmtCpuSlots({ total: 2, used: 4, waiting: 0 })).toBe("2 di 2 slot di calcolo in uso");
+  });
+  it("nessuna nota con un server che non riporta il budget", () => {
+    expect(fmtCpuSlots(undefined)).toBeNull();
+    expect(fmtCpuSlots(null)).toBeNull();
+    expect(fmtCpuSlots({ total: 0, used: 0, waiting: 0 })).toBeNull();
+  });
+});
+
+describe("fmtQueuePosition", () => {
+  it("posizione in coda dal server, da 1", () => {
+    expect(fmtQueuePosition(1)).toBe("1° in coda");
+    expect(fmtQueuePosition(2)).toBe("2° in coda");
+    expect(fmtQueuePosition(12)).toBe("12° in coda");
+  });
+  it("nessuna nota senza una posizione valida", () => {
+    expect(fmtQueuePosition(null)).toBeNull();
+    expect(fmtQueuePosition(undefined)).toBeNull();
+    expect(fmtQueuePosition(0)).toBeNull();
+    expect(fmtQueuePosition(-1)).toBeNull();
+    expect(fmtQueuePosition(1.5)).toBeNull();
+    expect(fmtQueuePosition(Number.NaN)).toBeNull();
+  });
+  it("solo per i job ancora in coda", () => {
+    expect(queueLabel({ status: "queued", queue_position: 3 })).toBe("3° in coda");
+    expect(queueLabel({ status: "queued", queue_position: null })).toBeNull(); // ripresa in preparazione
+    expect(queueLabel({ status: "queued" })).toBeNull(); // server precedente, senza il campo
+    expect(queueLabel({ status: "running", queue_position: 1 })).toBeNull(); // appena partito: riepilogo vecchio
+    expect(queueLabel(null)).toBeNull();
+  });
+});
 
 describe("fmtEta", () => {
   it("nessuna nota senza stima", () => {

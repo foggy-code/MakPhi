@@ -70,8 +70,8 @@ def build_core(paths: Paths) -> Core:
     cache.configure(paths.compute_cache)
     search.configure(paths.local_cache)
     db = Database(paths.db)
-    jobs = JobManager(db, paths.jobs, settings.get().effective_workers(), settings.get,
-                      scratch_dir=paths.scratch)
+    # job di calcolo in parallelo e budget di CPU seguono le Impostazioni anche dopo un cambio (workers=None)
+    jobs = JobManager(db, paths.jobs, None, settings.get, scratch_dir=paths.scratch)
     recovered = jobs.recover()
     library = TemplateLibrary(paths.templates)
     projects = ProjectService(db)

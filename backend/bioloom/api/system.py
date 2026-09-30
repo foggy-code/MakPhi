@@ -89,6 +89,8 @@ def stats(core: Core = Depends(get_core)) -> dict:
         "disk": {"total": disk.total, "free": disk.free, "percent": disk.percent},
         "process_memory": proc.memory_info().rss,
         "active_jobs": core.jobs.count_active(),
+        # budget di CPU condiviso fra i job: slot totali, occupati dai processi di calcolo, processi in attesa
+        "cpu_slots": core.jobs.budget.snapshot(),
     }
 
 
@@ -144,6 +146,8 @@ def update_settings(body: SettingsUpdate, core: Core = Depends(get_core)) -> dic
         raise AppError(f"Impostazioni non valide: {exc}")
     if "modeller_python" in changes:
         tools.detect_modeller(updated.modeller_python, force=True)
+    if "max_workers" in changes:
+        core.jobs.reconfigure()  # job in parallelo e slot di CPU cambiano subito, senza riavvio
     return updated.model_dump()
 
 

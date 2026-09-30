@@ -5,10 +5,16 @@ versione del database (anche più versioni sullo stesso disco, vedi docker/qmean
 indica quale usare (impostazione `qmean_uniclust`, vuota = la più recente pronta). Il calcolo usa HHblits:
 dal disco esterno servono da qualche minuto a oltre mezz'ora per modello. Con Docker Desktop conviene la
 copia locale di indici e cs219 (`local_copy`), che evita le letture piccole attraverso la condivisione di file.
+
+Memoria: prima di ogni calcolo si confronta la memoria del servizio (`memory` dello stato del worker) con quella
+richiesta dal database scelto (`memory_requirement`). Se non basta il calcolo non parte e il job fallisce subito
+con il motivo (o passa al fallback su SWISS-MODEL, se attivo): con meno memoria HHblits rilegge di continuo il
+cs219 e il calcolo si fermerebbe a metà per il timeout.
 """
 
 from __future__ import annotations
 
+import math
 import os
 import time
 from typing import Callable, Optional
@@ -25,6 +31,74 @@ NOT_RUNNING = ("QMEAN locale non attivo: collega il disco con UniClust30/UniRef3
                "dall'avviatore, che attiva il servizio quando trova il database.")
 _status_cache: dict = {"at": 0.0, "key": None, "value": None}
 
+GIB = 1024 ** 3  # unità binarie, come il worker e l'interfaccia ("GB")
+# Memoria da assegnare a Docker perché HHblits finisca in tempi ragionevoli, misurata (README, docs/ARCHITETTURA.md):
+# con UniRef30_2020_06 HHblits tiene in memoria 3,8 GB di indici (1,36 GB sul disco) e deve avere nella cache
+# l'intero cs219 (6 GB), più circa 1 GB per il resto del programma e il 10% di margine per kernel e container.
+# Con 5,7 GB ha letto oltre 100 GB in 4 minuti senza avanzare.
+MEASURED_MEMORY = {"uniref30_2020_06": 12 * GIB}
+REFERENCE_DATABASE = "uniref30_2020_06"
+REFERENCE_SIZE = 194 * GIB  # UniRef30_2020_06 sul disco (HH-suite 3, file a3m, hhm e cs219)
+# Versioni non misurate: stima in proporzione alla dimensione del database, più il 50%. La memoria dipende da
+# indici e cs219, che crescono con il numero di cluster; la dimensione la fanno soprattutto gli allineamenti, meno
+# profondi nelle versioni vecchie, che hanno quindi più indice e cs219 per GB di database. È una stima prudente, non
+# una misura: se il worker, che conosce le dimensioni vere degli indici, giudica la memoria sufficiente ("ok"),
+# vale il suo giudizio.
+ESTIMATE_MARGIN = 1.5
+MIN_MEMORY = 2 * GIB  # HHblits e OpenStructure anche con un database minuscolo
+# /proc/meminfo del container riporta un po' meno della memoria assegnata a Docker (kernel, riserve: con 12 GB
+# assegnati si leggono circa 11,7 GB): si accetta il 95% del requisito.
+MEMINFO_TOLERANCE = 0.95
+
+
+def _gb(value: float, decimals: int = 1) -> str:
+    return f"{value / GIB:.{decimals}f}".replace(".", ",")
+
+
+def memory_requirement(uniclust: Optional[dict]) -> Optional[dict]:
+    """Memoria richiesta dal database scelto: {"bytes", "basis": "measured" | "estimate"}; None se non si sa.
+
+    `uniclust` è la descrizione del database scelto nello stato del worker (nome in `prefix`, `size` in byte).
+    """
+    if not isinstance(uniclust, dict):
+        return None
+    name = str(uniclust.get("prefix") or "").lower()
+    if name in MEASURED_MEMORY:
+        return {"bytes": MEASURED_MEMORY[name], "basis": "measured"}
+    size = uniclust.get("size")
+    if isinstance(size, bool) or not isinstance(size, (int, float)) or size <= 0:
+        return None
+    estimate = size / REFERENCE_SIZE * MEASURED_MEMORY[REFERENCE_DATABASE] * ESTIMATE_MARGIN
+    return {"bytes": int(math.ceil(max(MIN_MEMORY, estimate) / GIB)) * GIB, "basis": "estimate"}
+
+
+def memory_problem(uniclust: Optional[dict], memory: Optional[dict]) -> Optional[str]:
+    """Perché la memoria del servizio QMEAN non basta per il database scelto; None se basta o non si sa.
+
+    Nell'ordine: il giudizio del worker sulle dimensioni vere degli indici ("insufficient": non basta nemmeno con
+    lo swap; "ok": basta con il 10% di margine), poi il requisito di `memory_requirement` confrontato con la memoria
+    del container (senza lo swap, che per HHblits non serve: il cs219 va tenuto nella cache).
+    """
+    uniclust = uniclust if isinstance(uniclust, dict) else {}
+    fit = uniclust.get("memory")
+    if fit == "insufficient":
+        return uniclust.get("memory_message") or "memoria insufficiente per HHblits."
+    if fit == "ok":
+        return None
+    total = (memory or {}).get("total") if isinstance(memory, dict) else None
+    need = memory_requirement(uniclust)
+    if not isinstance(total, (int, float)) or total <= 0 or need is None:
+        return None  # worker di una versione che non misura la memoria: nessun controllo
+    if total >= need["bytes"] * MEMINFO_TOLERANCE:
+        return None
+    name = uniclust.get("prefix") or "il database scelto"
+    basis = "valore misurato" if need["basis"] == "measured" else \
+        f"stima dalla dimensione del database, {_gb(float(uniclust.get('size') or 0), 0)} GB"
+    return (f"memoria insufficiente per {name}: servono circa {_gb(need['bytes'], 0)} GB assegnati a Docker "
+            f"({basis}) e il servizio QMEAN ne ha {_gb(total)}. Con meno memoria HHblits rilegge di continuo il "
+            "cs219 e il calcolo si fermerebbe a metà per il timeout. Aumenta la memoria di Docker, scegli una "
+            "versione più piccola del database oppure usa il fallback su SWISS-MODEL.")
+
 
 def base_url() -> str:
     """Indirizzo del worker: l'avviatore lo imposta solo quando ha trovato UniClust30."""
@@ -38,7 +112,8 @@ def _client() -> httpx.Client:
 def status(prefer: str = "", force: bool = False) -> dict:
     """Stato del worker e dei database trovati (cache di 15 s).
 
-    `available` è vero se la versione richiesta (o, senza richiesta, almeno una) è pronta.
+    `available` è vero se la versione richiesta (o, senza richiesta, almeno una) è pronta e la memoria del
+    servizio basta per quel database (`memory_problem`); `memory_required` è il requisito del database scelto.
     """
     url = base_url()
     if not url:
@@ -55,17 +130,20 @@ def status(prefer: str = "", force: bool = False) -> dict:
                 params["refresh"] = "1"
             data = c.get("/status", params=params).json()
         uniclust = data.get("uniclust") or {}
-        no_memory = uniclust.get("memory") == "insufficient"  # HHblits verrebbe interrotto: meglio dirlo subito
-        if not uniclust.get("valid"):
+        valid = bool(uniclust.get("valid"))
+        # memoria che non basta: HHblits si fermerebbe a metà (o verrebbe interrotto), meglio dirlo subito
+        no_memory = memory_problem(uniclust, data.get("memory")) if valid else None
+        if not valid:
             message = f"UniClust30 non utilizzabile: {uniclust.get('error')}"
         else:
-            message = f"QMEAN locale non utilizzabile: {uniclust.get('memory_message')}" if no_memory else None
-        value = {"configured": True, "reachable": True, "available": bool(uniclust.get("valid")) and not no_memory,
+            message = f"QMEAN locale non utilizzabile: {no_memory}" if no_memory else None
+        value = {"configured": True, "reachable": True, "available": valid and not no_memory,
                  "uniclust": uniclust, "selected": data.get("selected"), "preferred": prefer or None,
                  "databases": data.get("databases") or [], "archives": data.get("archives") or [],
                  "unsupported": data.get("unsupported") or [], "local_orphans": data.get("local_orphans") or [],
                  "qmtl": data.get("qmtl") or {},
                  "memory": data.get("memory"),
+                 "memory_required": memory_requirement(uniclust) if valid else None,
                  "busy": data.get("busy"), "queued": data.get("queued"), "qmean_version": data.get("qmean_version"),
                  "message": message}
     except (httpx.HTTPError, ValueError):

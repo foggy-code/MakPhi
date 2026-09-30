@@ -58,11 +58,15 @@ Dalla sua finestra puoi:
   - Su Linux il disco è montato direttamente e la copia non serve.
 - **Memoria:** HHblits deve tenere in memoria gli indici del database e l'intero cs219. Con UniRef30_2020_06
   servono circa 12 GB assegnati a Docker.
-  - **Con meno memoria** il calcolo parte, ma rilegge il cs219 di continuo e può durare ore. Con 6 GB, dopo
-    l'avvio ha letto oltre 100 GB senza avanzare.
-  - **Prima di partire** BioLoom avvisa e indica quanta memoria serve. Se non bastano nemmeno memoria e swap
-    insieme, non avvia HHblits e usa il fallback su SWISS-MODEL, se attivo.
-  - **Con memoria al limite** HHblits usa un solo processore: legge molto meno dal disco.
+  - **Con meno memoria** HHblits rilegge il cs219 di continuo e il calcolo si ferma a metà per il timeout. Con 6 GB,
+    dopo l'avvio ha letto oltre 100 GB senza avanzare.
+  - **Prima di partire** BioLoom confronta la memoria di Docker con quella richiesta dal database scelto: 12 GB per
+    UniRef30_2020_06, per le altre versioni una stima prudente dalla dimensione del database (Impostazioni → Database
+    mostra entrambe). Se non basta, il calcolo non parte e il job fallisce subito dicendo quanta memoria serve, oppure
+    usa il fallback su SWISS-MODEL, se attivo.
+  - **Con memoria al limite** (sopra il requisito ma sotto quella consigliata dal servizio) HHblits usa un solo
+    processore: legge molto meno dal disco.
+  - **Un calcolo alla volta:** gli altri QMEAN locali aspettano in coda ("2° in coda") senza fermare gli altri job.
   - **Windows:** nel file `%UserProfile%\.wslconfig` metti `[wsl2]` e `memory=...GB`, poi `wsl --shutdown`.
     Il valore predefinito è metà della RAM.
   - **macOS:** Docker Desktop → Settings → Resources.
@@ -96,6 +100,18 @@ sequenze e altre opzioni di modellazione salta così tutte le ricerche.
   aggiorna il risultato salvato.
 - **Disattivazione e spazio:** da Impostazioni → Spazio e file temporanei, che mostra anche lo spazio occupato. La
   cache sta in `data/cache/compute` e si pulisce da sola dopo 30 giorni.
+
+## Coda dei calcoli
+
+- **Priorità:** ricerche, allineamenti, analisi di qualità e QMEAN partono prima di modellazioni e raffinamenti dei
+  loop, e questi prima di pipeline e aggiornamenti dei database; a parità, in ordine di creazione. I job in coda
+  mostrano la posizione ("2° in coda") nella pagina Job e nel riquadro del job.
+- **CPU condivisa:** i programmi di calcolo di tutti i job insieme (MODELLER, PROCHECK, ProSA, BLAST+, MMseqs2,
+  allineatori…) non superano i **Job di calcolo in parallelo** delle Impostazioni (predefinito: core − 1). Una
+  pipeline con molte sequenze in parallelo e un'analisi lanciata nel frattempo si dividono i processori invece di
+  saturarli. Chi aspetta mostra "In attesa di CPU libera"; l'attesa non conta nel timeout e l'annullamento la
+  interrompe. La Panoramica mostra gli slot di calcolo in uso.
+- **Impostazione:** il numero di job in parallelo vale subito, senza riavviare BioLoom.
 
 ## Qualità per residuo e consenso
 

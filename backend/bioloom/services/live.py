@@ -3,7 +3,8 @@
 Ogni evento è `event: <tipo>` + `data: <JSON su una riga>`.
 
 - **Un job** (`GET /api/jobs/{id}/events?offset=&log=`):
-  - `status`: riepilogo del job con `eta_seconds`, all'apertura e a ogni cambiamento;
+  - `status`: riepilogo del job con `eta_seconds` e `queue_position`, all'apertura e a ogni cambiamento (anche
+    della posizione in coda, che cambia quando partono i job davanti);
   - `log`: righe complete aggiunte al log, `{"start", "offset", "text"}` in byte del file (il client riparte
     da `offset`, come con `GET /log?offset=`);
   - `end`: job terminato con l'esecuzione chiusa, quindi log completo; subito dopo il flusso si chiude. Lo stato
@@ -12,7 +13,8 @@ Ogni evento è `event: <tipo>` + `data: <JSON su una riga>`.
     attivo: il client apre un nuovo flusso.
 - **Elenco** (`GET /api/jobs/events?project_id=`):
   - `ready` all'apertura, con il numero dei job attivi (`active`);
-  - `job` quando un job cambia stato, progresso, fase o stima (riepilogo con `eta_seconds`);
+  - `job` quando un job cambia stato, progresso, fase, stima o posizione in coda (riepilogo con `eta_seconds` e
+    `queue_position`);
   - `items` quando cambiano elementi di una pipeline (`idx`, null = molti insieme);
   - `active` quando cambia il numero dei job attivi; `deleted` per un job eliminato; `resync` se il flusso ha
     perso cambiamenti (il client ricarica tutto).
@@ -55,7 +57,8 @@ LOG_PASS_BYTES = 1024 * 1024  # log inviato per passata: un log lungo arriva in 
 MAX_ITEM_IDS = 500
 RETRY_MS = 3000             # attesa di riconnessione suggerita ai client SSE generici
 HEARTBEAT = ": ping\n\n"
-STATUS_FIELDS = ("status", "progress", "stage", "error", "started_at", "finished_at", "updated_at", "eta_seconds")
+STATUS_FIELDS = ("status", "progress", "stage", "error", "started_at", "finished_at", "updated_at", "eta_seconds",
+                 "queue_position")
 
 
 def sse(event: str, data) -> str:

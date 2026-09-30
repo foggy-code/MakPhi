@@ -16,6 +16,11 @@ mutuamente esclusivi: un job rimesso in coda non può essere eliminato mentre ri
 Ogni cambiamento (stato, progresso, righe di log scritte su disco, esecuzione chiusa, eliminazione) viene
 pubblicato su `events` (core/events.py), da cui i flussi SSE lo ricevono senza interrogare di continuo il
 database; `estimate` stima il tempo residuo dei job in esecuzione (core/eta.py).
+
+Coda e CPU: i job in coda partono in ordine di priorità del tipo (`PRIORITY`), a parità per data di creazione,
+da un dispatcher per pool (core/dispatch.py: "cpu" con i job di calcolo in parallelo delle Impostazioni, "io"
+con 8); i processi esterni di calcolo lanciati da `JobContext.run` prendono gli slot di un budget di CPU
+condiviso fra tutti i job (core/budget.py), così pipeline, elementi e strumenti insieme non saturano la CPU.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from __future__ import annotations
 import codecs
 import collections
 import fnmatch
+import functools
 import os
 import shutil
 import signal
@@ -32,13 +38,14 @@ import threading
 import time
 import traceback
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable, Optional, Union
 
+from .budget import CpuBudget
 from .db import Database, encode_json, now_iso
+from .dispatch import Dispatcher
 from .errors import AppError, Conflict, NotFound
 from .eta import progress_eta, seconds_between
 from .events import DELETED, IDLE, JOB, LOG, ChangeFeed
@@ -59,6 +66,25 @@ REQUEUE_WAIT_SECONDS = 10.0
 # temporanee delle analisi: non vengono salvati tra i risultati di un job riuscito.
 INTERMEDIATE_PATTERNS = ("*.rsr", "*.lrsr", "*.sch", "*.ini", "*.D[0-9]*", "*.V[0-9]*", "*.DL[0-9]*",
                          "*.IL[0-9]*", "dope_input.pdb")
+
+# Priorità di esecuzione per tipo di job (numero più basso = parte prima), nella coda di ciascun pool e nel
+# budget di CPU: i calcoli interattivi brevi, che l'utente sta aspettando davanti allo schermo, prima della
+# modellazione; questa prima dei lavori lunghi in blocco (pipeline, manutenzione dei database). A parità di
+# priorità vale l'ordine di creazione. `compare` è il confronto strutturale (leggero, interattivo).
+PRIORITY = {
+    "search": 0, "align": 0, "align2d": 0, "quality": 0, "qmean": 0, "compare": 0,
+    "model": 1, "loop": 1, "selftest": 1,
+    "pipeline": 2, "db_update_pdbaa": 2, "db_build_mmseqs": 2, "db_index_mmseqs": 2, "db_convert_uniclust": 2,
+    "db_local_uniclust": 2,
+}
+DEFAULT_PRIORITY = 1
+IO_WORKERS = 8
+# Fase mostrata mentre un processo aspetta uno slot del budget di CPU (vedi JobContext.run)
+WAIT_STAGE = "In attesa di CPU libera"
+WAIT_SUFFIX = " · in attesa di CPU libera"
+# Risorse esclusive (core/dispatch.py): il servizio QMEAN locale esegue un calcolo alla volta
+QMEAN_LOCAL = "qmean_local"
+RESOURCE_STAGE = {QMEAN_LOCAL: "In coda: il servizio QMEAN locale sta eseguendo un altro calcolo"}
 
 _extra_env: dict[str, str] = {}
 
@@ -119,6 +145,8 @@ class ProcessResult:
 Handler = Callable[["JobContext", dict], dict]
 # stima del tempo residuo di un job in esecuzione (riga di `jobs`, adesso): secondi o None
 EtaEstimator = Callable[[dict, datetime], Optional[int]]
+# risorsa esclusiva richiesta da un job, dai suoi parametri (None = nessuna)
+ResourceFn = Callable[[dict], Optional[str]]
 
 
 @dataclass
@@ -126,14 +154,38 @@ class _Registration:
     fn: Handler
     pool: str
     eta: Optional[EtaEstimator] = None
+    priority: int = DEFAULT_PRIORITY
+    resource: Optional[ResourceFn] = None
+
+
+def _silent(_fraction: Optional[float], _stage: Optional[str]) -> None:
+    """Progresso di un contesto figlio senza fase propria (es. l'analisi di qualità dentro la modellazione)."""
+
+
+def cpu_slots(cpu: Union[bool, int]) -> int:
+    """Slot del budget di CPU per il parametro `cpu` di `JobContext.run`: True = 1, False = 0, un numero = quello."""
+    if cpu is True:
+        return 1
+    if cpu is False or cpu is None:
+        return 0
+    return max(1, int(cpu))
 
 
 class JobContext:
-    """Interfaccia offerta agli handler: log, progresso, sottoprocessi, cancellazione."""
+    """Interfaccia offerta agli handler: log, progresso, sottoprocessi, cancellazione.
+
+    I contesti figli (`sub`) condividono cancellazione e log del job. Le attese di CPU dei loro processi si
+    mostrano nella fase del job: al posto della fase ("In attesa di CPU libera") se il processo è del job stesso
+    o di un figlio senza fase propria e nessun altro processo del job è in esecuzione; altrimenti in coda alla fase
+    ("Validazione · in attesa di CPU libera" con passi in parallelo, "3 di 5 sequenze elaborate · in attesa di CPU
+    libera" per gli elementi di pipeline, figli con una fase propria), così le fasi della pipeline restano.
+    """
 
     def __init__(self, manager: "JobManager", job_id: str, workdir: Path, params: dict,
                  cancel_event: threading.Event, prefix: str = "",
-                 on_progress: Optional[Callable[[Optional[float], Optional[str]], None]] = None) -> None:
+                 on_progress: Optional[Callable[[Optional[float], Optional[str]], None]] = None, *,
+                 priority: int = DEFAULT_PRIORITY, parent: Optional["JobContext"] = None, lane: bool = False,
+                 stage: Optional[str] = None) -> None:
         self._manager = manager
         self.job_id = job_id
         self.workdir = workdir
@@ -141,6 +193,18 @@ class JobContext:
         self._cancel = cancel_event
         self._prefix = prefix
         self._on_progress = on_progress
+        self.priority = priority
+        # radice (la fase del job) e "corsia": il contesto con una fase propria da cui dipende questo (sé stesso
+        # se è la radice o un figlio con progresso proprio, come un elemento di pipeline; altrimenti quella del padre)
+        self._root: JobContext = parent._root if parent is not None else self
+        self._lane: JobContext = self if parent is None or lane else parent._lane
+        # solo nella radice: fase dichiarata dall'handler, fase mostrata e processi in attesa di CPU
+        self._stage_lock = threading.Lock()
+        self._stage = stage
+        self._shown = stage
+        self._own_waiting = 0
+        self._lane_waiting = 0
+        self._running = 0  # processi del job in esecuzione (da qualunque contesto)
 
     @property
     def settings(self):
@@ -169,15 +233,65 @@ class JobContext:
     def progress(self, fraction: Optional[float] = None, stage: Optional[str] = None) -> None:
         if self._on_progress is not None:
             self._on_progress(fraction, stage)
-        else:
-            self._manager._set_progress(self.job_id, fraction, stage)
+            return
+        # radice: la fase mostrata tiene conto dei processi in attesa di CPU (sotto il lock: le fasi scritte da
+        # più thread, es. gli elementi di una pipeline, arrivano nel database nell'ordine in cui si decidono)
+        with self._stage_lock:
+            shown = None
+            if stage is not None:
+                self._stage = stage
+                shown = self._shown = self._display()
+            self._manager._set_progress(self.job_id, fraction, shown)
+
+    def _display(self) -> Optional[str]:
+        """Fase da mostrare (radice, sotto il lock). Al posto della fase solo se il job non ha nessun processo in
+        esecuzione: con passi in parallelo (uno gira, un altro aspetta) o con gli elementi di una pipeline l'attesa
+        si aggiunge in coda alla fase dichiarata dall'handler."""
+        if self._own_waiting > 0 and self._running == 0:
+            return WAIT_STAGE
+        if self._own_waiting > 0 or self._lane_waiting > 0:
+            return f"{self._stage}{WAIT_SUFFIX}" if self._stage else WAIT_STAGE
+        return self._stage
+
+    def _track(self, *, waiting: int = 0, running: int = 0) -> None:
+        """Processi di questo contesto in attesa di uno slot di CPU o in esecuzione: aggiorna la fase del job (quella
+        dichiarata dall'handler torna appena nessun processo aspetta più). Mostrarla è accessorio: un errore nello
+        scriverla (database chiuso all'arresto) non interrompe il processo."""
+        root = self._root
+        with root._stage_lock:
+            if waiting and self._lane is root:
+                root._own_waiting = max(0, root._own_waiting + waiting)
+            elif waiting:
+                root._lane_waiting = max(0, root._lane_waiting + waiting)
+            root._running = max(0, root._running + running)
+            shown = root._display()
+            if shown is not None and shown != root._shown:
+                root._shown = shown
+                try:
+                    self._manager._set_progress(self.job_id, None, shown)
+                except Exception:
+                    pass
+
+    def _cpu_wait(self, waiting: bool) -> None:
+        """Inizio o fine dell'attesa di uno slot di CPU (chiamata dal budget)."""
+        self._track(waiting=1 if waiting else -1)
+
+    def cpu_threads(self, wanted: int) -> int:
+        """Thread da dare a un programma multi-thread che ne vorrebbe `wanted`: non oltre gli slot del budget di
+        CPU. Lo stesso numero va passato a `run(cpu=...)`, così il programma occupa uno slot per thread."""
+        return self._manager.budget.slots_for(wanted)
 
     def sub(self, name: str, workdir: Path,
             on_progress: Optional[Callable[[Optional[float], Optional[str]], None]] = None) -> "JobContext":
-        """Contesto figlio (es. un elemento di pipeline): condivide cancellazione e log del job padre."""
+        """Contesto figlio (es. un elemento di pipeline): condivide cancellazione e log del job padre.
+
+        Con `on_progress` il figlio ha una fase propria (l'elemento di pipeline); senza, il suo progresso non si
+        mostra e le sue attese di CPU contano come quelle del padre.
+        """
         workdir.mkdir(parents=True, exist_ok=True)
         return JobContext(self._manager, self.job_id, workdir, self.params, self._cancel,
-                          prefix=f"{self._prefix}[{name}] ", on_progress=on_progress or (lambda f, s: None))
+                          prefix=f"{self._prefix}[{name}] ", on_progress=on_progress or _silent,
+                          priority=self.priority, parent=self, lane=on_progress is not None)
 
     def path(self, *parts: str) -> Path:
         return safe_join(self.workdir, *parts)
@@ -190,16 +304,46 @@ class JobContext:
         """
         self._manager._commit(self.job_id, self.workdir, success=success)
 
-    def run(self, cmd: list[str], *, cwd: Optional[Path] = None, env: Optional[dict] = None,
-            timeout: Optional[float] = None, on_line: Optional[Callable[[str], None]] = None,
-            log_output: bool = True) -> ProcessResult:
+    def run(self, cmd: Union[list[str], Callable[[int], list[str]]], *, cwd: Optional[Path] = None,
+            env: Optional[dict] = None, timeout: Optional[float] = None,
+            on_line: Optional[Callable[[str], None]] = None, log_output: bool = True,
+            cpu: Union[bool, int] = True) -> ProcessResult:
         """Esegue un processo esterno registrandone l'output nel log; rispetta cancellazione e timeout.
 
         Senza `timeout` esplicito vale il timeout dei job delle Impostazioni.
+
+        `cpu`: slot del budget di CPU condiviso fra i job (core/budget.py) occupati dal processo finché gira.
+        True (predefinito) = 1, per i programmi di calcolo a un thread; False per i processi leggeri o di I/O, che
+        partono subito; un numero N per i programmi multi-thread, uno slot per thread:
+        - con `cmd` funzione del numero di thread (`cmd(n)` → comando) la richiesta è elastica: al suo turno il
+          processo prende da 1 a N slot, quanti ne sono liberi, e parte con altrettanti thread (non blocca la coda
+          aspettando che se ne liberino N);
+        - con `cmd` lista il processo aspetta tutti gli N slot (N non oltre la capacità, vedi `cpu_threads`).
+        L'attesa di uno slot si interrompe con l'annullamento, mostra "In attesa di CPU libera" e non conta nel
+        timeout, che parte con il processo.
         """
         self.check()
         if timeout is None:
             timeout = float(self.settings.job_timeout_minutes) * 60
+        slots = cpu_slots(cpu)
+        elastic = callable(cmd)
+        grant = self._manager.budget.acquire(slots, minimum=1 if elastic else None, priority=self.priority,
+                                             check=self.check, on_wait=self._cpu_wait) if slots else None
+        started = False
+        try:
+            argv = cmd(grant.slots if grant is not None else 1) if elastic else cmd
+            self._track(running=1)
+            started = True
+            return self._popen(argv, cwd=cwd, env=env, timeout=timeout, on_line=on_line, log_output=log_output)
+        finally:
+            if grant is not None:
+                grant.release()
+            if started:
+                self._track(running=-1)
+
+    def _popen(self, cmd: list[str], *, cwd: Optional[Path], env: Optional[dict], timeout: Optional[float],
+               on_line: Optional[Callable[[str], None]], log_output: bool) -> ProcessResult:
+        self.check()  # annullato mentre aspettava la CPU: il processo non parte
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
         proc = subprocess.Popen(
             cmd, cwd=str(cwd or self.workdir), env=env if env is not None else default_env(),
@@ -240,17 +384,21 @@ class JobContext:
 
 
 class JobManager:
-    def __init__(self, db: Database, jobs_dir: Path, workers: int, settings_provider: Callable,
+    def __init__(self, db: Database, jobs_dir: Path, workers: Optional[int], settings_provider: Callable,
                  scratch_dir: Optional[Path] = None) -> None:
+        """`workers`: job di calcolo in parallelo (pool "cpu") e slot del budget di CPU; None = dalle Impostazioni
+        (`effective_workers`), riletti a ogni scelta, così un cambio vale senza riavvio."""
         self.db = db
         self.jobs_dir = jobs_dir
         # senza scratch i job lavorano direttamente nella cartella definitiva
         self.scratch_jobs = (scratch_dir / "jobs") if scratch_dir is not None else None
         self.settings_provider = settings_provider
+        self._fixed_workers = workers
         self._handlers: dict[str, _Registration] = {}
+        self.budget = CpuBudget(self.cpu_workers)
         self._pools = {
-            "cpu": ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="bioloom-cpu"),
-            "io": ThreadPoolExecutor(max_workers=8, thread_name_prefix="bioloom-io"),
+            "cpu": Dispatcher("cpu", self.cpu_workers, self._execute, on_blocked=self._blocked),
+            "io": Dispatcher("io", lambda: IO_WORKERS, self._execute, on_blocked=self._blocked),
         }
         self._lock = threading.RLock()
         self._cancel_events: dict[str, threading.Event] = {}
@@ -272,9 +420,53 @@ class JobManager:
         self._flusher.start()
 
     # ------------------------------------------------------------------ registrazione e avvio
-    def register(self, kind: str, fn: Handler, pool: str = "cpu", eta: Optional[EtaEstimator] = None) -> None:
-        """Registra l'handler di un tipo di job; `eta` sostituisce la stima dal progresso (es. la pipeline)."""
-        self._handlers[kind] = _Registration(fn, pool, eta)
+    def register(self, kind: str, fn: Handler, pool: str = "cpu", eta: Optional[EtaEstimator] = None,
+                 priority: Optional[int] = None, resource: Optional[ResourceFn] = None) -> None:
+        """Registra l'handler di un tipo di job; `eta` sostituisce la stima dal progresso (es. la pipeline).
+
+        `priority` sostituisce quella del tipo (`PRIORITY`); `resource(params)` indica una risorsa esclusiva
+        (es. `QMEAN_LOCAL`): un job che la chiede resta in coda finché un altro la tiene.
+        """
+        if pool not in self._pools:
+            raise ValueError(f"Pool sconosciuto: {pool}")
+        rank = PRIORITY.get(kind, DEFAULT_PRIORITY) if priority is None else int(priority)
+        self._handlers[kind] = _Registration(fn, pool, eta, rank, resource)
+
+    def cpu_workers(self) -> int:
+        """Job di calcolo in parallelo e slot del budget di CPU in questo momento."""
+        if self._fixed_workers:
+            return max(1, int(self._fixed_workers))
+        try:
+            return max(1, int(self.settings_provider().effective_workers()))
+        except Exception:  # impostazioni non leggibili: si procede con un solo job alla volta
+            return 1
+
+    def reconfigure(self) -> None:
+        """Le Impostazioni sono cambiate (job in parallelo): code e budget di CPU si riesaminano subito."""
+        for pool in self._pools.values():
+            pool.wake()
+        self.budget.wake()
+
+    def _enqueue(self, job_id: str, kind: str, params: dict, created_at: str) -> None:
+        """Mette il job nella coda del suo pool, con la priorità del tipo e l'eventuale risorsa esclusiva.
+
+        A parità di priorità l'ordine è quello di creazione: `created_at` (al secondo) e poi il rowid della riga,
+        così un job ripreso torna davanti a quelli creati dopo di lui anche nello stesso secondo.
+        """
+        registration = self._handlers[kind]
+        # la risorsa si ricalcola al momento della scelta: le Impostazioni possono cambiare mentre il job aspetta
+        resource = None if registration.resource is None else \
+            functools.partial(registration.resource, params if isinstance(params, dict) else {})
+        rowid = self.db.scalar("SELECT rowid FROM jobs WHERE id=?", (job_id,)) or 0
+        self._pools[registration.pool].push(job_id, priority=registration.priority, created_at=created_at,
+                                            created_seq=int(rowid), resource=resource)
+
+    def _blocked(self, job_id: str, resource: str) -> None:
+        """Il job resta in coda perché la sua risorsa esclusiva è occupata: la fase lo dice."""
+        stage = RESOURCE_STAGE.get(resource, "In coda: la risorsa richiesta è occupata da un altro job")
+        if self.db.execute("UPDATE jobs SET stage=?, updated_at=? WHERE id=? AND status='queued'",
+                           (stage, now_iso(), job_id)):
+            self.events.publish(job_id, JOB)
 
     def recover(self) -> int:
         """Marca come falliti i job rimasti attivi da un'esecuzione precedente e svuota lo scratch.
@@ -312,8 +504,8 @@ class JobManager:
         with self._lock:
             self._cancel_events[job_id] = threading.Event()
         self.events.publish(job_id, JOB)
-        self._pools[self._handlers[kind].pool].submit(self._execute, job_id)
-        return self.get(job_id)
+        self._enqueue(job_id, kind, params, now)
+        return self.with_eta(self.get(job_id))
 
     def requeue(self, job_id: str, *, prepare: Optional[Callable[[str, Path], None]] = None,
                 note: str = "", stage: str = "In coda (ripresa)", statuses: frozenset[str] = REQUEUABLE,
@@ -381,8 +573,10 @@ class JobManager:
                 self._preparing.discard(job_id)
                 self._idle.notify_all()
             self.events.publish(job_id, IDLE)
-        # se nel frattempo è stato annullato, l'esecuzione trova lo stato cambiato e non parte
-        self._pools[self._handlers[job["kind"]].pool].submit(self._execute, job_id)
+        # se nel frattempo è stato annullato, l'esecuzione trova lo stato cambiato e non parte; in coda il job
+        # riprende il suo posto per priorità e data di creazione
+        stored = self.db.query_one("SELECT params FROM jobs WHERE id=?", (job_id,)) or {}
+        self._enqueue(job_id, job["kind"], stored.get("params") or {}, job["created_at"])
         return self.get(job_id, include_result=False)
 
     # ------------------------------------------------------------------ interrogazione
@@ -441,10 +635,22 @@ class JobManager:
             return None
 
     def with_eta(self, jobs: dict | list[dict], now: Optional[datetime] = None) -> dict | list[dict]:
-        """Aggiunge `eta_seconds` a un riepilogo di job o a un elenco (null se non stimabile); restituisce l'input."""
+        """Aggiunge `eta_seconds` (null se non stimabile) e `queue_position` a un riepilogo di job o a un elenco;
+        restituisce l'input.
+
+        `queue_position`: per un job in coda, la sua posizione (da 1) nella coda del suo pool, nell'ordine in cui
+        i job partiranno; null per gli altri e per un job non ancora (o non più) nella coda, come una ripresa in
+        preparazione.
+        """
         now = now or datetime.now(timezone.utc)
-        for job in ([jobs] if isinstance(jobs, dict) else jobs):
+        rows = [jobs] if isinstance(jobs, dict) else jobs
+        positions: dict[str, int] = {}
+        if any(job.get("status") == "queued" for job in rows):
+            for pool in self._pools.values():
+                positions.update(pool.positions())
+        for job in rows:
             job["eta_seconds"] = self.estimate(job, now)
+            job["queue_position"] = positions.get(job.get("id", "")) if job.get("status") == "queued" else None
         return jobs
 
     def busy(self, job_id: str) -> bool:
@@ -541,11 +747,20 @@ class JobManager:
             procs = list(self._processes.get(job_id, ()))
         if event is not None:
             event.set()
+        self.budget.wake()  # un processo in attesa di CPU se ne accorge subito e non parte
         for proc in procs:
             _kill(proc)
-        # un job in coda si chiude subito; se nel frattempo è partito, lo chiuderà la sua esecuzione
-        if not (job["status"] == "queued"
-                and self._finish(job_id, "cancelled", error="Annullato dall'utente.", only_from=("queued",))):
+        # Un job in coda si chiude subito ed esce dalla coda, nello stesso passo sotto il lock: una ripresa
+        # successiva (che lo rimette in coda) non può vedersi togliere la nuova voce. Se nel frattempo è partito,
+        # lo chiuderà la sua esecuzione.
+        closed = False
+        if job["status"] == "queued":
+            with self._lock:
+                closed = self._finish(job_id, "cancelled", error="Annullato dall'utente.", only_from=("queued",))
+                if closed:
+                    for pool in self._pools.values():
+                        pool.discard(job_id)
+        if not closed:
             if self.db.execute("UPDATE jobs SET status='cancelling', stage='Annullamento in corso', updated_at=? "
                                "WHERE id=? AND status='running'", (now_iso(), job_id)):
                 self.events.publish(job_id, JOB)
@@ -583,10 +798,11 @@ class JobManager:
             procs = [p for group in self._processes.values() for p in group]
         for event in events:
             event.set()
+        self.budget.close()
         for proc in procs:
             _kill(proc)
         for pool in self._pools.values():
-            pool.shutdown(wait=False, cancel_futures=True)
+            pool.close()  # i job ancora in coda li marca `recover` al prossimo avvio
         self._stop.set()
         self._flush_all()
 
@@ -612,8 +828,9 @@ class JobManager:
         self.events.publish(job_id, JOB)
         live = self.live_dir(job_id)
         live.mkdir(parents=True, exist_ok=True)
-        ctx = JobContext(self, job_id, live, job["params"] or {}, event)
         registration = self._handlers[job["kind"]]
+        ctx = JobContext(self, job_id, live, job["params"] or {}, event, priority=registration.priority,
+                         stage="Avvio")
         try:
             ctx.log(f"Job {job['kind']} avviato")
             result = registration.fn(ctx, job["params"] or {})
