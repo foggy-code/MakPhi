@@ -14,6 +14,7 @@ const Alignment = lazy(() => import("./pages/Alignment"));
 const PirEditor = lazy(() => import("./pages/PirEditor"));
 const Modeling = lazy(() => import("./pages/Modeling"));
 const Quality = lazy(() => import("./pages/Quality"));
+const Compare = lazy(() => import("./pages/Compare"));
 const Pipeline = lazy(() => import("./pages/Pipeline"));
 const Jobs = lazy(() => import("./pages/Jobs"));
 const SettingsPage = lazy(() => import("./pages/Settings"));
@@ -68,6 +69,7 @@ export function App() {
                 ["/pir", <PirEditor />],
                 ["/modeling", <Modeling />],
                 ["/quality", <Quality />],
+                ["/compare", <Compare />],
                 ["/pipeline", <Pipeline />],
                 ["/jobs", <Jobs />],
                 ["/settings", <SettingsPage />],

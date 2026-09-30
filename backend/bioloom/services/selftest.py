@@ -116,7 +116,8 @@ class SelfTestService:
             raise ToolUnavailable(f"{tools.TOOLS[tool]['label']} non installato.")
         sub = ctx.sub(tool, ctx.workdir / tool)
         res = align.structural(ASSET, "A", ASSET, "A", sub, tool=tool, names=("1UBQ", "1UBQ"), use_cache=False)
-        return f"1UBQ su se stessa: TM-score {res.get('tm_score')}, RMSD {res.get('rmsd')}"
+        return (f"1UBQ su se stessa: TM-score {res.get('tm_score')}, RMSD {res.get('rmsd')}, "
+                f"GDT-TS {res.get('gdt_ts')}, lDDT {res.get('lddt')}")
 
     @staticmethod
     def _procheck(ctx: JobContext, workdir: Path) -> str:

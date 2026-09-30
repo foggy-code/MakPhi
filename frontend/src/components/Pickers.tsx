@@ -257,7 +257,9 @@ export function StructurePicker({ value, onChange, label = "Struttura" }: { valu
         <div className="stack-sm">
           <DropZone
             accept=".pdb,.ent,.cif,.mmcif"
-            label={uploaded && value?.type === "upload" ? <><b>{uploaded.filename}</b> · catene {uploaded.chains.map((c) => c.chain).join(", ")} (trascina un altro file per cambiarlo)</> : <>Trascina un file <b>.pdb</b> o <b>.cif</b> oppure fai clic</>}
+            label={uploaded && value?.type === "upload" ? <><b>{uploaded.filename}</b> · catene {uploaded.chains.map((c) => c.chain).join(", ")} (trascina un altro file per cambiarlo)</>
+              : value?.type === "upload" && value.file ? <><b>{value.file}</b> (da un link; trascina un altro file per cambiarlo)</>
+              : <>Trascina un file <b>.pdb</b> o <b>.cif</b> oppure fai clic</>}
             onFile={(file) =>
               api.uploadStructure(file)
                 .then((u) => { setUploaded(u); onChange({ ...u.source, chain: value?.chain }); })

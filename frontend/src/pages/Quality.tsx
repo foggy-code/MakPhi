@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type {
-  ConsensusBand, ConsensusMethod, ConsensusRegion, ConsensusResult, DatabaseStatus, Job, JobSummary, QmeanResult, QualityReport, ResidueRow, Settings, StructureSource,
+  ConsensusBand, ConsensusMethod, ConsensusRegion, ConsensusResult, DatabaseStatus, Job, JobSummary, ModelResult, QmeanResult, QualityReport, ResidueRow, Settings, StructureSource,
 } from "../api/types";
 import { ConsensusTracks, RamachandranPlot, ResidueProfile, ResidueStrip, StackBar } from "../components/charts";
 import { Icon } from "../components/Icon";
@@ -10,6 +10,7 @@ import { JobPanel } from "../components/JobPanel";
 import { StructurePicker } from "../components/Pickers";
 import { Viewer3D } from "../components/Viewer3D";
 import { Alert, Badge, BarCell, Card, DropZone, Empty, Grade, PageHead, Stat, Tabs } from "../components/ui";
+import { compareLink } from "../lib/compare";
 import { useProject, useToast } from "../lib/context";
 import { fmtNum, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
@@ -83,6 +84,27 @@ function QmeanPanel({ source, onDone }: { source: StructureSource; onDone?: (job
           <Stat label={r.method === "QMEAN" ? "Media locale" : "QMEANDisCo"} value={fmtNum(r.qmeandisco, 3)} note={r.url ? <a href={r.url} target="_blank" rel="noreferrer">rapporto completo</a> : r.uniclust ? `${r.uniclust}${r.uniclust_version ? ` (${r.uniclust_version})` : ""}` : undefined} />
         </div>
       )}
+    </div>
+  );
+}
+
+/** Confronto strutturale della struttura analizzata (B): con i template del suo job di modellazione o con un'altra. */
+function CompareLinks({ source }: { source: StructureSource }) {
+  const { data: job } = useAsync<Job<ModelResult> | null>(
+    () => (source.type === "job" && source.job_id ? api.job<ModelResult>(source.job_id).catch(() => null) : Promise.resolve(null)),
+    [source.type, source.job_id],
+  );
+  const templates = job?.kind === "model" ? job.result?.templates ?? [] : [];
+  return (
+    <div className="row" style={{ gap: 6 }}>
+      {templates.map((t) => (
+        <Link key={t.code} className="btn btn-sm" to={compareLink({ type: "template", id: t.id, chain: t.chains[0] }, source)} title="GDT, lDDT e deviazione per residuo rispetto al template">
+          <Icon name="compare" size={13} /> Confronta con {t.code}
+        </Link>
+      ))}
+      <Link className="btn btn-sm" to={compareLink(null, source)} title="Sovrapponi questa struttura a un riferimento a scelta">
+        <Icon name="compare" size={13} /> {templates.length ? "Con un'altra struttura" : "Confronta con un'altra struttura"}
+      </Link>
     </div>
   );
 }
@@ -412,6 +434,7 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
               {consensus?.score != null && <> · consenso {fmtNum(consensus.score, 0)}/100 ({consensus.band}, {consensus.methods_used} metodi)</>}
             </div>
             {plddt && <div style={{ marginTop: 6 }}><Badge tone="info" title="Riconosciuto come nella libreria dei template: intestazione di AlphaFold DB (TITLE «ALPHAFOLD … PREDICTION» senza EXPDTA, oppure ModelCIF senza _exptl.method) o nome AF-<accessione>-F<n> senza un altro metodo dichiarato, e valori tra 0 e 100">Modello AlphaFold: la colonna B-factor contiene il pLDDT</Badge></div>}
+            {source && <div style={{ marginTop: 8 }}><CompareLinks source={source} /></div>}
           </div>
           {source && <QmeanPanel source={source} onDone={onQmean} />}
         </div>

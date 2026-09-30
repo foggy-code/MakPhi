@@ -28,11 +28,17 @@ interface Props {
 
 const NO_VALUE_INT = hexToInt(NO_VALUE_COLOR);
 
+/** Colori per residuo e, per i residui non elencati, per catena (interi 0xRRGGBB). */
+interface ViewerColors {
+  residues: Map<string, number>;
+  chains: Map<string, number>;
+}
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
-function applyStyle(viewer: any, scheme: Scheme, highlight: { chain: string; resi: number }[], colors: Map<string, number> | null) {
+function applyStyle(viewer: any, scheme: Scheme, highlight: { chain: string; resi: number }[], colors: ViewerColors | null) {
   viewer.setStyle({}, {});
   let cartoon: any;
-  if (colors) cartoon = { colorfunc: (atom: any) => colors.get(atomKey(atom)) ?? NO_VALUE_INT };
+  if (colors) cartoon = { colorfunc: (atom: any) => colors.residues.get(atomKey(atom)) ?? colors.chains.get(atom.chain ?? "") ?? NO_VALUE_INT };
   else if (scheme === "ss") cartoon = { colorscheme: "ssPyMol", thickness: 0.4 };
   else if (scheme === "chain") cartoon = { colorscheme: "chain" };
   else if (scheme === "rainbow") cartoon = { color: "spectrum" };
@@ -76,6 +82,7 @@ function ViewerLegend({ coloring }: { coloring: ResidueColoring }) {
       ) : (
         legend.items.map((it) => <span key={it.label} className="sw"><i style={{ background: it.color }} />{it.label}</span>)
       )}
+      {coloring.legendExtra?.map((it) => <span key={it.label} className="sw"><i style={{ background: it.color }} />{it.label}</span>)}
       {legend.noValue && <span className="sw"><i style={{ background: NO_VALUE_COLOR }} />senza valore</span>}
     </div>
   );
@@ -90,11 +97,12 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [hover, setHover] = useState<string | null>(null);
-  const colors = useMemo(() => {
+  const colors = useMemo((): ViewerColors | null => {
     if (!coloring) return null;
-    const out = new Map<string, number>();
-    coloringMap(coloring).forEach((hex, key) => out.set(key, hexToInt(hex)));
-    return out;
+    const residues = new Map<string, number>();
+    coloringMap(coloring).forEach((hex, key) => residues.set(key, hexToInt(hex)));
+    const chains = new Map(Object.entries(coloring.chainColors ?? {}).map(([chain, hex]) => [chain, hexToInt(hex)] as [string, number]));
+    return { residues, chains };
   }, [coloring]);
   const interactive = !!coloring || !!onPickResidue;
   // i callback di 3Dmol leggono sempre i valori correnti
