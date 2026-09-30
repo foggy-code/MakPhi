@@ -8,7 +8,7 @@ import { JobPanel } from "../components/JobPanel";
 import { StructurePicker } from "../components/Pickers";
 import { StructuralComparison } from "../components/StructuralComparison";
 import { Alert, Card, Empty, Field, PageHead } from "../components/ui";
-import { compareParams, jobSources, linkedSources } from "../lib/compare";
+import { compareJobView, compareParams, jobSources, linkedSources } from "../lib/compare";
 import { useProject, useToast } from "../lib/context";
 import { useAsync, useJob } from "../lib/hooks";
 
@@ -37,7 +37,9 @@ export default function Compare() {
   const [tool, setTool] = useState("auto");
   const [recompute, setRecompute] = useState(false);
   const { data: info } = useAsync<SystemInfo>(() => api.systemInfo(), []);
-  const { job, summary, log, cancel } = useJob<AlignResult>(jobId, { withLog: true });
+  const { job, summary, log, cancel, error } = useJob<AlignResult>(jobId, { withLog: true });
+  // job del link eliminato o inesistente: errore e invito a rilanciare, invece di una colonna vuota
+  const view = compareJobView(jobId, !!summary, error);
 
   // strutture dal link (Modellazione, Qualità, Allineamenti): precompilate, il confronto parte con «Confronta»
   const linkKey = ["a", "ca", "b", "cb"].map((k) => params.get(k) ?? "").join("|");
@@ -126,7 +128,19 @@ export default function Compare() {
           </Card>
         </div>
         <div className="stack">
-          {jobId ? <JobPanel summary={summary} log={log} onCancel={cancel} /> : <Card><Empty icon="layers" title="Scegli le due strutture e avvia il confronto">Da Modellazione (tabella dei modelli) e da Qualità le strutture arrivano già scelte.</Empty></Card>}
+          {view === "missing" && <Alert tone="err">Confronto non disponibile: {error}</Alert>}
+          {view === "job" ? (
+            <JobPanel summary={summary} log={log} onCancel={cancel} />
+          ) : view === "missing" ? (
+            <Card>
+              <Empty icon="layers" title="Avvia di nuovo il confronto">
+                Il job del link non si può aprire (eliminato, link non valido o server non raggiungibile).{" "}
+                {a || b ? "Le strutture del link restano scelte: rilancia con «Confronta»." : "Scegli le due strutture e rilancia con «Confronta»."}
+              </Empty>
+            </Card>
+          ) : (
+            <Card><Empty icon="layers" title="Scegli le due strutture e avvia il confronto">Da Modellazione (tabella dei modelli) e da Qualità le strutture arrivano già scelte.</Empty></Card>
+          )}
           {notStructural && <Alert tone="warn">Il job indicato non è un allineamento strutturale: <Link to={`/alignment?job=${job!.id}`}>aprilo in Allineamenti</Link>.</Alert>}
           {r && r.mode === "structural" && (
             <>

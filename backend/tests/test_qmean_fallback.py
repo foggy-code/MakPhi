@@ -247,6 +247,25 @@ def test_memory_problem_rules():
     assert "circa 24 GB" in estimate and "stima dalla dimensione del database, 250 GB" in estimate
 
 
+def test_memory_sufficient_is_the_outcome_of_the_check():
+    """L'esito mostrato accanto al requisito è quello del controllo prima del calcolo, giudizio del worker compreso."""
+    ref = {"prefix": "UniRef30_2020_06", "size": 194 * GIB}
+    newer = {"prefix": "UniRef30_2023_02", "size": 250 * GIB}  # stima 24 GB
+    sufficient = qmean_local.memory_sufficient
+    assert sufficient({**ref, "memory": "swap"}, {"total": int(11.7 * GIB), "swap": 0}) is True  # entro il 95%
+    assert sufficient({**ref, "memory": "swap"}, {"total": 8 * GIB, "swap": 0}) is False
+    assert sufficient({**ref, "memory": "insufficient"}, {"total": 64 * GIB, "swap": 0}) is False
+    # stima più alta della memoria, ma il worker (dimensioni vere degli indici) dice "ok": parte, ed è sufficiente
+    assert qmean_local.memory_problem({**newer, "memory": "ok"}, {"total": 16 * GIB, "swap": 0}) is None
+    assert sufficient({**newer, "memory": "ok"}, {"total": 16 * GIB, "swap": 0}) is True
+    assert qmean_local._requirement({**newer, "memory": "ok"}, {"total": 16 * GIB, "swap": 0}) == \
+        {"bytes": 24 * GIB, "basis": "estimate", "sufficient": True}
+    # worker che non misura la memoria o database senza dimensione: non si sa
+    assert sufficient({**ref, "memory": None}, None) is None
+    assert sufficient({"prefix": "x"}, {"total": 8 * GIB, "swap": 0}) is None
+    assert qmean_local._requirement({"prefix": "x"}, None) is None
+
+
 class SmallDockerWorker(Worker):
     """UniRef30_2020_06 con poca memoria per Docker: il worker lo farebbe partire (memoria al limite)."""
 
@@ -270,7 +289,7 @@ def test_local_qmean_fails_at_once_when_memory_is_below_the_requirement(client_w
     w = worker(SmallDockerWorker(8 * GIB))
     info = qmean_local.status(force=True)
     assert info["available"] is False and "circa 12 GB" in info["message"]
-    assert info["memory_required"] == {"bytes": 12 * GIB, "basis": "measured"}
+    assert info["memory_required"] == {"bytes": 12 * GIB, "basis": "measured", "sufficient": False}
     t0 = time.monotonic()
     done = qmean(client_with_ubq)
     assert done["status"] == "failed" and time.monotonic() - t0 < 10  # subito, non dopo il timeout
@@ -288,6 +307,7 @@ def test_local_qmean_starts_with_the_required_memory(client_with_ubq, worker, sw
     w = worker(SmallDockerWorker(11.7 * GIB))  # 12 GB assegnati a Docker, visti dal container
     info = qmean_local.status(force=True)
     assert info["available"] is True and info["message"] is None
+    assert info["memory_required"] == {"bytes": 12 * GIB, "basis": "measured", "sufficient": True}
     done = qmean(client_with_ubq)
     assert done["status"] == "completed" and done["result"]["source"] == "local"
     assert any(p == "/jobs" for _m, p, _q, _b in w.requests) and not swissmodel
@@ -359,10 +379,100 @@ def test_local_qmean_runs_one_at_a_time_without_blocking_the_io_pool(client_with
     assert w.peak == 1
 
 
-def test_remote_qmean_is_not_serialized(client):
+def test_remote_qmean_is_not_serialized(client, monkeypatch):
     compute = client.app.state.core.compute
+    monkeypatch.setenv("BIOLOOM_QMEAN_URL", "http://qmean:8080")
     assert compute._qmean_resource({"mode": "remote"}) is None  # SWISS-MODEL: nessuna risorsa locale
     assert compute._qmean_resource({}) == QMEAN_LOCAL  # Impostazioni predefinite: locale
     assert compute._qmean_resource({"mode": "auto"}) == QMEAN_LOCAL
+    # senza servizio locale (l'avviatore non ha trovato UniClust30) il job fallisce subito o va al fallback
+    monkeypatch.delenv("BIOLOOM_QMEAN_URL")
+    assert compute._qmean_resource({}) is None
+    monkeypatch.setenv("BIOLOOM_QMEAN_URL", "http://qmean:8080")
     client.put("/api/settings", json={"qmean_mode": "remote"})
     assert compute._qmean_resource({}) is None
+
+
+class SlowSwissModel:
+    """SWISS-MODEL simulato che risponde solo quando il test apre il cancello (annullabile nell'attesa)."""
+
+    def __init__(self) -> None:
+        self.gate = threading.Event()
+        self.lock = threading.Lock()
+        self.calls: list[str] = []
+
+    def __call__(self, pdb_text, email, check=None, log=print, sleep=None):
+        with self.lock:
+            self.calls.append(email)
+        while not self.gate.wait(0.05):
+            if check is not None:
+                check()
+        return dict(REMOTE_RESULT)
+
+
+FALLBACK_SETTINGS = {"qmean_remote": True, "contact_email": "a@b.it", "qmean_fallback_remote": True}
+
+
+def test_without_the_local_service_fallbacks_run_together(client_with_ubq, monkeypatch):
+    """Modalità locale senza servizio QMEAN e fallback attivo: nessuna risorsa esclusiva, i due invii a SWISS-MODEL
+    partono insieme e nessun job dice di aspettare un servizio locale che non c'è."""
+    c = client_with_ubq
+    monkeypatch.delenv("BIOLOOM_QMEAN_URL", raising=False)
+    slow = SlowSwissModel()
+    monkeypatch.setattr(remote, "swissmodel_qmean", slow)
+    c.put("/api/settings", json=FALLBACK_SETTINGS)
+    body = {"source": {"type": "template", "id": "1UBQ"}}
+    ids = [c.post("/api/qmean", json=body).json()["id"] for _ in range(2)]
+    until(lambda: len(slow.calls) == 2)  # entrambi su SWISS-MODEL nello stesso momento
+    for job_id in ids:
+        job = c.get(f"/api/jobs/{job_id}").json()
+        assert job["status"] == "running" and job["stage"] != RESOURCE_STAGE[QMEAN_LOCAL]
+    slow.gate.set()
+    for job_id in ids:
+        done = wait_job(c, job_id, timeout=20)
+        assert done["status"] == "completed", done["error"]
+        assert done["result"]["source"] == "swissmodel" and done["result"]["fallback"]["from"] == "local"
+
+
+class FailFirstWorker(Worker):
+    """Worker QMEAN: il primo calcolo fallisce (poi c'è il fallback), i successivi riescono."""
+
+    def __init__(self):
+        super().__init__()
+        self.posted = 0
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/jobs" and request.method == "POST":
+            self.posted += 1
+            return httpx.Response(202, json={"id": f"q{self.posted}", "status": "queued"})
+        if path.startswith("/jobs/q") and request.method == "GET":
+            if path == "/jobs/q1":
+                return httpx.Response(200, json={"status": "failed", "error": "HHblits: interrotto"})
+            return httpx.Response(200, json={"status": "completed", "result": {
+                **QMEAN_OUTPUT, "bioloom_database": {"name": "UniRef30_2023_02", "version": "2023-02"}}})
+        return super().__call__(request)
+
+
+def test_local_service_is_released_before_the_remote_fallback(client_with_ubq, worker, monkeypatch):
+    """Il primo QMEAN locale fallisce e ripiega su SWISS-MODEL (lento): il servizio locale è già libero, e un secondo
+    QMEAN locale parte e finisce mentre il primo aspetta ancora SWISS-MODEL."""
+    c = client_with_ubq
+    w = worker(FailFirstWorker())
+    slow = SlowSwissModel()
+    monkeypatch.setattr(remote, "swissmodel_qmean", slow)
+    c.put("/api/settings", json=FALLBACK_SETTINGS)
+    assert c.app.state.core.compute._qmean_resource({}) == QMEAN_LOCAL  # servizio presente: un calcolo alla volta
+    body = {"source": {"type": "template", "id": "1UBQ"}}
+    first = c.post("/api/qmean", json=body).json()["id"]
+    until(lambda: slow.calls)  # il primo è nel fallback su SWISS-MODEL
+    second = c.post("/api/qmean", json=body).json()["id"]
+    done = wait_job(c, second, timeout=20)
+    assert done["status"] == "completed", done["error"]
+    assert done["result"]["source"] == "local" and w.posted == 2
+    assert c.get(f"/api/jobs/{first}").json()["status"] == "running"  # ancora in attesa di SWISS-MODEL
+    slow.gate.set()
+    done = wait_job(c, first, timeout=20)
+    assert done["status"] == "completed", done["error"]
+    assert done["result"]["source"] == "swissmodel" and "HHblits" in done["result"]["fallback"]["reason"]
+    assert len(slow.calls) == 1

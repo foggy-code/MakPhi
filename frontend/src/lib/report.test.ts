@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { base64Bytes, filenameFromDisposition, REPORT_IMAGE_MAX_BYTES, reportFallbackName, reportImage } from "./report";
+import { base64Bytes, filenameFromDisposition, REPORT_IMAGE_MAX_BYTES, reportFallbackName, reportImage, reportSavedMessage } from "./report";
 
 const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
@@ -23,7 +23,7 @@ describe("immagine del viewer nel report", () => {
     for (const uri of ["data:image/jpeg;base64,/9j/4AAQ", "data:image/png;base64,", "iVBORw0KGgo", "data:,"]) {
       const out = reportImage(uri);
       expect(out.image).toBeNull();
-      expect(out.note).toMatch(/senza immagine/);
+      expect(out.note).toMatch(/non è disponibile come PNG/);
     }
   });
   it("oltre il limite del server il report si genera senza immagine", () => {
@@ -32,6 +32,14 @@ describe("immagine del viewer nel report", () => {
     const big = reportImage(`data:image/png;base64,${"A".repeat(limit + 4)}`);
     expect(big.image).toBeNull();
     expect(big.note).toMatch(/3 MB/);
+  });
+  it("il motivo della vista mancante arriva solo con il report salvato, unito all'avviso di successo", () => {
+    expect(reportSavedMessage(reportImage(PNG))).toEqual({ text: "Report scaricato, con la vista 3D corrente", tone: "ok" });
+    expect(reportSavedMessage(reportImage(null))).toEqual({ text: "Report scaricato", tone: "ok" });
+    const big = reportSavedMessage(reportImage(`data:image/png;base64,${"A".repeat((REPORT_IMAGE_MAX_BYTES / 3) * 4 + 4)}`));
+    expect(big).toEqual({ text: "Report scaricato senza la vista 3D: la vista 3D supera 3 MB (riduci la finestra del viewer).", tone: "warn" });
+    // il motivo da solo non dice che il report è stato generato: se la richiesta fallisce non contraddice l'errore
+    expect(reportImage("data:image/jpeg;base64,/9j/4AAQ").note).not.toMatch(/report/i);
   });
 });
 

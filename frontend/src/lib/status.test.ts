@@ -13,6 +13,24 @@ describe("qmeanMemoryNote", () => {
     expect(qmeanMemoryNote({ memory: { total: 8 * GB, swap: 2 * GB }, memory_required: { bytes: 24 * GB, basis: "estimate" } }))
       .toBe("Memoria di Docker: 8 GB; richiesti circa 24 GB (stima dalla dimensione del database).");
   });
+  it("con l'esito del server dice se la memoria basta", () => {
+    const measured = { bytes: 12 * GB, basis: "measured" as const };
+    expect(qmeanMemoryNote({ memory: { total: 15.6 * GB, swap: 0 }, memory_required: { ...measured, sufficient: true } }))
+      .toBe("Memoria di Docker: 15,6 GB; richiesti circa 12 GB (valore misurato): sufficiente.");
+    expect(qmeanMemoryNote({ memory: { total: 8 * GB, swap: 0 }, memory_required: { ...measured, sufficient: false } }))
+      .toBe("Memoria di Docker: 8 GB; richiesti circa 12 GB (valore misurato): insufficiente.");
+    // 12 GB assegnati, 11,7 visti dal container: accettati dal server, e la nota non sembra un difetto
+    expect(qmeanMemoryNote({ memory: { total: 11.7 * GB, swap: 0 }, memory_required: { ...measured, sufficient: true } }))
+      .toBe("Memoria di Docker: 11,7 GB; richiesti circa 12 GB (valore misurato): sufficiente (il container vede un po' meno della memoria assegnata a Docker).");
+    expect(qmeanMemoryNote({ memory: { total: 11.7 * GB, swap: 0 }, memory_required: { ...measured, sufficient: true }, uniclust: { valid: true, prefix: "UniRef30_2020_06", error: null, memory: "swap" } }))
+      .toBe("Memoria di Docker: 11,7 GB; richiesti circa 12 GB (valore misurato): sufficiente per partire, ma al limite secondo il servizio QMEAN.");
+  });
+  it("con il giudizio \"ok\" del worker non mostra una stima più alta della memoria", () => {
+    const uniclust = { valid: true, prefix: "UniRef30_2023_02", error: null, memory: "ok" as const };
+    const note = qmeanMemoryNote({ memory: { total: 16 * GB, swap: 0 }, memory_required: { bytes: 24 * GB, basis: "estimate", sufficient: true }, uniclust });
+    expect(note).toBe("Memoria di Docker: 16 GB: sufficiente secondo il servizio QMEAN, che misura le dimensioni reali degli indici.");
+    expect(note).not.toContain("24 GB");
+  });
   it("nessuna nota senza i dati (worker o server di una versione precedente)", () => {
     expect(qmeanMemoryNote(null)).toBeNull();
     expect(qmeanMemoryNote({ memory: null, memory_required: { bytes: 12 * GB, basis: "measured" } })).toBeNull();

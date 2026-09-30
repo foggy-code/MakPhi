@@ -50,17 +50,30 @@ export function qmeanRoute(
 }
 
 /**
- * Memoria del servizio QMEAN rispetto al requisito del database scelto (controllato dal server prima di ogni
- * calcolo): "Memoria di Docker: 15,6 GB; richiesti circa 12 GB (valore misurato)". null se il server non la riporta.
+ * Memoria del servizio QMEAN rispetto al requisito del database scelto, con l'esito del controllo che il server fa
+ * prima di ogni calcolo (`memory_required.sufficient`): "Memoria di Docker: 15,6 GB; richiesti circa 12 GB (valore
+ * misurato): sufficiente." Quando decide il giudizio del worker ("ok", sulle dimensioni vere degli indici) la stima
+ * prudente, magari più alta della memoria, non si mostra. null se il server non riporta memoria o requisito.
  */
-export function qmeanMemoryNote(q: Pick<QmeanServiceStatus, "memory" | "memory_required"> | null | undefined): string | null {
+export function qmeanMemoryNote(q: Pick<QmeanServiceStatus, "memory" | "memory_required" | "uniclust"> | null | undefined): string | null {
   const total = q?.memory?.total;
   const need = q?.memory_required;
   if (!total || !need?.bytes) return null;
   // un decimale anche sopra i 10 GB: vicino alla soglia "11,6 GB" e "12 GB" devono restare distinguibili
   const gb = (n: number) => `${(n / 1024 ** 3).toLocaleString("it-IT", { maximumFractionDigits: 1 })} GB`;
+  const have = `Memoria di Docker: ${gb(total)}`;
+  const worker = q?.uniclust?.memory;
+  if (need.sufficient === true && worker === "ok" && need.basis === "estimate") {
+    return `${have}: sufficiente secondo il servizio QMEAN, che misura le dimensioni reali degli indici.`;
+  }
   const basis = need.basis === "measured" ? "valore misurato" : "stima dalla dimensione del database";
-  return `Memoria di Docker: ${gb(total)}; richiesti circa ${gb(need.bytes)} (${basis}).`;
+  const note = `${have}; richiesti circa ${gb(need.bytes)} (${basis})`;
+  if (need.sufficient === false) return `${note}: insufficiente.`;
+  if (need.sufficient !== true) return `${note}.`; // server di una versione precedente: nessun esito
+  if (worker === "swap") return `${note}: sufficiente per partire, ma al limite secondo il servizio QMEAN.`;
+  // il container vede un po' meno della memoria assegnata (12 GB → circa 11,7): il server accetta il 95%
+  if (total < need.bytes) return `${note}: sufficiente (il container vede un po' meno della memoria assegnata a Docker).`;
+  return `${note}: sufficiente.`;
 }
 
 /** Avvisi da mostrare per le licenze (vuoto se tutto è a posto). */

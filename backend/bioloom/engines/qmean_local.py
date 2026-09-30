@@ -100,6 +100,22 @@ def memory_problem(uniclust: Optional[dict], memory: Optional[dict]) -> Optional
             "versione più piccola del database oppure usa il fallback su SWISS-MODEL.")
 
 
+def memory_sufficient(uniclust: Optional[dict], memory: Optional[dict]) -> Optional[bool]:
+    """Esito di `memory_problem` per l'interfaccia: False se la memoria non basta, True se basta (giudizio "ok" del
+    worker, anche quando la stima prudente direbbe di no, oppure requisito entro la tolleranza), None se non si sa
+    (worker che non misura la memoria o database senza requisito noto)."""
+    if memory_problem(uniclust, memory) is not None:
+        return False
+    uniclust = uniclust if isinstance(uniclust, dict) else {}
+    if uniclust.get("memory") == "ok":
+        return True
+    total = memory.get("total") if isinstance(memory, dict) else None
+    known = isinstance(total, (int, float)) and not isinstance(total, bool) and total > 0
+    if not known or memory_requirement(uniclust) is None:
+        return None
+    return True
+
+
 def base_url() -> str:
     """Indirizzo del worker: l'avviatore lo imposta solo quando ha trovato UniClust30."""
     return os.environ.get("BIOLOOM_QMEAN_URL", "").rstrip("/")
@@ -113,7 +129,9 @@ def status(prefer: str = "", force: bool = False) -> dict:
     """Stato del worker e dei database trovati (cache di 15 s).
 
     `available` è vero se la versione richiesta (o, senza richiesta, almeno una) è pronta e la memoria del
-    servizio basta per quel database (`memory_problem`); `memory_required` è il requisito del database scelto.
+    servizio basta per quel database (`memory_problem`); `memory_required` è il requisito del database scelto, con
+    `sufficient` (`memory_sufficient`): l'esito del controllo, che l'interfaccia mostra accanto al requisito (una stima
+    più alta della memoria non è un difetto se il worker ha giudicato la memoria sufficiente).
     """
     url = base_url()
     if not url:
@@ -143,7 +161,7 @@ def status(prefer: str = "", force: bool = False) -> dict:
                  "unsupported": data.get("unsupported") or [], "local_orphans": data.get("local_orphans") or [],
                  "qmtl": data.get("qmtl") or {},
                  "memory": data.get("memory"),
-                 "memory_required": memory_requirement(uniclust) if valid else None,
+                 "memory_required": _requirement(uniclust, data.get("memory")) if valid else None,
                  "busy": data.get("busy"), "queued": data.get("queued"), "qmean_version": data.get("qmean_version"),
                  "message": message}
     except (httpx.HTTPError, ValueError):
@@ -151,6 +169,11 @@ def status(prefer: str = "", force: bool = False) -> dict:
                  "databases": [], "archives": [], "unsupported": [], "local_orphans": []}
     _status_cache.update({"at": time.monotonic(), "key": key, "value": value})
     return value
+
+
+def _requirement(uniclust: dict, memory: Optional[dict]) -> Optional[dict]:
+    need = memory_requirement(uniclust)
+    return None if need is None else {**need, "sufficient": memory_sufficient(uniclust, memory)}
 
 
 def _follow(c: httpx.Client, job_id: str, ctx: JobContext, *, timeout_minutes: float, running_stage: str,

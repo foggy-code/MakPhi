@@ -18,6 +18,10 @@ Regole:
   chi viene dopo aspetta anche se a lui basterebbero (niente sorpassi: una richiesta fissa di più slot non resta
   indietro per sempre dietro a quelle da uno). I programmi multi-thread usano richieste elastiche da 1 slot minimo,
   così non bloccano la coda in attesa che se ne liberino molti.
+- **Invecchiamento:** la priorità effettiva di una richiesta migliora di un livello ogni `AGING_SECONDS` di attesa,
+  fino a 0. Con un flusso continuo di processi interattivi, quelli di una pipeline (priorità 2) partono al più tardi
+  dopo 2 × `AGING_SECONDS` di attesa (più le richieste arrivate prima di loro). A parità di priorità effettiva vale
+  l'arrivo: una richiesta della stessa priorità arrivata dopo non sorpassa chi aspetta da prima.
 - **Nessun deadlock:** gli slot li tengono solo processi in esecuzione, che finiscono da soli, per timeout o per
   annullamento; mai chi aspetta altro. Una pipeline non prende slot mentre aspetta i suoi elementi: li prendono i
   processi degli elementi, e solo mentre girano.
@@ -27,24 +31,36 @@ Regole:
 
 from __future__ import annotations
 
-import bisect
 import itertools
 import threading
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass
 from typing import Callable, Optional
 
+from .dispatch import effective_priority
 from .errors import AppError
 
-# riesame periodico anche senza risvegli: capacità cambiata nelle Impostazioni, annullamento
+# riesame periodico anche senza risvegli: capacità cambiata nelle Impostazioni, annullamento, invecchiamento
 POLL_SECONDS = 1.0
+# Invecchiamento: un livello di priorità ogni minuto di attesa di uno slot. I processi dei calcoli interattivi durano
+# pochi secondi (DOPE, PROCHECK, ProSA, TM-align) o meno di un minuto (BLAST+ e MMseqs2 locali), quindi un'analisi
+# lanciata dall'utente passa comunque davanti a modellazioni e pipeline; con un flusso continuo di processi
+# interattivi un processo di modellazione aspetta al più 1 minuto e uno di pipeline al più 2 prima di contare solo
+# l'arrivo.
+AGING_SECONDS = 60.0
 
 
-@dataclass(order=True)
+@dataclass(eq=False)
 class _Request:
     priority: int
     seq: int
-    slots: int = field(compare=False)
-    minimum: int = field(compare=False, default=1)
+    since: float  # arrivo (orologio del budget): da qui conta l'invecchiamento
+    slots: int
+    minimum: int = 1
+
+    def rank(self, now: float, aging: float) -> tuple[int, int]:
+        """Posizione nell'ordine adesso: priorità effettiva (invecchiata), poi arrivo."""
+        return (effective_priority(self.priority, now - self.since, aging), self.seq)
 
 
 class Grant:
@@ -71,11 +87,15 @@ class Grant:
 
 
 class CpuBudget:
-    def __init__(self, capacity: Callable[[], int]) -> None:
+    def __init__(self, capacity: Callable[[], int], *, aging: float = AGING_SECONDS,
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        """`capacity()`: slot totali, riletti a ogni scelta. `aging` e `clock` servono ai test dell'invecchiamento."""
         self._capacity = capacity
+        self._aging = float(aging)
+        self._clock = clock
         self._cond = threading.Condition()
         self._used = 0
-        self._waiting: list[_Request] = []  # ordinata per (priorità, arrivo): il primo è il prossimo a partire
+        self._waiting: list[_Request] = []  # in ordine di arrivo; il prossimo a partire è `_head`
         self._seq = itertools.count()
         self._closed = False
 
@@ -116,12 +136,12 @@ class CpuBudget:
         libera"); se gli slot sono subito disponibili non si chiama.
         """
         wanted = max(1, int(slots))
-        request = _Request(priority, next(self._seq), wanted,
-                           wanted if minimum is None else max(1, min(int(minimum), wanted)))
         with self._cond:
             if self._closed:
                 raise AppError("BioLoom si sta arrestando: il processo non viene avviato.", code="shutting_down")
-            bisect.insort(self._waiting, request)
+            request = _Request(int(priority), next(self._seq), self._clock(), wanted,
+                               wanted if minimum is None else max(1, min(int(minimum), wanted)))
+            self._waiting.append(request)
             grant = self._try_take(request)
             if grant is not None:
                 return grant
@@ -146,16 +166,23 @@ class CpuBudget:
         finally:
             _notify(on_wait, False)
 
+    def _head(self) -> Optional[_Request]:
+        """Sotto il lock: la prossima richiesta a partire, per priorità effettiva (invecchiata adesso) e arrivo."""
+        if not self._waiting:
+            return None
+        now = self._clock()
+        return min(self._waiting, key=lambda r: r.rank(now, self._aging))
+
     def _try_take(self, request: _Request) -> Optional[Grant]:
         """Sotto il lock: slot alla richiesta se è la prima in ordine e ce ne sono abbastanza."""
         capacity = self.capacity
         want = min(request.slots, capacity)  # capacità ridotta nel frattempo: la richiesta resta soddisfacibile
         need = min(request.minimum, want)
         free = capacity - self._used
-        if not self._waiting or self._waiting[0] is not request or free < need:
+        if self._head() is not request or free < need:
             return None
         take = min(want, free)
-        self._waiting.pop(0)
+        self._waiting.remove(request)
         self._used += take
         self._cond.notify_all()  # anche la richiesta successiva può trovare posto
         return Grant(self, take)

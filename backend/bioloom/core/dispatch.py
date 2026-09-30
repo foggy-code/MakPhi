@@ -1,57 +1,88 @@
 """Coda con priorità dei job: un dispatcher per pool ("cpu", "io") al posto del ThreadPoolExecutor FIFO.
 
-I job in coda stanno in un heap ordinato per (priorità del tipo di job, `created_at`, ordine di creazione) e i
-worker del pool prendono sempre il primo che si può avviare. La priorità viene dal tipo (core/jobs.PRIORITY):
-ricerche, allineamenti, qualità e QMEAN prima di modellazione e loop, questi prima di pipeline e manutenzione
-dei database; a parità, il job creato prima (FIFO, anche per un job ripreso).
+I worker del pool prendono sempre il primo job avviabile nell'ordine (priorità effettiva, `created_at`, ordine di
+creazione, ordine di arrivo in coda). La priorità viene dal tipo (core/jobs.PRIORITY): ricerche, allineamenti,
+qualità e QMEAN prima di modellazione e loop, questi prima di pipeline e manutenzione dei database; a parità, il job
+creato prima (FIFO, anche per un job ripreso).
 
+- **Invecchiamento:** la priorità effettiva di un job in coda migliora di un livello ogni `AGING_SECONDS` di attesa,
+  fino a 0 (la più alta). Un flusso continuo di job interattivi non lascia quindi ferma per sempre una pipeline
+  (priorità 2): al più tardi dopo 2 × `AGING_SECONDS` di attesa conta solo la creazione. A parità di priorità
+  effettiva l'ordine resta quello di creazione, e un job della stessa priorità arrivato dopo non sorpassa mai chi
+  aspetta da prima (ha atteso di meno, quindi non è invecchiato di più).
 - **Risorse esclusive:** un job può dichiarare una risorsa (es. il servizio QMEAN locale, un calcolo alla
   volta). Finché un altro job la tiene resta in coda, con la sua posizione, e il worker passa al successivo:
   il pool non si blocca per gli altri job. La risorsa si calcola al momento della scelta (le Impostazioni
-  possono cambiare mentre il job aspetta) e si tiene fino alla chiusura dell'esecuzione.
+  possono cambiare mentre il job aspetta) e si tiene fino alla chiusura dell'esecuzione, salvo che il job la
+  restituisca prima con `release`, passato all'esecuzione (QMEAN: finita la parte locale, prima del fallback remoto).
 - **Capacità dinamica:** i job contemporanei del pool si rileggono a ogni scelta (il pool "cpu" segue i job di
   calcolo in parallelo delle Impostazioni); i thread si creano quando servono, fino alla capacità.
-- **Stato vero su SQLite:** una voce dell'heap dice solo "prova ad avviare questo job". `JobManager._execute`
+- **Stato vero su SQLite:** una voce della coda dice solo "prova ad avviare questo job". `JobManager._execute`
   parte soltanto da 'queued' con un passaggio condizionato, quindi una voce rimasta indietro (job annullato in
-  coda e ripreso, ripresa in preparazione) non avvia nulla due volte. Un job ha al più una voce valida.
+  coda e ripreso, ripresa in preparazione) non avvia nulla due volte. Un job ha al più una voce in coda.
 - **Arresto:** `close` svuota la coda; i job ancora 'queued' li marca il `recover` del prossimo avvio.
 """
 
 from __future__ import annotations
 
-import heapq
 import itertools
 import threading
+import time
 import traceback
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Callable, Optional
 
 # riesame periodico dei worker inattivi: capacità cambiata senza `wake`
 IDLE_SECONDS = 5.0
+# Invecchiamento: un livello di priorità ogni 5 minuti di attesa in coda. È più lungo di un calcolo interattivo tipico
+# (ricerca, allineamento, analisi di qualità: da secondi a pochi minuti), quindi le richieste di chi è davanti allo
+# schermo passano comunque davanti a modellazioni e pipeline; è abbastanza breve che, anche con un flusso continuo di
+# richieste interattive, una modellazione parta dopo al più 5 minuti di attesa e una pipeline dopo al più 10 (più i
+# job creati prima di lei).
+AGING_SECONDS = 300.0
 
 
-@dataclass(order=True)
+def effective_priority(priority: int, waited: float, aging: float) -> int:
+    """Priorità dopo `waited` secondi di attesa: un livello in meno ogni `aging` secondi, mai sotto 0 (una priorità
+    già 0 resta com'è). `aging` <= 0 = nessun invecchiamento."""
+    if aging <= 0 or priority <= 0 or waited <= 0:
+        return priority
+    return max(0, priority - int(waited // aging))
+
+
+@dataclass(eq=False)
 class _Entry:
     priority: int
     created_at: str
     created_seq: int  # ordine di creazione a parità di created_at (al secondo): il rowid della riga
     seq: int
-    job_id: str = field(compare=False)
-    resource: Optional[Callable[[], Optional[str]]] = field(compare=False, default=None)
-    blocked: bool = field(compare=False, default=False)  # attesa della risorsa già segnalata
-    held: Optional[str] = field(compare=False, default=None)
+    job_id: str
+    since: float  # ingresso in coda (orologio del dispatcher): da qui conta l'invecchiamento
+    resource: Optional[Callable[[], Optional[str]]] = field(default=None)
+    blocked: bool = field(default=False)  # attesa della risorsa già segnalata
+    held: Optional[str] = field(default=None)
+
+    def rank(self, now: float, aging: float) -> tuple:
+        """Posizione nell'ordine di partenza adesso: priorità effettiva (invecchiata), poi creazione e arrivo."""
+        return (effective_priority(self.priority, now - self.since, aging), self.created_at, self.created_seq,
+                self.seq)
 
 
 class Dispatcher:
-    def __init__(self, name: str, capacity: Callable[[], int], run: Callable[[str], None],
-                 on_blocked: Optional[Callable[[str, str], None]] = None) -> None:
+    def __init__(self, name: str, capacity: Callable[[], int], run: Callable[[str, Callable[[], None]], None],
+                 on_blocked: Optional[Callable[[str, str], None]] = None, *, aging: float = AGING_SECONDS,
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        """`run(job_id, release)` esegue il job; con `release()` il job restituisce la sua risorsa esclusiva prima
+        di finire (una volta sola: dopo non fa nulla). `aging` e `clock` servono ai test dell'invecchiamento."""
         self.name = name
         self._capacity = capacity
         self._run = run
         self._on_blocked = on_blocked
+        self._aging = float(aging)
+        self._clock = clock
         self._cond = threading.Condition()
-        self._heap: list[_Entry] = []
-        self._queued: dict[str, _Entry] = {}  # voce valida di ogni job in coda
+        self._queued: dict[str, _Entry] = {}  # voce di ogni job in coda
         self._held: set[str] = set()
         self._busy = 0
         self._threads: list[threading.Thread] = []
@@ -72,30 +103,35 @@ class Dispatcher:
     # ------------------------------------------------------------------ coda
     def push(self, job_id: str, *, priority: int, created_at: str, created_seq: int = 0,
              resource: Optional[Callable[[], Optional[str]]] = None) -> None:
-        """Mette in coda un job; se ha già una voce valida non ne aggiunge un'altra.
+        """Mette in coda un job; se ha già una voce in coda non ne aggiunge un'altra.
 
-        Ordine: `priority`, poi `created_at` e `created_seq` (creazione), infine l'ordine di arrivo in coda.
+        Ordine: `priority` (invecchiata con l'attesa), poi `created_at` e `created_seq` (creazione), infine l'ordine
+        di arrivo in coda.
         """
         with self._cond:
             if self._closed or job_id in self._queued:
                 return
-            entry = _Entry(int(priority), created_at or "", int(created_seq or 0), next(self._seq), job_id, resource)
-            heapq.heappush(self._heap, entry)
-            self._queued[job_id] = entry
+            self._queued[job_id] = _Entry(int(priority), created_at or "", int(created_seq or 0), next(self._seq),
+                                          job_id, self._clock(), resource)
             self._ensure_threads()
             self._cond.notify_all()
 
     def discard(self, job_id: str) -> None:
-        """Toglie un job dalla coda (annullato mentre aspettava); la voce nell'heap resta, ma non vale più."""
+        """Toglie un job dalla coda (annullato mentre aspettava)."""
         with self._cond:
             if self._queued.pop(job_id, None) is not None:
                 self._cond.notify_all()
 
+    def _ordered(self) -> list[_Entry]:
+        """Sotto il lock: i job in coda nell'ordine in cui partirebbero adesso (l'invecchiamento cambia col tempo)."""
+        now = self._clock()
+        return sorted(self._queued.values(), key=lambda e: e.rank(now, self._aging))
+
     def positions(self) -> dict[str, int]:
         """Posizione (da 1) dei job in coda in questo pool, nell'ordine in cui partiranno."""
         with self._cond:
-            valid = sorted(e for e in self._heap if self._queued.get(e.job_id) is e)
-        return {e.job_id: n for n, e in enumerate(valid, start=1)}
+            ordered = self._ordered()
+        return {e.job_id: n for n, e in enumerate(ordered, start=1)}
 
     def wake(self) -> None:
         """Riesame immediato (capacità cambiata nelle Impostazioni)."""
@@ -106,7 +142,6 @@ class Dispatcher:
     def close(self) -> None:
         with self._cond:
             self._closed = True
-            self._heap.clear()
             self._queued.clear()
             self._cond.notify_all()
 
@@ -124,13 +159,8 @@ class Dispatcher:
     def _pick(self) -> tuple[Optional[_Entry], list[tuple[str, str]]]:
         """Sotto il lock: il primo job avviabile (la sua risorsa è libera) e i job appena trovati in attesa di
         una risorsa (da segnalare fuori dal lock)."""
-        skipped: list[_Entry] = []
         blocked: list[tuple[str, str]] = []
-        found: Optional[_Entry] = None
-        while self._heap:
-            entry = heapq.heappop(self._heap)
-            if self._queued.get(entry.job_id) is not entry:
-                continue  # voce non più valida (annullato in coda, già avviato)
+        for entry in self._ordered():
             resource = None
             if entry.resource is not None:
                 try:
@@ -138,21 +168,25 @@ class Dispatcher:
                 except Exception:  # impostazioni non leggibili: nessuna esclusione
                     resource = None
             if resource is not None and resource in self._held:
-                skipped.append(entry)
                 if not entry.blocked:
                     entry.blocked = True
                     blocked.append((entry.job_id, resource))
                 continue
-            found = entry
-            found.held = resource
-            break
-        for entry in skipped:
-            heapq.heappush(self._heap, entry)
-        if found is not None:
-            del self._queued[found.job_id]
-            if found.held is not None:
-                self._held.add(found.held)
-        return found, blocked
+            entry.held = resource
+            del self._queued[entry.job_id]
+            if resource is not None:
+                self._held.add(resource)
+            return entry, blocked
+        return None, blocked
+
+    def _release(self, entry: _Entry) -> None:
+        """Restituisce la risorsa esclusiva del job, una volta sola. `held` torna None: la chiusura dell'esecuzione
+        (o una seconda chiamata) non libera la stessa risorsa presa nel frattempo da un altro job."""
+        with self._cond:
+            if entry.held is not None:
+                self._held.discard(entry.held)
+                entry.held = None
+                self._cond.notify_all()
 
     def _worker(self) -> None:
         while True:
@@ -177,12 +211,11 @@ class Dispatcher:
             if entry is None:
                 continue
             try:
-                self._run(entry.job_id)
+                self._run(entry.job_id, partial(self._release, entry))
             except Exception:  # _execute gestisce i propri errori: questo è un guasto del gestore
                 traceback.print_exc()
             finally:
+                self._release(entry)
                 with self._cond:
                     self._busy -= 1
-                    if entry.held is not None:
-                        self._held.discard(entry.held)
                     self._cond.notify_all()

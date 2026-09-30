@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { JobItemsEvent, JobSummary, PipelinePage, PipelineResult, ResumeScope, SearchEngine, Sequence, TemplateItem, TemplateRef } from "../api/types";
 import { RecomputeOption } from "../components/CacheOption";
 import { SequenceFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
+import { PipelineItemActions, PipelineModelView } from "../components/PipelineItemActions";
 import { TemplatePicker } from "../components/Pickers";
 import { PlddtOption } from "../components/PlddtOption";
-import { Viewer3D } from "../components/Viewer3D";
-import { Badge, BarCell, Card, Empty, Field, Grade, Modal, PageHead, Segmented, StatusBadge } from "../components/ui";
+import { Badge, BarCell, Card, Empty, Field, Grade, PageHead, Segmented, StatusBadge } from "../components/ui";
 import { hasPredictedTemplate, pipelineFastaName, PLDDT_DEFAULT } from "../lib/alphafold";
 import { useProject, useToast } from "../lib/context";
 import { fmtDate, fmtEvalue, fmtNum, isActive, relTime, searchCacheHitsLabel, STATUS_LABEL } from "../lib/format";
@@ -113,13 +113,7 @@ function Items({ jobId, running, cacheHits }: { jobId: string; running: boolean;
                   <td className="num">{fmtNum(it.rama_favored)}</td>
                   <td className="num">{fmtNum(it.clashscore, 1)}</td>
                   <td className="nowrap">
-                    {it.best_model && (
-                      <>
-                        <button className="btn btn-sm" onClick={() => setView({ name: it.name, path: it.best_model! })} title="Visualizza"><Icon name="eye" size={13} /></button>{" "}
-                        <Link className="btn btn-sm" to={`/quality?job=${jobId}&file=${encodeURIComponent(it.best_model)}`} title="Qualità"><Icon name="shield" size={13} /></Link>{" "}
-                        <a className="btn btn-sm" href={api.jobFileUrl(jobId, it.best_model, true)} title="Scarica PDB"><Icon name="download" size={13} /></a>
-                      </>
-                    )}
+                    <PipelineItemActions jobId={jobId} item={it} onView={() => it.best_model && setView({ name: it.name, path: it.best_model })} />
                   </td>
                 </tr>
               ))}
@@ -138,11 +132,7 @@ function Items({ jobId, running, cacheHits }: { jobId: string; running: boolean;
           </div>
         </div>
       </div>
-      {view && (
-        <Modal title={`Modello di ${view.name}`} wide onClose={() => setView(null)}>
-          <Viewer3D url={api.jobFileUrl(jobId, view.path)} height={520} />
-        </Modal>
-      )}
+      {view && <PipelineModelView jobId={jobId} name={view.name} model={view.path} onClose={() => setView(null)} />}
     </Card>
   );
 }

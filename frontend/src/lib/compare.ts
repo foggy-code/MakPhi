@@ -5,7 +5,7 @@
 // Convenzioni del backend (engines/align.structural, domain/comparison.py): A è il riferimento, B si sovrappone su A;
 // nel PDB sovrapposto la catena A è la struttura A e la catena B la struttura B, qualunque fosse la catena originale.
 
-import type { ModelEntry, PreparedTemplate, StructuralPair, StructureSource } from "../api/types";
+import type { AlignResult, ModelEntry, PreparedTemplate, StructuralPair, StructureSource } from "../api/types";
 import { fmtScaleValue, NO_VALUE_COLOR, type ContinuousScale } from "./colorscale";
 import { resiNumber, type ResidueColoring, type ResidueRef, type ResidueValue } from "./residueColoring";
 
@@ -108,6 +108,17 @@ export function jobSources(params: Record<string, unknown> | null | undefined): 
   const a = clean(list[0]);
   const b = clean(list[1]);
   return a && b ? [a, b] : null;
+}
+
+/**
+ * Cosa mostra la colonna del risultato nella pagina Confronto: "empty" senza job (invito a scegliere le strutture),
+ * "missing" se il job del link non si è potuto caricare (eliminato, link vecchio: errore e invito a rilanciare con
+ * «Confronta», le strutture del link restano scelte), altrimenti "job" (il pannello del job). Un errore dopo il primo
+ * caricamento (rete, polling) non nasconde il job già mostrato.
+ */
+export function compareJobView(jobId: string | null | undefined, loaded: boolean, error: string | null | undefined): "empty" | "missing" | "job" {
+  if (!jobId) return "empty";
+  return !loaded && error ? "missing" : "job";
 }
 
 /** Dalla tabella dei modelli: con quali strutture confrontare un modello (template usati, altri modelli del job). */
@@ -234,6 +245,29 @@ export function pairRows(pairs: StructuralPair[], sort: PairSort = "position", m
   if (sort === "distance") rows.sort((i, j) => pairs[j].distance - pairs[i].distance || i - j);
   else if (sort === "lddt") rows.sort((i, j) => (pairs[i].lddt ?? Infinity) - (pairs[j].lddt ?? Infinity) || i - j);
   return rows;
+}
+
+/**
+ * Scorrimento verticale (da aggiungere a `scrollTop`) del contenitore della tabella perché la riga selezionata sia
+ * visibile sotto l'intestazione fissa: 0 se lo è già, altrimenti la porta al centro. Si scorre solo il contenitore,
+ * mai la pagina (`scrollIntoView` scorrerebbe anche la finestra e porterebbe via il viewer 3D appena cliccato).
+ * Rettangoli come `getBoundingClientRect`; `header` = altezza dell'intestazione fissa.
+ */
+export function rowScrollDelta(row: { top: number; bottom: number }, view: { top: number; bottom: number }, header = 0): number {
+  const top = view.top + header;
+  if (row.top >= top && row.bottom <= view.bottom) return 0;
+  const visible = view.bottom - top;
+  const height = row.bottom - row.top;
+  return Math.round(row.top - top - (visible - height) / 2);
+}
+
+/**
+ * Il risultato strutturale è di una versione precedente di BioLoom, senza confronto per residuo: niente coppie e
+ * niente `comparison_version`. Non basta l'assenza di una nota: il metodo integrato ha sempre scritto la sua
+ * ("Allineamento dipendente dalla sequenza…"), mentre un risultato nuovo senza coppie ha la versione e la sua nota.
+ */
+export function comparisonOutdated(result: Pick<AlignResult, "pairs" | "comparison_version">): boolean {
+  return !result.pairs?.length && result.comparison_version == null;
 }
 
 /** Lettura del TM-score (Xu & Zhang, Bioinformatics 26:889, 2010; Zhang & Skolnick, Proteins 57:702, 2004). */

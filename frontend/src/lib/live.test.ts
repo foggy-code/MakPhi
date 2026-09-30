@@ -91,6 +91,9 @@ describe("scelta fra flusso e polling", () => {
     expect(jobPollInterval({ hasJob: true, active: false, watch: true, live: false })).toBe(5000); // riprendibile
     expect(jobPollInterval({ hasJob: true, active: false, watch: false, live: false })).toBeNull();
     expect(jobPollInterval({ hasJob: false, active: true, watch: false, live: false })).toBeNull();
+    // job eliminato o link vecchio (404): nessun polling, anche se lo stato non è mai arrivato ("attivo" per difetto)
+    expect(jobPollInterval({ hasJob: true, active: true, watch: false, live: false, gone: true })).toBeNull();
+    expect(jobPollInterval({ hasJob: true, active: false, watch: true, live: false, gone: true })).toBeNull();
     expect(listPollInterval(true, true, 2000, 8000)).toBeNull();
     expect(listPollInterval(false, true, 2000, 8000)).toBe(2000);
     expect(listPollInterval(false, false, 3000, null)).toBeNull();

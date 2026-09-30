@@ -259,9 +259,9 @@ aggiornamento di un elemento. Ogni cambiamento ha una versione crescente e resta
 
 ### Coda con priorità e budget di CPU
 
-**Coda** (`core/dispatch.py`). Ogni pool ha un dispatcher con un heap al posto del `ThreadPoolExecutor` FIFO: "cpu"
-con i job di calcolo in parallelo delle Impostazioni (`effective_workers`, core − 1 se automatico), "io" con 8. I
-worker prendono sempre il primo job avviabile in quest'ordine (`core/jobs.PRIORITY`):
+**Coda** (`core/dispatch.py`). Ogni pool ha un dispatcher con una coda ordinata al posto del `ThreadPoolExecutor`
+FIFO: "cpu" con i job di calcolo in parallelo delle Impostazioni (`effective_workers`, core − 1 se automatico), "io"
+con 8. I worker prendono sempre il primo job avviabile in quest'ordine (`core/jobs.PRIORITY`):
 
 | Priorità | Tipi di job | Perché |
 |---|---|---|
@@ -271,10 +271,18 @@ worker prendono sempre il primo job avviabile in quest'ordine (`core/jobs.PRIORI
 
 - **A parità:** `created_at`, poi il rowid della riga (ordine di creazione anche nello stesso secondo). Un job ripreso
   rientra con la sua data di creazione e passa davanti ai job creati dopo di lui.
+- **Invecchiamento** (`dispatch.AGING_SECONDS` = 300 s): la priorità effettiva di un job in coda migliora di un
+  livello ogni 5 minuti di attesa, fino a 0. Senza, un flusso continuo di job interattivi lasciava una pipeline in
+  coda per sempre. 5 minuti sono più di un calcolo interattivo tipico (ricerca, allineamento, qualità: da secondi a
+  pochi minuti), quindi le richieste di chi aspetta davanti allo schermo passano ancora davanti; con un flusso
+  continuo una modellazione parte dopo al più 5 minuti e una pipeline dopo al più 10, più i job creati prima di lei.
+  A parità di priorità effettiva vale la creazione: un job della stessa priorità arrivato dopo non sorpassa chi
+  aspetta da prima, perché ha atteso di meno. L'ordine si calcola a ogni scelta (e per `queue_position`), non
+  all'ingresso in coda.
 - **Nessuna colonna nuova:** la priorità si ricava dal tipo; lo schema SQLite non cambia. La coda sta in memoria e lo
-  stato vero resta su SQLite: una voce dell'heap dice solo "prova ad avviare". `_execute` parte soltanto da `queued`,
-  con il passaggio condizionato di prima, quindi una voce rimasta indietro non avvia nulla due volte. Un job ha al
-  più una voce valida.
+  stato vero resta su SQLite: una voce della coda dice solo "prova ad avviare". `_execute` parte soltanto da `queued`,
+  con il passaggio condizionato di prima, quindi un tentativo rimasto indietro non avvia nulla due volte. Un job ha al
+  più una voce in coda.
 - **Compatibilità:** annullare un job in coda scrive lo stato finale e lo toglie dalla coda nello stesso passo, sotto
   il lock del gestore, così una ripresa successiva non può vedersi togliere la voce nuova. La ripresa lo rimette in
   coda a preparazione finita. All'arresto la coda si svuota e il `recover` del prossimo avvio marca i job rimasti
@@ -291,10 +299,15 @@ worker prendono sempre il primo job avviabile in quest'ordine (`core/jobs.PRIORI
   calcolo alla volta; lo chiedono i job `qmean` in modalità locale e le conversioni e copie di UniClust30, che nel
   servizio passano dalla stessa coda. Un job con la risorsa occupata resta `queued`, con la sua posizione e la fase
   "In coda: il servizio QMEAN locale sta eseguendo un altro calcolo", e il worker passa al successivo: il pool "io"
-  continua a servire gli altri job. La risorsa si calcola al momento della scelta (`mode` del job o delle
-  Impostazioni: un QMEAN su SWISS-MODEL non la chiede) e si tiene fino alla chiusura dell'esecuzione, compreso un
-  eventuale fallback su SWISS-MODEL. Prima i job QMEAN restavano `running` in attesa della coda del worker e
-  consumavano il loro timeout.
+  continua a servire gli altri job. La risorsa si calcola al momento della scelta: `mode` del job o delle
+  Impostazioni; un QMEAN su SWISS-MODEL non la chiede, e nemmeno uno in modalità locale senza servizio QMEAN
+  (`BIOLOOM_QMEAN_URL` assente: l'avviatore non ha trovato UniClust30), che fallisce subito o va al fallback. Si tiene
+  fino alla chiusura dell'esecuzione, salvo che il job la restituisca prima con `JobContext.release_resource` (il
+  dispatcher gliela passa all'avvio): `handle_qmean` lo fa appena finisce la parte locale, riuscita o no, così un
+  fallback su SWISS-MODEL (minuti di attesa) non tiene in coda il QMEAN locale successivo, e più fallback partono
+  insieme. Restituita, la risorsa non si libera una seconda volta alla chiusura (quella presa nel frattempo da un
+  altro job resta sua). Prima i job QMEAN restavano `running` in attesa della coda del worker e consumavano il loro
+  timeout.
 
 **Budget di CPU** (`core/budget.py`). Senza coordinamento, pipeline × elementi in parallelo × strumenti saturavano la
 CPU. Gli slot sono `effective_workers`, condivisi da tutti i job. `JobContext.run(cpu=...)` li prende prima di avviare
@@ -318,6 +331,13 @@ il processo e li restituisce quando termina: `True` (predefinito) = 1, un numero
 - **Ordine:** priorità del job, poi arrivo. Niente sorpassi: il primo in ordine parte appena ha abbastanza slot, e
   chi viene dopo aspetta anche se gli basterebbero. Così una richiesta fissa di N slot non resta indietro per sempre
   dietro a quelle da uno.
+- **Invecchiamento** (`budget.AGING_SECONDS` = 60 s): la priorità effettiva di una richiesta migliora di un livello
+  ogni minuto di attesa, fino a 0, con le stesse regole della coda (a parità vale l'arrivo). I processi dei calcoli
+  interattivi durano pochi secondi (DOPE, PROCHECK, ProSA, TM-align) o meno di un minuto (BLAST+ e MMseqs2 locali):
+  un'analisi lanciata dall'utente passa ancora davanti, ma con un flusso continuo di processi interattivi un processo
+  di modellazione aspetta al più 1 minuto e uno di pipeline al più 2 prima di contare solo l'arrivo. Chi aspetta
+  riesamina il proprio turno a ogni rilascio e comunque ogni secondo, quindi l'invecchiamento vale anche senza
+  risvegli.
 - **Nessun deadlock:**
   - gli slot li tengono solo processi in esecuzione, che finiscono da soli, per timeout o per annullamento;
   - la pipeline non ne prende mentre aspetta i suoi elementi: li prendono i processi degli elementi;
@@ -456,6 +476,11 @@ integrato se mkdssp manca), su un pool di thread del singolo calcolo. QMEAN rest
       - Tolleranza: si accetta il 95% del requisito, perché `/proc/meminfo` vede un po' meno della memoria assegnata
         (con 12 GB per Docker circa 11,7 GB).
       - Un worker di una versione che non riporta la memoria non viene controllato.
+      - Nello stato `memory_required.sufficient` riporta l'esito (`memory_sufficient`: true, false o null se non si
+        sa), e Impostazioni → Database lo scrive accanto al requisito (`qmeanMemoryNote`): "Memoria di Docker:
+        11,7 GB; richiesti circa 12 GB (valore misurato): sufficiente…". Con il giudizio `ok` del worker e una stima
+        più alta della memoria la nota non mostra la stima ma "sufficiente secondo il servizio QMEAN", che misura le
+        dimensioni vere degli indici: prima compariva "richiesti circa 14 GB" accanto a un servizio disponibile.
       - Esempio: UniRef30_2020_06 con 8 GB per Docker → "memoria insufficiente per UniRef30_2020_06: servono circa
         12 GB assegnati a Docker (valore misurato) e il servizio QMEAN ne ha 8,0…"; con 11,7 GB parte.
   - **Processori:** `run_qmean.py` lancia HHblits con `-cpu 1`; il wrapper ne passa di più.
@@ -612,7 +637,10 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
   - `Viewer3D` espone `handle.pngDataUri()` (3Dmol `pngURI`), che risponde solo con la struttura disegnata e nessun
     caricamento in corso. Il frontend la invia solo per il modello mostrato dal viewer (in Modellazione il modello
     selezionato, in Qualità con la scheda 3D aperta) e solo se è un PNG entro 3 MB (`lib/report.ts`); altrimenti il
-    report si genera senza immagine, con un avviso.
+    report si genera senza immagine e il motivo compare nell'avviso del salvataggio riuscito ("Report scaricato senza
+    la vista 3D: …", `reportSavedMessage`), non prima della richiesta: un report che poi fallisce mostra solo
+    l'errore. In Pipeline il pulsante Report c'è in ogni riga completata (report dell'elemento anche senza analisi di
+    qualità) e nella finestra «Visualizza», che incorpora la vista corrente.
   - `decode_png` accetta base64 o un data URI `image/png` e controlla la lunghezza prima di decodificare. Poi verifica
     firma, blocchi (lunghezza, tipo, CRC-32), IHDR (lati fino a 16384, profondità ammessa per il tipo di colore),
     almeno un IDAT, IEND finale e nessun dato dopo. Il data URI del report è ricodificato dai byte verificati.
@@ -625,6 +653,12 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
 - **Pipeline:** `export_zip` aggiunge `report/<nome>.html` per ogni elemento completato (senza immagine), generati e
   scritti uno alla volta: in memoria c'è al più un report. Un report che non si può generare finisce in
   `report/non_generati.txt` e non ferma l'esportazione. Il LEGGIMI dello ZIP descrive la cartella.
+  - **Nomi:** `modelli/<nome>.pdb`, `qualita/<nome>.quality.json` e `report/<nome>.html` usano lo stesso nome
+    dell'elemento, unico nell'archivio: il report sta sempre accanto al suo modello. I nomi vengono da
+    `sequences.sanitize_code` (solo `[A-Za-z0-9_-]`); la deduplicazione registra anche i nomi generati ("x", "x",
+    "x_2" → "x", "x_2", "x_2_2"). Un nome ripetuto in un job di una versione precedente diventa nello ZIP quello della
+    cartella dell'elemento (`0002_x_2`). Prima il report passava da `safe_filename`, che toglie i '-' ai bordi: "abc"
+    e "abc-" davano due voci `report/abc.html` e all'estrazione una copriva l'altra.
 
 ### Allineamenti
 
@@ -704,7 +738,10 @@ residui è quella dell'allineamento ed è fissata; nessuna metrica la cambia.
 per residuo, hanno un'altra chiave e non si leggono più (le toglie la pulizia a 30 giorni). In più `run_cached(accept=)`
 scarta alla lettura una voce che non ha tutti i campi del confronto (`_complete`), e `keep` non scrive in cache un
 risultato senza coppie (mappatura non ricostruita). I job completati prima restano leggibili: l'interfaccia mostra le
-metriche che hanno e chiede di rilanciare per il confronto per residuo.
+metriche che hanno e chiede di rilanciare per il confronto per residuo. Per distinguerli ogni risultato nuovo ha
+`comparison_version` (= `STRUCTURAL_VERSION`), anche quando il confronto per residuo non è riuscito: l'invito a
+rilanciare compare senza coppie e senza `comparison_version`, anche accanto alla nota "Allineamento dipendente dalla
+sequenza…" che il metodo integrato scriveva già prima; un risultato nuovo senza coppie mostra solo la sua nota.
 
 ### Ricerca di template
 
@@ -1029,12 +1066,20 @@ Il client API (`api/client.ts`) e i tipi (`api/types.ts`) sono l'unico punto di 
   valore"), con i campioni in legenda (`legendExtra`).
 - **Selezione:** clic su grafico, tabella o tratto che devia (almeno 3 coppie consecutive oltre 1, 2 o 4 Å, le soglie
   del GDT, senza salti della numerazione di A) evidenzia i due residui e centra la vista; clic nel 3D seleziona la
-  coppia (`pairIndexOf`, su catena A o B). Il grafico interrompe la linea dove A ha residui senza coppia.
+  coppia (`pairIndexOf`, su catena A o B). Il grafico interrompe la linea dove A ha residui senza coppia. La tabella
+  porta in vista la riga selezionata scorrendo solo il proprio contenitore (`rowScrollDelta`): `scrollIntoView`
+  scorreva anche la pagina e un clic nel 3D portava via il viewer.
 - **Link stabili:** `?a=template:1UBQ&ca=A&b=job:<id>:<file>&cb=&job=` (`encodeSource`/`decodeSource`, catena a parte):
   «Confronta…» nella tabella dei modelli di Modellazione (`compareTargets`: template usati e altri modelli del job; il
   modello è B), «Confronta con» nella pagina Qualità (i template del job del modello, o un riferimento a scelta) e «Apri
-  in Confronto» negli Allineamenti. Il link precompila, il confronto parte con «Confronta».
-- **Risultati precedenti** (senza `pairs`): metriche che hanno, viewer con le catene e un avviso per rilanciare.
+  in Confronto» negli Allineamenti. Il link precompila, il confronto parte con «Confronta». Nel selettore della
+  struttura (`StructurePicker`, `lib/picker.ts`) un job che non è tra gli ultimi job di modellazione elencati (una
+  pipeline, un job loop, un job più vecchio) compare in cima «(da un link)», con il suo modello fra le scelte: prima la
+  struttura sembrava non scelta e sceglierne un'altra dall'elenco la azzerava. Un `?job=` che non si carica (job
+  eliminato, link vecchio) mostra l'errore e l'invito a rilanciare (`compareJobView`), e `useJob` smette di
+  interrogare un job che il server non ha (404).
+- **Risultati precedenti** (senza `pairs` e senza `comparison_version`): metriche che hanno, viewer con le catene e un
+  avviso per rilanciare, anche accanto alla nota del metodo integrato.
 
 Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni risultato ha un link stabile.
 
@@ -1098,7 +1143,10 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - scelta della versione e fallback su SWISS-MODEL (`test_qmean_fallback.py`), memoria richiesta dal database
     (12 GB misurati per UniRef30_2020_06, stima per le altre versioni, giudizio del worker, tolleranza del 95%): job
     fallito subito o fallback con 8 GB, partenza con 11,7 GB; due QMEAN locali eseguiti uno alla volta, il secondo in
-    coda con posizione e fase, senza bloccare il pool "io"; QMEAN su SWISS-MODEL senza esclusione;
+    coda con posizione e fase, senza bloccare il pool "io"; QMEAN su SWISS-MODEL senza esclusione, e nemmeno senza
+    servizio locale (due fallback insieme, nessuna fase di coda); servizio locale restituito prima del fallback (un
+    secondo QMEAN locale parte e finisce mentre il primo aspetta SWISS-MODEL); nota sulla memoria con l'esito
+    (`memory_required.sufficient`, anche quando decide il giudizio del worker);
   - lettura dei formati di sequenza e caricamento di strutture (`test_fileformats.py`);
   - consenso tra i metodi (`test_consensus.py`):
     - scale, pesi, fasce, metodi mancanti, discordanze;
@@ -1145,9 +1193,12 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     timeout non consumato dall'attesa e ancora valido per il processo, impostazione dei job in parallelo cambiata
     senza riavvio (budget e pool "cpu"), programmi multi-thread su più slot (fissi ed elastici: questi prendono subito
     gli slot liberi), processi di I/O fuori dal budget, ordine
-    per priorità senza sorpassi, fase "In attesa di CPU libera" (job, elemento di pipeline, figlio senza fase, passi
-    in parallelo),
-    ordine di esecuzione per tipo con un solo worker e FIFO a parità, ripresa che torna al suo posto, annullamento e
+    per priorità senza sorpassi, invecchiamento con un orologio simulato (budget e coda: una richiesta di pipeline
+    servita entro 2 livelli anche con richieste interattive continue, FIFO a parità di priorità effettiva), fase "In
+    attesa di CPU libera" (job, elemento di pipeline, figlio senza fase, passi in parallelo),
+    ordine di esecuzione per tipo con un solo worker e FIFO a parità, risorsa esclusiva restituita prima della fine
+    (il job successivo parte, la chiusura non libera la risorsa presa da un altro), ripresa che torna al suo posto,
+    annullamento e
     ripresa di un job in coda, job in coda all'arresto marcati da `recover`, eventi invariati, posizione nel flusso
     dell'elenco, pipeline con 4 elementi in parallelo su 2 slot senza deadlock;
   - analisi in parallelo e template preparati (`test_parallel_quality.py`): `Steps` (ordine dei risultati diverso da
@@ -1165,23 +1216,25 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     in titoli, nomi, metadati, residui e atomi; PNG valido incorporato, PNG malformati (firma, CRC, troncati, dati
     dopo IEND, senza IDAT, altri tipi) e oltre 3 MB rifiutati; modelli non del job, falliti, job non completato;
     loop; report di un job quality con QMEAN simulato (70–76 sotto 0,6); ZIP della pipeline con un report per
-    elemento completato e rotta del report di un elemento; nomi di file sicuri;
+    elemento completato e rotta del report di un elemento; nomi unici nello ZIP ("abc" e "abc-", "x", "x", "x_2", job
+    precedenti con nomi ripetuti); nomi di file sicuri;
   - verifica dell'installazione.
 
   `pytest -m network` prova i servizi reali. Oltre a 1UBQ, `tests/data` contiene strutture sintetiche generate
   da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con interfaccia di contatto) e `ubq_zn.pdb` (sito Zn²⁺
   su His68 e due acque).
-- **`frontend/src/**/*.test.ts` (vitest):**
+- **`frontend/src/**/*.test.ts(x)` (vitest):**
   - parser PIR e formattazione (compresa la nota "dalla cache");
   - logica QMEAN locale/remoto/fallback e avvisi delle licenze;
   - pulsanti di ripresa delle pipeline e ricarica del job quando cambia stato, dopo l'annullamento e dopo la
     ripresa;
   - posizione in coda ("2° in coda", solo per i job in coda), slot di calcolo in uso (`format.test.ts`), memoria del
-    servizio QMEAN rispetto al requisito (`status.test.ts`);
+    servizio QMEAN rispetto al requisito, con l'esito del server (sufficiente, insufficiente, al limite, 11,7 GB su 12,
+    giudizio "ok" del worker al posto di una stima più alta: `status.test.ts`);
   - tempo residuo leggibile (`fmtEta`); scelta fra flusso e polling, riconnessione con backoff, timeout di
     connessione, fine del flusso, flusso condiviso dell'elenco, ricomposizione del log (anche con polling e flusso
-    sovrapposti) e aggiornamento degli elenchi, anche dopo una ricarica lenta (`live.test.ts`, con flussi e timer
-    finti);
+    sovrapposti) e aggiornamento degli elenchi, anche dopo una ricarica lenta, niente polling per un job che il server
+    non ha (404) (`live.test.ts`, con flussi e timer finti);
   - decodifica dei file, chiave MODELLER da file, vincoli da e verso file;
   - scale di colore e legende (`colorscale.test.ts`, fasce con limite escluso o compreso), conversione del rapporto
     nei valori per residuo, pLDDT compreso con le fasce del backend (`residueColoring.test.ts`), residui
@@ -1190,12 +1243,20 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - confronto strutturale (`compare.test.ts`): sorgenti nei link (andata e ritorno, valori non validi), destinazioni
     di «Confronta…» dai modelli, scala delle distanze saturata a 5 Å, colore fisso di A e colore per catena, coppia di
     un residuo scelto nel 3D, interruzioni del grafico (salti e codici di inserzione), tratti che deviano, ordinamento e
-    filtro della tabella, lettura del TM-score.
+    filtro della tabella, lettura del TM-score, scorrimento del solo contenitore della tabella alla riga selezionata,
+    risultati di versioni precedenti riconosciuti da `comparison_version` (non dall'assenza di una nota), job del link
+    non trovato nella pagina Confronto;
+  - selettore della struttura di un job (`picker.test.ts`): job e modello arrivati da un link (elemento di pipeline,
+    job loop, job non tra gli ultimi 30) restano visibili come scelti, risultati senza elenco dei modelli;
+  - azioni degli elementi di pipeline (`PipelineItemActions.test.tsx`, markup statico di `react-dom/server`): report
+    del modello in ogni riga completata, disattivato per le altre, e report con la vista 3D dalla finestra
+    «Visualizza».
   - AlphaFold (`alphafold.test.ts`): accessioni e id `AF-…`, accessione precompilata che segue la sequenza,
     intestazioni `sp|`/`tr|` della pipeline, fasce di pLDDT, quando mostrare la soglia, riepilogo del ritaglio
     (anche con i frammenti isolati).
-  - report (`report.test.ts`): vista 3D inviata solo se è un PNG entro 3 MB, nome del file da Content-Disposition
-    (senza percorsi) e nome di riserva come quello del server.
+  - report (`report.test.ts`): vista 3D inviata solo se è un PNG entro 3 MB, motivo della vista mancante solo
+    nell'avviso del salvataggio riuscito, nome del file da Content-Disposition (senza percorsi) e nome di riserva come
+    quello del server.
 - **Profilazione:** `scripts/test.sh backend tests/perf_timing.py -s` (fuori dalla suite, vedi
   [Prestazioni](#prestazioni)).
 - **Esecuzione:** `scripts/test.sh` (ruff, pytest nell'immagine con MODELLER reale, typecheck e vitest). La CI

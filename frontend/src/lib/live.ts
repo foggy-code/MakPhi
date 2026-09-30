@@ -43,10 +43,11 @@ export function wantJobStream(o: { hasJob: boolean; active: boolean; visible: bo
 /**
  * Intervallo di polling di `useJob` in ms (null = nessuno). Job attivo: nessun polling mentre il flusso è
  * attivo, altrimenti ogni `activeMs`. Job terminato ma riprendibile: controllo lento (la ripresa può arrivare
- * da un'altra scheda); il flusso riparte quando il job torna attivo.
+ * da un'altra scheda); il flusso riparte quando il job torna attivo. Job che il server non ha (`gone`: 404,
+ * eliminato, link vecchio): nessun polling.
  */
-export function jobPollInterval(o: { hasJob: boolean; active: boolean; watch: boolean; live: boolean }, activeMs = 900, watchMs = 5000): number | null {
-  if (!o.hasJob) return null;
+export function jobPollInterval(o: { hasJob: boolean; active: boolean; watch: boolean; live: boolean; gone?: boolean }, activeMs = 900, watchMs = 5000): number | null {
+  if (!o.hasJob || o.gone) return null;
   if (o.active) return o.live ? null : activeMs;
   return o.watch ? watchMs : null;
 }

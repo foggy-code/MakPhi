@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
-import type { JobSummary, ModelResult, ParsedFile, Sequence, StructureSource, TemplateAnalysis, TemplateItem, TemplateRef, UploadedStructure } from "../api/types";
+import type { JobSummary, ParsedFile, Sequence, StructureSource, TemplateAnalysis, TemplateItem, TemplateRef, UploadedStructure } from "../api/types";
 import { isAlphaFoldId, plddtLabel, plddtTone } from "../lib/alphafold";
 import { useProject, useToast } from "../lib/context";
 import { useAsync } from "../lib/hooks";
+import { jobChoices, modelChoices, modelFiles } from "../lib/picker";
 import { FileButton, SequenceFileButton } from "./FileLoad";
 import { Icon } from "./Icon";
 import { Badge, DropZone, Segmented } from "./ui";
@@ -241,10 +242,28 @@ export function StructurePicker({ value, onChange, label = "Struttura" }: { valu
     else if (value?.type === "upload") setKind("upload");
   }, [value?.type, value?.job_id]);
   const [models, setModels] = useState<string[]>([]);
+  const [jobTitle, setJobTitle] = useState<string | null>(null);
   useEffect(() => {
-    if (!jobId) return setModels([]);
-    api.job<ModelResult>(jobId).then((j) => setModels(j.result?.models.filter((m) => !m.failure).map((m) => m.file) ?? [])).catch(() => setModels([]));
+    setModels([]);
+    setJobTitle(null);
+    if (!jobId) return;
+    let current = true;
+    // i job senza elenco di modelli (pipeline) non ne danno: il modello del link resta comunque scelto (modelChoices)
+    api.job<unknown>(jobId)
+      .then((j) => {
+        if (!current) return;
+        setModels(modelFiles(j.result));
+        setJobTitle(j.title || null);
+      })
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
   }, [jobId]);
+  // un job o un modello arrivati da un link (pipeline, loop, job più vecchio) restano visibili come scelti
+  const jobOptions = jobChoices(jobs, jobId, jobTitle);
+  const chosenFile = value?.type === "job" && value.job_id === jobId ? value.file : null;
+  const modelOptions = modelChoices(models, chosenFile);
   return (
     <div className="stack-sm">
       <div className="row">
@@ -279,13 +298,13 @@ export function StructurePicker({ value, onChange, label = "Struttura" }: { valu
         <div className="grid grid-2">
           <select className="input" value={jobId} onChange={(e) => { setJobId(e.target.value); onChange(null); }}>
             <option value="">— job di modellazione —</option>
-            {jobs?.map((j) => (
-              <option key={j.id} value={j.id}>{j.title}</option>
+            {jobOptions.map((j) => (
+              <option key={j.value} value={j.value}>{j.label}</option>
             ))}
           </select>
-          <select className="input" value={value?.type === "job" ? value.file : ""} disabled={!models.length} onChange={(e) => onChange(e.target.value ? { type: "job", job_id: jobId, file: e.target.value } : null)}>
+          <select className="input" value={chosenFile ?? ""} disabled={!modelOptions.length} onChange={(e) => onChange(e.target.value ? { type: "job", job_id: jobId, file: e.target.value } : null)}>
             <option value="">— modello —</option>
-            {models.map((m) => (
+            {modelOptions.map((m) => (
               <option key={m} value={m}>{m}</option>
             ))}
           </select>

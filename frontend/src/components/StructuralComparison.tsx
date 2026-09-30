@@ -3,7 +3,8 @@ import { api } from "../api/client";
 import type { AlignResult, StructuralPair } from "../api/types";
 import { colorFor } from "../lib/colorscale";
 import {
-  breaksBefore, comparisonColoring, deviatingSegments, DISTANCE_MAX, DISTANCE_SCALE, pairHighlight, pairIndexOf, pairRows, seriesPath, tmVerdict,
+  breaksBefore, comparisonColoring, comparisonOutdated, deviatingSegments, DISTANCE_MAX, DISTANCE_SCALE, pairHighlight, pairIndexOf, pairRows,
+  rowScrollDelta, seriesPath, tmVerdict,
   type CompareColorBy, type DeviatingSegment, type PairSort,
 } from "../lib/compare";
 import { fmtNum } from "../lib/format";
@@ -115,8 +116,15 @@ function PairTable({ pairs, selected, onSelect }: { pairs: StructuralPair[]; sel
   const [minDistance, setMinDistance] = useState(0);
   const rows = useMemo(() => pairRows(pairs, sort, minDistance), [pairs, sort, minDistance]);
   const selRow = useRef<HTMLTableRowElement>(null);
+  const wrap = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    selRow.current?.scrollIntoView({ block: "nearest" });
+    // solo il contenitore della tabella: una selezione dal 3D, dal grafico o dai tratti non sposta la pagina
+    const box = wrap.current;
+    const row = selRow.current;
+    if (!box || !row) return;
+    const header = box.querySelector("thead")?.getBoundingClientRect().height ?? 0;
+    const delta = rowScrollDelta(row.getBoundingClientRect(), box.getBoundingClientRect(), header);
+    if (delta) box.scrollTop += delta;
   }, [selected]);
   const head = (key: PairSort, label: string, num = false) => (
     <th className={`sortable${num ? " num" : ""}`} onClick={() => setSort(key)} title="Ordina">{label} {sort === key ? "▼" : ""}</th>
@@ -132,7 +140,7 @@ function PairTable({ pairs, selected, onSelect }: { pairs: StructuralPair[]; sel
         </label>
         <span className="muted">{rows.length} righe · clic su una riga per evidenziare i due residui nel 3D.</span>
       </div>
-      <div className="table-wrap" style={{ maxHeight: 380, overflowY: "auto" }}>
+      <div ref={wrap} className="table-wrap" style={{ maxHeight: 380, overflowY: "auto" }}>
         <table className="table">
           <thead><tr>{head("position", "Posizione")}<th>Residuo di A</th><th>Residuo di B</th>{head("distance", "Distanza (Å)", true)}{head("lddt", "lDDT", true)}</tr></thead>
           <tbody>
@@ -189,7 +197,7 @@ export function StructuralComparison({ jobId, result }: { jobId: string; result:
     <div className="stack">
       <Metrics result={result} />
       {result.note && <Alert tone="info">{result.note}</Alert>}
-      {!pairs.length && !result.note && (
+      {comparisonOutdated(result) && (
         <Alert tone="info">
           Confronto per residuo non disponibile: risultato di una versione precedente di BioLoom. Rilancia l'allineamento
           (i risultati precedenti in cache vengono ricalcolati) per distanze, GDT e lDDT.

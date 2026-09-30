@@ -204,9 +204,16 @@ class ComputeService:
 
     def _qmean_resource(self, p: dict) -> Optional[str]:
         """QMEAN locale: al massimo un calcolo alla volta (il servizio ha una coda sola e HHblits richiede molta
-        memoria). Gli altri restano in coda in BioLoom, senza occupare un worker del pool "io"; SWISS-MODEL no."""
+        memoria). Gli altri restano in coda in BioLoom, senza occupare un worker del pool "io".
+
+        Nessuna risorsa per SWISS-MODEL e quando il servizio locale non c'è (l'avviatore non ha trovato UniClust30:
+        `base_url` vuoto, una variabile d'ambiente letta senza I/O sotto il lock del dispatcher): il job fallisce
+        subito o passa al fallback, e i fallback partono insieme. Con il servizio presente la risorsa si restituisce
+        appena finisce la parte locale, prima di un eventuale fallback (`handle_qmean`)."""
         mode = p.get("mode") or self.jobs.settings_provider().qmean_mode
-        return None if mode == "remote" else QMEAN_LOCAL
+        if mode == "remote" or not qmean_local.base_url():
+            return None
+        return QMEAN_LOCAL
 
     # ------------------------------------------------------------------------------ risoluzione file
     def resolve_structure(self, source: dict) -> tuple[Path, str]:
@@ -557,7 +564,8 @@ class ComputeService:
         """QMEAN locale (UniClust30/UniRef30 sul disco esterno) oppure SWISS-MODEL, secondo le Impostazioni.
 
         Fallback facoltativo: se il calcolo locale non è possibile o non riesce e l'utente lo ha consentito
-        (impostazione o scelta del singolo calcolo), il modello viene inviato a SWISS-MODEL.
+        (impostazione o scelta del singolo calcolo), il modello viene inviato a SWISS-MODEL. La risorsa esclusiva del
+        servizio locale (`_qmean_resource`) si restituisce appena finisce la parte locale, prima del fallback.
         """
         settings = ctx.settings
         path, label = self.resolve_structure(p.get("source", {}))
@@ -587,10 +595,15 @@ class ComputeService:
             result = swissmodel()
         else:
             try:
-                ctx.progress(0.05, "QMEAN locale")
-                result = qmean_local.score(pdb_text, ctx, method=p.get("method", "auto"),
-                                           database=p.get("database") or settings.qmean_uniclust,
-                                           timeout_minutes=settings.qmean_timeout_minutes)
+                try:
+                    ctx.progress(0.05, "QMEAN locale")
+                    result = qmean_local.score(pdb_text, ctx, method=p.get("method", "auto"),
+                                               database=p.get("database") or settings.qmean_uniclust,
+                                               timeout_minutes=settings.qmean_timeout_minutes)
+                finally:
+                    # parte locale finita (riuscita, fallita o annullata): il prossimo QMEAN locale può partire, anche
+                    # mentre questo job aspetta SWISS-MODEL (minuti) nel fallback
+                    ctx.release_resource()
             except JobCancelled:
                 raise
             except AppError as exc:  # comprende ToolUnavailable (servizio o database assenti) e timeout

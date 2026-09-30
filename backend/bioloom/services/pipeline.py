@@ -31,7 +31,6 @@ from ..core.errors import AppError, Conflict, NotFound
 from ..core.events import ITEM
 from ..core.jobs import REQUEUABLE, JobCancelled, JobContext, JobManager, requeue_error
 from ..core.storage import remove_tree, safe_join
-from ..domain import report as report_domain
 from ..domain import sequences
 from ..domain.sequences import SeqRecord
 from ..engines import search
@@ -208,16 +207,20 @@ class PipelineService:
             raise AppError("Nessuna sequenza fornita alla pipeline.")
         if len(records) > 2000:
             raise AppError("Massimo 2000 sequenze per pipeline.")
-        seen: dict[str, int] = {}
+        # nomi unici, anche quelli generati: "x", "x", "x_2" → "x", "x_2", "x_2_2" (nell'archivio ZIP i file di un
+        # elemento prendono il suo nome)
+        used: set[str] = set()
+        counters: dict[str, int] = {}
         out = []
         for i, r in enumerate(records):
             seq, _ = sequences.validate_sequence(r.sequence, "protein", r.name or f"sequenza {i + 1}")
-            name = sequences.sanitize_code(r.name, default=f"seq{i + 1}")
-            if name in seen:
-                seen[name] += 1
-                name = f"{name}_{seen[name]}"
-            else:
-                seen[name] = 1
+            base = name = sequences.sanitize_code(r.name, default=f"seq{i + 1}")
+            n = counters.get(base, 1)
+            while name in used:
+                n += 1
+                name = f"{base}_{n}"
+            counters[base] = n
+            used.add(name)
             out.append(SeqRecord(name, seq))
         return out
 
@@ -450,13 +453,15 @@ class PipelineService:
 
         Il report HTML di ogni elemento completato (senza immagine 3D) si genera e si scrive uno alla volta: in
         memoria c'è al più un report. Un report non generato (file dell'elemento illeggibili) non ferma
-        l'esportazione: il motivo finisce in `report/non_generati.txt`.
+        l'esportazione: il motivo finisce in `report/non_generati.txt`. Modello, rapporto di qualità e report di un
+        elemento hanno lo stesso nome nell'archivio, unico fra gli elementi (`_zip_stem`).
         """
         job = self.jobs.get(job_id)
         rows = self.db.query(f"SELECT {ITEM_COLUMNS}, sequence FROM pipeline_items WHERE job_id=? "
                              "AND status='completed' ORDER BY idx", (job_id,))
         reports = ReportService(self.jobs, self.compute, self.db)
         missing: list[str] = []
+        used: set[str] = set()
         with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("riepilogo.csv", self.export_csv(job_id))
             zf.writestr("LEGGIMI.txt", README_ZIP)
@@ -465,19 +470,39 @@ class PipelineService:
                     model = self.jobs.file_path(job_id, r["best_model"])
                 except NotFound:
                     continue
-                zf.write(model, f"modelli/{r['name']}.pdb")
+                stem = _zip_stem(r["name"], int(r["idx"]), used)
+                zf.write(model, f"modelli/{stem}.pdb")
                 quality = Path(str(model) + ".quality.json")
                 if quality.exists():
-                    zf.write(quality, f"qualita/{r['name']}.quality.json")
+                    zf.write(quality, f"qualita/{stem}.quality.json")
                 try:
                     text = reports.pipeline_item(job, r)
                 except Exception as exc:  # un report non generato non deve fermare l'esportazione
-                    missing.append(f"{r['name']}: {getattr(exc, 'message', None) or f'{type(exc).__name__}: {exc}'}")
+                    missing.append(f"{stem}: {getattr(exc, 'message', None) or f'{type(exc).__name__}: {exc}'}")
                     continue
-                zf.writestr(f"report/{report_domain.safe_filename(r['name'])}", text)
+                zf.writestr(f"report/{stem}.html", text)
             if missing:
                 zf.writestr("report/non_generati.txt", "Report non generati\n\n" + "\n".join(missing) + "\n")
             zf.writestr("parametri.json", json.dumps(job["params"], indent=2, ensure_ascii=False))
+
+
+def _zip_stem(name: str, idx: int, used: set[str]) -> str:
+    """Nome di un elemento nell'archivio ZIP, uguale per modelli/, qualita/ e report/ e unico fra gli elementi.
+
+    È il nome dell'elemento, già limitato a [A-Za-z0-9_-] da `sequences.sanitize_code` (niente `safe_filename`, che
+    toglie i '-' ai bordi: "abc" e "abc-" darebbero lo stesso report). Se è già usato (job di versioni precedenti, la
+    cui deduplicazione poteva ripetere un nome generato: "x", "x", "x_2" → "x", "x_2", "x_2") diventa quello della
+    cartella dell'elemento, `<idx>_<nome>`, con un contatore se serve.
+    """
+    stem = name or f"seq{idx + 1}"
+    if stem in used:
+        stem = f"{idx:04d}_{stem}"
+    base, n = stem, 1
+    while stem in used:
+        n += 1
+        stem = f"{base}_{n}"
+    used.add(stem)
+    return stem
 
 
 def _seqs(n: int) -> str:

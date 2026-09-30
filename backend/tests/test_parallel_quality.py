@@ -519,24 +519,33 @@ def test_prepared_templates_concurrent_items_prepare_once(tmp_path, ubq_path, mo
 
 
 def test_waiting_for_a_prepared_template_is_cancellable(tmp_path, ubq_path, monkeypatch):
-    gate = threading.Event()
+    """L'annullamento ferma l'attesa del lock della chiave (ciclo `lock.acquire(timeout=0.5)` con il controllo), non
+    solo il controllo dopo l'acquisizione: il primo elemento tiene il lock finché il test non apre il cancello."""
+    gate, entered = threading.Event(), threading.Event()
     original = modeller.prepare_template
-    monkeypatch.setattr(modeller, "prepare_template",
-                        lambda s, spec, d: gate.wait(5) and original(s, spec, d))
+
+    def slow(source, spec, dest_dir):
+        entered.set()
+        assert gate.wait(5)
+        return original(source, spec, dest_dir)
+
+    monkeypatch.setattr(modeller, "prepare_template", slow)
     cache = PreparedTemplates(tmp_path / "cache")
     first = threading.Thread(target=lambda: cache.get(ubq_path, modeller.TemplateSpec("1UBQ", ["A"]),
                                                       tmp_path / "a", _Check()))
     first.start()
-    time.sleep(0.1)
+    until(entered.is_set)  # il primo ha il lock della chiave e sta preparando
     check = _Check()
     check.cancelled.set()
     t0 = time.perf_counter()
     with pytest.raises(JobCancelled):
         cache.get(ubq_path, modeller.TemplateSpec("1UBQ", ["A"]), tmp_path / "b", check)
-    assert time.perf_counter() - t0 < 2
+    elapsed = time.perf_counter() - t0
+    # almeno un giro del ciclo di attesa (0,5 s, con un margine per gli orologi): l'attesa c'è stata ed è annullabile
+    assert 0.45 <= elapsed < 2 and not gate.is_set()
     gate.set()
     first.join(10)
-    assert not (tmp_path / "b" / "1UBQ_A.pdb").exists()
+    assert not (tmp_path / "b" / "1UBQ_A.pdb").exists() and (tmp_path / "a" / "1UBQ_A.pdb").exists()
 
 
 @pytest.mark.modeller

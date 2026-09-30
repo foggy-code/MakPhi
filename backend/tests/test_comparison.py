@@ -407,6 +407,8 @@ def test_residues_not_matching_the_files_are_reported_and_not_cached(client_with
     done = _compare(c, UBQ_A, UBQ_A, "tmalign")
     r = done["result"]
     assert r["tm_score"] == 1.0 and "pairs" not in r and "non corrispondono" in r["note"]
+    # anche senza confronto per residuo il risultato è della versione attuale (l'interfaccia non lo dice "precedente")
+    assert r["comparison_version"] == align.STRUCTURAL_VERSION
     assert not list((c.app.state.core.paths.compute_cache / "align_structural").glob("*.json"))
 
 
@@ -447,6 +449,7 @@ def test_structural_cache_entries_without_the_comparison_are_not_reused(client_w
     # la voce completa si riusa, con tutti i campi nuovi
     again = _compare(c, UBQ_A, UBQ_A, "builtin")["result"]
     assert again["cached"] is True and again["pairs"] == r["pairs"] and again["gdt"] == r["gdt"]
+    assert r["comparison_version"] == again["comparison_version"] == align.STRUCTURAL_VERSION
     assert align._complete(again) and not align._complete({**again, "pairs": []})
 
 

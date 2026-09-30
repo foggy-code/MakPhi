@@ -17,24 +17,35 @@ export function base64Bytes(b64: string): number {
 export interface ReportImage {
   /** data URI da inviare (`image_png_base64`), null = report senza vista 3D */
   image: string | null;
-  /** perché l'immagine non c'è, se il viewer ne ha data una inutilizzabile */
+  /** perché l'immagine non c'è, se il viewer ne ha data una inutilizzabile (da mostrare solo a report salvato) */
   note: string | null;
 }
 
 /**
  * Vista 3D (data URI di 3Dmol `pngURI`) da incorporare nel report: un PNG entro il limite del server. Senza
  * viewer aperto non c'è immagine; un'immagine non PNG o troppo grande non si invia (il server la rifiuterebbe) e
- * il report si genera comunque, con un avviso.
+ * il report si genera comunque, con il motivo in `note` (vedi `reportSavedMessage`).
  */
 export function reportImage(dataUri: string | null | undefined): ReportImage {
   if (!dataUri) return { image: null, note: null };
   if (!dataUri.startsWith(PNG_PREFIX) || dataUri.length === PNG_PREFIX.length) {
-    return { image: null, note: "La vista 3D non è disponibile come PNG: report generato senza immagine." };
+    return { image: null, note: "la vista 3D non è disponibile come PNG" };
   }
   if (base64Bytes(dataUri.slice(PNG_PREFIX.length)) > REPORT_IMAGE_MAX_BYTES) {
-    return { image: null, note: "La vista 3D supera 3 MB: report generato senza immagine (riduci la finestra del viewer)." };
+    return { image: null, note: "la vista 3D supera 3 MB (riduci la finestra del viewer)" };
   }
   return { image: dataUri, note: null };
+}
+
+/**
+ * Avviso dopo il salvataggio riuscito del report: con la vista 3D, senza, oppure senza perché la vista non era
+ * utilizzabile (tono "warn", con il motivo). Un report non generato mostra solo l'errore: il motivo dell'immagine
+ * mancante non si annuncia prima della richiesta.
+ */
+export function reportSavedMessage({ image, note }: ReportImage): { text: string; tone: "ok" | "warn" } {
+  if (image) return { text: "Report scaricato, con la vista 3D corrente", tone: "ok" };
+  if (note) return { text: `Report scaricato senza la vista 3D: ${note}.`, tone: "warn" };
+  return { text: "Report scaricato", tone: "ok" };
 }
 
 /**

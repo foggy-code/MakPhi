@@ -162,6 +162,8 @@ export function useJob<R = unknown>(jobId: string | null | undefined, opts: { wi
   const [summary, setSummary] = useState<JobSummary | null>(null);
   const [log, setLog] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // il server non ha il job (eliminato, link vecchio): nessun polling che riceverebbe sempre 404
+  const [gone, setGone] = useState(false);
   const [loads, setLoads] = useState(0); // caricamenti completi: il flusso (ri)parte dall'offset appena letto
   const [feed, setFeed] = useState<FeedState>("off");
   const visible = usePageVisible();
@@ -186,6 +188,7 @@ export function useJob<R = unknown>(jobId: string | null | undefined, opts: { wi
       setLoads((n) => n + 1);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      if (e instanceof ApiError && e.status === 404) setGone(true);
     }
   }, [jobId, withLog]);
   const sync = useMemo<JobSync>(() => ({ last, setSummary, loadFull }), [loadFull]);
@@ -195,6 +198,7 @@ export function useJob<R = unknown>(jobId: string | null | undefined, opts: { wi
     setSummary(null);
     setLog("");
     setError(null);
+    setGone(false);
     setLoads(0);
     offset.current = 0;
     last.current = null;
@@ -218,6 +222,7 @@ export function useJob<R = unknown>(jobId: string | null | undefined, opts: { wi
           }
         } else if (type === "end" && (data as { deleted?: boolean } | null)?.deleted) {
           setError("Il job è stato eliminato.");
+          setGone(true);
         } else if (isJobSummary(data) && recordStatus(sync, data)) {
           void loadFull(); // terminato ("end" porta lo stato finale, a log completo): risultato e file
         }
@@ -245,11 +250,12 @@ export function useJob<R = unknown>(jobId: string | null | undefined, opts: { wi
       if (reload) await loadFull();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      if (e instanceof ApiError && e.status === 404) setGone(true);
     }
   }, [jobId, loadFull, withLog, sync]);
 
   // polling solo senza flusso (non supportato, scheda nascosta, connessione caduta) e per i job riprendibili
-  useInterval(poll, jobPollInterval({ hasJob: !!jobId, active, watch, live: isLive(feed) }, 900, WATCH_RESUMABLE_MS));
+  useInterval(poll, jobPollInterval({ hasJob: !!jobId, active, watch, live: isLive(feed), gone }, 900, WATCH_RESUMABLE_MS));
 
   /** Annulla il job; uno in coda si chiude subito e viene ricaricato (pulsanti di ripresa compresi). */
   const cancel = useCallback(async () => {

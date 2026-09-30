@@ -70,7 +70,9 @@ INTERMEDIATE_PATTERNS = ("*.rsr", "*.lrsr", "*.sch", "*.ini", "*.D[0-9]*", "*.V[
 # Priorità di esecuzione per tipo di job (numero più basso = parte prima), nella coda di ciascun pool e nel
 # budget di CPU: i calcoli interattivi brevi, che l'utente sta aspettando davanti allo schermo, prima della
 # modellazione; questa prima dei lavori lunghi in blocco (pipeline, manutenzione dei database). A parità di
-# priorità vale l'ordine di creazione. `compare` è il confronto strutturale (leggero, interattivo).
+# priorità vale l'ordine di creazione. `compare` è il confronto strutturale (leggero, interattivo). La priorità
+# migliora con l'attesa (invecchiamento: core/dispatch.AGING_SECONDS in coda, core/budget.AGING_SECONDS per gli slot),
+# così un flusso continuo di calcoli interattivi non ferma per sempre modellazioni e pipeline.
 PRIORITY = {
     "search": 0, "align": 0, "align2d": 0, "quality": 0, "qmean": 0, "compare": 0,
     "model": 1, "loop": 1, "selftest": 1,
@@ -185,7 +187,7 @@ class JobContext:
                  cancel_event: threading.Event, prefix: str = "",
                  on_progress: Optional[Callable[[Optional[float], Optional[str]], None]] = None, *,
                  priority: int = DEFAULT_PRIORITY, parent: Optional["JobContext"] = None, lane: bool = False,
-                 stage: Optional[str] = None) -> None:
+                 stage: Optional[str] = None, release_resource: Optional[Callable[[], None]] = None) -> None:
         self._manager = manager
         self.job_id = job_id
         self.workdir = workdir
@@ -205,6 +207,7 @@ class JobContext:
         self._own_waiting = 0
         self._lane_waiting = 0
         self._running = 0  # processi del job in esecuzione (da qualunque contesto)
+        self._release = release_resource  # solo nella radice: restituisce la risorsa esclusiva (core/dispatch.py)
 
     @property
     def settings(self):
@@ -224,6 +227,14 @@ class JobContext:
     def check(self) -> None:
         if self._cancel.is_set():
             raise JobCancelled()
+
+    def release_resource(self) -> None:
+        """Restituisce subito la risorsa esclusiva del job (`register(resource=...)`), prima della fine
+        dell'esecuzione: il prossimo job che la aspetta può partire. Es. QMEAN finita la parte locale, prima del
+        fallback su SWISS-MODEL. Senza risorsa, o già restituita, non fa nulla."""
+        release = self._root._release
+        if release is not None:
+            release()
 
     def log(self, message: str) -> None:
         stamp = datetime.now().strftime("%H:%M:%S")
@@ -425,7 +436,8 @@ class JobManager:
         """Registra l'handler di un tipo di job; `eta` sostituisce la stima dal progresso (es. la pipeline).
 
         `priority` sostituisce quella del tipo (`PRIORITY`); `resource(params)` indica una risorsa esclusiva
-        (es. `QMEAN_LOCAL`): un job che la chiede resta in coda finché un altro la tiene.
+        (es. `QMEAN_LOCAL`): un job che la chiede resta in coda finché un altro la tiene, cioè fino alla fine della sua
+        esecuzione o a `JobContext.release_resource`.
         """
         if pool not in self._pools:
             raise ValueError(f"Pool sconosciuto: {pool}")
@@ -807,7 +819,9 @@ class JobManager:
         self._flush_all()
 
     # ------------------------------------------------------------------ esecuzione
-    def _execute(self, job_id: str) -> None:
+    def _execute(self, job_id: str, release_resource: Optional[Callable[[], None]] = None) -> None:
+        """Esegue un job in coda (dal dispatcher del suo pool); `release_resource` restituisce prima della fine la
+        sua risorsa esclusiva (`JobContext.release_resource`)."""
         job = self.db.query_one("SELECT kind, status, params FROM jobs WHERE id=?", (job_id,))
         if not job or job["status"] != "queued":
             return
@@ -830,7 +844,7 @@ class JobManager:
         live.mkdir(parents=True, exist_ok=True)
         registration = self._handlers[job["kind"]]
         ctx = JobContext(self, job_id, live, job["params"] or {}, event, priority=registration.priority,
-                         stage="Avvio")
+                         stage="Avvio", release_resource=release_resource)
         try:
             ctx.log(f"Job {job['kind']} avviato")
             result = registration.fn(ctx, job["params"] or {})

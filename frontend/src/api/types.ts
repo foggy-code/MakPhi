@@ -185,8 +185,9 @@ export interface QmeanServiceStatus {
   };
   /** memoria del container QMEAN (byte) */
   memory?: { total: number; swap: number } | null;
-  /** memoria da assegnare a Docker per il database scelto: misurata (UniRef30_2020_06) o stimata dalla dimensione */
-  memory_required?: { bytes: number; basis: "measured" | "estimate" } | null;
+  /** memoria da assegnare a Docker per il database scelto: misurata (UniRef30_2020_06) o stimata dalla dimensione;
+   *  `sufficient` = esito del controllo del server (giudizio del worker compreso), null se non si sa */
+  memory_required?: { bytes: number; basis: "measured" | "estimate"; sufficient?: boolean | null } | null;
   selected?: string | null;
   preferred?: string | null;
   databases: UniclustDatabase[];
@@ -524,6 +525,9 @@ export interface AlignResult extends CacheInfo {
   lddt_distances?: number;
   /** sovrapposizione che porta B su A: x' = R·x + t */
   transform?: { rotation: number[][]; translation: number[] };
+  /** versione del confronto strutturale (engines/align.STRUCTURAL_VERSION), anche se il confronto per residuo non è
+   *  riuscito; assente nei risultati delle versioni precedenti */
+  comparison_version?: number;
 }
 
 export interface StructuralPair {

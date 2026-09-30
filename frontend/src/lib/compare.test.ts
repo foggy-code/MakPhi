@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { ModelEntry, PreparedTemplate, StructuralPair } from "../api/types";
+import type { AlignResult, ModelEntry, PreparedTemplate, StructuralPair } from "../api/types";
 import { colorFor, legendFor, NO_VALUE_COLOR } from "./colorscale";
 import {
-  breaksBefore, compareLink, compareParams, compareTargets, comparisonColoring, decodeSource, deviatingSegments, DISTANCE_SCALE, encodeSource, jobSources,
-  LDDT_SCALE, linkedSources, pairHighlight, pairIndexOf, pairRows, REFERENCE_COLOR, seriesPath, tmVerdict,
+  breaksBefore, compareJobView, compareLink, compareParams, compareTargets, comparisonColoring, comparisonOutdated, decodeSource, deviatingSegments,
+  DISTANCE_SCALE, encodeSource, jobSources, LDDT_SCALE, linkedSources, pairHighlight, pairIndexOf, pairRows, REFERENCE_COLOR, rowScrollDelta,
+  seriesPath, tmVerdict,
 } from "./compare";
 import { coloringMap, describeResidue, hasMissing } from "./residueColoring";
 
@@ -148,5 +149,46 @@ describe("tabella delle coppie", () => {
     expect(tmVerdict(0.5)).toBe("somiglianza debole (0,17–0,5)");
     expect(tmVerdict(0.1)).toBe("come due strutture casuali (< 0,17)");
     expect(tmVerdict(null)).toBe("—");
+  });
+});
+
+describe("scorrimento della tabella alla riga selezionata", () => {
+  // contenitore da 0 a 380 px con 30 px di intestazione fissa; righe alte 30 px
+  const view = { top: 100, bottom: 480 };
+  it("nessuno scorrimento se la riga è già visibile sotto l'intestazione", () => {
+    expect(rowScrollDelta({ top: 140, bottom: 170 }, view, 30)).toBe(0);
+    expect(rowScrollDelta({ top: 450, bottom: 480 }, view, 30)).toBe(0);
+  });
+  it("una riga sotto o sopra l'area visibile va al centro del contenitore (non della pagina)", () => {
+    const below = { top: 900, bottom: 930 };
+    const delta = rowScrollDelta(below, view, 30);
+    const after = { top: below.top - delta, bottom: below.bottom - delta };
+    expect((after.top + after.bottom) / 2).toBeCloseTo((view.top + 30 + view.bottom) / 2, 0);
+    expect(rowScrollDelta({ top: 110, bottom: 140 }, view, 30)).toBeLessThan(0); // coperta dall'intestazione
+    expect(rowScrollDelta({ top: -200, bottom: -170 }, view)).toBeLessThan(0);
+  });
+});
+
+describe("risultati di versioni precedenti", () => {
+  const note = "Allineamento dipendente dalla sequenza: per proteine con bassa identità usare TM-align/US-align.";
+  it("un vecchio risultato del metodo integrato ha la nota ma non la versione: si invita a rilanciare", () => {
+    const oldBuiltin: Partial<AlignResult> = { method: "Kabsch + TM-score integrato", note, tm_score: 1 };
+    const oldTool: Partial<AlignResult> = { method: "US-align", tm_score: 1 };
+    expect(comparisonOutdated(oldBuiltin)).toBe(true);
+    expect(comparisonOutdated(oldTool)).toBe(true);
+  });
+  it("un risultato nuovo senza coppie (uscita non riconosciuta) ha la versione: solo la sua nota", () => {
+    const failed: Partial<AlignResult> = { method: "TM-align", note: "Uscita di TM-align non riconosciuta: confronto per residuo non disponibile.", comparison_version: 2 };
+    expect(comparisonOutdated(failed)).toBe(false);
+    expect(comparisonOutdated({ pairs: SHIFTED, comparison_version: 2 })).toBe(false);
+  });
+});
+
+describe("pagina Confronto", () => {
+  it("un job del link che non si carica (eliminato, link vecchio) mostra l'errore, non una colonna vuota", () => {
+    expect(compareJobView(null, false, null)).toBe("empty");
+    expect(compareJobView("0123456789abcdef", false, null)).toBe("job"); // in caricamento
+    expect(compareJobView("0123456789abcdef", false, "Job 0123456789abcdef non trovato.")).toBe("missing");
+    expect(compareJobView("0123456789abcdef", true, "Server BioLoom non raggiungibile.")).toBe("job"); // già mostrato
   });
 });

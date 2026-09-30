@@ -1,7 +1,7 @@
 import { useState, type RefObject } from "react";
 import { api } from "../api/client";
 import { useToast } from "../lib/context";
-import { reportImage } from "../lib/report";
+import { reportImage, reportSavedMessage } from "../lib/report";
 import { Icon } from "./Icon";
 import type { Viewer3DHandle } from "./Viewer3D";
 import { Spinner } from "./ui";
@@ -35,11 +35,12 @@ export function ReportButton({ jobId, model = null, qmeanJob = null, viewer, dis
   const run = async () => {
     setBusy(true);
     try {
-      const { image, note } = reportImage(viewer?.current?.pngDataUri() ?? null);
-      if (note) toast.push(note, "warn");
-      const file = await api.report(jobId, model, image ? { image_png_base64: image } : {}, qmeanJob);
+      const shot = reportImage(viewer?.current?.pngDataUri() ?? null);
+      const file = await api.report(jobId, model, shot.image ? { image_png_base64: shot.image } : {}, qmeanJob);
       saveFile(file.filename, file.blob);
-      toast.push(image ? "Report scaricato, con la vista 3D corrente" : "Report scaricato");
+      // l'eventuale motivo della vista mancante solo a report salvato: se la richiesta fallisce resta solo l'errore
+      const done = reportSavedMessage(shot);
+      toast.push(done.text, done.tone);
     } catch (e) {
       toast.error(e);
     } finally {

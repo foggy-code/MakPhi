@@ -128,7 +128,8 @@ def png_size(data: bytes) -> tuple[int, int]:
 
 
 def safe_filename(stem: str, suffix: str = ".html", default: str = "report") -> str:
-    """Nome di file ASCII sicuro per `Content-Disposition` e per lo ZIP: lettere, cifre, '_', '-', '.'."""
+    """Nome di file ASCII sicuro per `Content-Disposition`: lettere, cifre, '_', '-', '.' (senza '.', '_' e '-' ai
+    bordi, quindi nomi diversi possono dare lo stesso file: lo ZIP delle pipeline usa i nomi degli elementi)."""
     clean = re.sub(r"[^A-Za-z0-9_.-]+", "_", stem or "")
     clean = re.sub(r"\.{2,}", ".", re.sub(r"_+", "_", clean)).strip("._-")[:80].strip("._-")
     return (clean or default) + suffix

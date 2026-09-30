@@ -485,6 +485,62 @@ def test_pipeline_zip_contains_one_report_per_completed_item(client_with_ubq, mo
         assert zf.read("report/non_generati.txt").decode().splitlines()[2].startswith("c: ")
 
 
+def _pipeline_zip(c, job_id) -> dict[str, bytes]:
+    r = c.get(f"/api/pipeline/{job_id}/export.zip")
+    assert r.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+        names = zf.namelist()
+        assert len(names) == len(set(names)), names  # nessuna voce ripetuta
+        return {name: zf.read(name) for name in names}
+
+
+def test_pipeline_zip_names_are_unique_and_match_the_models(client_with_ubq, monkeypatch):
+    """"abc" e "abc-" sono elementi diversi: modello, rapporto di qualità e report di ognuno hanno lo stesso nome
+    nell'archivio, senza voci ripetute (prima entrambi i report diventavano report/abc.html)."""
+    c = client_with_ubq
+    core = c.app.state.core
+    monkeypatch.setattr(core.compute, "run_modeling", ReportModeller())
+    fasta = f">abc\n{YEAST_UB}\n>abc-\n{HUMAN_UB}\n>-abc\n{HUMAN_UB}\n"
+    job = c.post("/api/pipeline", json={"fasta": fasta, "template_mode": "fixed", "parallel": 1,
+                                        "templates": [{"id": "1UBQ", "chains": ["A"]}]}).json()
+    assert wait_job(c, job["id"])["status"] == "completed"
+    files = _pipeline_zip(c, job["id"])
+    for idx, name in enumerate(("abc", "abc-", "-abc")):
+        assert {f"modelli/{name}.pdb", f"qualita/{name}.quality.json", f"report/{name}.html"} <= set(files)
+        assert f"items/{idx:04d}_{name}/{name}.B99990001.pdb" in files[f"report/{name}.html"].decode()
+    assert files["modelli/abc-.pdb"] == (core.jobs.workdir(job["id"]) / "items" / "0001_abc-" /
+                                         "abc-.B99990001.pdb").read_bytes()
+
+
+def test_pipeline_deduplicates_generated_names_too():
+    from bioloom.services.pipeline import PipelineService
+
+    fasta = "".join(f">{name}\n{HUMAN_UB}\n" for name in ("x", "x", "x_2", "x", "abc", "abc-"))
+    names = [r.name for r in PipelineService._records({"fasta": fasta})]
+    assert names == ["x", "x_2", "x_2_2", "x_3", "abc", "abc-"]
+
+
+def test_pipeline_zip_of_an_old_job_with_repeated_names(client_with_ubq, monkeypatch):
+    """Job di una versione precedente con nomi ripetuti ("x", "x", "x_2" → "x", "x_2", "x_2"): nello ZIP il secondo
+    "x_2" prende il nome della sua cartella, e ogni report resta accanto al suo modello."""
+    from bioloom.services.pipeline import PipelineService
+
+    c = client_with_ubq
+    core = c.app.state.core
+    monkeypatch.setattr(core.compute, "run_modeling", ReportModeller())
+    monkeypatch.setattr(PipelineService, "_records", staticmethod(lambda params: [
+        sequences.SeqRecord("x", YEAST_UB), sequences.SeqRecord("x_2", HUMAN_UB), sequences.SeqRecord("x_2", HUMAN_UB)]))
+    job = c.post("/api/pipeline", json={"fasta": ">x\nMKV\n", "template_mode": "fixed", "parallel": 1,
+                                        "templates": [{"id": "1UBQ", "chains": ["A"]}]}).json()
+    assert wait_job(c, job["id"])["status"] == "completed"
+    files = _pipeline_zip(c, job["id"])
+    for stem, folder in (("x", "0000_x"), ("x_2", "0001_x_2"), ("0002_x_2", "0002_x_2")):
+        assert f"items/{folder}/" in files[f"report/{stem}.html"].decode()
+        model = core.jobs.workdir(job["id"]) / "items" / folder / f"{folder[5:]}.B99990001.pdb"
+        assert files[f"modelli/{stem}.pdb"] == model.read_bytes()
+        assert f"qualita/{stem}.quality.json" in files
+
+
 def test_pipeline_item_report_route(client_with_ubq, monkeypatch):
     c = client_with_ubq
     core = c.app.state.core

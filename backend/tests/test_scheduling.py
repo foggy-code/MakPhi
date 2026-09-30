@@ -5,6 +5,7 @@ misurati da dentro il processo, cioè mentre tiene lo slot. Dalla sovrapposizion
 massimo di processi contemporanei, senza affidarsi a contatori interni.
 """
 
+import queue
 import sys
 import threading
 import time
@@ -13,6 +14,8 @@ from pathlib import Path
 import pytest
 
 from bioloom.config import UserSettings
+from bioloom.core import budget as budget_module
+from bioloom.core import dispatch
 from bioloom.core.budget import CpuBudget
 from bioloom.core.db import Database
 from bioloom.core.errors import AppError
@@ -63,6 +66,19 @@ def until(condition, timeout=20):
             return
         time.sleep(0.01)
     raise AssertionError("condizione non raggiunta in tempo")
+
+
+class FakeClock:
+    """Orologio dei test dell'invecchiamento: avanza solo quando il test lo sposta."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
 
 
 def sleeper(ctx, marks: Path, name: str, seconds: float, **kwargs):
@@ -387,6 +403,84 @@ def test_requests_larger_than_the_capacity_are_clamped():
     assert budget.used == 0 and budget.slots_for(10) == 2 and budget.slots_for(1) == 1
 
 
+def test_effective_priority_ages_one_level_per_interval():
+    age = dispatch.effective_priority
+    assert [age(2, t, 60) for t in (0, 59.9, 60, 119, 120, 1000)] == [2, 2, 1, 1, 0, 0]
+    assert age(0, 1000, 60) == 0 and age(1, 30, 60) == 1
+    assert age(2, 1000, 0) == 2  # nessun invecchiamento
+    # i test di ordinamento con l'orologio vero durano pochi secondi: restano dentro il primo intervallo
+    assert dispatch.AGING_SECONDS >= 60 and budget_module.AGING_SECONDS >= 30
+
+
+def _budget_waiter(budget, got, name, priority):
+    thread = threading.Thread(target=lambda: got.put((name, budget.acquire(1, priority=priority))), daemon=True)
+    thread.start()
+    return thread
+
+
+def test_budget_aging_serves_a_pipeline_process_under_continuous_interactive_ones():
+    """Un processo di pipeline (priorità 2) non aspetta per sempre dietro a processi interattivi continui: dopo
+    2 intervalli di invecchiamento è servito prima di quelli arrivati dopo di lui."""
+    clock = FakeClock()
+    budget = CpuBudget(lambda: 1, aging=60, clock=clock)
+    got: queue.Queue = queue.Queue()
+    current = budget.acquire(1, priority=0)
+    _budget_waiter(budget, got, "pipeline", 2)
+    until(lambda: budget.waiting == 1)
+    order = []
+    for n in range(1, 10):
+        _budget_waiter(budget, got, f"interattivo{n}", 0)  # ne arriva sempre uno nuovo prima che lo slot si liberi
+        until(lambda: budget.waiting == 2)
+        clock.advance(30)
+        current.release()
+        name, current = got.get(timeout=5)
+        order.append(name)
+        if name == "pipeline":
+            break
+    # t=30: priorità 2; t=60 e t=90: 1 (gli interattivi, arrivati dopo, sono a 0); t=120: 0 e arrivata prima
+    assert order == ["interattivo1", "interattivo2", "interattivo3", "pipeline"] and clock.now == 120
+    current.release()
+    name, last = got.get(timeout=5)
+    assert name == "interattivo4"
+    last.release()
+    assert budget.used == 0 and budget.waiting == 0
+
+
+def test_budget_aging_keeps_arrival_order_at_equal_effective_priority():
+    clock = FakeClock()
+    budget = CpuBudget(lambda: 1, aging=60, clock=clock)
+    got: queue.Queue = queue.Queue()
+    held = budget.acquire(1)
+    _budget_waiter(budget, got, "pipeline", 2)  # t=0
+    until(lambda: budget.waiting == 1)
+    clock.advance(50)
+    _budget_waiter(budget, got, "modello", 1)  # t=50
+    until(lambda: budget.waiting == 2)
+    clock.advance(15)  # t=65: la pipeline è salita a 1, il modello è ancora a 1: vale l'arrivo
+    held.release()
+    name, grant = got.get(timeout=5)
+    assert name == "pipeline"
+    grant.release()
+    name, grant = got.get(timeout=5)
+    assert name == "modello"
+    grant.release()
+    # senza attesa sufficiente vale la priorità: il modello arrivato dopo passa davanti alla pipeline
+    held = budget.acquire(1)
+    _budget_waiter(budget, got, "pipeline", 2)
+    until(lambda: budget.waiting == 1)
+    clock.advance(50)
+    _budget_waiter(budget, got, "modello", 1)
+    until(lambda: budget.waiting == 2)
+    held.release()
+    name, grant = got.get(timeout=5)
+    assert name == "modello"
+    grant.release()
+    name, grant = got.get(timeout=5)
+    assert name == "pipeline"
+    grant.release()
+    assert budget.used == 0 and budget.waiting == 0
+
+
 # ------------------------------------------------------------------------------------------ fase durante l'attesa
 def test_stage_while_waiting_for_cpu(make_manager, tmp_path):
     """Il job mostra "In attesa di CPU libera" mentre aspetta e riprende la sua fase appena parte il processo;
@@ -560,6 +654,110 @@ def test_cancelled_queued_job_leaves_the_queue_and_can_be_resumed(make_manager):
     for job_id in ids.values():
         assert wait(mgr, job_id)["status"] == "completed"
     assert order == ["a", "b", "c"]  # ognuno una volta sola
+
+
+class _Runs:
+    """Esecuzione dei test del dispatcher: registra l'avvio e aspetta il cancello del job."""
+
+    def __init__(self) -> None:
+        self.started: queue.Queue = queue.Queue()
+        self.gates: dict[str, threading.Event] = {}
+        self.releases: dict[str, object] = {}
+
+    def __call__(self, job_id, release):
+        self.releases[job_id] = release
+        self.started.put(job_id)
+        assert self.gates[job_id].wait(10)
+
+    def push(self, d, job_id, priority=0, created_at="", resource=None):
+        self.gates[job_id] = threading.Event()
+        d.push(job_id, priority=priority, created_at=created_at or job_id, resource=resource)
+
+    def nothing_starts(self, seconds=0.3) -> bool:
+        try:
+            self.started.get(timeout=seconds)
+        except queue.Empty:
+            return True
+        return False
+
+
+def test_queue_aging_starts_a_pipeline_under_continuous_interactive_jobs():
+    """Con un flusso continuo di job interattivi una pipeline in coda parte dopo 2 intervalli di invecchiamento,
+    prima degli interattivi creati dopo di lei; le posizioni in coda seguono lo stesso ordine."""
+    clock, runs = FakeClock(), _Runs()
+    d = dispatch.Dispatcher("t", lambda: 1, runs, aging=300, clock=clock)
+    try:
+        runs.push(d, "i00", 0, "t00")
+        current = runs.started.get(timeout=5)
+        runs.push(d, "pipeline", 2, "t01")
+        order = []
+        for n in range(1, 10):
+            newest = f"i{n:02d}"
+            runs.push(d, newest, 0, f"t{n + 1:02d}")  # creati dopo la pipeline
+            clock.advance(150)
+            if clock.now < 600:
+                assert d.positions() == {newest: 1, "pipeline": 2}
+            else:
+                assert d.positions() == {"pipeline": 1, newest: 2}
+            runs.gates[current].set()
+            current = runs.started.get(timeout=5)
+            order.append(current)
+            if current == "pipeline":
+                break
+        assert order == ["i01", "i02", "i03", "pipeline"] and clock.now == 600
+        runs.gates[current].set()
+        assert runs.started.get(timeout=5) == "i04"
+    finally:
+        for gate in runs.gates.values():
+            gate.set()
+        d.close()
+
+
+def test_resource_released_early_lets_the_next_job_start_and_is_not_freed_twice():
+    runs = _Runs()
+    d = dispatch.Dispatcher("t", lambda: 4, runs)
+    try:
+        for job_id in ("a", "b", "c"):
+            runs.push(d, job_id, resource=lambda: "servizio")
+        assert runs.started.get(timeout=5) == "a" and runs.nothing_starts()  # b e c aspettano la risorsa
+        runs.releases["a"]()  # "a" ha finito la parte che usa il servizio: "b" parte mentre "a" continua
+        assert runs.started.get(timeout=5) == "b"
+        runs.releases["a"]()  # una seconda volta non fa nulla
+        runs.gates["a"].set()  # la chiusura di "a" non libera la risorsa, che ora è di "b"
+        assert runs.nothing_starts()
+        runs.gates["b"].set()
+        assert runs.started.get(timeout=5) == "c"
+    finally:
+        for gate in runs.gates.values():
+            gate.set()
+        d.close()
+
+
+def test_job_context_releases_the_exclusive_resource(make_manager):
+    """`JobContext.release_resource` arriva al dispatcher, anche da un contesto figlio: il job successivo con la
+    stessa risorsa parte mentre il primo è ancora in esecuzione; senza risorsa non fa nulla."""
+    mgr = make_manager(workers=2)
+    gates = {name: threading.Event() for name in ("a", "b")}
+    started: queue.Queue = queue.Queue()
+
+    def holder(ctx, p):
+        started.put(p["name"])
+        if p["name"] == "a":
+            ctx.sub("figlio", ctx.workdir / "figlio").release_resource()
+        assert gates[p["name"]].wait(10)
+        return {}
+
+    mgr.register("esclusivo", holder, pool="io", resource=lambda _p: "servizio")
+    mgr.register("libero", lambda ctx, p: ctx.release_resource() or {}, pool="io")
+    a = mgr.submit("esclusivo", {"name": "a"})["id"]
+    assert started.get(timeout=5) == "a"
+    b = mgr.submit("esclusivo", {"name": "b"})["id"]
+    assert started.get(timeout=5) == "b"
+    assert mgr.get(a)["status"] == "running"  # "a" è ancora in esecuzione
+    assert wait(mgr, mgr.submit("libero", {})["id"])["status"] == "completed"
+    for gate in gates.values():
+        gate.set()
+    assert wait(mgr, a)["status"] == "completed" and wait(mgr, b)["status"] == "completed"
 
 
 def test_queued_jobs_at_shutdown_are_marked_by_recover(tmp_path):

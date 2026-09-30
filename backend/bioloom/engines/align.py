@@ -248,6 +248,9 @@ def structural(path_a: Path, chain_a: Optional[str], path_b: Path, chain_b: Opti
     result = cache.run_cached(ctx, "align_structural", descriptor, run, use_cache=use_cache, keep=_complete,
                               accept=_complete)
     result["ids"] = list(names)
+    # versione del confronto anche nei risultati senza confronto per residuo (uscita non riconosciuta, residui che
+    # non corrispondono): l'interfaccia distingue così un risultato di una versione precedente, che non l'ha
+    result["comparison_version"] = STRUCTURAL_VERSION
     return result
 
 

@@ -67,6 +67,7 @@ Dalla sua finestra puoi:
   - **Con memoria al limite** (sopra il requisito ma sotto quella consigliata dal servizio) HHblits usa un solo
     processore: legge molto meno dal disco.
   - **Un calcolo alla volta:** gli altri QMEAN locali aspettano in coda ("2° in coda") senza fermare gli altri job.
+    Un calcolo che ripiega su SWISS-MODEL libera subito il servizio locale per il successivo.
   - **Windows:** nel file `%UserProfile%\.wslconfig` metti `[wsl2]` e `memory=...GB`, poi `wsl --shutdown`.
     Il valore predefinito è metà della RAM.
   - **macOS:** Docker Desktop → Settings → Resources.
@@ -146,8 +147,9 @@ riferimento (per esempio il template o una struttura sperimentale), con US-align
 
 ## Report del modello
 
-Il pulsante **Report** (tabella dei modelli in Modellazione, pagina Qualità) scarica un file HTML autonomo, da aprire
-con qualunque browser anche senza BioLoom e da stampare in PDF (Stampa → Salva come PDF):
+Il pulsante **Report** (tabella dei modelli in Modellazione, pagina Qualità, righe della pipeline e la sua finestra
+«Visualizza») scarica un file HTML autonomo, da aprire con qualunque browser anche senza BioLoom e da stampare in PDF
+(Stampa → Salva come PDF):
 
 - intestazione con job, progetto, date e versioni (BioLoom, MODELLER, strumenti di validazione usati);
 - bersaglio, template (sorgente, identità e copertura; avviso e ritaglio pLDDT per i modelli AlphaFold), allineamento
@@ -155,7 +157,7 @@ con qualunque browser anche senza BioLoom e da stampare in PDF (Stampa → Salva
 - per il modello: voto con le penalità, consenso tra i metodi (discordanze e regioni problematiche), grafici di
   Ramachandran e profili per residuo (DOPE; QMEAN locale se calcolato nella pagina Qualità), struttura secondaria,
   contatti sterici principali, avvisi, legenda delle metriche e riferimenti bibliografici;
-- la **vista 3D corrente**, se il viewer è aperto su quel modello (in Qualità: scheda 3D).
+- la **vista 3D corrente**, se il viewer è aperto su quel modello (in Qualità: scheda 3D; in Pipeline: «Visualizza»).
 
 Per un'analisi di qualità di una struttura qualsiasi il report è ridotto (niente template, allineamento e parametri).
 L'archivio ZIP della pipeline contiene un report per ogni sequenza completata (cartella `report/`, senza vista 3D).
