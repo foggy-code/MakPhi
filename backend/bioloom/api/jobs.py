@@ -1,4 +1,4 @@
-"""Job: elenco, stato, log incrementale, file prodotti, annullamento, eliminazione."""
+"""Job: elenco, stato, log incrementale, file prodotti, annullamento, ripresa, eliminazione."""
 
 from __future__ import annotations
 
@@ -6,10 +6,11 @@ import os
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import FileResponse, PlainTextResponse, Response
+from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from ..core.container import Core
@@ -24,6 +25,11 @@ MEDIA = {".pdb": "chemical/x-pdb", ".json": "application/json", ".ali": "text/pl
          ".fasta": "text/plain", ".aln": "text/plain", ".log": "text/plain", ".py": "text/plain", ".csv": "text/csv"}
 
 
+class ResumeIn(BaseModel):
+    scope: Literal["incomplete", "failed"] = Field(
+        "incomplete", description="incomplete = tutti gli elementi non conclusi; failed = solo i falliti")
+
+
 @router.get("")
 def list_jobs(project_id: Optional[str] = None, kind: Optional[str] = None,
               status: Optional[str] = Query(None, description="Stati separati da virgola"),
@@ -36,6 +42,7 @@ def list_jobs(project_id: Optional[str] = None, kind: Optional[str] = None,
 def get_job(job_id: str, core: Core = Depends(get_core)) -> dict:
     job = core.jobs.get(job_id)
     job["files"] = core.jobs.list_files(job_id)
+    job.update(core.pipeline.resume_state(job))  # resumable, resumable_items (solo le pipeline si riprendono)
     return job
 
 
@@ -52,6 +59,12 @@ def job_log(job_id: str, offset: int = 0, core: Core = Depends(get_core)) -> dic
 @router.post("/{job_id}/cancel")
 def cancel_job(job_id: str, core: Core = Depends(get_core)) -> dict:
     return core.jobs.cancel(job_id)
+
+
+@router.post("/{job_id}/resume")
+def resume_job(job_id: str, body: Optional[ResumeIn] = None, core: Core = Depends(get_core)) -> dict:
+    """Riprende una pipeline fallita o annullata: rielabora solo gli elementi non conclusi (o i falliti)."""
+    return core.pipeline.resume(job_id, (body or ResumeIn()).scope)
 
 
 @router.delete("/{job_id}")

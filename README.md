@@ -105,7 +105,7 @@ sequenze e altre opzioni di modellazione salta così tutte le ricerche.
 | Ricerca template | RCSB e NCBI BLAST (online); BLAST+ e MMseqs2 sul database locale pdbaa |
 | Allineamenti | Clustal Omega, MAFFT, MUSCLE, TM-align, US-align, più motori integrati |
 | Qualità | Ramachandran, clashscore, DSSP (mkdssp), SASA, profilo DOPE, **PROCHECK**, **ProSA II**, **QMEAN locale** (UniClust30) o SWISS-MODEL, voto A–D |
-| Automazione | pipeline batch da multi-FASTA; verifica dell'installazione (Impostazioni → Strumenti) |
+| Automazione | pipeline batch da multi-FASTA, riprendibili dopo un annullamento, un errore o un riavvio ("Riprendi" o "Riprova solo i falliti": le sequenze già modellate non si rifanno); verifica dell'installazione (Impostazioni → Strumenti) |
 
 ## Dove stanno i dati
 

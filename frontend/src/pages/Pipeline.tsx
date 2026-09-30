@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { JobSummary, PipelinePage, PipelineResult, SearchEngine, Sequence, TemplateRef } from "../api/types";
+import type { JobSummary, PipelinePage, PipelineResult, ResumeScope, SearchEngine, Sequence, TemplateRef } from "../api/types";
 import { RecomputeOption } from "../components/CacheOption";
 import { SequenceFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
@@ -36,8 +36,11 @@ function Items({ jobId, running, cacheHits }: { jobId: string; running: boolean;
   const [view, setView] = useState<{ name: string; path: string } | null>(null);
   const { data, reload } = useAsync<PipelinePage>(() => api.pipelineItems(jobId, { page, size, status, sort: sort.key, direction: sort.dir, q }), [jobId, page, size, status, sort.key, sort.dir, q]);
   useInterval(reload, running ? 3000 : null);
+  const wasRunning = useRef(running);
   useEffect(() => {
-    if (!running) reload(); // stato finale degli elementi al termine della pipeline
+    // stato finale degli elementi al termine; alla ripresa, subito gli elementi rimessi in attesa
+    if (wasRunning.current !== running) reload();
+    wasRunning.current = running;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running]);
   if (!data) return null;
@@ -155,9 +158,25 @@ export default function Pipeline() {
   const [parallel, setParallel] = useState(2);
   const [recompute, setRecompute] = useState(false);
   const { data: projectSeqs } = useAsync<Sequence[]>(() => (projectId ? api.sequences(projectId) : Promise.resolve([])), [projectId]);
-  const { data: recent } = useAsync<JobSummary[]>(() => api.jobs({ project_id: projectId ?? undefined, kind: "pipeline", limit: 10 }), [projectId, jobId]);
-  const { job, summary, log, cancel } = useJob<PipelineResult>(jobId, { withLog: true });
+  const { data: recent, reload: reloadRecent } = useAsync<JobSummary[]>(() => api.jobs({ project_id: projectId ?? undefined, kind: "pipeline", limit: 10 }), [projectId, jobId]);
+  const { job, summary, log, cancel, resume } = useJob<PipelineResult>(jobId, { withLog: true });
   const count = (fasta.match(/^>/gm) ?? []).length;
+  const running = summary ? isActive(summary.status) : false;
+  const wasRunning = useRef(running);
+  useEffect(() => {
+    if (wasRunning.current !== running) reloadRecent(); // stato aggiornato anche nell'elenco delle recenti
+    wasRunning.current = running;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running]);
+
+  const doResume = async (scope: ResumeScope) => {
+    try {
+      await resume(scope);
+      toast.push(scope === "failed" ? "Nuovo tentativo sulle sequenze fallite" : "Pipeline ripresa: si elaborano solo le sequenze non concluse");
+    } catch (e) {
+      toast.error(e);
+    }
+  };
 
   const submit = async () => {
     try {
@@ -267,8 +286,8 @@ export default function Pipeline() {
         <div className="stack">
           {jobId ? (
             <>
-              <JobPanel summary={summary} log={log} onCancel={cancel} />
-              <Items jobId={jobId} running={summary ? isActive(summary.status) : false} cacheHits={job?.id === jobId ? job.result?.search_cache_hits : undefined} />
+              <JobPanel summary={summary} log={log} onCancel={cancel} resume={job} onResume={doResume} />
+              <Items jobId={jobId} running={running} cacheHits={job?.id === jobId ? job.result?.search_cache_hits : undefined} />
             </>
           ) : <Card><Empty icon="layers" title="Avvia una pipeline o aprine una recente" /></Card>}
         </div>

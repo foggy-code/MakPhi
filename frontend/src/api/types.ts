@@ -31,6 +31,20 @@ export interface Job<R = unknown> extends JobSummary {
   params: Record<string, unknown>;
   result: R | null;
   files: JobFile[];
+  /** pipeline fallita o annullata con elementi non conclusi: si può riprendere */
+  resumable: boolean;
+  /** conteggi per i pulsanti di ripresa (solo pipeline fallite o annullate, altrimenti null) */
+  resumable_items: ResumeItems | null;
+}
+
+/** Ambito della ripresa: tutti gli elementi non conclusi oppure solo i falliti. */
+export type ResumeScope = "incomplete" | "failed";
+
+export interface ResumeItems {
+  total: number;
+  /** non completati né filtrati: falliti, annullati, interrotti, in attesa */
+  incomplete: number;
+  failed: number;
 }
 
 export interface Project {

@@ -7,6 +7,9 @@ Ogni calcolo (ricerca, allineamento, modellazione, qualità, pipeline) è un job
     programmi esterni: a fine job i risultati vengono spostati nella cartella definitiva (senza i file
     intermedi di MODELLER, salvo diversa impostazione) e lo scratch viene svuotato;
   - un `JobContext` passato all'handler per log, progresso, sottoprocessi e cancellazione.
+
+Un job terminato con errore o annullato può essere rimesso in coda (`requeue`): la pipeline lo usa
+per riprendere solo gli elementi non conclusi, conservando log e risultati già salvati.
 """
 
 from __future__ import annotations
@@ -34,8 +37,12 @@ from .storage import atomic_write_json, remove_tree, safe_join, validate_identif
 
 TERMINAL = frozenset({"completed", "failed", "cancelled"})
 ACTIVE = frozenset({"queued", "running", "cancelling"})
+# stati da cui un job si può rimettere in coda (ripresa); un job completato non si riprende
+REQUEUABLE = frozenset({"failed", "cancelled"})
 LOG_NAME = "job.log"
 LOG_FLUSH_SECONDS = 0.5
+# attesa massima, per una ripresa, della chiusura dell'esecuzione precedente (spostamento dei file, scratch)
+REQUEUE_WAIT_SECONDS = 10.0
 
 # File intermedi di MODELLER (restrizioni, schedule, traiettorie, violazioni, modelli iniziali) e copie
 # temporanee delle analisi: non vengono salvati tra i risultati di un job riuscito.
@@ -65,6 +72,18 @@ def is_intermediate(name: str) -> bool:
     return any(fnmatch.fnmatchcase(name, pattern) for pattern in INTERMEDIATE_PATTERNS)
 
 
+def requeue_error(job: dict) -> Optional[AppError]:
+    """Perché il job non si può rimettere in coda (None se si può, cioè se è fallito o annullato)."""
+    status = job["status"]
+    if status in REQUEUABLE:
+        return None
+    if status in ACTIVE:
+        return Conflict("Il job è ancora in coda o in esecuzione: non c'è nulla da riprendere.")
+    if status == "completed":
+        return Conflict("Il job è già completato: si possono riprendere solo job falliti o annullati.")
+    return Conflict(f"Un job nello stato '{status}' non si può riprendere.")
+
+
 def _kill(proc: subprocess.Popen) -> None:
     """Termina il processo e i suoi figli (su POSIX ogni processo esterno ha un proprio gruppo)."""
     try:
@@ -77,7 +96,7 @@ def _kill(proc: subprocess.Popen) -> None:
 
 
 class JobCancelled(Exception):
-    pass
+    """Job annullato. Un messaggio facoltativo sostituisce "Annullato dall'utente." come motivo."""
 
 
 @dataclass
@@ -222,6 +241,11 @@ class JobManager:
         self._lock = threading.RLock()
         self._cancel_events: dict[str, threading.Event] = {}
         self._processes: dict[str, set[subprocess.Popen]] = {}
+        # Job con un'esecuzione non ancora chiusa (lo stato può essere già terminale mentre si spostano i
+        # file e si svuota lo scratch) e job con una ripresa in preparazione: nessuna ripresa li tocca.
+        self._running: set[str] = set()
+        self._preparing: set[str] = set()
+        self._idle = threading.Condition(self._lock)
         self._log_handles: dict[str, object] = {}
         self._log_dirty: dict[str, float] = {}
         self._log_lock = threading.Lock()
@@ -237,13 +261,17 @@ class JobManager:
         self._handlers[kind] = _Registration(fn, pool)
 
     def recover(self) -> int:
-        """Marca come falliti i job rimasti attivi da un'esecuzione precedente e svuota lo scratch."""
+        """Marca come falliti i job rimasti attivi da un'esecuzione precedente e svuota lo scratch.
+
+        Gli elementi di pipeline non conclusi diventano falliti ("interrotti"): la pipeline resta
+        riprendibile (`requeue`) e gli elementi già salvati non vanno rifatti.
+        """
         now = now_iso()
         count = self.db.execute(
-            "UPDATE jobs SET status='failed', error='Interrotto dal riavvio del server.', finished_at=?, "
-            "updated_at=? WHERE status IN ('queued','running','cancelling')", (now, now))
+            "UPDATE jobs SET status='failed', stage='Interrotto', error='Interrotto dal riavvio del server.', "
+            "finished_at=?, updated_at=? WHERE status IN ('queued','running','cancelling')", (now, now))
         self.db.execute(
-            "UPDATE pipeline_items SET status='failed', error='Interrotto dal riavvio del server.' "
+            "UPDATE pipeline_items SET status='failed', stage='Interrotto', error='Interrotto dal riavvio del server.' "
             "WHERE status NOT IN ('completed','failed','cancelled','filtered')")
         if self.scratch_jobs is not None and self.scratch_jobs.exists():
             for leftover in self.scratch_jobs.iterdir():
@@ -269,6 +297,56 @@ class JobManager:
             self._cancel_events[job_id] = threading.Event()
         self._pools[self._handlers[kind].pool].submit(self._execute, job_id)
         return self.get(job_id)
+
+    def requeue(self, job_id: str, *, prepare: Optional[Callable[[str, Path], None]] = None,
+                note: str = "", stage: str = "In coda (ripresa)") -> dict:
+        """Rimette in coda un job fallito o annullato; log, parametri e file salvati restano.
+
+        Il passaggio a 'queued' è un solo UPDATE condizionato allo stato: fra due richieste concorrenti
+        una sola lo ottiene, l'altra riceve Conflict. `prepare(job_id, cartella definitiva)` gira dopo quel
+        passaggio e prima dell'esecuzione (la pipeline vi azzera gli elementi da rifare); se fallisce il
+        job torna 'failed' con il motivo e l'errore viene rilanciato.
+        """
+        with self._idle:
+            job = self.get(job_id, include_result=False)
+            if job["kind"] not in self._handlers:
+                raise AppError(f"Tipo di job sconosciuto: {job['kind']}")
+            blocked = requeue_error(job)
+            if blocked is not None:
+                raise blocked
+            # Lo stato finale è scritto prima che l'esecuzione chiuda log, file e scratch (e una ripresa
+            # annullata mentre si preparava può non aver finito di azzerare): si attende che abbiano finito.
+            if not self._idle.wait_for(lambda: job_id not in self._running and job_id not in self._preparing,
+                                       timeout=REQUEUE_WAIT_SECONDS):
+                raise Conflict("Il job sta ancora terminando: riprova tra qualche secondo.")
+            allowed = sorted(REQUEUABLE)
+            changed = self.db.execute(
+                "UPDATE jobs SET status='queued', stage=?, error=NULL, result=NULL, finished_at=NULL, updated_at=? "
+                f"WHERE id=? AND status IN ({','.join('?' * len(allowed))})",
+                (stage[:200], now_iso(), job_id, *allowed))
+            if changed != 1:
+                raise requeue_error(self.get(job_id, include_result=False)) or Conflict("Ripresa non riuscita.")
+            self._cancel_events[job_id] = threading.Event()
+            self._preparing.add(job_id)
+        try:
+            self._log_now(job_id, "Ripresa del job" + (f": {note}" if note else ""))
+            if prepare is not None:
+                prepare(job_id, self.workdir(job_id))
+        except BaseException as exc:
+            reason = exc.message if isinstance(exc, AppError) else f"{type(exc).__name__}: {exc}"
+            self._finish(job_id, "failed", error=f"Ripresa non riuscita: {reason}", only_from=("queued",))
+            try:
+                self._log_now(job_id, f"Ripresa non riuscita: {reason}")
+            except OSError:
+                pass
+            raise
+        finally:
+            with self._idle:
+                self._preparing.discard(job_id)
+                self._idle.notify_all()
+        # se nel frattempo è stato annullato, l'esecuzione trova lo stato cambiato e non parte
+        self._pools[self._handlers[job["kind"]].pool].submit(self._execute, job_id)
+        return self.get(job_id, include_result=False)
 
     # ------------------------------------------------------------------ interrogazione
     def get(self, job_id: str, include_result: bool = True) -> dict:
@@ -369,9 +447,9 @@ class JobManager:
             event.set()
         for proc in procs:
             _kill(proc)
-        if job["status"] == "queued":
-            self._finish(job_id, "cancelled", error="Annullato dall'utente.")
-        else:
+        # un job in coda si chiude subito; se nel frattempo è partito, lo chiuderà la sua esecuzione
+        if not (job["status"] == "queued"
+                and self._finish(job_id, "cancelled", error="Annullato dall'utente.", only_from=("queued",))):
             self.db.execute("UPDATE jobs SET status='cancelling', stage='Annullamento in corso', updated_at=? "
                             "WHERE id=? AND status='running'", (now_iso(), job_id))
         return self.get(job_id, include_result=False)
@@ -403,14 +481,20 @@ class JobManager:
         job = self.db.query_one("SELECT kind, status, params FROM jobs WHERE id=?", (job_id,))
         if not job or job["status"] != "queued":
             return
+        # Avvio sotto il lock, atomico rispetto a `requeue`: un job annullato in coda e poi ripreso può avere
+        # nel pool anche la vecchia esecuzione in attesa, e deve partirne una sola, a ripresa preparata.
         with self._lock:
             event = self._cancel_events.setdefault(job_id, threading.Event())
-        if event.is_set():
-            self._finish(job_id, "cancelled", error="Annullato dall'utente.")
-            return
-        now = now_iso()
-        self.db.execute("UPDATE jobs SET status='running', started_at=?, updated_at=?, stage='Avvio' WHERE id=?",
-                        (now, now, job_id))
+            if job_id in self._preparing:
+                return  # la ripresa sta azzerando gli elementi: a preparazione finita sottomette la sua
+            if event.is_set():
+                self._finish(job_id, "cancelled", error="Annullato dall'utente.", only_from=("queued",))
+                return
+            now = now_iso()
+            if self.db.execute("UPDATE jobs SET status='running', started_at=?, updated_at=?, stage='Avvio' "
+                               "WHERE id=? AND status='queued'", (now, now, job_id)) != 1:
+                return
+            self._running.add(job_id)
         live = self.live_dir(job_id)
         live.mkdir(parents=True, exist_ok=True)
         ctx = JobContext(self, job_id, live, job["params"] or {}, event)
@@ -424,10 +508,11 @@ class JobManager:
             atomic_write_json(self.workdir(job_id) / "result.json", result)
             ctx.log("Job completato")
             self._finish(job_id, "completed", result=result)
-        except JobCancelled:
+        except JobCancelled as exc:
             self._commit(job_id, live, success=True)
-            ctx.log("Job annullato dall'utente")
-            self._finish(job_id, "cancelled", error="Annullato dall'utente.")
+            reason = str(exc)
+            ctx.log(f"Job annullato: {reason}" if reason else "Job annullato dall'utente")
+            self._finish(job_id, "cancelled", error=reason or "Annullato dall'utente.")
         except AppError as exc:
             self._commit(job_id, live, success=False)
             ctx.log(f"ERRORE: {exc.message}")
@@ -440,9 +525,12 @@ class JobManager:
             self._close_log(job_id)
             if live != self.workdir(job_id):
                 remove_tree(live)
-            with self._lock:
-                self._cancel_events.pop(job_id, None)
+            with self._idle:
+                if self._cancel_events.get(job_id) is event:
+                    self._cancel_events.pop(job_id, None)
                 self._processes.pop(job_id, None)
+                self._running.discard(job_id)
+                self._idle.notify_all()  # una ripresa in attesa può procedere
 
     def _commit(self, job_id: str, source: Path, *, success: bool) -> None:
         """Sposta i file da `source` (nello scratch) alla cartella definitiva del job.
@@ -478,13 +566,19 @@ class JobManager:
         if source != live_root:
             remove_tree(source)
 
-    def _finish(self, job_id: str, status: str, *, result: Optional[dict] = None, error: Optional[str] = None) -> None:
+    def _finish(self, job_id: str, status: str, *, result: Optional[dict] = None, error: Optional[str] = None,
+                only_from: Optional[tuple[str, ...]] = None) -> bool:
+        """Scrive lo stato finale; con `only_from` solo se lo stato attuale è fra quelli indicati."""
         now = now_iso()
         stage = {"completed": "Completato", "failed": "Fallito", "cancelled": "Annullato"}[status]
-        self.db.execute(
+        guard, extra = "", ()
+        if only_from:
+            guard = f" AND status IN ({','.join('?' * len(only_from))})"
+            extra = tuple(only_from)
+        return self.db.execute(
             "UPDATE jobs SET status=?, result=?, error=?, stage=?, progress=CASE WHEN ?='completed' THEN 1 "
-            "ELSE progress END, finished_at=?, updated_at=? WHERE id=?",
-            (status, encode_json(result), error, stage, status, now, now, job_id))
+            f"ELSE progress END, finished_at=?, updated_at=? WHERE id=?{guard}",
+            (status, encode_json(result), error, stage, status, now, now, job_id, *extra)) == 1
 
     def _set_progress(self, job_id: str, fraction: Optional[float], stage: Optional[str]) -> None:
         sets, args = ["updated_at=?"], [now_iso()]
@@ -514,6 +608,14 @@ class JobManager:
             elif now - last >= LOG_FLUSH_SECONDS:
                 fh.flush()
                 self._log_dirty.pop(job_id, None)
+
+    def _log_now(self, job_id: str, message: str) -> None:
+        """Riga di log con orario scritta subito su disco, fuori da un'esecuzione (es. la ripresa).
+
+        Il file si chiude: la prossima esecuzione lo riapre in aggiunta, così il log continua.
+        """
+        self._append_log(job_id, f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
+        self._close_log(job_id)
 
     def _flush_all(self) -> None:
         with self._log_lock:

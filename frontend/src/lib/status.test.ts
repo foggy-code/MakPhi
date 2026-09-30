@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { LicenseStatus } from "../api/types";
-import { fmtSeconds, licenseWarnings, qmeanRoute } from "./status";
+import type { JobStatus, LicenseStatus } from "../api/types";
+import { fmtSeconds, licenseWarnings, needsFullReload, qmeanRoute, resumeOptions } from "./status";
 
 const base = { qmean_mode: "local" as const, qmean_remote: false, contact_email: "", qmean_fallback_remote: false };
 const remote = { qmean_remote: true, contact_email: "a@b.it" };
@@ -61,6 +61,46 @@ describe("licenseWarnings", () => {
   });
   it("segnala il MAC diverso per ProSA", () => {
     expect(licenseWarnings(lic({}, { mac_ok: false }))[0]).toContain("MAC");
+  });
+});
+
+describe("resumeOptions", () => {
+  const job = (incomplete: number, failed: number, total = 40) => ({ resumable: incomplete > 0, resumable_items: { total, incomplete, failed } });
+  it("propone Riprendi e Riprova solo i falliti per una pipeline annullata con falliti", () => {
+    const r = resumeOptions("cancelled", job(28, 3));
+    expect(r).not.toBeNull();
+    expect(r!.incomplete).toBe(28);
+    expect(r!.failedOnly).toBe(true);
+    expect(r!.text).toBe("12 di 40 sequenze concluse · 28 da riprendere (3 fallite).");
+  });
+  it("nasconde Riprova solo i falliti quando coincide con Riprendi o non ci sono falliti", () => {
+    expect(resumeOptions("failed", job(5, 5))!.failedOnly).toBe(false); // dopo un riavvio: tutti falliti
+    const onlyCancelled = resumeOptions("cancelled", job(3, 0, 5))!;
+    expect(onlyCancelled.failedOnly).toBe(false);
+    expect(onlyCancelled.text).toBe("2 di 5 sequenze concluse · 3 da riprendere.");
+    expect(resumeOptions("failed", job(2, 1, 5))!.text).toContain("(1 fallita)");
+  });
+  it("niente ripresa per job attivi, completati o senza elementi da rifare", () => {
+    expect(resumeOptions("running", job(3, 1))).toBeNull(); // il job completo può essere vecchio: vale lo stato
+    expect(resumeOptions("queued", job(3, 1))).toBeNull();
+    expect(resumeOptions("completed", { resumable: false, resumable_items: null })).toBeNull();
+    expect(resumeOptions("failed", job(0, 0))).toBeNull();
+    expect(resumeOptions("failed", null)).toBeNull();
+  });
+});
+
+describe("needsFullReload", () => {
+  const s = (status: JobStatus, updated_at = "2026-01-01T10:00:00+00:00") => ({ status, updated_at });
+  it("ricarica solo al termine, non a ogni controllo di un job terminato", () => {
+    expect(needsFullReload(s("running"), s("running"))).toBe(false);
+    expect(needsFullReload(s("running"), s("completed"))).toBe(true);
+    expect(needsFullReload(null, s("failed"))).toBe(true);
+    expect(needsFullReload(s("failed"), s("failed"))).toBe(false);
+  });
+  it("si accorge di una ripresa conclusa fra due controlli", () => {
+    expect(needsFullReload(s("cancelled"), s("completed", "2026-01-01T10:05:00+00:00"))).toBe(true);
+    expect(needsFullReload(s("failed"), s("failed", "2026-01-01T10:05:00+00:00"))).toBe(true);
+    expect(needsFullReload(s("failed"), s("queued"))).toBe(false); // tornato attivo: riprende il polling
   });
 });
 

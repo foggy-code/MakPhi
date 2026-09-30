@@ -16,6 +16,7 @@ import type {
   PirReport,
   Project,
   QualityReport,
+  ResumeScope,
   Sequence,
   SequenceAnalysis,
   Settings,
@@ -182,6 +183,7 @@ export const api = {
   jobStatus: (id: string) => get<JobSummary>(`/api/jobs/${id}/status`),
   jobLog: (id: string, offset = 0) => get<{ text: string; offset: number; size: number }>(`/api/jobs/${id}/log?offset=${offset}`),
   cancelJob: (id: string) => post<JobSummary>(`/api/jobs/${id}/cancel`),
+  resumeJob: (id: string, scope: ResumeScope = "incomplete") => post<JobSummary>(`/api/jobs/${id}/resume`, { scope }),
   deleteJob: (id: string) => del(`/api/jobs/${id}`),
   jobFileUrl: (id: string, path: string, download = false) =>
     `/api/jobs/${id}/files/${path.split("/").map(enc).join("/")}${download ? "?download=true" : ""}`,
