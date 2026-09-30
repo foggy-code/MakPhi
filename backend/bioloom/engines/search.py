@@ -269,10 +269,15 @@ def _alphafold_search(ctx: JobContext, sequence: str, *, uniprot: str, evalue: f
                       outcome: dict) -> list[dict]:
     """Modelli di AlphaFold DB per l'accessione indicata o per le proteine Swiss-Prot più simili (NCBI BLAST).
 
-    Un'accessione senza modello (404) è un esito definitivo; un errore di EBI rende il risultato parziale (niente
-    cache).
+    Esiti (le note vanno in `outcome["notes"]` e da lì nel risultato, per l'interfaccia):
+    - con l'accessione indicata c'è un solo candidato: nessun modello (404) o EBI non disponibile fanno fallire il job
+      con il messaggio di AlphaFold DB, invece di un risultato vuoto che non dice perché;
+    - senza accessione, una proteina senza modello (404) è un esito definitivo e si salta (nota); EBI non disponibile
+      per alcune proteine rende il risultato parziale (nota, niente cache), per tutte fa fallire il job come gli
+      errori degli altri servizi remoti.
     """
     query = re.sub(r"[^A-Z]", "", sequence.upper())
+    notes: list[str] = outcome.setdefault("notes", [])
     if uniprot:
         candidates = [{"accession": uniprot, "evalue": None, "bitscore": None, "title": ""}]
         ctx.log(f"Modelli di AlphaFold DB per l'accessione UniProt {uniprot}")
@@ -285,25 +290,46 @@ def _alphafold_search(ctx: JobContext, sequence: str, *, uniprot: str, evalue: f
         candidates = uniprot_hits_from_blast_xml(xml)[:wanted]
         if not candidates:
             ctx.log("Nessuna proteina di Swiss-Prot sotto la soglia di E-value.")
+            notes.append("NCBI BLAST non ha trovato proteine di Swiss-Prot sotto la soglia di E-value.")
             return []
         ctx.log("Proteine Swiss-Prot più simili: " + ", ".join(c["accession"] for c in candidates))
     hits = []
+    missing: list[str] = []
+    unavailable: list[str] = []
+    last_error: Optional[RemoteServiceError] = None
     for n, cand in enumerate(candidates):
         ctx.check()
         ctx.progress(0.5 + 0.4 * n / len(candidates), f"AlphaFold DB: {cand['accession']}")
         try:
             entries = remote.alphafold_entries(cand["accession"], check=ctx.check, log=ctx.log)
         except NotFound:
+            if uniprot:
+                raise  # "AlphaFold DB non ha un modello per l'accessione UniProt …"
             ctx.log(f"{cand['accession']}: nessun modello in AlphaFold DB")
+            missing.append(cand["accession"])
             continue
         except RemoteServiceError as exc:
+            if uniprot:
+                raise RemoteServiceError(f"AlphaFold DB non disponibile per l'accessione {uniprot}: {exc.message} "
+                                         "Riprova più tardi.", details=exc.details) from exc
             ctx.log(f"{cand['accession']}: AlphaFold DB non disponibile ({exc.message})")
             outcome["complete"] = False
+            unavailable.append(cand["accession"])
+            last_error = exc
             continue
         for entry in entries:
             hit = _alphafold_hit(query, entry, cand)
             if hit is not None:
                 hits.append(hit)
+    if last_error is not None and len(unavailable) == len(candidates):
+        raise RemoteServiceError(f"AlphaFold DB non disponibile: nessuna risposta per le proteine Swiss-Prot più "
+                                 f"simili ({', '.join(unavailable)}). {last_error.message} Riprova più tardi.",
+                                 details=last_error.details)
+    if missing:
+        notes.append(f"Senza modello in AlphaFold DB: {', '.join(missing)}.")
+    if unavailable:
+        notes.append(f"AlphaFold DB non disponibile per {', '.join(unavailable)}: risultato parziale, non salvato "
+                     "nella cache dei calcoli (riprova più tardi).")
     hits.sort(key=lambda h: (h["evalue"], -h["bitscore"]))
     return hits[:max_hits]
 
@@ -412,6 +438,7 @@ def search(ctx: JobContext, sequence: str, *, engine: str = "rcsb", evalue: floa
             out["uniprot"] = uniprot
             out["engine_label"] = (f"AlphaFold DB, modelli predetti dell'accessione UniProt {uniprot}" if uniprot
                                    else "AlphaFold DB, modelli predetti delle proteine Swiss-Prot più simili (NCBI BLAST)")
+            out["notes"] = list(outcome.get("notes") or [])
         return out
 
     return cache.run_cached(ctx, "search", descriptor, run, use_cache=use_cache, ttl=CACHE_TTL.get(engine),

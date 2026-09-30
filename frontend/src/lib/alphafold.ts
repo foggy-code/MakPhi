@@ -27,6 +27,53 @@ export function sequenceAccession(seq: Pick<Sequence, "meta"> | null | undefined
   return typeof acc === "string" && isUniProtAccession(acc) ? normalizeAccession(acc) : "";
 }
 
+// Nome con l'intestazione FASTA di UniProt: "sp|P69905|HBA_HUMAN", anche già ripulito ("sp_P69905_HBA_HUMAN")
+const UNIPROT_NAME = /^(?:sp|tr)[|_]([A-Z0-9]{6,10})(?:[|_]|$)/i;
+
+/** Accessione da un nome con l'intestazione FASTA di UniProt (sp|ACC|NOME o tr|ACC|NOME), altrimenti "". */
+export function accessionFromName(name: string | null | undefined): string {
+  const m = UNIPROT_NAME.exec((name ?? "").trim());
+  return m && isUniProtAccession(m[1]) ? normalizeAccession(m[1]) : "";
+}
+
+/**
+ * Nome per il multi-FASTA della pipeline: con l'accessione di una sequenza importata da UniProt diventa
+ * "sp|ACC|NOME" ("tr|…" per le voci non revisionate), così la pipeline la usa con il motore AlphaFold DB (senza,
+ * la sequenza andrebbe a NCBI BLAST); il backend riconosce entrambe le forme. Gli altri nomi restano come sono.
+ */
+export function pipelineFastaName(seq: Pick<Sequence, "name" | "meta">): string {
+  const acc = sequenceAccession(seq);
+  if (!acc || accessionFromName(seq.name)) return seq.name;
+  return `${seq.meta?.reviewed === false ? "tr" : "sp"}|${acc}|${seq.name}`;
+}
+
+/** Accessione precompilata e la sequenza da cui viene (pagina Ricerca). */
+export interface AutoAccession {
+  accession: string;
+  sequence: string;
+}
+
+const cleanSequence = (s: string) => s.replace(/[^A-Za-z]/g, "").toUpperCase();
+
+/**
+ * Campo "Accessione UniProt" dopo un cambio della sequenza senza scegliere una sequenza del progetto (incollata o
+ * da file). L'accessione precompilata segue la sequenza da cui viene: con un'altra sequenza si toglie, a meno che
+ * l'utente non l'abbia cambiata a mano; un'intestazione FASTA di UniProt nel nome (sp|ACC|…) la precompila.
+ */
+export function followAccession(current: string, auto: AutoAccession | null, next: { name: string; sequence: string }): { uniprot: string; auto: AutoAccession | null } {
+  const fromName = accessionFromName(next.name);
+  const untouched = !current.trim() || (!!auto && normalizeAccession(current) === auto.accession);
+  if (fromName && untouched) return { uniprot: fromName, auto: { accession: fromName, sequence: cleanSequence(next.sequence) } };
+  if (!auto || cleanSequence(next.sequence) === auto.sequence) return { uniprot: current, auto };
+  return { uniprot: untouched ? "" : current, auto: null };
+}
+
+/** Precompilazione da una sequenza del progetto (o da ?seq=): l'accessione e la sequenza a cui appartiene. */
+export function autoAccessionFor(seq: Pick<Sequence, "meta" | "sequence">): AutoAccession | null {
+  const accession = sequenceAccession(seq);
+  return accession ? { accession, sequence: cleanSequence(seq.sequence) } : null;
+}
+
 export type PlddtBand = "very_high" | "confident" | "low" | "very_low";
 
 export const PLDDT_BAND_LABEL: Record<PlddtBand, string> = {
@@ -36,11 +83,14 @@ export const PLDDT_BAND_LABEL: Record<PlddtBand, string> = {
   very_low: "molto bassa",
 };
 
+/** Limite inferiore (compreso) delle fasce di AlphaFold DB, come domain/plddt.BANDS e il ritaglio del backend. */
+export const PLDDT_BAND_MIN = { very_high: 90, confident: 70, low: 50 } as const;
+
 /** Fascia di confidenza (limite inferiore compreso): ≥ 90, 70–90, 50–70, < 50. */
 export function plddtBand(value: number): PlddtBand {
-  if (value >= 90) return "very_high";
-  if (value >= 70) return "confident";
-  if (value >= 50) return "low";
+  if (value >= PLDDT_BAND_MIN.very_high) return "very_high";
+  if (value >= PLDDT_BAND_MIN.confident) return "confident";
+  if (value >= PLDDT_BAND_MIN.low) return "low";
   return "very_low";
 }
 
@@ -79,14 +129,21 @@ export function clampThreshold(value: number): number {
   return Math.min(100, Math.max(0, value));
 }
 
-/** Riepilogo del ritaglio di un template preparato: "rimossi 11 residui con pLDDT < 70 (restano 65 di 76)". */
+/**
+ * Riepilogo del ritaglio di un template preparato: "rimossi 11 residui con pLDDT < 70 (restano 65 di 76)", con i
+ * frammenti isolati se ce ne sono ("rimossi 20 residui con pLDDT < 70 e 4 in frammenti isolati (restano …)").
+ */
 export function trimSummary(t: Pick<PreparedTemplate, "predicted" | "plddt">): string | null {
   if (!t.predicted) return null;
   const p = t.plddt;
   if (!p) return "modello predetto, usato senza ritaglio pLDDT";
   if (!p.removed) return `nessun residuo con pLDDT < ${fmtNum(p.threshold, 0)}`;
-  const n = p.removed === 1 ? "1 residuo" : `${p.removed} residui`;
-  return `${p.removed === 1 ? "rimosso" : "rimossi"} ${n} con pLDDT < ${fmtNum(p.threshold, 0)} (restano ${p.kept} di ${p.total})`;
+  const below = p.removed_threshold ?? p.removed;
+  const fragments = p.removed_fragments ?? 0;
+  const n = below === 1 ? "1 residuo" : `${below} residui`;
+  const verb = p.removed === 1 ? "rimosso" : "rimossi";
+  const extra = fragments ? ` e ${fragments} in frammenti isolati (< ${p.min_fragment ?? 5} residui)` : "";
+  return `${verb} ${n} con pLDDT < ${fmtNum(p.threshold, 0)}${extra} (restano ${p.kept} di ${p.total})`;
 }
 
 /** Intervalli di residui tolti: "1–5:A, 71–76:A". */

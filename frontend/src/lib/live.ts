@@ -74,6 +74,17 @@ export function sliceLogChunk(current: number, chunk: JobLogChunk | null | undef
   return { text: new TextDecoder().decode(bytes.subarray(current - chunk.start)), offset: chunk.offset };
 }
 
+/**
+ * Blocco di log arrivato dal polling, chiesto dall'offset `from`: da accodare solo se nel frattempo nessun altro
+ * (il flusso SSE, riaperto mentre la richiesta era in corso) ha fatto avanzare l'offset, che ora è `current`;
+ * altrimenti null (le stesse righe arriverebbero due volte). Il polling accetta anche un blocco che non riparte
+ * da `from` (log accorciato: il server riparte dalla coda), così l'offset si riallinea.
+ */
+export function polledLogChunk(from: number, current: number, chunk: Pick<JobLogChunk, "text" | "offset"> | null | undefined): { text: string; offset: number } | null {
+  if (!chunk || current !== from || typeof chunk.offset !== "number" || typeof chunk.text !== "string") return null;
+  return { text: chunk.text, offset: chunk.offset };
+}
+
 /** Dati JSON di un evento SSE; null se illeggibili. */
 export function parseData(raw: unknown): unknown {
   if (typeof raw !== "string") return null;
@@ -99,6 +110,47 @@ export function mergeJob(list: JobSummary[] | null, job: JobSummary, matches: (j
   const next = list.slice();
   next[index] = { ...list[index], ...job };
   return { list: next, reload: false };
+}
+
+/**
+ * Ultimi riepiloghi arrivati dal flusso dell'elenco, da riapplicare agli elenchi ricaricati. Una ricarica partita
+ * prima di un evento può rispondere dopo, con lo stato letto prima (un job appena concluso ancora "in esecuzione"),
+ * e il flusso non rimanda un job che non cambia più: sopra ogni elenco ricaricato vale il riepilogo più recente per
+ * `updated_at` (a parità, quello del flusso: è stato inviato dopo la scrittura). Si tengono solo i riepiloghi dei job
+ * in elenco ancora più recenti della ricarica, quindi al più uno per riga.
+ */
+export class RecentJobs {
+  private readonly seen = new Map<string, JobSummary>();
+
+  remember(job: JobSummary): void {
+    this.seen.set(job.id, job);
+  }
+
+  get size(): number {
+    return this.seen.size;
+  }
+
+  /** L'elenco con i riepiloghi più recenti; lo stesso oggetto se non cambia nulla. */
+  apply(list: JobSummary[]): JobSummary[] {
+    let out: JobSummary[] | null = null;
+    const listed = new Set<string>();
+    for (let i = 0; i < list.length; i++) {
+      const row = list[i];
+      listed.add(row.id);
+      const newer = this.seen.get(row.id);
+      if (!newer) continue;
+      if ((newer.updated_at ?? "") < (row.updated_at ?? "")) {
+        this.seen.delete(row.id); // la ricarica è già più recente
+        continue;
+      }
+      const fields = Object.keys(newer) as (keyof JobSummary)[];
+      if (fields.every((k) => newer[k] === row[k])) continue; // già uguale
+      if (!out) out = list.slice();
+      out[i] = { ...row, ...newer };
+    }
+    for (const id of [...this.seen.keys()]) if (!listed.has(id)) this.seen.delete(id);
+    return out ?? list;
+  }
 }
 
 // ------------------------------------------------------------------------------------------ flussi e timer

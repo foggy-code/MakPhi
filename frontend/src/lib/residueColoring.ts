@@ -2,6 +2,7 @@
 // Logica pura: ogni opzione "Colora per" produce l'elenco {catena, residuo, valore} e la sua scala.
 
 import type { ConsensusResult, QualityReport, ResidueRow } from "../api/types";
+import { PLDDT_BAND_LABEL, PLDDT_BAND_MIN, plddtBand } from "./alphafold";
 import { colorFor, fmtScaleValue, PALETTES, uniformStops, type BinnedScale, type CategoricalScale, type ColorScale, type ContinuousScale } from "./colorscale";
 
 export type ColorBy = "ss" | "rama" | "clashes" | "dope" | "rsa" | "bfactor" | "plddt" | "qmean" | "consensus";
@@ -71,14 +72,17 @@ export const CLASH_SCALE: BinnedScale = {
   digits: 0,
 };
 
-/** Scala ufficiale di AlphaFold DB (Varadi et al. 2022; tema pLDDT di Mol*): > 90, 70–90, 50–70, ≤ 50. */
+/**
+ * Colori ufficiali di AlphaFold DB (Varadi et al. 2022; tema pLDDT di Mol*) sulle fasce di `plddtBand`, con il
+ * limite inferiore compreso come il ritaglio e i riepiloghi del backend: ≥ 90, 70–90, 50–70, < 50.
+ */
 export const PLDDT_SCALE: BinnedScale = {
   kind: "binned",
   bins: [
-    { gt: 90, color: "#0053D6", label: "Molto alta (> 90)" },
-    { gt: 70, color: "#65CBF3", label: "Alta (70–90)" },
-    { gt: 50, color: "#FFDB13", label: "Bassa (50–70)" },
-    { color: "#FF7D45", label: "Molto bassa (< 50)" },
+    { gte: PLDDT_BAND_MIN.very_high, color: "#0053D6", label: `Molto alta (≥ ${PLDDT_BAND_MIN.very_high})` },
+    { gte: PLDDT_BAND_MIN.confident, color: "#65CBF3", label: `Confidente (${PLDDT_BAND_MIN.confident}–${PLDDT_BAND_MIN.very_high})` },
+    { gte: PLDDT_BAND_MIN.low, color: "#FFDB13", label: `Bassa (${PLDDT_BAND_MIN.low}–${PLDDT_BAND_MIN.confident})` },
+    { color: "#FF7D45", label: `Molto bassa (< ${PLDDT_BAND_MIN.low})` },
   ],
   digits: 1,
 };
@@ -132,8 +136,6 @@ export function rangeScale(values: (number | null | undefined)[], palette: reado
   const ticks = [{ value: min }, ...extra.filter((t) => t.value > min && t.value < max), { value: max }];
   return { kind: "continuous", stops: uniformStops(min, max, palette), ticks, digits, unit };
 }
-
-const bandLabel = (scale: BinnedScale, v: number) => scale.bins.find((b) => b.gt === undefined || v > b.gt)?.label ?? "";
 
 /** Valori del consenso allineati ai residui del rapporto (null se non corrispondono). */
 function consensusArrays(report: QualityReport, consensus?: ConsensusResult | null) {
@@ -206,7 +208,7 @@ export function residueColoring(report: QualityReport, by: ColorBy, consensus?: 
       if (!res.some((r) => r.bfactor !== null)) return null;
       return {
         key: by, title: "pLDDT (AlphaFold)", values: map((r) => r.bfactor), scale: PLDDT_SCALE,
-        describe: (v) => (typeof v === "number" ? `${fmtScaleValue(v, 1)} · ${bandLabel(PLDDT_SCALE, v).split(" (")[0].toLowerCase()}` : "—"),
+        describe: (v) => (typeof v === "number" ? `${fmtScaleValue(v, 1)} · ${PLDDT_BAND_LABEL[plddtBand(v)]}` : "—"),
       };
     case "qmean": {
       const per = consensusArrays(report, consensus);

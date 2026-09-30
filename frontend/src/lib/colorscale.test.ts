@@ -53,6 +53,13 @@ describe("scale a fasce e categoriali", () => {
     expect(colorFor(bins, 90)).toBe("#65CBF3");
     expect(colorFor(bins, 12)).toBe("#FF7D45");
   });
+  it("limite compreso con gte", () => {
+    const inclusive: BinnedScale = { kind: "binned", bins: [{ gte: 90, color: "#0053D6", label: "a" }, { gte: 70, color: "#65CBF3", label: "b" }, { color: "#FF7D45", label: "c" }] };
+    expect(colorFor(inclusive, 90)).toBe("#0053D6");
+    expect(colorFor(inclusive, 89.99)).toBe("#65CBF3");
+    expect(colorFor(inclusive, 70)).toBe("#65CBF3");
+    expect(colorFor(inclusive, 69.99)).toBe("#FF7D45");
+  });
   it("valori mancanti o sconosciuti in grigio", () => {
     const cat: CategoricalScale = { kind: "categorical", categories: [{ key: "H", color: "#f472b6", label: "Elica" }] };
     expect(colorFor(cat, "H")).toBe("#f472b6");

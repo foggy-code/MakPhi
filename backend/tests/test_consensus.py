@@ -6,7 +6,7 @@ import shutil
 
 import pytest
 
-from bioloom.domain import consensus, perresidue
+from bioloom.domain import consensus, perresidue, plddt
 from bioloom.domain import procheck as procheck_parser
 from bioloom.engines import prosa, qmean_local, quality
 
@@ -319,24 +319,100 @@ def test_plddt_needs_alphafold_evidence_and_the_0_100_range(tmp_path):
 @pytest.mark.parametrize("name,expected", [
     ("AF-P0CG48-F1-model_v4.pdb", True), ("AF-P0CG48-F1.pdb", True), ("AF-P0CG48-F1", True),
     ("af-p0cg48-f1-model_v4.cif", True), ("1a2b3c4d_AF-A0A024RBG1-F2-model_v3.pdb", True),
+    ("AF-P0CG48-F1_A.pdb", True),  # copia preparata per MODELLER (id + catena)
     ("SAF-P0CG48-F1.pdb", False), ("AF-XYZ-F1.pdb", False), ("1UBQ.pdb", False), ("AF-P0CG48.pdb", False),
 ])
 def test_alphafold_file_names(name, expected):
-    assert bool(perresidue.AF_NAME.search(name)) is expected
+    assert bool(plddt.AF_NAME.search(name)) is expected
 
 
-def test_alphafold_header_detection_rules():
-    mention = perresidue.header_mentions_alphafold
-    assert mention(AF_HEADER)
-    assert not mention("HEADER    CHROMOSOMAL PROTEIN\nTITLE     STRUCTURE OF UBIQUITIN\n")
-    # le righe di tracciabilità di BioLoom e il testo dopo le coordinate non contano
-    assert not mention("REMARK 999 BIOLOOM TEMPLATES ALPHAFOLD_MODEL\nATOM      1  N   MET A   1\n")
-    assert not mention("ATOM      1  N   MET A   1\nREMARK   1 ALPHAFOLD\n")
-    assert not mention("COMPND   2 MOLECULE: ALPHAFOLD;\n")  # solo HEADER, TITLE e REMARK
-    assert mention("data_AF\n_struct.title 'AlphaFold Monomer V2.0 prediction for X'\nloop_\n_atom_site.id\n", "cif")
-    assert not mention("data_1UBQ\nloop_\n_atom_site.id\nATOM 1 N . MET A 1 ? 1 AlphaFold\n", "cif")
-    assert perresidue.bfactor_kind("AF-P0CG48-F1.pdb", "", [0.0, 0.0]) == "bfactor"  # colonna azzerata
-    assert perresidue.bfactor_kind("AF-P0CG48-F1.pdb", "", []) == "bfactor"
+# Struttura cristallografica risolta per sostituzione molecolare con un modello AlphaFold: B-factor in 0–100
+XRAY_FROM_AF = (
+    "HEADER    HYDROLASE                               01-JAN-23   8ABC              \n"
+    "TITLE     CRYSTAL STRUCTURE OF A HYDROLASE                                      \n"
+    "EXPDTA    X-RAY DIFFRACTION                                                     \n"
+    "REMARK 200 STARTING MODEL: ALPHAFOLD2 PREDICTION                                \n"
+)
+XRAY_FROM_AF_CIF = (
+    "data_8ABC\n_entry.id 8ABC\n_exptl.entry_id 8ABC\n_exptl.method 'X-RAY DIFFRACTION'\n"
+    "_pdbx_initial_refinement_model.id 1\n_pdbx_initial_refinement_model.source_name AlphaFold\n"
+    "_refine.pdbx_starting_model AlphaFold\nloop_\n_atom_site.group_PDB\n_atom_site.id\n"
+)
+MODELLER_HEADER = (
+    "EXPDTA    THEORETICAL MODEL, MODELLER 10.8 2026/09/27 10:40:27\n"
+    "REMARK   6 MODELLER OBJECTIVE FUNCTION:       242.7604\n"
+    "REMARK 999 BIOLOOM TEMPLATE AF-P0CG47-F1_A ALPHAFOLD PLDDT<70 REMOVED 11\n"
+)
+AF_CIF = ("data_AF-P0CG47-F1\n_software.name AlphaFold\n_ma_qa_metric.id 1\n_ma_qa_metric.name pLDDT\nloop_\n"
+          "_atom_site.group_PDB\n")
+
+
+def test_alphafold_detection_rules():
+    kind = perresidue.bfactor_kind
+    values = [12.3, 44.4, 88.0, 35.1]
+    # file di AlphaFold DB (PDB e ModelCIF): pLDDT
+    assert kind("modello.pdb", AF_HEADER, values) == "plddt"
+    assert kind("modello.cif", AF_CIF, values) == "plddt"
+    # un modello AlphaFold come punto di partenza di una struttura sperimentale non la rende predetta
+    assert kind("8ABC.pdb", XRAY_FROM_AF, values) == "bfactor"
+    assert kind("8ABC.cif", XRAY_FROM_AF_CIF, values) == "bfactor"
+    # modello di MODELLER con il nome di un template AlphaFold (Biso di MODELLER, non pLDDT)
+    assert kind("AF-P69905-F1-model_v4_A.B99990001.pdb", MODELLER_HEADER, values) == "bfactor"
+    assert kind("AF-P69905-F1-model_v4_A.B99990001.pdb", "", values) == "plddt"  # solo il nome: AlphaFold DB
+    # una menzione di AlphaFold che non è il TITLE di AlphaFold DB non basta
+    assert kind("modello.pdb", "REMARK   1 HIGHLY ACCURATE PROTEIN STRUCTURE PREDICTION WITH ALPHAFOLD\n",
+                values) == "bfactor"
+    assert kind("modello.pdb", "HEADER    CHROMOSOMAL PROTEIN\nTITLE     STRUCTURE OF UBIQUITIN\n", values) == "bfactor"
+    assert kind("AF-P0CG48-F1.pdb", "", [0.0, 0.0]) == "bfactor"  # colonna azzerata
+    assert kind("AF-P0CG48-F1.pdb", "", []) == "bfactor"
+    assert kind("AF-P0CG48-F1.pdb", AF_HEADER, [50.0, 120.0]) == "bfactor"  # fuori da 0–100
+    assert plddt.declares_other_origin(XRAY_FROM_AF) and plddt.declares_other_origin(XRAY_FROM_AF_CIF)
+    assert plddt.declares_other_origin(MODELLER_HEADER) and not plddt.declares_other_origin(AF_HEADER)
+
+
+def test_experimental_structure_from_an_alphafold_starting_model(tmp_path):
+    """Quality: EXPDTA X-RAY con REMARK 200 STARTING MODEL: ALPHAFOLD e B-factor in 0–100 → B-factor."""
+    report = quality.analyze(_af_like(tmp_path / "8ABC.pdb", header=XRAY_FROM_AF), None, with_dope=False)
+    assert report["structure"]["bfactor_kind"] == "bfactor"
+    named = _af_like(tmp_path / "AF-P69905-F1-model_v4_A.B99990001.pdb", header=MODELLER_HEADER)
+    assert quality.analyze(named, None, with_dope=False)["structure"]["bfactor_kind"] == "bfactor"
+
+
+def test_library_quality_and_prepared_template_agree_on_alphafold_files(tmp_path):
+    """Un solo riconoscimento: la libreria (modello predetto, ritaglio), il rapporto di qualità (pLDDT) e la copia
+    del template preparata per MODELLER danno lo stesso esito sugli stessi file."""
+    from bioloom.engines import modeller
+    from bioloom.services.templates import TemplateLibrary
+
+    files = tmp_path / "files"
+    files.mkdir()
+    cases = {  # nome del file, intestazione, pLDDT atteso
+        "af_db": ("AF-P0CG47-F1-model_v4.pdb", AF_HEADER, True),  # modello di AlphaFold DB
+        "af_title": ("mio_modello.pdb", AF_HEADER, True),  # file AlphaFold caricato con un altro nome
+        "af_name": ("AF-P0CG47-F1.pdb", "", True),  # nome di AlphaFold DB, intestazione tolta
+        "plain": ("ubiquitina.pdb", "", False),  # file normale con B-factor in 0–100
+        "xray_from_af": ("8ABC.pdb", XRAY_FROM_AF, False),
+        "modeller_af_name": ("AF-P69905-F1_A.B99990001.pdb", MODELLER_HEADER, False),
+    }
+    library = TemplateLibrary(tmp_path / "templates")
+    for key, (filename, header, expected) in cases.items():
+        path = _af_like(files / filename, header=header)
+        uploaded = library.save_upload(filename, path.read_bytes())
+        tid = uploaded["id"]
+        assert uploaded["predicted"] is expected, key
+        assert library.is_predicted(tid) is expected, key
+        assert next(t for t in library.list() if t["id"] == tid)["predicted"] is expected, key
+        kind = quality.analyze(library.path(tid), None, with_dope=False)["structure"]["bfactor_kind"]
+        assert kind == ("plddt" if expected else "bfactor"), key
+        assert quality.analyze(path, None, with_dope=False)["structure"]["bfactor_kind"] == kind, key
+        # copia preparata (ritagliata se predetta): stesso esito anche con un nome qualunque
+        spec = modeller.TemplateSpec(tid, ["A"], plddt_min=50 if expected else None)
+        info = modeller.prepare_template(library.path(tid), spec, tmp_path / "job" / key)
+        copy = tmp_path / "job" / key / info["file"]
+        renamed = copy.with_name("copia.pdb")
+        shutil.copyfile(copy, renamed)
+        for candidate in (copy, renamed):
+            assert quality.analyze(candidate, None, with_dope=False)["structure"]["bfactor_kind"] == kind, key
 
 
 # ---------------------------------------------------------------------------------------------- rotta
@@ -395,6 +471,35 @@ def test_consensus_route_rejects_qmean_of_another_structure(client_with_ubq, mon
     assert r.status_code == 400 and r.json()["error"]["code"] == "qmean_job_invalid"
     assert c.get(f"/api/jobs/{qjob['id']}/consensus", params={"qmean_job": "0123456789abcdef"}).status_code == 404
     assert c.get("/api/jobs/0123456789abcdef/consensus").status_code == 404
+
+
+def test_consensus_route_rejects_qmean_of_a_replaced_template(client, monkeypatch):
+    """Stesso id, file diverso: il template sostituito dopo l'analisi di qualità non riceve il QMEAN del nuovo file."""
+    _fake_qmean(monkeypatch)
+    library = client.app.state.core.library
+    library.save_upload("X.pdb", (DATA / "1UBQ.pdb").read_bytes())
+    qjob = _run(client, "/api/quality", {"source": {"type": "template", "id": "X"}, "dope": False,
+                                         "procheck": False, "prosa": False})
+    assert qjob["result"]["source_sha256"]
+    # stesso file: il QMEAN vale
+    same = _run(client, "/api/qmean", {"source": {"type": "template", "id": "X"}})
+    assert same["result"]["source_sha256"] == qjob["result"]["source_sha256"]
+    assert client.get(f"/api/jobs/{qjob['id']}/consensus", params={"qmean_job": same["id"]}).status_code == 200
+    # un altro file caricato con lo stesso id (stesso numero di residui: anche i punteggi locali sarebbero attribuiti)
+    lines = (DATA / "1UBQ.pdb").read_text().splitlines(keepends=True)
+    i = next(n for n, line in enumerate(lines) if line.startswith("ATOM"))
+    lines[i] = lines[i][:30] + f"{float(lines[i][30:38]) + 0.5:8.3f}" + lines[i][38:]
+    library.save_upload("X.pdb", "".join(lines).encode())
+    other = _run(client, "/api/qmean", {"source": {"type": "template", "id": "X"}})
+    r = client.get(f"/api/jobs/{qjob['id']}/consensus", params={"qmean_job": other["id"]})
+    assert r.status_code == 400 and r.json()["error"]["code"] == "qmean_source_mismatch"
+    assert "è cambiato tra l'analisi di qualità e il calcolo QMEAN" in r.json()["error"]["message"]
+    # job precedenti senza impronta: resta il confronto per id
+    core = client.app.state.core
+    stored = core.jobs.get(other["id"])["result"]
+    stored.pop("source_sha256")
+    core.db.execute("UPDATE jobs SET result=? WHERE id=?", (json.dumps(stored), other["id"]))
+    assert client.get(f"/api/jobs/{qjob['id']}/consensus", params={"qmean_job": other["id"]}).status_code == 200
 
 
 def test_consensus_route_needs_a_completed_qmean(client_with_ubq, monkeypatch):

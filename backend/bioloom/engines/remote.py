@@ -90,8 +90,11 @@ def _request(method: str, url: str, service: str, **kwargs) -> httpx.Response:
 def _request_retry(method: str, url: str, service: str, *, attempts: int = 3, wait: float = 5.0,
                    check: Optional[Callable[[], None]] = None, log: Optional[Callable[[str], None]] = None,
                    **kwargs) -> httpx.Response:
-    """Come _request, ma ritenta gli errori transitori (timeout, 5xx) con attesa crescente."""
+    """Come _request, ma ritenta gli errori transitori (timeout, 5xx) con attesa crescente. `check` (annullamento)
+    si controlla prima di ogni tentativo e durante le pause."""
     for attempt in range(1, attempts + 1):
+        if check:
+            check()
         try:
             return _request(method, url, service, **kwargs)
         except RemoteServiceError as exc:

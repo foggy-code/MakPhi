@@ -146,7 +146,7 @@ function UniProtImport({ onAdded }: { onAdded: () => void }) {
   const add = async () => {
     if (!entry || !projectId) return;
     try {
-      await api.addSequence(projectId, entry.entry_name || entry.accession, entry.sequence, "uniprot", { accession: entry.accession, protein: entry.protein_name, organism: entry.organism });
+      await api.addSequence(projectId, entry.entry_name || entry.accession, entry.sequence, "uniprot", { accession: entry.accession, reviewed: entry.reviewed, protein: entry.protein_name, organism: entry.organism });
       toast.push(`${entry.accession} aggiunta al progetto`);
       onAdded();
     } catch (e) {

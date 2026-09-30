@@ -18,10 +18,13 @@ export interface ContinuousScale {
   unit?: string;
 }
 
-/** Fasce: vince la prima (in ordine) con `gt` assente o valore > `gt`. */
+/**
+ * Fasce: vince la prima (in ordine) il cui limite il valore supera: `gt` (escluso, valore > gt) oppure `gte`
+ * (compreso, valore ≥ gte, come le fasce di pLDDT di AlphaFold DB); una fascia senza limite prende il resto.
+ */
 export interface BinnedScale {
   kind: "binned";
-  bins: { gt?: number; color: string; label: string }[];
+  bins: { gt?: number; gte?: number; color: string; label: string }[];
   digits?: number;
   unit?: string;
 }
@@ -89,7 +92,9 @@ export function interpolateStops(stops: ColorStop[], value: number): string {
 }
 
 export function binFor(scale: BinnedScale, value: number) {
-  return scale.bins.find((b) => b.gt === undefined || value > b.gt) ?? scale.bins[scale.bins.length - 1];
+  const inBin = (b: BinnedScale["bins"][number]) =>
+    b.gte !== undefined ? value >= b.gte : b.gt !== undefined ? value > b.gt : true;
+  return scale.bins.find(inBin) ?? scale.bins[scale.bins.length - 1];
 }
 
 /** Colore di un valore (numero o categoria); grigio se il valore manca o la categoria è sconosciuta. */

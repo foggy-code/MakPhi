@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { JobSummary, SearchEngine, SearchHit, SearchResult, Sequence, Settings } from "../api/types";
@@ -6,8 +6,10 @@ import { CachedBadge, RecomputeOption } from "../components/CacheOption";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { SequencePicker } from "../components/Pickers";
-import { Badge, BarCell, Card, Empty, Field, PageHead, Segmented } from "../components/ui";
-import { isUniProtAccession, normalizeAccession, plddtLabel, plddtTone, sequenceAccession } from "../lib/alphafold";
+import { Alert, Badge, BarCell, Card, Empty, Field, PageHead, Segmented } from "../components/ui";
+import {
+  autoAccessionFor, type AutoAccession, followAccession, isUniProtAccession, normalizeAccession, plddtLabel, plddtTone,
+} from "../lib/alphafold";
 import { useProject, useToast } from "../lib/context";
 import { fmtEvalue, fmtNum, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
@@ -61,8 +63,14 @@ export default function Search() {
   const [evalue, setEvalue] = useState(0.001);
   const [maxHits, setMaxHits] = useState(50);
   const [recompute, setRecompute] = useState(false);
-  // motore AlphaFold DB: accessione UniProt facoltativa, precompilata dalle sequenze importate da UniProt
+  // motore AlphaFold DB: accessione UniProt facoltativa, precompilata dalle sequenze importate da UniProt; quella
+  // precompilata segue la sequenza da cui viene (followAccession), una scritta a mano resta
   const [uniprot, setUniprot] = useState("");
+  const autoAcc = useRef<AutoAccession | null>(null);
+  const prefill = (s: Sequence | null | undefined) => {
+    autoAcc.current = s ? autoAccessionFor(s) : null;
+    setUniprot(autoAcc.current?.accession ?? "");
+  };
   const [expanded, setExpanded] = useState<string | null>(null);
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "evalue", dir: 1 });
   const [filter, setFilter] = useState("");
@@ -83,7 +91,7 @@ export default function Search() {
         const s = list.find((x) => x.id === sid);
         if (s) {
           setQuery({ name: s.name, sequence: s.sequence });
-          setUniprot(sequenceAccession(s));
+          prefill(s);
         }
       });
     }
@@ -144,7 +152,13 @@ export default function Search() {
                 value={query}
                 onChange={(v) => {
                   setQuery({ name: v.name, sequence: v.sequence });
-                  if (v.id) setUniprot(sequenceAccession(projectSeqs?.find((s) => s.id === v.id)));
+                  if (v.id) prefill(projectSeqs?.find((s) => s.id === v.id));
+                  else {
+                    // incollata o da file: l'accessione precompilata per un'altra sequenza non vale più
+                    const next = followAccession(uniprot, autoAcc.current, v);
+                    autoAcc.current = next.auto;
+                    if (next.uniprot !== uniprot) setUniprot(next.uniprot);
+                  }
                 }}
               />
               <Field label="Motore">
@@ -157,7 +171,7 @@ export default function Search() {
                     ? <span style={{ color: "var(--err)" }}>Accessione non valida: formato UniProtKB, es. P69905 (le isoforme non sono supportate).</span>
                     : "Con l'accessione si usano direttamente i suoi modelli AlphaFold. Senza, NCBI BLAST su Swiss-Prot trova le proteine più simili (1–5 min) e se ne prendono i modelli. L'accessione va a EBI; senza accessione la sequenza va a NCBI."}
                 >
-                  <input className="input" style={{ textTransform: "uppercase" }} placeholder="es. P69905" maxLength={20} value={uniprot} onChange={(e) => setUniprot(e.target.value)} />
+                  <input className="input" style={{ textTransform: "uppercase" }} placeholder="es. P69905" maxLength={20} value={uniprot} onChange={(e) => { autoAcc.current = null; setUniprot(e.target.value); }} />
                 </Field>
               )}
               <div className="grid grid-2">
@@ -201,7 +215,19 @@ export default function Search() {
               sub={<>{result.engine_label} · query {result.query.name} ({result.query_length} aa) <CachedBadge result={result} /></>}
               right={<input className="input" style={{ width: 220 }} placeholder="Filtra (codice, titolo, organismo)" value={filter} onChange={(e) => setFilter(e.target.value)} />}
             >
-              {!hits.length ? <Empty icon="search" title="Nessun template sotto la soglia di E-value">Prova ad aumentare l'E-value o a usare NCBI BLAST.</Empty> : (
+              {result.engine === "alphafold" && !!result.notes?.length && result.hits.length > 0 && (
+                <div className="stack-sm" style={{ marginBottom: 8 }}>{result.notes.map((n, i) => <Alert key={i} tone="warn">{n}</Alert>)}</div>
+              )}
+              {!hits.length ? (
+                result.hits.length ? <Empty icon="search" title="Nessun template corrisponde al filtro" />
+                  : result.engine === "alphafold" ? (
+                    // l'E-value non c'entra (con l'accessione non si usa): si mostra il perché
+                    <Empty icon="search" title="Nessun modello AlphaFold trovato">
+                      {result.notes?.length ? result.notes.join(" ") : "Nessuna proteina di Swiss-Prot simile ha un modello in AlphaFold DB: indica l'accessione UniProt della sequenza o prova un altro motore."}
+                    </Empty>
+                  )
+                  : <Empty icon="search" title="Nessun template sotto la soglia di E-value">Prova ad aumentare l'E-value o a usare NCBI BLAST.</Empty>
+              ) : (
                 <div className="table-wrap">
                   <table className="table">
                     <thead>

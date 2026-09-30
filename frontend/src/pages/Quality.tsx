@@ -13,6 +13,7 @@ import { Alert, Badge, BarCell, Card, DropZone, Empty, Grade, PageHead, Stat, Ta
 import { useProject, useToast } from "../lib/context";
 import { fmtNum, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
+import { alignedPerResidue, isProblemResidue, problemResidues, shownReportSource } from "../lib/qualityReport";
 import {
   colorOptions, isPlddt, QMEAN_LOCAL_THRESHOLD, regionResidues, residueColoring, resiNumber, SIGNAL_LABEL, type ColorBy, type ColorOption, type ResidueRef,
 } from "../lib/residueColoring";
@@ -152,8 +153,8 @@ function ProsaProfile({ profile }: { profile: { index: number; energy_w10: numbe
 const sameResidue = (a: ResidueRef | null | undefined, b: ResidueRef) => !!a && a.chain === b.chain && a.resnum === b.resnum;
 
 function ResidueTable({ residues, onPick, selected, consensus, plddt }: { residues: ResidueRow[]; onPick: (r: ResidueRow) => void; selected: ResidueRef | null; consensus: ConsensusResult | null; plddt: boolean }) {
-  const counts = consensus && consensus.per_residue.counts.length === residues.length ? consensus.per_residue : null;
-  const problem = (r: ResidueRow, i: number) => r.rama === "outlier" || r.clashes > 0 || (counts ? counts.counts[i] >= 2 : false);
+  const counts = alignedPerResidue({ residues }, consensus);
+  const problem = (r: ResidueRow, i: number) => isProblemResidue(r, i, counts);
   const selectedIsProblem = selected ? residues.some((r, i) => sameResidue(selected, r) && problem(r, i)) : true;
   const [only, setOnly] = useState<"all" | "problems">(selectedIsProblem ? "problems" : "all");
   const rows = residues.map((r, i) => ({ r, i })).filter(({ r, i }) => only === "all" || problem(r, i));
@@ -168,7 +169,7 @@ function ResidueTable({ residues, onPick, selected, consensus, plddt }: { residu
         <label className="check"><input type="radio" checked={only === "all"} onChange={() => setOnly("all")} /> Tutti ({residues.length})</label>
         {counts && <span className="muted">Problematici: outlier, clash o segnalati da almeno 2 metodi del consenso.</span>}
       </div>
-      {!rows.length ? <Alert tone="ok">Nessun outlier di Ramachandran né residuo coinvolto in clash.</Alert> : (
+      {!rows.length ? <Alert tone="ok">{counts ? "Nessun outlier di Ramachandran, residuo coinvolto in clash o segnalato da almeno 2 metodi del consenso." : "Nessun outlier di Ramachandran né residuo coinvolto in clash."}</Alert> : (
         <div className="table-wrap" style={{ maxHeight: 420, overflowY: "auto" }}>
           <table className="table">
             <thead><tr><th>Residuo</th><th>DSSP</th><th className="num">φ</th><th className="num">ψ</th><th>Ramachandran</th><th className="num">Clash</th><th className="num">RSA</th><th className="num">DOPE</th><th className="num">{plddt ? "pLDDT" : "B-factor"}</th>{counts && <th>Consenso</th>}</tr></thead>
@@ -381,14 +382,9 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
     setCenterKey((k) => k + 1);
     setTab("3d");
   };
-  const problems = useMemo(() => {
-    const out: { chain: string; resi: number }[] = [];
-    report.residues.forEach((r) => {
-      if (r.rama === "outlier" || r.clashes > 0) out.push({ chain: r.chain, resi: resiNumber(r.resnum) });
-    });
-    return out;
-  }, [report]);
-  const per = consensus && consensus.per_residue.counts.length === report.residues.length ? consensus.per_residue : null;
+  // stessa definizione del filtro "Solo residui problematici" della tabella
+  const problems = useMemo(() => problemResidues(report, consensus).map((r) => ({ chain: r.chain, resi: resiNumber(r.resnum) })), [report, consensus]);
+  const per = alignedPerResidue(report, consensus);
   const strip = coloring && (
     <div className="stack-sm">
       <div className="row small">
@@ -415,7 +411,7 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
               Punteggio {fmtNum(g.score, 1)}/100 — penalità: Ramachandran {g.penalties.ramachandran}, clash {g.penalties.clashes}, DOPE {g.penalties.dope}
               {consensus?.score != null && <> · consenso {fmtNum(consensus.score, 0)}/100 ({consensus.band}, {consensus.methods_used} metodi)</>}
             </div>
-            {plddt && <div style={{ marginTop: 6 }}><Badge tone="info" title="Riconosciuto dall'intestazione o dal nome del file (AlphaFold DB) e dai valori tra 0 e 100">Modello AlphaFold: la colonna B-factor contiene il pLDDT</Badge></div>}
+            {plddt && <div style={{ marginTop: 6 }}><Badge tone="info" title="Riconosciuto come nella libreria dei template: intestazione di AlphaFold DB (TITLE «ALPHAFOLD … PREDICTION» senza EXPDTA, oppure ModelCIF senza _exptl.method) o nome AF-<accessione>-F<n> senza un altro metodo dichiarato, e valori tra 0 e 100">Modello AlphaFold: la colonna B-factor contiene il pLDDT</Badge></div>}
           </div>
           {source && <QmeanPanel source={source} onDone={onQmean} />}
         </div>
@@ -607,7 +603,8 @@ export default function Quality() {
     }
   };
   const report = qjob ? (job?.status === "completed" ? job.result : null) : stored;
-  const reportSource = qjob ? (job?.params?.source as StructureSource | undefined) : source ?? undefined;
+  // la struttura del rapporto mostrato, non quella scelta nel selettore (vale solo per la prossima analisi)
+  const reportSource = shownReportSource(qjob, job?.params?.source, stored);
   // dove chiedere il consenso ricalcolato (QMEAN, GA341): il job di qualità oppure il modello del job
   const consensusRef = useMemo(() => (qjob ? { job: qjob } : modelJob && modelFile ? { job: modelJob, model: modelFile } : null), [qjob, modelJob, modelFile]);
 

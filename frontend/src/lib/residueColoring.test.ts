@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ConsensusResult, QualityReport, ResidueRow } from "../api/types";
+import { PLDDT_BAND_LABEL, plddtBand } from "./alphafold";
 import { colorFor, NO_VALUE_COLOR } from "./colorscale";
 import {
   atomKey, colorOptions, coloringMap, CONSENSUS_SCALE, describeResidue, hasMissing, PLDDT_SCALE, QMEAN_SCALE, regionResidues, residueColoring, residueKey,
@@ -78,12 +79,17 @@ describe("valori per residuo", () => {
     expect(describeResidue(c, { chain: "A", resnum: "2" })).toBe("outlier");
     expect(describeResidue(c, { chain: "Z", resnum: "2" })).toBe("—");
   });
-  it("pLDDT con la scala ufficiale di AlphaFold DB", () => {
-    const rep = report([row(1, { bfactor: 95 }), row(2, { bfactor: 90 }), row(3, { bfactor: 70 }), row(4, { bfactor: 50.0 }), row(5, { bfactor: 12 })], "plddt");
+  it("pLDDT con i colori di AlphaFold DB e le fasce del backend (limite inferiore compreso)", () => {
+    const values = [95, 90, 89.99, 70, 69.99, 50.0, 49.99, 12];
+    const rep = report(values.map((v, i) => row(i + 1, { bfactor: v })), "plddt");
     const c = residueColoring(rep, "plddt")!;
     expect(c.scale).toBe(PLDDT_SCALE);
-    expect([...coloringMap(c).values()]).toEqual(["#0053D6", "#65CBF3", "#FFDB13", "#FF7D45", "#FF7D45"]);
+    expect([...coloringMap(c).values()]).toEqual(["#0053D6", "#0053D6", "#65CBF3", "#65CBF3", "#FFDB13", "#FFDB13", "#FF7D45", "#FF7D45"]);
+    // stessa fascia di badge, libreria e ritaglio (70 resta nel template ed è "confidente")
+    values.forEach((v, i) => expect(describeResidue(c, { chain: "A", resnum: String(i + 1) })).toBe(`${v.toLocaleString("it-IT", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} · ${PLDDT_BAND_LABEL[plddtBand(v)]}`));
+    expect(describeResidue(c, { chain: "A", resnum: "4" })).toBe("70,0 · confidente");
     expect(describeResidue(c, { chain: "A", resnum: "1" })).toBe("95,0 · molto alta");
+    expect(PLDDT_SCALE.bins.map((b) => b.label)).toEqual(["Molto alta (≥ 90)", "Confidente (70–90)", "Bassa (50–70)", "Molto bassa (< 50)"]);
     expect(c.title).toContain("pLDDT");
   });
   it("DOPE su scala dal minimo al massimo, con la soglia dei picchi del consenso", () => {

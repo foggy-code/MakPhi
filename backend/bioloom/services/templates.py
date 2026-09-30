@@ -11,7 +11,7 @@ import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from ..core.errors import AppError, NotFound, RemoteServiceError
 from ..core.storage import atomic_write_bytes, atomic_write_json, atomic_write_text, read_json, safe_join
@@ -78,11 +78,55 @@ class TemplateLibrary:
     def _analysis_path(self, tid: str) -> Path:
         return safe_join(self.root, f"{tid}.analysis.json")
 
+    # ----------------------------------------------------------------------------- metadati
+    def _meta(self, tid: str, path: Optional[Path] = None) -> dict:
+        """Metadati di un template. Quelli registrati prima dei modelli predetti (senza `predicted`) si completano
+        alla prima lettura con lo stesso riconoscimento dei template nuovi (`_predicted_meta`) e si riscrivono:
+        elenco, dettaglio e modellazione (`is_predicted`) usano così la stessa informazione."""
+        meta = read_json(self._meta_path(tid), default={}) or {}
+        if "predicted" in meta:
+            return meta
+        try:
+            extra = self._predicted_meta(tid, path or self.path(tid), force=meta.get("source") == SOURCE_ALPHAFOLD)
+        except AppError:  # file illeggibile: nulla da aggiungere, niente da riscrivere
+            return meta
+        if extra is None:
+            meta["predicted"] = False
+        else:
+            meta.update(extra)
+            meta["method"] = meta.get("method") or PREDICTED_METHOD
+        atomic_write_json(self._meta_path(tid), meta)
+        return meta
+
+    def _predicted_meta(self, tid: str, path: Path, *, force: bool = False,
+                        alphafold: Optional[dict] = None) -> Optional[dict]:
+        """Campi dei metadati di un modello predetto (AlphaFold), None per ogni altra struttura.
+
+        Predetto: scaricato da AlphaFold DB (`force`), oppure riconosciuto da `plddt.is_alphafold_model`, lo stesso
+        criterio del rapporto di qualità (mai dai soli B-factor: servono segni di AlphaFold nell'intestazione o nel
+        nome e nessuna altra origine dichiarata).
+        """
+        model = structure.first_model(structure.load_structure(path, tid))
+        if not force and not plddt.is_alphafold_model(path.name, structure.read_text_head(path, 200_000),
+                                                      plddt.atom_values(model)):
+            return None
+        summary = plddt.summarize([v for _c, _r, v in plddt.residues(model)])
+        info = alphafold or {}
+        out = {
+            "predicted": True, "note": PREDICTED_NOTE,
+            # pLDDT medio di AlphaFold DB (globalMetricValue) se c'è, altrimenti la media per residuo del file
+            "plddt_mean": info.get("plddt") if info.get("plddt") is not None else summary["mean"],
+            "plddt_fractions": summary["fractions"],
+        }
+        if alphafold is not None:
+            out["alphafold"] = {k: alphafold.get(k) for k in ALPHAFOLD_META}
+        return out
+
     # ----------------------------------------------------------------------------- operazioni
     def list(self) -> list[dict]:
         items = []
         for tid, path in sorted(self._files().items()):
-            meta = read_json(self._meta_path(tid), default={}) or {}
+            meta = self._meta(tid, path)
             items.append({
                 "id": tid, "format": path.suffix.lstrip(".").lower(), "size": path.stat().st_size,
                 "source": meta.get("source", "sconosciuta"), "added_at": meta.get("added_at"),
@@ -94,25 +138,30 @@ class TemplateLibrary:
         return items
 
     def is_predicted(self, template_id: str) -> bool:
-        """Modello predetto (AlphaFold): dai metadati o, per i file registrati prima che esistessero, dall'header."""
-        tid = normalize_id(template_id)
-        meta = read_json(self._meta_path(tid), default={}) or {}
-        if "predicted" in meta:
-            return bool(meta["predicted"])
-        if meta.get("source") == SOURCE_ALPHAFOLD:
-            return True
-        return plddt.is_alphafold_text(structure.read_text_head(self.path(tid), 200_000))
+        """Modello predetto (AlphaFold), dai metadati (completati alla prima lettura per i template precedenti)."""
+        return bool(self._meta(normalize_id(template_id)).get("predicted"))
 
-    def fetch_alphafold(self, accession: str) -> dict:
+    def fetch_alphafold(self, accession: str, *, check: Optional[Callable[[], None]] = None,
+                        log: Optional[Callable[[str], None]] = None) -> dict:
         """Modello di AlphaFold DB per un'accessione UniProt, o per un identificativo AF-<ACC>-F<n> (frammenti delle
-        proteine lunghe), salvato con id AF-<ACC>-F<n> e i record originali del file."""
+        proteine lunghe), salvato con id AF-<ACC>-F<n> e i record originali del file.
+
+        `check` (annullamento del job) interrompe i tentativi verso EBI, le loro pause e l'attesa del download dello
+        stesso modello da parte di un altro elemento di pipeline; `log` riceve i messaggi dei nuovi tentativi.
+        """
         parsed = remote.parse_alphafold_id(accession)
         acc, fragment = parsed if parsed else (remote.validate_uniprot_accession(accession), None)
         guess = normalize_id(f"AF-{acc}-F{fragment or 1}")
-        with self._fetch_lock(guess):
+        lock = self._fetch_lock(guess)
+        while not lock.acquire(timeout=0.5):
+            if check:
+                check()
+        try:
+            if check:  # svegliato dopo l'annullamento: nessun nuovo download
+                check()
             if self.exists(guess):  # già in libreria: nessuna richiesta a EBI
                 return {**self.describe(guess), "cached": True}
-            entries = remote.alphafold_entries(acc)
+            entries = remote.alphafold_entries(acc, check=check, log=log)
             if fragment is None:
                 entry = entries[0]
             else:
@@ -123,7 +172,7 @@ class TemplateLibrary:
             tid = normalize_id(entry["entry_id"])
             if self.exists(tid):  # accessione secondaria di un modello già in libreria
                 return {**self.describe(tid), "cached": True}
-            text, fmt = remote.alphafold_download(entry)
+            text, fmt = remote.alphafold_download(entry, check=check, log=log)
             other = safe_join(self.root, f"{tid}.{'cif' if fmt == 'pdb' else 'pdb'}")
             dest = safe_join(self.root, f"{tid}.{fmt}")
             other.unlink(missing_ok=True)
@@ -134,6 +183,8 @@ class TemplateLibrary:
                 dest.unlink(missing_ok=True)
                 raise RemoteServiceError(f"AlphaFold DB: il modello {tid} scaricato non è leggibile ({exc.message}).")
             return {**self._register(tid, dest, source=SOURCE_ALPHAFOLD, alphafold=entry), "cached": False}
+        finally:
+            lock.release()
 
     def fetch(self, pdb_id: str, fmt: str = "pdb") -> dict:
         pid = remote.validate_pdb_id(pdb_id)
@@ -190,20 +241,12 @@ class TemplateLibrary:
             "chains": [c["chain"] for c in analysis["chains"]],
         }
         # Modello predetto: scaricato da AlphaFold DB, oppure un file di AlphaFold caricato dall'utente
-        # (riconosciuto solo da segni certi nell'header, mai dai soli B-factor).
-        if alphafold is not None or plddt.is_alphafold_text(structure.read_text_head(path, 200_000)):
-            values = [v for _c, _r, v in plddt.residues(structure.first_model(structure.load_structure(path, tid)))]
-            summary = plddt.summarize(values)
-            info = alphafold or {}
-            meta.update({
-                "predicted": True, "note": PREDICTED_NOTE, "method": meta["method"] or PREDICTED_METHOD,
-                "title": meta["title"] or info.get("description", ""),
-                # pLDDT medio di AlphaFold DB (globalMetricValue) se c'è, altrimenti la media per residuo del file
-                "plddt_mean": info.get("plddt") if info.get("plddt") is not None else summary["mean"],
-                "plddt_fractions": summary["fractions"],
-            })
-            if alphafold is not None:
-                meta["alphafold"] = {k: alphafold.get(k) for k in ALPHAFOLD_META}
+        # (riconosciuto come nel rapporto di qualità, mai dai soli B-factor).
+        predicted = self._predicted_meta(tid, path, force=alphafold is not None, alphafold=alphafold)
+        if predicted is not None:
+            meta.update(predicted)
+            meta["method"] = meta["method"] or PREDICTED_METHOD
+            meta["title"] = meta["title"] or (alphafold or {}).get("description", "")
         else:
             meta["predicted"] = False
         atomic_write_json(self._meta_path(tid), meta)
@@ -212,7 +255,7 @@ class TemplateLibrary:
     def describe(self, template_id: str) -> dict:
         tid = normalize_id(template_id)
         path = self.path(tid)
-        meta = read_json(self._meta_path(tid), default={}) or {}
+        meta = self._meta(tid, path)
         return {"id": tid, "format": path.suffix.lstrip("."), "size": path.stat().st_size, **meta}
 
     def delete(self, template_id: str) -> None:

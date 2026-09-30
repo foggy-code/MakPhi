@@ -121,11 +121,17 @@ sperimentale**, con il pLDDT medio (confidenza della predizione, 0–100).
 - **Libreria template → Da AlphaFold DB (UniProt):** scarica il modello di un'accessione (es. `P69905`); resta in
   libreria come `AF-P69905-F1`, con il file originale.
 - **Ricerca template → AlphaFold DB:** con l'accessione UniProt (precompilata per le sequenze importate da UniProt)
-  prende i suoi modelli; senza, cerca le proteine più simili con NCBI BLAST su Swiss-Prot (1–5 min). Nella pipeline
-  l'accessione si legge dall'intestazione FASTA di UniProt (`>sp|P69905|HBA_HUMAN`).
+  prende i suoi modelli; senza, cerca le proteine più simili con NCBI BLAST su Swiss-Prot (1–5 min). Se l'accessione
+  non ha modelli o EBI non risponde, la ricerca lo dice (invece di "0 template"). Nella pipeline l'accessione si legge
+  dall'intestazione FASTA di UniProt (`>sp|P69905|HBA_HUMAN`), che «Usa le sequenze del progetto» aggiunge da sola
+  per le sequenze importate da UniProt.
 - **Modellazione e Pipeline:** con un template AlphaFold, i residui con pLDDT sotto la soglia (predefinita 70) vengono
   tolti dal template, perché le regioni a bassa confidenza (spesso disordinate) peggiorano il modello; MODELLER li
-  costruisce senza template. Il numero di residui tolti è nel log e nei risultati.
+  costruisce senza template. Con loro si tolgono i frammenti rimasti isolati (meno di 5 residui tra residui tolti).
+  Il numero di residui tolti è nel log e nei risultati.
+- **Riconoscimento:** un file è un modello AlphaFold (pLDDT nella colonna B-factor) con l'intestazione di AlphaFold
+  DB o il nome `AF-<accessione>-F<n>`, mai per i soli valori: una struttura sperimentale risolta a partire da un
+  modello AlphaFold resta sperimentale. Libreria, modellazione e pagina Qualità usano la stessa regola.
 - **Privacy:** a EBI va solo l'accessione; senza accessione la sequenza va a NCBI, come per il motore NCBI BLAST.
 
 ## Cosa contiene

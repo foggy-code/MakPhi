@@ -9,7 +9,7 @@ from typing import Optional
 
 from ..core.errors import AppError, ToolUnavailable
 from ..core.jobs import JobContext
-from ..domain import clashes, consensus, grading, perresidue, ramachandran, secondary, structure
+from ..domain import clashes, consensus, grading, perresidue, plddt, ramachandran, secondary, structure
 from . import modeller, procheck, prosa, tools
 
 # ASA massima teorica per residuo (Tien et al. 2013), per la SASA relativa.
@@ -193,9 +193,8 @@ def analyze(path: Path, ctx: Optional[JobContext] = None, *, with_dope: bool = T
             warnings.append(f"Profilo DOPE ({len(profile)} residui) non allineabile alla struttura "
                             f"({len(residues)} residui): mostrato per indice.")
     bvals = [r["bfactor"] for r in residues if r["bfactor"] is not None]
-    # pLDDT di AlphaFold nella colonna B-factor? (euristica documentata in domain/perresidue.bfactor_kind)
-    atom_b = [a.bfactor for ch in model for res in ch if structure.is_amino_residue(res) for a in res]
-    bfactor_kind = perresidue.bfactor_kind(path.name, head, atom_b, "cif" if is_cif else "pdb")
+    # pLDDT di AlphaFold nella colonna B-factor? (stesso criterio della libreria: domain/plddt.is_alphafold_model)
+    bfactor_kind = perresidue.bfactor_kind(path.name, head, plddt.atom_values(model))
     zdope = dope.get("zdope") if dope else None
     grade = grading.grade(rama["summary"]["outlier_pct"], clash["clashscore"], zdope)
     rsa_values = [r["rsa"] for r in residues if r["rsa"] is not None]

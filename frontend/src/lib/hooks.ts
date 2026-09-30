@@ -3,8 +3,8 @@ import { api, ApiError } from "../api/client";
 import type { Job, JobLogChunk, JobSummary, ResumeScope } from "../api/types";
 import { isActive } from "./format";
 import {
-  FeedHub, type FeedState, isJobSummary, isLive, jobPollInterval, LiveFeed, LOG_MAX_CHARS, mergeJob, sliceLogChunk,
-  streamSupported, throttle, wantJobStream,
+  FeedHub, type FeedState, isJobSummary, isLive, jobPollInterval, LiveFeed, LOG_MAX_CHARS, mergeJob, polledLogChunk,
+  RecentJobs, sliceLogChunk, streamSupported, throttle, wantJobStream,
 } from "./live";
 import { cancelAndSync, type JobSync, recordStatus, resumeAndSync } from "./status";
 
@@ -113,7 +113,9 @@ export function useJobsFeed(onEvent: (type: string, data: unknown) => void): boo
 /**
  * Elenco di job tenuto aggiornato dal flusso dell'elenco: i job presenti si aggiornano sul posto (stato,
  * progresso, tempo residuo); un job nuovo che rientra in `matches`, un job eliminato o una riconnessione
- * ricaricano l'elenco, al più una volta al secondo. Restituisce true mentre il flusso è attivo (niente polling).
+ * ricaricano l'elenco, al più una volta al secondo. Un elenco ricaricato riceve sopra i riepiloghi del flusso più
+ * recenti della sua lettura (`RecentJobs`): una ricarica lenta non riporta indietro un job già concluso.
+ * Restituisce true mentre il flusso è attivo (niente polling).
  */
 export function useLiveJobList(
   list: JobSummary[] | null,
@@ -123,12 +125,23 @@ export function useLiveJobList(
 ): boolean {
   const shown = useRef(list);
   shown.current = list;
+  const recent = useRef(new RecentJobs());
+  const own = useRef<JobSummary[] | null>(null); // ultimo elenco scritto qui (gli altri vengono dalle ricariche)
   const refresh = useThrottled(reload, 1000);
+  useEffect(() => {
+    if (!list || list === own.current) return;
+    const fixed = recent.current.apply(list);
+    if (fixed !== list) {
+      own.current = shown.current = fixed;
+      setList(fixed);
+    }
+  }, [list, setList]);
   return useJobsFeed((type, data) => {
     if (type === "job" && isJobSummary(data)) {
+      if (matches(data) || shown.current?.some((j) => j.id === data.id)) recent.current.remember(data);
       const merged = mergeJob(shown.current, data, matches);
       if (merged.list !== shown.current) {
-        shown.current = merged.list; // eventi ravvicinati si sommano prima del nuovo render
+        own.current = shown.current = merged.list; // eventi ravvicinati si sommano prima del nuovo render
         setList(merged.list);
       }
       if (merged.reload) refresh();
@@ -220,9 +233,14 @@ export function useJob<R = unknown>(jobId: string | null | undefined, opts: { wi
       const s = await api.jobStatus(jobId);
       const reload = recordStatus(sync, s);
       if (withLog && isActive(s.status)) {
-        const chunk = await api.jobLog(jobId, offset.current);
-        if (chunk.text) setLog((prev) => (prev + chunk.text).slice(-LOG_MAX_CHARS));
-        offset.current = chunk.offset;
+        const from = offset.current;
+        const chunk = await api.jobLog(jobId, from);
+        // il flusso riaperto nel frattempo (scheda di nuovo visibile) può aver già accodato queste righe
+        const part = polledLogChunk(from, offset.current, chunk);
+        if (part) {
+          offset.current = part.offset;
+          if (part.text) setLog((prev) => (prev + part.text).slice(-LOG_MAX_CHARS));
+        }
       }
       if (reload) await loadFull();
     } catch (e) {

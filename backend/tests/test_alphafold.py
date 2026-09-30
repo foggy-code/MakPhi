@@ -20,6 +20,7 @@ import pytest
 
 from bioloom.config import UserSettings
 from bioloom.core.errors import AppError, NotFound, RemoteServiceError
+from bioloom.core.jobs import JobCancelled
 from bioloom.domain import plddt, sequences, structure
 from bioloom.engines import modeller, remote, search
 from bioloom.services.compute import ComputeService
@@ -320,6 +321,110 @@ def test_concurrent_fetches_download_the_model_once(tmp_path, afdb):
     assert {r["id"] for r in results} == {"AF-P0CG48-F1"} and library.is_predicted("AF-P0CG48-F1")
 
 
+class Cancelled:
+    """`check` di un job che si può annullare dal test (come JobContext.check)."""
+
+    def __init__(self) -> None:
+        self.event = threading.Event()
+        self.calls = 0
+
+    def __call__(self) -> None:
+        self.calls += 1
+        if self.event.is_set():
+            raise JobCancelled()
+
+
+def test_alphafold_download_stops_as_soon_as_the_job_is_cancelled(tmp_path, afdb):
+    """EBI risponde 503 al file e il job viene annullato durante il download: nessun altro tentativo."""
+    library = TemplateLibrary(tmp_path / "templates")
+    cancelled = Cancelled()
+    afdb.files["AF-P0CG48-F1-model_v6.pdb"] = (503, "Service Unavailable")
+    handler = afdb.handler
+
+    def cancel_on_download(request):
+        if "/files/" in request.url.path:
+            cancelled.event.set()  # l'utente annulla mentre il file è in arrivo
+        return handler(request)
+
+    afdb.handler = cancel_on_download
+    with pytest.raises(JobCancelled):
+        library.fetch_alphafold("P0CG48", check=cancelled)
+    assert len(afdb.file_calls()) == 1 and not library.exists("AF-P0CG48-F1")
+
+
+def test_waiting_for_the_same_alphafold_download_can_be_cancelled(tmp_path, afdb):
+    """Un elemento di pipeline in attesa del download dello stesso modello (lock per template) si ferma
+    all'annullamento, senza aspettare l'altro e senza scaricare di nuovo."""
+    library = TemplateLibrary(tmp_path / "templates")
+    lock = library._fetch_lock("AF-P0CG48-F1")
+    lock.acquire()  # un altro elemento sta scaricando lo stesso modello
+    cancelled = Cancelled()
+    outcome: dict = {}
+
+    def fetch():
+        try:
+            library.fetch_alphafold("P0CG48", check=cancelled)
+        except JobCancelled as exc:
+            outcome["cancelled"] = exc
+
+    thread = threading.Thread(target=fetch)
+    try:
+        thread.start()
+        time.sleep(0.2)
+        assert thread.is_alive()  # in attesa del lock
+        cancelled.event.set()
+        thread.join(3)
+        assert not thread.is_alive() and "cancelled" in outcome
+    finally:
+        lock.release()
+    assert afdb.calls == [] and cancelled.calls >= 1
+    # il lock è libero: il download successivo procede
+    assert library.fetch_alphafold("P0CG48")["cached"] is False
+
+
+def test_modelling_passes_cancellation_to_the_alphafold_download(service, tmp_path, afdb):
+    ctx = Ctx()
+    ctx.check = Cancelled()
+    afdb.files["AF-P0CG48-F1-model_v6.pdb"] = (503, "Service Unavailable")
+    handler = afdb.handler
+
+    def cancel_on_download(request):
+        if "/files/" in request.url.path:
+            ctx.check.event.set()
+        return handler(request)
+
+    afdb.handler = cancel_on_download
+    with pytest.raises(JobCancelled):
+        service._prepare_templates(ctx, [modeller.TemplateSpec("AF-P0CG48-F1", ["A"])], tmp_path / "w",
+                                   plddt_min=70)
+    assert len(afdb.file_calls()) == 1
+
+
+def test_templates_registered_before_the_predicted_flag_are_completed(tmp_path, ubq_path):
+    """Cartella dati precedente ai modelli predetti: meta.json senza `predicted`. Elenco, dettaglio e modellazione
+    danno la stessa risposta, e i metadati si completano una volta."""
+    root = tmp_path / "templates"
+    root.mkdir()
+    (root / "MIO_AF.pdb").write_text(af_pdb(), encoding="utf-8")
+    (root / "1UBQ.pdb").write_bytes(ubq_path.read_bytes())
+    old = {"source": "caricamento utente", "added_at": "2026-01-01T00:00:00+00:00", "title": "", "method": "",
+           "resolution": None, "chains": ["A"]}
+    for tid in ("MIO_AF", "1UBQ"):
+        (root / f"{tid}.meta.json").write_text(json.dumps({"id": tid, **old}), encoding="utf-8")
+    library = TemplateLibrary(root)
+    by_id = {t["id"]: t for t in library.list()}
+    assert by_id["MIO_AF"]["predicted"] is True and by_id["1UBQ"]["predicted"] is False
+    assert by_id["MIO_AF"]["plddt_mean"] == round((5 * 40 + 6 * 30 + 65 * 90) / 76, 2)
+    assert library.is_predicted("MIO_AF") and not library.is_predicted("1UBQ")
+    described = library.describe("MIO_AF")
+    assert described["predicted"] is True and described["note"] == "modello predetto, non struttura sperimentale"
+    assert described["plddt_fractions"]["very_high"] == round(65 / 76, 3)
+    assert described["method"] == "Modello predetto (AlphaFold)" and described["source"] == "caricamento utente"
+    saved = json.loads((root / "MIO_AF.meta.json").read_text(encoding="utf-8"))
+    assert saved["predicted"] is True and saved["added_at"] == old["added_at"]  # riscritto, il resto invariato
+    assert json.loads((root / "1UBQ.meta.json").read_text(encoding="utf-8"))["predicted"] is False
+
+
 def test_uploaded_alphafold_files_are_recognized_only_by_certain_signs(client):
     up = client.post("/api/templates/upload", files={"file": ("mio_af.pdb", af_pdb().encode())}).json()
     assert up["predicted"] is True and up["source"] == "caricamento utente"
@@ -452,6 +557,7 @@ def test_search_without_accession_uses_ncbi_blast_on_swissprot(client, afdb, fak
     log = _log(client, done["id"])
     assert "Proteine Swiss-Prot più simili: P0CG48, P0CG47, P62990" in log
     assert "P0CG47: nessun modello in AlphaFold DB" in log
+    assert done["result"]["notes"] == ["Senza modello in AlphaFold DB: P0CG47."]  # anche nell'interfaccia
     assert sorted(u.rsplit("/", 1)[1] for u in afdb.api_calls()) == ["P0CG47", "P0CG48", "P62990"]
 
 
@@ -469,14 +575,42 @@ def test_alphafold_search_uses_the_compute_cache(client, afdb, fake_swissprot):
     assert not _search(client, uniprot="P0CG48", use_cache=False)["result"].get("cached")
 
 
-def test_partial_alphafold_results_are_not_cached(client, afdb, fake_swissprot):
-    afdb.fail_api = 99  # EBI non risponde: le accessioni restano senza esito
+def test_alphafold_unavailable_for_every_protein_fails_the_search(client, afdb, fake_swissprot):
+    afdb.fail_api = 99  # EBI non risponde per nessuna accessione: errore, non "0 template trovati"
     done = _search(client)
-    assert done["status"] == "completed" and done["result"]["hits"] == []
-    assert "AlphaFold DB non disponibile" in _log(client, done["id"])
+    assert done["status"] == "failed"
+    assert "AlphaFold DB non disponibile" in done["error"] and "P0CG48, P0CG47, P62990" in done["error"]
     afdb.fail_api = 0
     again = _search(client)
-    assert not again["result"].get("cached") and again["result"]["hits"]
+    assert again["status"] == "completed" and not again["result"].get("cached") and again["result"]["hits"]
+
+
+def test_partial_alphafold_results_are_not_cached(client, afdb, fake_swissprot):
+    afdb.predictions["P62990"] = [af_entry("P62990", YEAST_UB)]
+    afdb.fail_api = 3  # P0CG48 senza risposta dopo tre tentativi; P0CG47 senza modello; P62990 trovato
+    done = _search(client)
+    assert done["status"] == "completed", done
+    assert [h["template_id"] for h in done["result"]["hits"]] == ["AF-P62990-F1"]
+    notes = done["result"]["notes"]
+    assert "Senza modello in AlphaFold DB: P0CG47." in notes
+    assert any(n.startswith("AlphaFold DB non disponibile per P0CG48: risultato parziale") for n in notes)
+    again = _search(client)
+    assert not again["result"].get("cached") and len(again["result"]["hits"]) == 2
+    assert again["result"]["notes"] == ["Senza modello in AlphaFold DB: P0CG47."]
+
+
+def test_alphafold_search_with_an_accession_reports_why_there_are_no_models(client, afdb, no_ncbi):
+    # accessione senza modello: il job fallisce con il messaggio di AlphaFold DB (non un elenco vuoto)
+    missing = _search(client, uniprot="P69905")
+    assert missing["status"] == "failed"
+    assert "AlphaFold DB non ha un modello per l'accessione UniProt P69905" in missing["error"]
+    # EBI non raggiungibile
+    afdb.fail_api = 99
+    down = _search(client, uniprot="P0CG48")
+    assert down["status"] == "failed" and "AlphaFold DB non disponibile per l'accessione P0CG48" in down["error"]
+    afdb.fail_api = 0
+    ok = _search(client, uniprot="P0CG48")
+    assert ok["status"] == "completed" and ok["result"]["notes"] == [] and not ok["result"].get("cached")
 
 
 def test_search_rejects_an_invalid_accession_before_queueing(client):
@@ -526,9 +660,11 @@ def test_prepare_template_removes_low_plddt_residues(tmp_path):
 
 
 def test_threshold_is_exclusive_and_configurable(tmp_path):
-    src = _write(tmp_path, af_pdb(lambda n: 70.0 if n == 1 else 69.99 if n == 2 else 95.0))
+    # 1–5 a 70 (un tratto di 5 residui: non è un frammento isolato), 6 a 69,99
+    src = _write(tmp_path, af_pdb(lambda n: 70.0 if n <= 5 else 69.99 if n == 6 else 95.0))
     info = modeller.prepare_template(src, modeller.TemplateSpec("AF", ["A"], plddt_min=70), tmp_path / "a")
     assert info["plddt"]["removed"] == 1 and info["first"] == "1"  # 70 resta, 69,99 no
+    assert info["plddt"]["removed_ranges"] == [["6", "6", "A"]] and info["plddt"]["removed_fragments"] == 0
     info = modeller.prepare_template(src, modeller.TemplateSpec("AF", ["A"], plddt_min=50), tmp_path / "b")
     assert info["plddt"]["removed"] == 0 and info["plddt"]["removed_ranges"] == []
     assert info["sequence"] == HUMAN_UB
@@ -546,10 +682,45 @@ def test_too_few_residues_left_is_a_clear_error(tmp_path):
     assert "ne restano 29 su 76 (minimo 30)" in err.value.message and "Abbassa la soglia" in err.value.message
 
 
+def fragments_profile(resnum: int) -> float:
+    """pLDDT che dopo la soglia 70 lascia tratti isolati di 1 (16), 3 (21–23) e 6 residui (28–33) in una regione
+    a bassa confidenza, più 1–10 e 41–76 confidenti."""
+    high = resnum <= 10 or resnum == 16 or 21 <= resnum <= 23 or 28 <= resnum <= 33 or resnum >= 41
+    return 90.0 if high else 40.0
+
+
+def test_isolated_fragments_are_removed_after_the_threshold(tmp_path):
+    src = _write(tmp_path, af_pdb(fragments_profile))
+    info = modeller.prepare_template(src, modeller.TemplateSpec("AF-P0CG48-F1", ["A"], plddt_min=70), tmp_path / "job")
+    trim = info["plddt"]
+    # sotto soglia 11–15, 17–20, 24–27, 34–40 (20 residui); frammenti di 1 e 3 residui tolti, quello di 6 resta
+    assert (trim["removed_threshold"], trim["removed_fragments"], trim["min_fragment"]) == (20, 4, plddt.MIN_FRAGMENT)
+    assert (trim["total"], trim["removed"], trim["kept"]) == (76, 24, 52)
+    assert trim["removed_ranges"] == [["11", "27", "A"], ["34", "40", "A"]]
+    kept = {r[1] for r in info["_residues"] if r[3]}
+    assert {"16", "21", "22", "23"}.isdisjoint(kept) and {str(n) for n in range(28, 34)} <= kept
+    text = (tmp_path / "job" / info["file"]).read_text()
+    assert text.count(" CA ") == 52 and "REMOVED 24 OF 76 FRAGMENTS 4" in text
+    # con lunghezza minima 1 restano tutti i tratti sopra soglia
+    loose = plddt.low_confidence(structure.first_model(structure.load_structure(src)), ["A"], 70, min_fragment=1)
+    assert (loose["below"], loose["fragments"], len(loose["removed"])) == (20, 0, 20)
+    # log e avviso lo dicono
+    ctx = Ctx()
+    library = TemplateLibrary(tmp_path / "templates")
+    library.save_upload("AF-P0CG48-F1.pdb", src.read_bytes())
+    service = ComputeService(SimpleNamespace(register=lambda *a, **k: None), library, tmp_path / "u", tmp_path / "d")
+    [t] = service._prepare_templates(ctx, [modeller.TemplateSpec("AF-P0CG48-F1", ["A"])], tmp_path / "w", plddt_min=70)
+    assert ("rimossi 20 residui con pLDDT < 70 e 4 in frammenti isolati di meno di 5 residui (11–27:A, 34–40:A), "
+            "restano 52 di 76") in ctx.logs[-1]
+    assert "rimossi 20 residui con pLDDT < 70 e 4 in frammenti isolati" in service._predicted_notes([t])[0]
+
+
 def test_experimental_templates_are_never_trimmed(tmp_path, ubq_path):
     info = modeller.prepare_template(ubq_path, modeller.TemplateSpec("1UBQ", ["A"]), tmp_path)
     assert "plddt" not in info and info["sequence"] == HUMAN_UB
-    assert not (tmp_path / "1UBQ_A.pdb").read_text().startswith("HEADER")
+    text = (tmp_path / "1UBQ_A.pdb").read_text()
+    # nessun record di AlphaFold; il metodo sperimentale resta dichiarato nella copia
+    assert not text.startswith("HEADER") and text.startswith("EXPDTA    X-RAY DIFFRACTION")
 
 
 def test_model_options_validate_the_plddt_threshold():
@@ -651,14 +822,16 @@ def test_all_gap_columns_are_removed_after_trimming(service, tmp_path):
 # ------------------------------------------------------------------------------------------ pipeline e MODELLER
 def test_pipeline_alphafold_engine_without_modelling(client, afdb, fake_swissprot):
     """Ricerca AlphaFold nella pipeline (filtro zona crepuscolare: niente MODELLER): accessione dall'intestazione
-    FASTA di UniProt, altrimenti BLAST su Swiss-Prot."""
-    body = {"fasta": f">sp|P0CG48|UBC_HUMAN\n{YEAST_UB}\n>ignota\n{YEAST_UB}\n", "engine": "alphafold",
-            "twilight": {"filter": True, "identity": 99.0, "coverage": 40.0}, "parallel": 1}
+    FASTA di UniProt (anche TrEMBL: l'interfaccia la scrive così per le sequenze del progetto importate da UniProt),
+    altrimenti BLAST su Swiss-Prot."""
+    body = {"fasta": f">sp|P0CG48|UBC_HUMAN\n{YEAST_UB}\n>ignota\n{YEAST_UB}\n>tr|P0CG48|UBC_HUMAN\n{YEAST_UB}\n",
+            "engine": "alphafold", "twilight": {"filter": True, "identity": 99.0, "coverage": 40.0}, "parallel": 1}
     job = client.post("/api/pipeline", json=body).json()
     done = wait_job(client, job["id"])
     assert done["status"] == "completed", done
     items = client.get(f"/api/pipeline/{job['id']}/items").json()["items"]
-    assert [i["status"] for i in items] == ["filtered", "filtered"]
+    assert [i["name"] for i in items] == ["sp_P0CG48_UBC_HUMAN", "ignota", "tr_P0CG48_UBC_HUMAN"]
+    assert [i["status"] for i in items] == ["filtered", "filtered", "filtered"]
     assert all(i["template"] == "AF-P0CG48-F1" and i["template_source"] == "alphafold" for i in items)
     assert items[0]["identity"] == 96.1
     assert len(fake_swissprot) == 1  # solo la sequenza senza accessione passa da NCBI

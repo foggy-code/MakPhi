@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { JobSummary } from "../api/types";
 import {
   backoffDelay, CONNECT_TIMEOUT_MS, FeedHub, type FeedState, isJobSummary, isLive, jobPollInterval, listPollInterval,
-  LiveFeed, mergeJob, parseData, REOPEN_MS, sliceLogChunk, type SourceLike, throttle, type Timers, wantJobStream,
+  LiveFeed, mergeJob, parseData, polledLogChunk, RecentJobs, REOPEN_MS, sliceLogChunk, type SourceLike, throttle, type Timers,
+  wantJobStream,
 } from "./live";
 
 /** Timer finti: `advance` esegue in ordine quelli scaduti. */
@@ -144,6 +145,44 @@ describe("eventi e elenchi", () => {
     expect(mergeJob(list, job("c"), all)).toEqual({ list, reload: true });
     expect(mergeJob(list, job("c", { project_id: "altro" }), (j) => j.project_id === "p")).toEqual({ list, reload: false });
     expect(mergeJob(null, job("c"), all)).toEqual({ list: null, reload: true });
+  });
+  it("una ricarica lenta non riporta indietro un job già aggiornato dal flusso", () => {
+    const recent = new RecentJobs();
+    // la ricarica legge "b" in esecuzione; intanto il flusso consegna la fine di "b"
+    const stale = [job("a", { updated_at: "2026-09-30T10:00:00+00:00" }), job("b", { updated_at: "2026-09-30T10:00:01+00:00" })];
+    recent.remember(job("b", { status: "completed", progress: 1, updated_at: "2026-09-30T10:00:03+00:00" }));
+    const fixed = recent.apply(stale);
+    expect(fixed).not.toBe(stale);
+    expect(fixed[1]).toMatchObject({ id: "b", status: "completed", progress: 1 });
+    expect(fixed[0]).toBe(stale[0]);
+    // una ricarica successiva, già aggiornata, resta com'è e il riepilogo superato si dimentica
+    const fresh = [stale[0], job("b", { status: "completed", progress: 1, updated_at: "2026-09-30T10:00:05+00:00" })];
+    expect(recent.apply(fresh)).toBe(fresh);
+    expect(recent.size).toBe(0);
+  });
+  it("a parità di updated_at vale il flusso; niente copie inutili; i job usciti dall'elenco si dimenticano", () => {
+    const recent = new RecentJobs();
+    const t = "2026-09-30T10:00:03+00:00";
+    recent.remember(job("b", { status: "completed", updated_at: t }));
+    const list = [job("b", { status: "running", updated_at: t })];
+    expect(recent.apply(list)[0].status).toBe("completed");
+    const same = [job("b", { status: "completed", updated_at: t })];
+    expect(recent.apply(same)).toBe(same); // già uguale: stesso elenco
+    recent.remember(job("z", { updated_at: t }));
+    recent.apply([job("a")]);
+    expect(recent.size).toBe(0);
+  });
+});
+
+describe("log dal polling", () => {
+  it("accoda solo se l'offset non è cambiato durante la richiesta", () => {
+    const chunk = { start: 10, offset: 20, text: "riga nuova\n" };
+    expect(polledLogChunk(10, 10, chunk)).toEqual({ text: "riga nuova\n", offset: 20 });
+    // il flusso riaperto ha già accodato le stesse righe (offset 10 → 20): la risposta del polling si scarta
+    expect(polledLogChunk(10, 20, chunk)).toBeNull();
+    // log accorciato: il server riparte dalla coda e l'offset si riallinea
+    expect(polledLogChunk(500, 500, { offset: 30, text: "coda\n" })).toEqual({ text: "coda\n", offset: 30 });
+    expect(polledLogChunk(0, 0, null)).toBeNull();
   });
 });
 

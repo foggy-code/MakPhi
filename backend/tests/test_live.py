@@ -424,7 +424,8 @@ def test_job_stream_ends_on_terminal_job_and_follows_a_resume(pipe):
     until(lambda: fake.calls.count("b") == 2)
     follow = Stream(client, f"/api/jobs/{job_id}/events?offset={offset}")
     until(lambda: core.live.slots.used == 1)
-    time.sleep(0.5)  # prima lettura dello stato con "b" ancora ferma
+    # il flusso attende le notifiche: ha già inviato la prima lettura dello stato, con "b" ancora ferma
+    until(lambda: core.jobs.events.waiting >= 1)
     fake.let_go()
     events = parse_sse(follow.result(20).text)
     statuses = of(events, "status")
@@ -460,10 +461,21 @@ def test_stream_limit_and_slot_release(client):
 # ----------------------------------------------------------------------------------------------- flusso dell'elenco
 
 
-def close_after_last_pass(monkeypatch) -> None:
-    """Chiude i flussi dell'elenco aperti dopo che hanno elaborato gli ultimi cambiamenti: una passata segue ogni
-    notifica entro COALESCE_SECONDS (o il controllo di riserva entro POLL_SECONDS), poi la durata massima scade."""
-    time.sleep(live.POLL_SECONDS + 0.5)
+def stream_caught_up(core) -> None:
+    """Attende che l'unico flusso aperto abbia elaborato tutti i cambiamenti pubblicati finora.
+
+    Ogni pubblicazione sveglia e toglie chi attende (`ChangeFeed.publish`), e un flusso si rimette in attesa solo
+    con la versione corrente, dopo la passata che segue i cambiamenti rilevanti: un flusso in attesa adesso ha già
+    inviato ciò che è stato pubblicato prima. I cambiamenti da attendere devono essere già pubblicati (per un job:
+    esecuzione chiusa, `busy` falso, che viene dopo la pubblicazione dello stato finale)."""
+    until(lambda: core.jobs.events.waiting >= 1)
+
+
+def close_after_last_pass(monkeypatch, core, *job_ids: str) -> None:
+    """Chiude i flussi dell'elenco dopo che hanno elaborato gli ultimi cambiamenti dei job indicati: la durata
+    massima scade alla passata successiva."""
+    until(lambda: not any(core.jobs.busy(job_id) for job_id in job_ids))
+    stream_caught_up(core)
     monkeypatch.setattr(live, "MAX_STREAM_SECONDS", 0.0)
 
 
@@ -475,10 +487,10 @@ def test_list_stream_notifies_jobs_and_pipeline_items(pipe, monkeypatch):
     until(lambda: core.jobs.events.waiting >= 1)  # flusso aperto, stato iniziale letto
     job_id = submit(names=["a", "b", "c"])
     until(lambda: "b" in fake.calls)
-    time.sleep(0.5)
+    stream_caught_up(core)  # "running" e "1 di 3" già inviati, con "b" ancora ferma in modellazione
     fake.let_go()
     assert wait_job(client, job_id)["status"] == "completed"
-    close_after_last_pass(monkeypatch)
+    close_after_last_pass(monkeypatch, core, job_id)
     events = parse_sse(listening.result(20).text)
     assert events[0] == ("ready", {"active": 0}) and events[-1] == ("reconnect", {})
     jobs = [j for j in of(events, "job") if j["id"] == job_id]
@@ -512,7 +524,7 @@ def test_list_stream_project_filter_and_deletions(client, monkeypatch):
     until(lambda: not core.jobs.busy(old))
     assert client.delete(f"/api/jobs/{old}").status_code == 200  # del progetto seguito: segnalato
     assert client.delete(f"/api/jobs/{hidden}").status_code == 200  # di un altro progetto: no
-    close_after_last_pass(monkeypatch)
+    close_after_last_pass(monkeypatch, core, seen)
     events = parse_sse(listening.result(15).text)
     ids = {j["id"] for j in of(events, "job")}
     assert seen in ids and hidden not in ids

@@ -14,7 +14,11 @@ AlphaFold scrive il pLDDT del residuo (0–100, uguale per tutti i suoi atomi) n
 Il ritaglio predefinito dei template predetti (pLDDT < 70) toglie le fasce "bassa" e "molto bassa": lì lo scheletro
 non è affidabile e, usato come template, trasferirebbe a MODELLER vincoli su conformazioni non predette con
 confidenza (spesso regioni disordinate). I residui tolti diventano gap nell'allineamento e MODELLER li costruisce
-senza vincoli dal template.
+senza vincoli dal template. Dopo la soglia si tolgono anche i frammenti isolati (`MIN_FRAGMENT`).
+
+Riconoscimento dei modelli AlphaFold (`is_alphafold_model`): è l'unico criterio di BioLoom, usato dal rapporto di
+qualità (colonna "pLDDT" e colorazione), dalla libreria dei template (modello predetto, ritaglio) e dalla copia del
+template preparata per MODELLER.
 """
 
 from __future__ import annotations
@@ -33,10 +37,25 @@ DEFAULT_THRESHOLD = 70.0
 # finger C2H2, ~30 aa). Sotto, il template descrive un frammento e non un ripiegamento, e l'allineamento
 # sequenza-struttura di MODELLER su così pochi residui non è affidabile.
 MIN_TRIMMED_RESIDUES = 30
+# Tratto confidente più corto che resta nel template quando la soglia lo isola (residui tolti accanto): 5 residui
+# contigui. È il minimo per un giro d'elica α con il suo legame idrogeno i→i+4 (Pauling et al. 1951), cioè per una
+# conformazione locale che si regge da sola. Il pLDDT misura solo la confidenza locale (lDDT): la posizione di un
+# tratto più corto rispetto al resto del modello, in mezzo a regioni disordinate, non è stimata (è il PAE a dirlo) e
+# darebbe a MODELLER restrizioni di distanza da un punto arbitrario. I residui tolti così diventano gap come gli altri.
+MIN_FRAGMENT = 5
+PLDDT_RANGE = (0.0, 100.0)
 
 # TITLE dei PDB di AlphaFold DB: "ALPHAFOLD MONOMER V2.0 PREDICTION FOR <PROTEINA> (<ACC>)"
 _AF_TITLE = re.compile(r"^TITLE\s+(?:\d+\s+)?ALPHAFOLD\b.*\bPREDICTION\b", re.MULTILINE)
 _EXPDTA = re.compile(r"^EXPDTA", re.MULTILINE)
+# Righe che MODELLER scrive nei suoi modelli (oltre a "EXPDTA THEORETICAL MODEL, MODELLER …")
+_MODELLER_REMARK = re.compile(r"^REMARK   6 MODELLER", re.MULTILINE)
+# Accessione UniProt (espressione regolare ufficiale di UniProt, https://www.uniprot.org/help/accession_numbers).
+_UNIPROT_ACCESSION = r"(?:[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9](?:[A-Z][A-Z0-9]{2}[0-9]){1,2})"
+# File di AlphaFold DB ("AF-P0CG48-F1-model_v4.pdb") e identificativi di libreria che ne derivano ("AF-P0CG48-F1",
+# anche con la catena della copia preparata, "AF-P0CG48-F1_A.pdb"), anche con il prefisso casuale dei file caricati
+# ("1a2b3c4d_AF-P0CG48-F1-model_v4.pdb").
+AF_NAME = re.compile(rf"(?:^|[^A-Z0-9])AF-{_UNIPROT_ACCESSION}-F\d+(?:-MODEL_V\d+)?(?=[^A-Z0-9]|$)", re.IGNORECASE)
 
 
 def band(value: float) -> str:
@@ -94,20 +113,50 @@ def removed_ranges(rows: list[tuple]) -> list[list[str]]:
     return out
 
 
-def low_confidence(model, chains: Iterable[str], threshold: float) -> dict:
-    """Residui con pLDDT sotto la soglia nelle catene scelte, con i conteggi.
+def low_confidence(model, chains: Iterable[str], threshold: float, min_fragment: int = MIN_FRAGMENT) -> dict:
+    """Residui da togliere nelle catene scelte: pLDDT sotto la soglia e frammenti isolati, con i conteggi.
+
+    Frammento isolato: tratto di residui sopra soglia, contigui nel file e nella numerazione, più corto di
+    `min_fragment` e accanto ad almeno un residuo tolto per la soglia (un tratto delimitato solo dalle estremità
+    della catena o da un'interruzione del file non è un effetto del ritaglio e resta).
 
     Restituisce `rows` (catena, id Biopython del residuo, codice di residuo, lettera, pLDDT, tenuto) nell'ordine del
-    file e `removed`, l'insieme (catena, id Biopython) da escludere.
+    file, `removed`, l'insieme (catena, id Biopython) da escludere, e i conteggi `below` (sotto soglia) e
+    `fragments` (residui dei frammenti isolati).
     """
+    items = [(chain_id, res, value, value >= threshold) for chain_id, res, value in residues(model, chains)]
+    isolated = _isolated_fragments(items, min_fragment)
     rows = []
     removed = set()
-    for chain_id, res, value in residues(model, chains):
-        keep = value >= threshold
+    for n, (chain_id, res, value, above) in enumerate(items):
+        keep = above and n not in isolated
         rows.append((chain_id, res.id, _resid(res), structure.three_to_one(res.get_resname()), value, keep))
         if not keep:
             removed.add((chain_id, res.id))
-    return {"rows": rows, "removed": removed}
+    return {"rows": rows, "removed": removed, "below": sum(1 for item in items if not item[3]),
+            "fragments": len(isolated)}
+
+
+def _isolated_fragments(items: list[tuple], min_fragment: int) -> set[int]:
+    """Indici (in `items`) dei residui sopra soglia che formano frammenti isolati (vedi `low_confidence`)."""
+    runs: list[list[int]] = []  # tratti sopra soglia: indici consecutivi, stessa catena, numerazione contigua
+    for n, (chain_id, res, _value, above) in enumerate(items):
+        if not above:
+            continue
+        prev = items[n - 1] if n else None
+        if (runs and runs[-1][-1] == n - 1 and prev is not None and prev[0] == chain_id
+                and 0 <= res.id[1] - prev[1].id[1] <= 1):  # 0: codice di inserzione (52, 52A)
+            runs[-1].append(n)
+        else:
+            runs.append([n])
+    out: set[int] = set()
+    for run in runs:
+        if len(run) >= min_fragment:
+            continue
+        chain_id = items[run[0]][0]
+        if any(0 <= k < len(items) and items[k][0] == chain_id and not items[k][3] for k in (run[0] - 1, run[-1] + 1)):
+            out.update(run)
+    return out
 
 
 def _resid(res) -> str:
@@ -127,3 +176,46 @@ def is_alphafold_text(text: str) -> bool:
         return ("_ma_qa_metric" in head and re.search(r"alphafold", head, re.IGNORECASE) is not None
                 and "_exptl.method" not in head)
     return bool(_AF_TITLE.search(head)) and not _EXPDTA.search(head)
+
+
+def declares_other_origin(text: str) -> bool:
+    """L'intestazione dichiara un'origine diversa da AlphaFold: un metodo sperimentale (EXPDTA del PDB,
+    `_exptl.method` del mmCIF, anche in forma di loop) oppure MODELLER ("EXPDTA THEORETICAL MODEL, MODELLER",
+    righe `REMARK   6 MODELLER`). Una struttura risolta a partire da un modello AlphaFold (sostituzione molecolare,
+    `REMARK 200 STARTING MODEL: ALPHAFOLD`, `_pdbx_initial_refinement_model`) resta sperimentale."""
+    head = text or ""
+    return bool(_EXPDTA.search(head) or "_exptl.method" in head or _MODELLER_REMARK.search(head))
+
+
+def plausible_values(values: Iterable[float]) -> bool:
+    """Valori della colonna B-factor compatibili con il pLDDT: tutti in 0–100 e non tutti nulli (una colonna
+    azzerata non porta pLDDT)."""
+    vals = list(values)
+    lo, hi = PLDDT_RANGE
+    return bool(vals) and any(v != 0 for v in vals) and all(lo <= v <= hi for v in vals)
+
+
+def is_alphafold_model(name: str, head: str, values: Iterable[float]) -> bool:
+    """Il file è un modello di AlphaFold, con il pLDDT nella colonna B-factor? Unico criterio di BioLoom.
+
+    1. i valori sono compatibili con il pLDDT (`plausible_values`, su tutti gli atomi degli amminoacidi);
+    2. l'intestazione ha i segni certi di AlphaFold DB (`is_alphafold_text`: TITLE "ALPHAFOLD … PREDICTION" senza
+       EXPDTA, oppure ModelCIF con `_ma_qa_metric` senza `_exptl.method`),
+       oppure il nome segue lo schema di AlphaFold DB (`AF_NAME`: file scaricati, caricati con prefisso, id di
+       libreria e loro copie preparate) e l'intestazione non dichiara un'altra origine (`declares_other_origin`).
+
+    Un B-factor cristallografico può stare in 0–100 (1UBQ: massimo 42,75): per questo la sola scala non basta, e
+    una menzione di AlphaFold altrove nell'intestazione (per esempio il modello di partenza di una sostituzione
+    molecolare) non conta.
+    """
+    if not plausible_values(values):
+        return False
+    if is_alphafold_text(head):
+        return True
+    return AF_NAME.search(name or "") is not None and not declares_other_origin(head)
+
+
+def atom_values(model) -> list[float]:
+    """B-factor di tutti gli atomi degli amminoacidi del modello (i valori che `is_alphafold_model` controlla)."""
+    return [float(a.get_bfactor()) for chain in model for res in chain if structure.is_amino_residue(res)
+            for a in res]

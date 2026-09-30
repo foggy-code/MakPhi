@@ -235,13 +235,17 @@ aggiornamento di un elemento. Ogni cambiamento ha una versione crescente e resta
   completo è fatto, dall'offset del log appena letto; lo riapre dopo ogni caricamento completo (ripresa). Gli
   eventi `status` passano da `recordStatus` come il polling: stesse regole di ricarica di F2.1. `sliceLogChunk`
   accoda solo i byte nuovi (sovrapposizioni con un polling concorrente tagliate in byte UTF-8, buchi ignorati).
+  Il polling, a sua volta, scarta la risposta di `/log` se nel frattempo il flusso ha fatto avanzare l'offset
+  (`polledLogChunk`: flusso riaperto mentre una richiesta era in corso), così nessuna riga compare due volte.
 - **Ricaduta sul polling:** senza `EventSource`, con la scheda nascosta o con il flusso caduto (errore, 401, 503,
   nessun evento entro 5 s) torna il polling di prima (`jobPollInterval`), mentre il flusso riprova con backoff
   1, 2, 4… fino a 30 s; il primo evento ricevuto azzera il backoff. Il controllo lento dei job terminati ma
   riprendibili (5 s) resta com'era.
 - **Flusso dell'elenco condiviso:** uno per scheda (`FeedHub`), usato dal contatore della barra laterale, dalla
   pagina Job, dalle pipeline recenti e dai job recenti della Panoramica (`useLiveJobList`: aggiornamenti sul posto
-  con `mergeJob`, ricarica per job nuovi o eliminati) e dalla tabella della Pipeline (ricarica al più una volta al
+  con `mergeJob`, ricarica per job nuovi o eliminati; sopra ogni elenco ricaricato si riapplicano i riepiloghi del
+  flusso più recenti della lettura, per `updated_at`, con `RecentJobs`: una ricarica partita prima della fine di un
+  job e arrivata dopo non lo riporta "in esecuzione") e dalla tabella della Pipeline (ricarica al più una volta al
   secondo sugli eventi `items` del job). Ognuno sospende il proprio polling mentre il flusso è attivo e ricarica a
   ogni `ready` (dopo una riconnessione). CPU, memoria e disco della Panoramica restano periodici.
 - **Connessioni:** un browser tiene al massimo 6 connessioni HTTP/1.1 per server, contando tutte le schede: per
@@ -397,18 +401,23 @@ Il voto A–D non cambia: `consensus` è un campo in più del rapporto di qualit
     anche per un'analisi di qualità lanciata su quel modello. Con `qmean_job` aggiungono Z-score e punteggi
     locali di un job QMEAN completato.
 - **Controlli della rotta:** la sorgente del job QMEAN (nei parametri: nel risultato `source` è il servizio) deve
-  indicare la stessa struttura. Si confrontano template normalizzato, job + file, nome del file caricato. Una
-  sorgente diversa dà 400 `qmean_source_mismatch` e non viene esclusa in silenzio, perché i punteggi di un'altra
-  struttura renderebbero il consenso fuorviante. Un job che non è QMEAN dà 400 `qmean_job_invalid`, un QMEAN non
-  completato 409. I rapporti delle versioni precedenti, senza consenso, funzionano: la rotta lo calcola.
-- **pLDDT (`perresidue.bfactor_kind`):** `report.structure.bfactor_kind = "plddt"` se il file è di AlphaFold e
-  tutti i valori della colonna B-factor stanno in 0–100 e non sono tutti nulli. Il file è di AlphaFold se:
-  - HEADER, TITLE o REMARK citano AlphaFold (esclusi i `REMARK 999 BIOLOOM`); per mmCIF basta una voce prima di
-    `_atom_site`;
-  - oppure il nome segue lo schema di AlphaFold DB `AF-<accessione UniProt>-F<n>[-model_v<k>]`: file scaricati,
-    caricati con prefisso, id di libreria `AF-<ACC>-F1`.
+  indicare la stessa struttura. Si confrontano template normalizzato, job + file, nome del file caricato e, quando
+  entrambi i job la hanno, l'impronta del file analizzato (`source_sha256`, SHA-256 del contenuto, nei risultati
+  dei job `quality` e `qmean`): un template sostituito con lo stesso id tra l'analisi e QMEAN è un'altra struttura.
+  I job precedenti, senza impronta, si confrontano solo per sorgente. Una sorgente diversa dà 400
+  `qmean_source_mismatch` e non viene esclusa in silenzio, perché i punteggi di un'altra struttura renderebbero il
+  consenso fuorviante. Un job che non è QMEAN dà 400 `qmean_job_invalid`, un QMEAN non completato 409. I rapporti
+  delle versioni precedenti, senza consenso, funzionano: la rotta lo calcola.
+- **pLDDT (`perresidue.bfactor_kind`):** `report.structure.bfactor_kind = "plddt"` se il file è un modello
+  AlphaFold secondo `plddt.is_alphafold_model`, l'unico criterio di BioLoom, lo stesso della libreria dei template
+  e della copia preparata per MODELLER (vedi [Modelli AlphaFold DB](#modelli-alphafold-db)): segni certi di AlphaFold
+  DB nell'intestazione, oppure il nome `AF-<ACC>-F<n>` senza un'altra origine dichiarata, e valori in 0–100 non tutti
+  nulli.
 
   I B-factor cristallografici stanno spesso in 0–100 (1UBQ: massimo 42,75): per questo la sola scala non basta.
+  Una menzione di AlphaFold altrove nell'intestazione non conta: molte strutture sperimentali sono risolte per
+  sostituzione molecolare a partire da un modello AlphaFold (`REMARK 200 STARTING MODEL: ALPHAFOLD`,
+  `_pdbx_initial_refinement_model.source_name AlphaFold`) e i loro B-factor restano B-factor.
 - **Valori su 1UBQ** (uscite reali di MODELLER, PROCHECK e ProSA in `tests/data`):
 
   | Metodo | Valore | Punteggio |
@@ -463,14 +472,33 @@ riferimento. È sempre segnato come **modello predetto, non struttura sperimenta
   `AF-<ACC>-F2` per i frammenti delle proteine lunghe): id `AF-<ACC>-F<n>` (compatibile con `normalize_id`), file
   originale intatto (HEADER/TITLE/REMARK di AlphaFold e pLDDT nella colonna B-factor), meta con `source: "alphafold"`,
   `predicted: true`, `note`, `plddt_mean`, `plddt_fractions` (dal file) e `alphafold` (versione, frammento,
-  intervallo UniProt, gene, organismo, URL del PAE). Un modello già in libreria non genera richieste. Anche un file di
-  AlphaFold caricato dall'utente diventa `predicted`, ma solo con segni certi nell'header (TITLE "ALPHAFOLD …
-  PREDICTION" senza EXPDTA, oppure ModelCIF con `_ma_qa_metric` e il nome AlphaFold): i B-factor di una struttura
-  sperimentale non vanno mai presi per pLDDT. I template registrati prima di questa versione si riconoscono
-  dall'header quando servono.
+  intervallo UniProt, gene, organismo, URL del PAE). Un modello già in libreria non genera richieste. Il download
+  riceve l'annullamento del job (`fetch_alphafold(check=, log=)`): i tentativi verso EBI e le loro pause si fermano,
+  e anche l'attesa di un altro elemento di pipeline che sta scaricando lo stesso modello (lock per template preso a
+  intervalli di 0,5 s con il controllo dell'annullamento; chi si sveglia dopo l'annullamento non riscarica).
+- **Riconoscimento dei modelli AlphaFold** (`plddt.is_alphafold_model`, unico per libreria, rapporto di qualità e
+  copia preparata del template): i valori della colonna B-factor (tutti gli atomi degli amminoacidi) stanno in 0–100
+  e non sono tutti nulli, e
+  - l'intestazione ha i segni certi di AlphaFold DB (`is_alphafold_text`): TITLE "ALPHAFOLD … PREDICTION" senza
+    EXPDTA (sempre presente nelle strutture sperimentali), oppure ModelCIF con `_ma_qa_metric` e il nome AlphaFold
+    senza `_exptl.method`;
+  - oppure il nome segue lo schema di AlphaFold DB, `AF-<accessione UniProt>-F<n>[-model_v<k>]` (file scaricati,
+    caricati con prefisso, id di libreria e loro copie `AF-…_A.pdb`), e l'intestazione non dichiara un'altra
+    origine (`declares_other_origin`: EXPDTA, `_exptl.method`, anche in forma di loop, oppure `REMARK   6 MODELLER`).
+
+  Non contano le menzioni di AlphaFold altrove (per esempio `REMARK 200 STARTING MODEL: ALPHAFOLD` di una struttura
+  risolta per sostituzione molecolare): i B-factor di una struttura sperimentale o di un modello MODELLER non vanno
+  mai presi per pLDDT. Un file di AlphaFold caricato dall'utente diventa `predicted` con lo stesso criterio. I
+  metadati registrati prima di questi campi (senza `predicted`) si completano alla prima lettura (`_meta`: elenco,
+  dettaglio e `is_predicted` passano di lì) con `predicted`, `plddt_mean` e `plddt_fractions`, e si riscrivono: la
+  libreria e l'interfaccia (badge, opzione della soglia pLDDT) vedono quello che vede la modellazione.
 - **Motore `alphafold`** (`engines/search.py`): AlphaFold DB non ha una ricerca per sequenza.
   - Con l'accessione (`uniprot` di `/api/search`, precompilato dall'interfaccia per le sequenze importate da UniProt;
-    nella pipeline dall'intestazione FASTA `sp|ACC|NOME`) si usano i modelli di quell'accessione.
+    nella pipeline dall'intestazione FASTA `sp|ACC|NOME` o `tr|ACC|NOME`) si usano i modelli di quell'accessione.
+    Nella pagina Ricerca l'accessione precompilata segue la sequenza da cui viene: incollando o caricando un'altra
+    sequenza si toglie, a meno che l'utente non l'abbia scritta a mano; un FASTA incollato con l'intestazione di
+    UniProt la precompila. Nella Pipeline «Usa le sequenze del progetto» scrive `sp|ACC|NOME` (`tr|` per le voci non
+    revisionate) per le sequenze importate da UniProt, così non passano da NCBI.
   - Senza, NCBI QBlast su `swissprot` (`ncbi_blast(database="swissprot")`); le accessioni vengono da `sp|P0CG48.1|…`
     o dall'accessione NCBI con versione (`P0CG48.1`), nell'ordine di BLAST e senza ripetizioni, e si prendono i
     modelli delle prime 10.
@@ -479,8 +507,13 @@ riferimento. È sempre segnato come **modello predetto, non struttura sperimenta
     motori. E-value di BLAST se l'accessione viene da lì, altrimenti Karlin-Altschul sul solo confronto a coppie
     (indicativo). Hit con `source: "alphafold"`, `predicted`, `plddt`, `template_id = pdb_id = AF-<ACC>-F<n>`, catena A.
   - Cache dei calcoli con il TTL dei motori remoti (7 giorni); l'accessione entra nella chiave solo per questo
-    motore (le chiavi degli altri non cambiano). Un 404 di AlphaFold DB è un esito; un errore di EBI rende il
-    risultato parziale e non va in cache.
+    motore (le chiavi degli altri non cambiano).
+  - Esiti: con l'accessione indicata il candidato è uno solo, quindi nessun modello (404, `alphafold_not_found`) o
+    EBI non disponibile fanno fallire il job con il messaggio di AlphaFold DB, invece di "0 template trovati". Senza
+    accessione una proteina senza modello si salta (esito definitivo); EBI non disponibile per alcune proteine rende
+    il risultato parziale (niente cache), per tutte fa fallire il job come gli errori di RCSB e NCBI. Il risultato
+    ha `notes` (proteine senza modello, proteine senza risposta) che la pagina Ricerca mostra, anche al posto del
+    suggerimento sull'E-value quando non ci sono modelli; nella pipeline finiscono nell'errore dell'elemento.
   - Nella pipeline (`template_mode: auto`) funziona come gli altri: il modello scelto si scarica nella libreria
     prima della modellazione (`_prepare_templates` scarica da RCSB i codici di 4 caratteri e da AlphaFold DB gli id
     `AF-…`).
@@ -490,14 +523,24 @@ riferimento. È sempre segnato come **modello predetto, non struttura sperimenta
   inferiore compreso: ≥ 90 molto alta, 70–90 confidente, 50–70 bassa, < 50 molto bassa (spesso disordine). Sotto 70
   lo scheletro non è affidabile e, come template, trasferirebbe vincoli su conformazioni non predette con confidenza.
   - Si tolgono i residui con pLDDT < soglia; il template preparato, la sua sequenza e primo/ultimo residuo sono
-    quelli ritagliati, con i record descrittivi di AlphaFold e una riga `REMARK 999 BIOLOOM PLDDT_TRIM`.
+    quelli ritagliati, con i record descrittivi di AlphaFold (o un TITLE "ALPHAFOLD … PREDICTION" se il file non li
+    ha, come un mmCIF) e una riga `REMARK 999 BIOLOOM PLDDT_TRIM`: la copia resta riconoscibile come modello
+    AlphaFold qualunque sia il nome. La copia di una struttura non AlphaFold conserva invece il suo EXPDTA (o lo
+    riceve dal `_exptl.method` del mmCIF), così i suoi B-factor non passano per pLDDT.
+  - **Frammenti isolati** (`plddt.MIN_FRAGMENT = 5`): dopo la soglia si tolgono anche i tratti sopra soglia più
+    corti di 5 residui contigui (nel file e nella numerazione) accanto ad almeno un residuo tolto. Cinque residui sono
+    il minimo per un giro d'elica α con il legame i→i+4; il pLDDT misura solo la confidenza locale, e la posizione di
+    un tratto più corto in mezzo a regioni disordinate (che dice il PAE, non il pLDDT) darebbe a MODELLER
+    restrizioni da un punto arbitrario. Un tratto corto delimitato solo dalle estremità della catena resta. Il
+    risultato separa i conteggi (`removed_threshold`, `removed_fragments`, `min_fragment`; `removed` è il totale).
   - Minimo 30 residui rimasti (`plddt_too_few`): circa la dimensione dei più piccoli domini che si ripiegano da soli
     (HP35 della villina, dominio WW, zinc finger C2H2); sotto, il template è un frammento e align2d non è affidabile.
   - **Allineamento automatico**: MODELLER legge il template ritagliato, quindi i residui tolti sono gap del template.
   - **PIR dell'utente** (`_normalize_pir`): una riga scritta sul modello completo viene riportata sul ritaglio (residui
     tolti → gap, intervallo al primo/ultimo residuo rimasto, colonne di soli gap eliminate); una riga già ritagliata
     resta com'è; una riga diversa da entrambe è un errore chiaro. `align2d` (Editor PIR) allinea sul modello intero.
-  - Log ("rimossi 11 residui con pLDDT < 70 (1–5:A, 71–76:A), restano 65 di 76"), risultato (`templates[].plddt`,
+  - Log ("rimossi 11 residui con pLDDT < 70 (1–5:A, 71–76:A), restano 65 di 76", con "… e 4 in frammenti isolati
+    di meno di 5 residui" se ce ne sono), risultato (`templates[].plddt`,
     `plddt_removed`, avviso "modello predetto"), `REMARK 999 BIOLOOM TEMPLATE … ALPHAFOLD PLDDT<70 REMOVED 11` nel
     modello e, nella pipeline, `template_predicted`/`plddt_removed` nelle metriche dell'elemento.
   - Le strutture sperimentali non si ritagliano mai.
@@ -565,8 +608,13 @@ Il client API (`api/client.ts`) e i tipi (`api/types.ts`) sono l'unico punto di 
   mouse mostra residuo e valore (`setHoverable`). `centerKey` centra la vista sui residui evidenziati.
 - **Logica pura con test:**
   - `lib/colorscale.ts`: scale continue con salti netti alle soglie, a fasce, categoriali; legende;
-  - `lib/residueColoring.ts`: conversione del rapporto nelle opzioni "Colora per", compresa la scala pLDDT di
-    AlphaFold DB (> 90 #0053D6, 70–90 #65CBF3, 50–70 #FFDB13, ≤ 50 #FF7D45, come il tema pLDDT di Mol\*);
+  - `lib/residueColoring.ts`: conversione del rapporto nelle opzioni "Colora per", compresa la scala pLDDT con i
+    colori di AlphaFold DB (#0053D6, #65CBF3, #FFDB13, #FF7D45, come il tema pLDDT di Mol\*) sulle fasce di
+    `plddtBand`, con il limite inferiore compreso come il backend e il ritaglio: ≥ 90 molto alta, 70–90 confidente,
+    50–70 bassa, < 50 molto bassa (un residuo a 70,00 resta nel template ed è "confidente" anche nel 3D);
+  - `lib/qualityReport.ts`: residui problematici (outlier, clash o almeno 2 metodi del consenso), la stessa regola
+    per il filtro della tabella e per "Evidenzia tutti i residui problematici" nel 3D; struttura del rapporto
+    mostrato (quella del job o del rapporto salvato, mai la scelta del selettore, che vale per la prossima analisi);
   - `lib/alignConfidence.ts`.
 - **Selezione bidirezionale (pagina Qualità):**
   - un clic su grafici, tabelle, clash o regioni del consenso evidenzia e centra nel 3D;
@@ -626,7 +674,7 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 
 ## Test
 
-- **`backend/tests` (pytest), circa 160 test,** eseguiti sia nativamente sia nel container:
+- **`backend/tests` (pytest), circa 310 test,** eseguiti sia nativamente sia nel container:
   - dominio, job manager, API, generazione script, MODELLER end-to-end;
   - ripresa dei job e delle pipeline (`test_jobs.py`, `test_pipeline_resume.py`): solo gli elementi non
     conclusi, riavvio simulato, ambito "solo i falliti", pipeline completate con falliti, file vecchi eliminati,
@@ -644,17 +692,22 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     - segnali per residuo, regioni con tolleranza, confini di catena e numerazione;
     - QMEAN e ProSA per residuo;
     - 1UBQ con le uscite reali di MODELLER (`dope_1ubq.profile`), PROCHECK e ProSA;
-    - rotta con QMEAN simulato (stessa struttura, altra struttura, job non QMEAN o non completato) e modelli
-      MODELLER simulati;
-    - riconoscimento del pLDDT (intestazione AlphaFold sintetica, nome di AlphaFold DB, file normale, valori fuori
-      scala);
+    - rotta con QMEAN simulato (stessa struttura, altra struttura, template sostituito con lo stesso id, job non
+      QMEAN o non completato) e modelli MODELLER simulati;
+    - riconoscimento del pLDDT (intestazione AlphaFold sintetica, ModelCIF, nome di AlphaFold DB, file normale,
+      valori fuori scala; strutture sperimentali con `REMARK 200 STARTING MODEL: ALPHAFOLD` o
+      `_pdbx_initial_refinement_model` AlphaFold, modello MODELLER con un nome `AF-…`) e stesso esito per libreria,
+      rapporto di qualità e copia preparata del template sugli stessi file;
   - AlphaFold DB (`test_alphafold.py`, EBI simulato con `httpx.MockTransport`, NCBI con monkeypatch): parser della
     risposta (campi mancanti, più voci e frammenti, versioni, URL estranei), 404, accessioni non valide senza
     richieste, cache e nuovi tentativi, download PDB/mmCIF, libreria (id, meta, record originali, frammenti, file
-    caricati), motore con accessione e con BLAST simulato (estrazione delle accessioni, identità 96,1% e copertura
-    su 1UBQ contro l'ubiquitina di lievito), cache dei calcoli, `best_template` a parità, ritaglio per pLDDT su 1UBQ
-    con B-factor riscritti (11 residui tolti, soglia esclusa, minimo 30), PIR riportato sul ritaglio, pipeline e,
-    con MODELLER, modellazione e pipeline con template ritagliato;
+    caricati, metadati precedenti completati alla prima lettura), annullamento durante i tentativi del download e
+    durante l'attesa dello stesso modello, motore con accessione e con BLAST simulato (estrazione delle accessioni,
+    identità 96,1% e copertura su 1UBQ contro l'ubiquitina di lievito; accessione senza modello o EBI non
+    disponibile = job fallito con il motivo, risultati parziali con le note e senza cache), cache dei calcoli,
+    `best_template` a parità, ritaglio per pLDDT su 1UBQ con B-factor riscritti (11 residui tolti, soglia compresa,
+    minimo 30, frammenti isolati di 1 e 3 residui tolti e di 6 tenuti), PIR riportato sul ritaglio, pipeline
+    (accessioni da `sp|` e `tr|`) e, con MODELLER, modellazione e pipeline con template ritagliato;
   - cache dei calcoli (`test_compute_cache.py`): riscontri senza rieseguire i motori (simulati), invalidazione per
     parametri, sequenza, timbro del database o dello strumento, scadenza, file corrotti, job falliti e annullati,
     riuso nella pipeline e scritture concorrenti;
@@ -663,7 +716,9 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     con TestClient (stato, log contiguo, fine, offset, 404, ripresa), limite dei flussi, flusso dell'elenco (job,
     elementi di pipeline, filtro per progetto, eliminazioni, heartbeat), chiusura all'arresto, accesso con chiave
     (401 senza cookie, 200 con cookie o Bearer); con un server uvicorn vero: eventi mentre il job è fermo,
-    chiusura dopo `end`, posto liberato alla disconnessione del client, arresto non bloccato dai flussi aperti;
+    chiusura dopo `end`, posto liberato alla disconnessione del client, arresto non bloccato dai flussi aperti.
+    I test aspettano le condizioni, non tempi fissi: un flusso in attesa di notifiche (`ChangeFeed.waiting`) ha
+    già inviato tutto ciò che era stato pubblicato prima;
   - verifica dell'installazione.
 
   `pytest -m network` prova i servizi reali. Oltre a 1UBQ, `tests/data` contiene strutture sintetiche generate
@@ -675,13 +730,17 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - pulsanti di ripresa delle pipeline e ricarica del job quando cambia stato, dopo l'annullamento e dopo la
     ripresa;
   - tempo residuo leggibile (`fmtEta`); scelta fra flusso e polling, riconnessione con backoff, timeout di
-    connessione, fine del flusso, flusso condiviso dell'elenco, ricomposizione del log e aggiornamento degli elenchi
-    (`live.test.ts`, con flussi e timer finti);
+    connessione, fine del flusso, flusso condiviso dell'elenco, ricomposizione del log (anche con polling e flusso
+    sovrapposti) e aggiornamento degli elenchi, anche dopo una ricarica lenta (`live.test.ts`, con flussi e timer
+    finti);
   - decodifica dei file, chiave MODELLER da file, vincoli da e verso file;
-  - scale di colore e legende (`colorscale.test.ts`), conversione del rapporto nei valori per residuo, pLDDT
-    compreso (`residueColoring.test.ts`), confidenza degli allineamenti (`alignConfidence.test.ts`).
-  - AlphaFold (`alphafold.test.ts`): accessioni e id `AF-…`, fasce di pLDDT, quando mostrare la soglia, riepilogo del
-    ritaglio.
+  - scale di colore e legende (`colorscale.test.ts`, fasce con limite escluso o compreso), conversione del rapporto
+    nei valori per residuo, pLDDT compreso con le fasce del backend (`residueColoring.test.ts`), residui
+    problematici e struttura del rapporto mostrato (`qualityReport.test.ts`), confidenza degli allineamenti
+    (`alignConfidence.test.ts`).
+  - AlphaFold (`alphafold.test.ts`): accessioni e id `AF-…`, accessione precompilata che segue la sequenza,
+    intestazioni `sp|`/`tr|` della pipeline, fasce di pLDDT, quando mostrare la soglia, riepilogo del ritaglio
+    (anche con i frammenti isolati).
 - **Esecuzione:** `scripts/test.sh` (ruff, pytest nell'immagine con MODELLER reale, typecheck e vitest). La CI
   (`.github/workflows/ci.yml`) esegue gli stessi controlli: test rapidi senza strumenti esterni, frontend, e
   immagine completa con i test al suo interno.

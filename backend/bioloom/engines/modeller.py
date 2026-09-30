@@ -78,10 +78,12 @@ def modeller_python(ctx: JobContext) -> str:
 def prepare_template(source: Path, spec: TemplateSpec, dest_dir: Path) -> dict:
     """Converte il template in PDB pulito (catene scelte, ligandi opzionali, MSE→MET) nella cartella del job.
 
-    Con `spec.plddt_min` (template AlphaFold) toglie i residui con pLDDT sotto la soglia: il template preparato,
-    la sua sequenza e il primo/ultimo residuo sono quelli ritagliati, e il risultato riporta in `plddt` quanti residui
-    sono stati tolti e dove. `_residues` (chiave interna, da non salvare nei risultati) elenca i residui del template
-    completo con l'esito, per riportare sul ritaglio un PIR scritto sul template completo.
+    Con `spec.plddt_min` (template AlphaFold) toglie i residui con pLDDT sotto la soglia e i frammenti isolati che
+    ne restano (`plddt.low_confidence`): il template preparato, la sua sequenza e il primo/ultimo residuo sono quelli
+    ritagliati, e il risultato riporta in `plddt` quanti residui sono stati tolti (per soglia e per frammento) e dove.
+    `_residues` (chiave interna, da non salvare nei risultati) elenca i residui del template completo con l'esito,
+    per riportare sul ritaglio un PIR scritto sul template completo. La copia resta riconoscibile come il file
+    d'origine (`_provenance_header`): modello AlphaFold oppure struttura con il suo metodo (EXPDTA).
     """
     st = structure.load_structure(source, spec.id)
     model = structure.first_model(st)
@@ -111,11 +113,12 @@ def prepare_template(source: Path, spec: TemplateSpec, dest_dir: Path) -> dict:
                 "modellazione, oppure cerca un altro template.", code="plddt_too_few")
     structure.write_pdb(st, dest, chains=chains, keep_hetero=spec.hetatm, keep_water=False, exclude=removed or None)
     _convert_selenomethionine(dest)
-    header = _alphafold_header(source)
-    if header:  # provenienza AlphaFold riconoscibile anche nella copia del job (i B-factor restano pLDDT)
-        if trim is not None:
+    header, predicted = _provenance_header(source, model, spec.id)
+    if header:  # provenienza riconoscibile anche nella copia del job (per AlphaFold i B-factor restano pLDDT)
+        if trim is not None and predicted:
             header.append(f"REMARK 999 BIOLOOM PLDDT_TRIM THRESHOLD {float(spec.plddt_min):g} "
-                          f"REMOVED {len(removed)} OF {len(trim['rows'])}")
+                          f"REMOVED {len(removed)} OF {len(trim['rows'])}"
+                          + (f" FRAGMENTS {trim['fragments']}" if trim["fragments"] else ""))
         body = dest.read_text(encoding="utf-8")
         atomic_write_text(dest, "\n".join(line.ljust(80) for line in header) + "\n" + body)
     if removed:
@@ -138,6 +141,8 @@ def prepare_template(source: Path, spec: TemplateSpec, dest_dir: Path) -> dict:
         kept_values = [row[4] for row in trim["rows"] if row[5]]
         info["plddt"] = {
             "threshold": float(spec.plddt_min), "total": len(values), "removed": len(removed),
+            "removed_threshold": trim["below"], "removed_fragments": trim["fragments"],
+            "min_fragment": plddt.MIN_FRAGMENT,
             "kept": len(kept_values), "mean_before": plddt.summarize(values)["mean"],
             "mean_after": plddt.summarize(kept_values)["mean"], "removed_ranges": plddt.removed_ranges(trim["rows"]),
         }
@@ -148,20 +153,33 @@ def prepare_template(source: Path, spec: TemplateSpec, dest_dir: Path) -> dict:
 _HEADER_RECORDS = ("HEADER", "TITLE ", "COMPND", "SOURCE", "KEYWDS", "EXPDTA", "AUTHOR", "REMARK")
 
 
-def _alphafold_header(source: Path) -> list[str]:
-    """Record descrittivi (HEADER, TITLE, COMPND, SOURCE, REMARK...) di un PDB di AlphaFold, altrimenti []."""
-    if source.suffix.lower() not in (".pdb", ".ent"):
-        return []
+def _provenance_header(source: Path, model, template_id: str) -> tuple[list[str], bool]:
+    """Intestazione della copia preparata e se il template è un modello AlphaFold (`plddt.is_alphafold_model`).
+
+    La copia ha un altro nome e perde l'intestazione: riceve i record che la fanno riconoscere come il file d'origine.
+    - Template AlphaFold: record descrittivi del PDB originale (HEADER, TITLE, COMPND, SOURCE, REMARK...) e, se non
+      bastano (mmCIF, file riconosciuto dal nome), un TITLE "ALPHAFOLD … PREDICTION".
+    - Altre strutture: il metodo dichiarato (EXPDTA del PDB, `_exptl.method` del mmCIF), così i B-factor di una
+      struttura sperimentale o di un modello MODELLER non passano per pLDDT anche se l'id somiglia a quelli di
+      AlphaFold DB.
+    """
     head = structure.read_text_head(source, 200_000)
-    if not plddt.is_alphafold_text(head):
-        return []
-    lines = []
-    for line in head.splitlines():
-        if line.startswith(("ATOM", "HETATM", "MODEL", "SEQRES", "DBREF", "CRYST1")):
-            break
-        if line.startswith(_HEADER_RECORDS) and not line.startswith(("REMARK 465", "REMARK 470")):
-            lines.append(line.rstrip())
-    return lines
+    is_pdb = source.suffix.lower() in (".pdb", ".ent")
+    records = []
+    if is_pdb:
+        for line in head.splitlines():
+            if line.startswith(("ATOM", "HETATM", "MODEL", "SEQRES", "DBREF", "CRYST1")):
+                break
+            if line.startswith(_HEADER_RECORDS) and not line.startswith(("REMARK 465", "REMARK 470")):
+                records.append(line.rstrip())
+    if not plddt.is_alphafold_model(source.name, head, plddt.atom_values(model)):
+        if is_pdb:
+            return [line for line in records if line.startswith("EXPDTA")], False
+        method = structure.parse_cif_header(source).get("method") if "_exptl.method" in head else ""
+        return ([f"EXPDTA    {method.upper()}"[:80]] if method else []), False
+    if not plddt.is_alphafold_text("\n".join(records)):
+        records.insert(0, f"TITLE     ALPHAFOLD PREDICTION, TEMPLATE {template_id} PREPARED BY BIOLOOM"[:80])
+    return records, True
 
 
 def _convert_selenomethionine(path: Path) -> None:

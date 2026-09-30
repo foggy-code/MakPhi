@@ -7,6 +7,7 @@ from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 from typing import Optional
 
+from ..core import cache
 from ..core.errors import AppError, Conflict, NotFound
 from ..core.jobs import JobCancelled, JobContext, JobManager
 from ..core.storage import atomic_write_json, atomic_write_text, read_json, safe_join
@@ -39,6 +40,17 @@ def _template_specs(raw: list[dict]) -> list[TemplateSpec]:
             raise AppError("Template senza identificativo.")
         specs.append(TemplateSpec(id=tid, chains=chains, hetatm=bool(t.get("hetatm", False))))
     return specs
+
+
+def _removed_text(trim: dict) -> str:
+    """"11 residui con pLDDT < 70", con i frammenti isolati se ce ne sono ("… e 3 in frammenti isolati di meno di 5
+    residui")."""
+    below = trim.get("removed_threshold", trim["removed"])
+    fragments = trim.get("removed_fragments") or 0
+    text = f"{below} {'residuo' if below == 1 else 'residui'} con pLDDT < {trim['threshold']:g}"
+    if fragments:
+        text += f" e {fragments} in frammenti isolati di meno di {trim.get('min_fragment', 5)} residui"
+    return text
 
 
 def _apply_plddt_trim(entry: sequences.PirEntry, fields: list[str], t: dict) -> None:
@@ -207,7 +219,8 @@ class ComputeService:
                     self.library.fetch(spec.id)
                 elif auto_fetch and remote.parse_alphafold_id(spec.id):
                     ctx.log(f"Template {spec.id} non in libreria: download da AlphaFold DB (EBI)")
-                    self.library.fetch_alphafold(spec.id)
+                    # annullabile anche durante i tentativi e l'attesa di un altro elemento che lo sta scaricando
+                    self.library.fetch_alphafold(spec.id, check=ctx.check, log=ctx.log)
                 else:
                     raise AppError(f"Template {spec.id} non presente nella libreria.")
             predicted = self.library.is_predicted(spec.id)
@@ -222,8 +235,8 @@ class ComputeService:
                     ctx.log(f"Template {info['code']}: modello predetto (AlphaFold), usato senza ritaglio pLDDT")
                 else:
                     where = ", ".join(f"{a}–{b}:{c}" if a != b else f"{a}:{c}" for a, b, c in trim["removed_ranges"])
-                    ctx.log(f"Template {info['code']}: modello predetto (AlphaFold), rimossi {trim['removed']} "
-                            f"residui con pLDDT < {trim['threshold']:g}" + (f" ({where})" if where else "")
+                    ctx.log(f"Template {info['code']}: modello predetto (AlphaFold), rimossi {_removed_text(trim)}"
+                            + (f" ({where})" if where else "")
                             + f", restano {trim['kept']} di {trim['total']}; pLDDT medio {trim['mean_before']} → "
                               f"{trim['mean_after']}")
             prepared.append(info)
@@ -248,8 +261,8 @@ class ComputeService:
             if trim is None:
                 text += "; nessun ritaglio dei residui a basso pLDDT."
             elif trim["removed"]:
-                text += (f"; rimossi {trim['removed']} residui con pLDDT < {trim['threshold']:g} "
-                         f"(restano {trim['kept']} di {trim['total']}), costruiti senza vincoli dal template.")
+                text += (f"; rimossi {_removed_text(trim)} (restano {trim['kept']} di {trim['total']}), "
+                         "costruiti senza vincoli dal template.")
             else:
                 text += f"; tutti i residui hanno pLDDT ≥ {trim['threshold']:g}."
             notes.append(text)
@@ -427,9 +440,11 @@ class ComputeService:
     # ------------------------------------------------------------------------------ qualità
     def handle_quality(self, ctx: JobContext, p: dict) -> dict:
         path, label = self.resolve_structure(p.get("source", {}))
+        # impronta del file analizzato: un template sostituito dopo l'analisi ha lo stesso id ma un altro contenuto
+        fingerprint = cache.content_hash(path)
         report = quality.analyze(path, ctx, with_dope=bool(p.get("dope", True)),
                                  with_procheck=bool(p.get("procheck", True)), with_prosa=bool(p.get("prosa", True)))
-        return {"source": p.get("source"), "label": label, **report}
+        return {"source": p.get("source"), "label": label, "source_sha256": fingerprint, **report}
 
     def handle_qmean(self, ctx: JobContext, p: dict) -> dict:
         """QMEAN locale (UniClust30/UniRef30 sul disco esterno) oppure SWISS-MODEL, secondo le Impostazioni.
@@ -441,6 +456,7 @@ class ComputeService:
         path, label = self.resolve_structure(p.get("source", {}))
         from ..domain import structure as st_mod
 
+        fingerprint = cache.content_hash(path)  # confrontata dal consenso con quella dell'analisi di qualità
         pdb_text = st_mod.pdb_text(st_mod.load_structure(path, label))
         mode = p.get("mode") or settings.qmean_mode
         if mode == "auto":  # richieste della versione precedente
@@ -485,7 +501,7 @@ class ComputeService:
                 except AppError as remote_exc:
                     raise AppError(f"QMEAN locale: {reason.rstrip('.')}. Fallback su SWISS-MODEL non riuscito: "
                                    f"{remote_exc.message}", code=remote_exc.code) from remote_exc
-        return {"source": p.get("source"), "label": label, **result}
+        return {"source": p.get("source"), "label": label, **result, "source_sha256": fingerprint}
 
     # ------------------------------------------------------------------------------ consenso
     def consensus(self, job_id: str, model: Optional[str] = None, qmean_job: Optional[str] = None) -> dict:
@@ -518,7 +534,7 @@ class ComputeService:
             source = (job.get("params") or {}).get("source")
             source = source if isinstance(source, dict) else {}
         modeller_metrics = self._modeller_metrics(source) if source.get("type") == "job" else None
-        qmean = self._qmean_result(qmean_job, source) if qmean_job else None
+        qmean = self._qmean_result(qmean_job, source, report.get("source_sha256")) if qmean_job else None
         result = consensus.compute(report, qmean=qmean, modeller=modeller_metrics)
         result["inputs"] = {
             "source": source, "modeller": modeller_metrics,
@@ -551,7 +567,13 @@ class ComputeService:
                 return {"ga341": entry.get("ga341"), "zdope": entry.get("zdope")}
         return None
 
-    def _qmean_result(self, qmean_job: str, source: dict) -> dict:
+    def _qmean_result(self, qmean_job: str, source: dict, fingerprint: Optional[str] = None) -> dict:
+        """Risultato di un job QMEAN completato sulla stessa struttura del rapporto.
+
+        Stessa struttura: stessa sorgente (`source_key`) e, se entrambi i job hanno l'impronta del file analizzato
+        (`source_sha256`, dalla versione che la registra), lo stesso contenuto. Un template si sostituisce tenendo
+        l'id (caricamento di un altro file con lo stesso nome): senza impronte (job precedenti) resta il solo id.
+        """
         job = self.jobs.get(qmean_job)
         if job["kind"] != "qmean":
             raise AppError(f"Il job {qmean_job} non è un calcolo QMEAN.", code="qmean_job_invalid")
@@ -563,6 +585,11 @@ class ComputeService:
             raise AppError(f"Il calcolo QMEAN riguarda un'altra struttura ({describe_source(q_source)}, non "
                            f"{describe_source(source)}): i suoi punteggi non valgono per questo modello.",
                            code="qmean_source_mismatch")
+        q_fingerprint = job["result"].get("source_sha256")
+        if fingerprint and q_fingerprint and fingerprint != q_fingerprint:
+            raise AppError(f"Il file di {describe_source(source)} è cambiato tra l'analisi di qualità e il calcolo "
+                           "QMEAN (stesso nome, contenuto diverso): i punteggi QMEAN non valgono per la struttura "
+                           "analizzata. Ripeti l'analisi di qualità sul file attuale.", code="qmean_source_mismatch")
         return job["result"]
 
 

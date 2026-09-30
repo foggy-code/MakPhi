@@ -379,7 +379,13 @@ export interface AlphaFoldInfo {
 export interface PlddtTrim {
   threshold: number;
   total: number;
+  /** totale: sotto soglia + frammenti isolati */
   removed: number;
+  /** sotto soglia (assente nei risultati precedenti: = removed) */
+  removed_threshold?: number;
+  /** tratti sopra soglia più corti di `min_fragment` residui rimasti isolati tra residui tolti */
+  removed_fragments?: number;
+  min_fragment?: number;
   kept: number;
   mean_before: number | null;
   mean_after: number | null;
@@ -465,6 +471,8 @@ export interface SearchResult extends CacheInfo {
   best: string | null;
   /** motore alphafold: accessione UniProt usata (vuota = proteine trovate con NCBI BLAST su Swiss-Prot) */
   uniprot?: string;
+  /** motore alphafold: proteine senza modello, EBI non disponibile per alcune (risultato parziale) */
+  notes?: string[];
 }
 
 export interface AlignStats {
@@ -597,6 +605,8 @@ export interface ResidueRow {
 export interface QualityReport {
   source?: StructureSource;
   label?: string;
+  /** SHA-256 del file analizzato (job di qualità; assente nei rapporti dei modelli e in quelli precedenti) */
+  source_sha256?: string;
   structure: {
     file: string;
     title: string;

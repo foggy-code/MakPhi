@@ -335,8 +335,10 @@ class PipelineService:
                     self._update(job_id, idx, metrics=search_info)
                 best = search.best_template(result["hits"])
                 if best is None:
-                    self._update(job_id, idx, status="failed", stage="Nessun template",
-                                 error="Nessun template omologo trovato.", finished_at=now_iso())
+                    # motore AlphaFold: le note dicono perché (proteine senza modello, EBI non disponibile)
+                    error = " ".join(["Nessun template omologo trovato.", *(result.get("notes") or [])])
+                    self._update(job_id, idx, status="failed", stage="Nessun template", error=error[:2000],
+                                 finished_at=now_iso())
                     return None
                 tw = p.get("twilight") or {}
                 twilight = best["identity"] < float(tw.get("identity", 25)) or best["coverage"] < float(tw.get("coverage", 40))

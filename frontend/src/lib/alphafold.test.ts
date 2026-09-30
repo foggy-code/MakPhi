@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { PlddtTrim, TemplateItem } from "../api/types";
 import {
+  accessionFromName,
+  autoAccessionFor,
   clampThreshold,
+  followAccession,
   hasPredictedTemplate,
   isAlphaFoldId,
   isUniProtAccession,
+  pipelineFastaName,
   plddtBand,
   plddtLabel,
   plddtTone,
@@ -37,6 +41,48 @@ describe("accessioni UniProt e identificativi AlphaFold", () => {
     expect(sequenceAccession({ meta: { accession: "non valida" } })).toBe("");
     expect(sequenceAccession({ meta: {} })).toBe("");
     expect(sequenceAccession(null)).toBe("");
+  });
+  it("accessione dall'intestazione FASTA di UniProt", () => {
+    expect(accessionFromName("sp|P69905|HBA_HUMAN")).toBe("P69905");
+    expect(accessionFromName("tr|A0A0B4J2F0|X")).toBe("A0A0B4J2F0");
+    expect(accessionFromName("sp_P0CG48_UBC_HUMAN")).toBe("P0CG48");
+    expect(accessionFromName("HBA_HUMAN")).toBe("");
+    expect(accessionFromName("sp|ABCDEF|X")).toBe("");
+  });
+});
+
+describe("accessione della pagina Ricerca", () => {
+  const HBA = { name: "HBA_HUMAN", sequence: "MVLSPADKTN", meta: { accession: "P69905" } };
+  const auto = autoAccessionFor(HBA)!;
+  it("precompilata da una sequenza del progetto", () => {
+    expect(auto).toEqual({ accession: "P69905", sequence: "MVLSPADKTN" });
+    expect(autoAccessionFor({ sequence: "MK", meta: {} })).toBeNull();
+  });
+  it("si toglie quando la sequenza cambia (incollata o da file)", () => {
+    expect(followAccession("P69905", auto, { name: "altra", sequence: "MKTAYIAK" })).toEqual({ uniprot: "", auto: null });
+    // stessa sequenza (solo il nome cambia, o spazi e minuscole): resta
+    expect(followAccession("P69905", auto, { name: "HBA", sequence: "mvlsp adktn" })).toEqual({ uniprot: "P69905", auto });
+  });
+  it("un'accessione scritta a mano resta", () => {
+    expect(followAccession("Q12345", auto, { name: "altra", sequence: "MKTAYIAK" })).toEqual({ uniprot: "Q12345", auto: null });
+    expect(followAccession("Q12345", null, { name: "altra", sequence: "MKTAYIAK" })).toEqual({ uniprot: "Q12345", auto: null });
+    expect(followAccession("", null, { name: "altra", sequence: "MKTAYIAK" })).toEqual({ uniprot: "", auto: null });
+  });
+  it("un FASTA incollato con l'intestazione di UniProt la precompila", () => {
+    const next = followAccession("P69905", auto, { name: "sp|P0CG48|UBC_HUMAN", sequence: "MQIFVK" });
+    expect(next).toEqual({ uniprot: "P0CG48", auto: { accession: "P0CG48", sequence: "MQIFVK" } });
+    expect(followAccession("Q12345", null, { name: "sp|P0CG48|UBC_HUMAN", sequence: "MQIFVK" }).uniprot).toBe("Q12345");
+  });
+});
+
+describe("intestazioni della pipeline", () => {
+  it("sequenze importate da UniProt con sp|ACC|NOME (tr| se non revisionate)", () => {
+    expect(pipelineFastaName({ name: "HBA_HUMAN", meta: { accession: "P69905" } })).toBe("sp|P69905|HBA_HUMAN");
+    expect(pipelineFastaName({ name: "HBA_HUMAN", meta: { accession: "P69905", reviewed: true } })).toBe("sp|P69905|HBA_HUMAN");
+    expect(pipelineFastaName({ name: "X_HUMAN", meta: { accession: "A0A0B4J2F0", reviewed: false } })).toBe("tr|A0A0B4J2F0|X_HUMAN");
+    // senza accessione, o già con l'intestazione di UniProt: il nome resta
+    expect(pipelineFastaName({ name: "mia_proteina", meta: {} })).toBe("mia_proteina");
+    expect(pipelineFastaName({ name: "sp|P69905|HBA_HUMAN", meta: { accession: "P69905" } })).toBe("sp|P69905|HBA_HUMAN");
   });
 });
 
@@ -84,6 +130,9 @@ describe("riepilogo del ritaglio", () => {
     expect(trimSummary({ predicted: true, plddt: { ...trim, removed: 0, kept: 76 } })).toBe("nessun residuo con pLDDT < 70");
     expect(trimSummary({ predicted: true, plddt: null })).toBe("modello predetto, usato senza ritaglio pLDDT");
     expect(trimSummary({ predicted: false })).toBeNull();
+    // frammenti isolati tolti dopo la soglia
+    expect(trimSummary({ predicted: true, plddt: { ...trim, removed: 24, removed_threshold: 20, removed_fragments: 4, min_fragment: 5, kept: 52 } }))
+      .toBe("rimossi 20 residui con pLDDT < 70 e 4 in frammenti isolati (< 5 residui) (restano 52 di 76)");
     expect(removedRanges({ plddt: trim })).toBe("1–5:A, 71–76:A, 40:A");
     expect(removedRanges({})).toBe("");
   });

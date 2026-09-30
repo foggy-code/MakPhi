@@ -40,7 +40,7 @@ export default function Dashboard() {
         await api.addSequence(projectId, ex.name, ex.sequence, "esempio");
       } else if (ex.accession) {
         const entry = await api.uniprot(ex.accession);
-        await api.addSequence(projectId, entry.entry_name || ex.name, entry.sequence, "uniprot", { accession: entry.accession, protein: entry.protein_name });
+        await api.addSequence(projectId, entry.entry_name || ex.name, entry.sequence, "uniprot", { accession: entry.accession, reviewed: entry.reviewed, protein: entry.protein_name });
       }
       toast.push(`${ex.title} aggiunta al progetto`);
       reloadProjects();

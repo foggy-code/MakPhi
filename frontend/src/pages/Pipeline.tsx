@@ -10,7 +10,7 @@ import { TemplatePicker } from "../components/Pickers";
 import { PlddtOption } from "../components/PlddtOption";
 import { Viewer3D } from "../components/Viewer3D";
 import { Badge, BarCell, Card, Empty, Field, Grade, Modal, PageHead, Segmented, StatusBadge } from "../components/ui";
-import { hasPredictedTemplate, PLDDT_DEFAULT } from "../lib/alphafold";
+import { hasPredictedTemplate, pipelineFastaName, PLDDT_DEFAULT } from "../lib/alphafold";
 import { useProject, useToast } from "../lib/context";
 import { fmtDate, fmtEvalue, fmtNum, isActive, relTime, searchCacheHitsLabel, STATUS_LABEL } from "../lib/format";
 import { recordsToFasta } from "../lib/files";
@@ -233,7 +233,7 @@ export default function Pipeline() {
               </Field>
               <div className="row">
                 {!!projectSeqs?.length && (
-                  <button className="btn btn-sm" onClick={() => setFasta(projectSeqs.map((s) => `>${s.name}\n${s.sequence}`).join("\n"))}><Icon name="dna" size={14} /> Usa le sequenze del progetto ({projectSeqs.length})</button>
+                  <button className="btn btn-sm" title="Le sequenze importate da UniProt ricevono l'intestazione sp|ACC|NOME: con AlphaFold DB si usa l'accessione, senza passare da NCBI" onClick={() => setFasta(projectSeqs.map((s) => `>${pipelineFastaName(s)}\n${s.sequence}`).join("\n"))}><Icon name="dna" size={14} /> Usa le sequenze del progetto ({projectSeqs.length})</button>
                 )}
                 <SequenceFileButton onLoaded={(parsed) => setFasta(recordsToFasta(parsed.records))}>Carica da file</SequenceFileButton>
                 <span className="tiny muted">multi-FASTA, GenBank, UniProt… (anche .gz)</span>
@@ -262,7 +262,7 @@ export default function Pipeline() {
                   {engine === "alphafold" && (
                     <span className="tiny muted">
                       Modelli predetti di AlphaFold DB, non strutture sperimentali. Per ogni sequenza si usa l'accessione dell'intestazione FASTA di UniProt
-                      (<span className="mono">&gt;sp|P69905|HBA_HUMAN</span>); altrimenti NCBI BLAST su Swiss-Prot trova le proteine più simili (1–5 min per sequenza).
+                      (<span className="mono">&gt;sp|P69905|HBA_HUMAN</span>, aggiunta da «Usa le sequenze del progetto» per quelle importate da UniProt); altrimenti NCBI BLAST su Swiss-Prot trova le proteine più simili (1–5 min per sequenza).
                       Le accessioni vanno a EBI, le sequenze senza accessione a NCBI.
                     </span>
                   )}
