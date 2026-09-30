@@ -15,11 +15,12 @@ from typing import Callable, Optional
 
 from ..core.errors import AppError, NotFound, RemoteServiceError
 from ..core.storage import atomic_write_bytes, atomic_write_json, atomic_write_text, read_json, safe_join
-from ..domain import plddt, secondary, structure
+from ..domain import ligands, plddt, secondary, structure
 from ..engines import remote
 
 EXTENSIONS = {".pdb": "pdb", ".ent": "pdb", ".cif": "cif", ".mmcif": "cif"}
-ANALYSIS_VERSION = 2
+# 3: ligandi con la classificazione di domain/ligands (le analisi in cache delle versioni precedenti si ricalcolano)
+ANALYSIS_VERSION = 3
 SOURCE_ALPHAFOLD = "alphafold"
 PREDICTED_NOTE = "modello predetto, non struttura sperimentale"
 PREDICTED_METHOD = "Modello predetto (AlphaFold)"
@@ -269,7 +270,8 @@ class TemplateLibrary:
         return self.path(template_id).read_text(encoding="utf-8", errors="replace")
 
     def analyze(self, template_id: str) -> dict:
-        """Catene, sequenze, residui mancanti, ligandi e struttura secondaria (in cache per file)."""
+        """Catene, sequenze, residui mancanti, ligandi (classificati: metallo, cofattore, additivo, residuo
+        modificato, altro ligando) e struttura secondaria (in cache per file)."""
         tid = normalize_id(template_id)
         path = self.path(tid)
         cache_path = self._analysis_path(tid)
@@ -293,7 +295,8 @@ class TemplateLibrary:
             chain["missing"] = sum(1 for m in header["missing_residues"] if m["chain"] == chain["chain"])
         data = {
             "id": tid, "format": path.suffix.lstrip(".").lower(), "header": header, "chains": chains,
-            "ligands": structure.hetero_groups(model), "stats": structure.structure_stats(model),
+            # gruppi eteroatomici candidati al trasferimento nella modellazione, con classe e scelta predefinita
+            "ligands": ligands.candidates(model), "stats": structure.structure_stats(model),
             "models": len(st),
         }
         atomic_write_json(cache_path, {"mtime": mtime, "version": ANALYSIS_VERSION, "data": data})

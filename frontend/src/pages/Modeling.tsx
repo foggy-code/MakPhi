@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { DocumentItem, JobSummary, LoopResult, ModelEntry, ModelResult, PreparedTemplate, Sequence, StructureSource, SystemInfo, TemplateItem, TemplateRef } from "../api/types";
+import type { DocumentItem, JobSummary, LigandRef, LoopResult, ModelEntry, ModelResult, PreparedTemplate, Sequence, StructureSource, SystemInfo, TemplateItem, TemplateRef } from "../api/types";
+import { LigandPicker } from "../components/LigandPicker";
+import { LigandTable } from "../components/LigandsPanel";
+import { groupTitle, STATUS_TONE } from "../lib/ligands";
 import { AlignmentView } from "../components/AlignmentView";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
@@ -70,7 +73,10 @@ function ModelsTable({ jobId, models, selected, onSelect, templates, viewer }: {
               <td className="num">{fmtNum(m.zdope, 2)}</td>
               <td className="num">{fmtNum(m.ga341, 2)}</td>
               <td className="num">{fmtNum(m.molpdf, 1)}</td>
-              <td>{m.quality ? <span className="row" style={{ gap: 6 }}><Grade grade={m.quality.grade} /> <span className="tiny muted">{fmtNum(m.quality.rama_favored)}% fav.</span></span> : <span className="tiny muted">—</span>}</td>
+              <td>
+                {m.quality ? <span className="row" style={{ gap: 6 }}><Grade grade={m.quality.grade} /> <span className="tiny muted">{fmtNum(m.quality.rama_favored)}% fav.</span></span> : <span className="tiny muted">—</span>}
+                {m.ligands && <Badge tone={STATUS_TONE[m.ligands.status]} title="Verifica dei ligandi trasferiti (contatti, scontri, coordinazione)">ligandi: {m.ligands.status}</Badge>}
+              </td>
               <td className="nowrap" onClick={(e) => e.stopPropagation()}>
                 <button className="btn btn-sm" disabled={!!m.failure} title="Analisi di qualità completa" onClick={() => navigate(`/quality?job=${jobId}&file=${encodeURIComponent(m.file)}`)}>
                   <Icon name="shield" size={13} />
@@ -178,6 +184,16 @@ function Results({ jobId, result, kind }: { jobId: string; result: ModelResult |
       >
         <ModelsTable jobId={jobId} models={result.models} selected={selected} onSelect={setSelected} templates={full?.templates} viewer={viewer} />
       </Card>
+      {full?.ligands && (
+        <Card title="Ligandi, cofattori e metalli trasferiti" sub="verifica del modello migliore; il dettaglio e la vista 3D sono nella pagina Qualità">
+          <div className="stack-sm">
+            <div className="small text-2">
+              Trasferiti: {full.ligands.transferred.length ? full.ligands.transferred.map((g) => `${groupTitle(g)} (${g.label}, da ${g.template})`).join(", ") : "nessuno"}
+            </div>
+            {full.ligands.verification ? <LigandTable report={full.ligands.verification} /> : <Alert tone="warn">Nessun gruppo eteroatomico nel modello migliore.</Alert>}
+          </div>
+        </Card>
+      )}
       <Card title={`Struttura 3D · ${selected}`} sub="Il report del modello selezionato include questa vista">
         <Viewer3D url={api.jobFileUrl(jobId, selected)} handle={viewer} />
       </Card>
@@ -223,6 +239,11 @@ export default function Modeling() {
   const [seed, setSeed] = useState(-8123);
   const [plddtTrim, setPlddtTrim] = useState(true);
   const [plddtMin, setPlddtMin] = useState(PLDDT_DEFAULT);
+  // ligandi, cofattori e metalli da trasferire (opzioni hetatm e ligands)
+  const [ligandsOn, setLigandsOn] = useState(false);
+  const [ligandSel, setLigandSel] = useState<Record<string, boolean>>({});
+  const [ligandRefs, setLigandRefs] = useState<LigandRef[]>([]);
+  const [ligandsReady, setLigandsReady] = useState(false);
   const [loopSource, setLoopSource] = useState<StructureSource | null>(null);
   const [loopOpen, setLoopOpen] = useState(false);
   const { data: info } = useAsync<SystemInfo>(() => api.systemInfo(), []);
@@ -282,12 +303,16 @@ export default function Modeling() {
         // solo per i template AlphaFold; le strutture sperimentali non si ritagliano mai
         plddt_trim: plddtTrim,
         plddt_min: plddtMin,
+        // ligandi: esattamente i gruppi scelti (un elenco vuoto = nessuno)
+        hetatm: ligandsOn,
+        ...(ligandsOn ? { ligands: ligandRefs } : {}),
       };
       const j = await api.model({
         project_id: projectId ?? undefined,
         target: mode === "auto" ? { name: target.name || "target", sequence: target.sequence } : null,
         alignment,
-        templates,
+        // la scelta dei ligandi è quella del riquadro Parametri, non la casella del singolo template
+        templates: templates.map((t) => ({ id: t.id, chains: t.chains })),
         options,
         quality,
         extended_quality: quality !== "none" && extended,
@@ -328,7 +353,8 @@ export default function Modeling() {
 
   const pirDocs = docs?.filter((d) => d.kind === "pir") ?? [];
   const modellerMissing = info && !info.modeller.available;
-  const canSubmit = templates.length > 0 && templates.every((t) => t.chains.length > 0) && (mode === "auto" ? !!target.sequence.trim() : !!docId);
+  const canSubmit = templates.length > 0 && templates.every((t) => t.chains.length > 0) && (mode === "auto" ? !!target.sequence.trim() : !!docId)
+    && (!ligandsOn || ligandsReady);
 
   return (
     <div className="page">
@@ -357,7 +383,7 @@ export default function Modeling() {
               )}
               <div className="stack-sm">
                 <span className="small text-2" style={{ fontWeight: 550 }}>Template {mode === "pir" && "(stessi del PIR, nello stesso ordine)"}</span>
-                <TemplatePicker value={templates} onChange={setTemplates} />
+                <TemplatePicker value={templates} onChange={setTemplates} ligands={false} />
               </div>
             </div>
           </Card>
@@ -380,6 +406,8 @@ export default function Modeling() {
                 <Segmented value={refinement} onChange={setRefinement} options={REFINEMENT.map((r) => ({ value: r.value, label: r.label }))} />
               </Field>
               {predictedChosen && <PlddtOption enabled={plddtTrim} threshold={plddtMin} onEnabled={setPlddtTrim} onThreshold={setPlddtMin} />}
+              <LigandPicker templates={templates} enabled={ligandsOn} onEnabled={setLigandsOn} selection={ligandSel}
+                onSelection={(sel, refs, ready) => { setLigandSel(sel); setLigandRefs(refs); setLigandsReady(ready); }} />
               <button className="btn btn-ghost btn-sm" style={{ justifySelf: "start" }} onClick={() => setAdvanced(!advanced)}>
                 <Icon name="chevron" size={13} /> Opzioni avanzate
               </button>
@@ -434,6 +462,7 @@ export default function Modeling() {
               )}
               <button className="btn btn-primary" disabled={!canSubmit || !!modellerMissing} onClick={submit}><Icon name="play" size={14} /> Avvia modellazione</button>
               {templates.some((t) => !t.chains.length) && <span className="tiny" style={{ color: "var(--warn)" }}>Seleziona almeno una catena per ogni template.</span>}
+              {ligandsOn && !ligandsReady && templates.length > 0 && <span className="tiny muted">Lettura dei ligandi dei template in corso…</span>}
             </div>
           </Card>
           <Card title="Raffinamento dei loop" sub="di un modello, un template o un file PDB/mmCIF">

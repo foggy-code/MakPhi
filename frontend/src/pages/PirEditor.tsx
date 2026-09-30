@@ -52,7 +52,7 @@ function GenerateDialog({ onClose, onDone }: { onClose: () => void; onDone: (pir
         <SequencePicker value={target} onChange={setTarget} />
         <div className="stack-sm">
           <span className="small text-2" style={{ fontWeight: 550 }}>Template</span>
-          <TemplatePicker value={templates} onChange={setTemplates} />
+          <TemplatePicker value={templates} onChange={setTemplates} ligands={false} />
           <p className="tiny muted">Con più template MODELLER li sovrappone strutturalmente (salign) e allinea il bersaglio sul profilo comune.</p>
         </div>
       </div>

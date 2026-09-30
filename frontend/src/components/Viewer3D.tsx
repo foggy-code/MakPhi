@@ -26,7 +26,23 @@ interface Props {
   centerKey?: number | string;
   /** accesso facoltativo alla vista corrente (immagine PNG per il report del modello) */
   handle?: Ref<Viewer3DHandle>;
+  /** segmenti tratteggiati fra coppie di punti (es. coordinazione metallo → donatore dei ligandi) */
+  lines?: ViewerLine[];
+  /** con `centerKey`: oltre a centrare, ingrandisce sui residui evidenziati (un sito di un ligando) */
+  centerZoom?: boolean;
 }
+
+/** Segmento tratteggiato disegnato sopra la struttura (coordinate in Å del file). */
+export interface ViewerLine {
+  start: [number, number, number];
+  end: [number, number, number];
+  color: string;
+  /** piccola sfera alla fine del segmento, per un atomo che il viewer non disegna (acqua) */
+  marker?: boolean;
+}
+
+// Ioni metallici (un atomo): a sfere, perché a bastoncini un atomo senza legami non si vedrebbe
+const METAL_ELEMENTS = new Set(["LI", "NA", "K", "RB", "CS", "MG", "CA", "SR", "BA", "AL", "GA", "V", "CR", "MN", "FE", "CO", "NI", "CU", "ZN", "MO", "W", "CD", "HG", "PT", "AU", "AG", "PB"]);
 
 /** Vista corrente del viewer, per chi la vuole incorporare (report del modello). */
 export interface Viewer3DHandle {
@@ -43,7 +59,7 @@ interface ViewerColors {
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-function applyStyle(viewer: any, scheme: Scheme, highlight: { chain: string; resi: number }[], colors: ViewerColors | null) {
+function applyStyle(viewer: any, scheme: Scheme, highlight: { chain: string; resi: number }[], colors: ViewerColors | null, lines: ViewerLine[] = []) {
   viewer.setStyle({}, {});
   let cartoon: any;
   if (colors) cartoon = { colorfunc: (atom: any) => colors.residues.get(atomKey(atom)) ?? colors.chains.get(atom.chain ?? "") ?? NO_VALUE_INT };
@@ -59,15 +75,26 @@ function applyStyle(viewer: any, scheme: Scheme, highlight: { chain: string; res
   }
   viewer.setStyle({ hetflag: false }, { cartoon });
   viewer.setStyle({ hetflag: true, not: { resn: ["HOH", "WAT"] } }, { stick: { colorscheme: "greenCarbon", radius: 0.22 } });
+  viewer.addStyle({ hetflag: true, predicate: (a: any) => METAL_ELEMENTS.has(String(a.elem ?? "").toUpperCase()) }, { sphere: { scale: 0.35 } });
   for (const h of highlight) {
     viewer.addStyle({ chain: h.chain, resi: h.resi }, { stick: { colorscheme: "orangeCarbon", radius: 0.25 } });
+  }
+  viewer.removeAllShapes?.();
+  for (const l of lines) {
+    viewer.addCylinder({
+      start: { x: l.start[0], y: l.start[1], z: l.start[2] }, end: { x: l.end[0], y: l.end[1], z: l.end[2] },
+      radius: 0.07, color: l.color, dashed: true, dashLength: 0.25, gapLength: 0.15, fromCap: 1, toCap: 1,
+    });
+    if (l.marker) viewer.addSphere({ center: { x: l.end[0], y: l.end[1], z: l.end[2] }, radius: 0.28, color: l.color });
   }
   viewer.render();
 }
 
-function centerOn(viewer: any, highlight: { chain: string; resi: number }[]) {
+function centerOn(viewer: any, highlight: { chain: string; resi: number }[], zoom = false) {
   if (!highlight.length) return;
-  viewer.center({ or: highlight.map((h) => ({ chain: h.chain, resi: h.resi })) }, 400);
+  const sel = { or: highlight.map((h) => ({ chain: h.chain, resi: h.resi })) };
+  if (zoom) viewer.zoomTo(sel, 400);
+  else viewer.center(sel, 400);
 }
 
 const residueOf = (atom: any): ResidueRef => ({ chain: atom.chain ?? "", resnum: `${atom.resi}${(atom.icode ?? "").trim()}` });
@@ -97,7 +124,7 @@ function ViewerLegend({ coloring }: { coloring: ResidueColoring }) {
 }
 
 /** Visualizzatore 3D (3Dmol.js caricato su richiesta, contesto WebGL rilasciato allo smontaggio). */
-export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highlight = [], format = "pdb", coloring = null, onPickResidue, centerKey, handle }: Props) {
+export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highlight = [], format = "pdb", coloring = null, onPickResidue, centerKey, handle, lines = [], centerZoom = false }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewer = useRef<any>(null);
   const [text, setText] = useState<string | null>(pdb ?? null);
@@ -114,8 +141,8 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
   }, [coloring]);
   const interactive = !!coloring || !!onPickResidue;
   // i callback di 3Dmol leggono sempre i valori correnti
-  const live = useRef({ scheme, highlight, colors, coloring, onPickResidue, centerKey, interactive });
-  live.current = { scheme, highlight, colors, coloring, onPickResidue, centerKey, interactive };
+  const live = useRef({ scheme, highlight, colors, coloring, onPickResidue, centerKey, interactive, lines, centerZoom });
+  live.current = { scheme, highlight, colors, coloring, onPickResidue, centerKey, interactive, lines, centerZoom };
 
   // Immagine per il report: solo con la struttura disegnata e nessun caricamento in corso (con un altro `url` il
   // viewer mostra ancora la struttura precedente finché il file nuovo non arriva) né errore.
@@ -184,10 +211,10 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
         const cur = live.current;
         v.clear();
         v.addModel(text, format === "cif" ? "cif" : "pdb");
-        applyStyle(v, cur.scheme, cur.highlight, cur.colors);
+        applyStyle(v, cur.scheme, cur.highlight, cur.colors, cur.lines);
         enablePicking(v);
         v.zoomTo();
-        if (cur.centerKey !== undefined) centerOn(v, cur.highlight);
+        if (cur.centerKey !== undefined) centerOn(v, cur.highlight, cur.centerZoom);
         v.render();
         shown.current = true;
       })
@@ -202,9 +229,9 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
   }, [text, format]);
 
   useEffect(() => {
-    if (viewer.current && text) applyStyle(viewer.current, scheme, highlight, colors);
+    if (viewer.current && text) applyStyle(viewer.current, scheme, highlight, colors, lines);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scheme, JSON.stringify(highlight), colors]);
+  }, [scheme, JSON.stringify(highlight), colors, JSON.stringify(lines)]);
 
   useEffect(() => {
     if (viewer.current && text) enablePicking(viewer.current);
@@ -212,7 +239,7 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
   }, [interactive]);
 
   useEffect(() => {
-    if (viewer.current && text && centerKey !== undefined) centerOn(viewer.current, highlight);
+    if (viewer.current && text && centerKey !== undefined) centerOn(viewer.current, highlight, centerZoom);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [centerKey]);
 

@@ -566,6 +566,14 @@ REFERENCES = {
     "tien": "Tien M.Z., Meyer A.G., Sydykova D.K., Spielman S.J., Wilke C.O. (2013) Maximum allowed solvent "
             "accessibilites of residues in proteins. PLoS ONE 8:e80635.",
     "rost": "Rost B. (1999) Twilight zone of protein sequence alignments. Protein Eng. 12:85–94.",
+    "harding": "Harding M.M. (2006) Small revisions to predicted distances around metal sites in proteins. "
+               "Acta Cryst. D62:678–682.",
+    "cmm": "Zheng H., Cooper D.R., Porebski P.J., Shabalin I.G., Handing K.B., Minor W. (2017) CheckMyMetal: a "
+           "macromolecular metal-binding validation tool. Acta Cryst. D73:223–233.",
+    "kuppuraj": "Kuppuraj G., Dudev M., Lim C. (2009) Factors governing metal–ligand distances and coordination "
+                "geometries of metal complexes. J. Phys. Chem. B 113:2952–2960.",
+    "biolip": "Yang J., Roy A., Zhang Y. (2013) BioLiP: a semi-manually curated database for biologically relevant "
+              "ligand–protein interactions. Nucleic Acids Res. 41:D1096–D1103.",
 }
 
 LEGEND = {
@@ -618,6 +626,12 @@ LEGEND = {
            "filamento β (E, B), coil (T, S e il resto)."),
     "sasa": ("SASA relativa", "superficie accessibile al solvente (Shrake & Rupley 1973 o mkdssp) divisa per l'area "
              "massima del residuo (Tien et al. 2013); sepolto sotto il 20%."),
+    "ligands": ("Ligandi e metalli", "per ogni gruppo eteroatomico: residui entro 4 Å, scontri fra atomi pesanti "
+                "sotto 2,2 Å (esclusi coordinazione e legami covalenti del template); per i metalli donatori N, O, S "
+                "entro la distanza attesa + 0,5 Å (Harding 2006), nella norma entro ± 0,25 Å, numero di coordinazione "
+                "rispetto all'intervallo tipico e geometria dagli angoli donatore–metallo–donatore con posizioni "
+                "vacanti (gRMSD oltre 13,5° da controllare, oltre 21,5° anomala; Zheng et al. 2017). Nei modelli, "
+                "confronto con i residui che coordinano il metallo nel template. Il voto A–D non ne tiene conto."),
 }
 
 
@@ -969,7 +983,7 @@ def _options(doc: _Doc, data: dict) -> None:
                  ("Modelli", _e(opts.get("models"))),
                  ("Raffinamento", _e(_lookup(REFINEMENT_LABEL, opts.get("refinement")))),
                  ("Seme casuale", _e(opts.get("seed"))),
-                 ("Ligandi (HETATM)", "sì" if opts.get("hetatm") else "no")]
+                 ("Ligandi (HETATM)", _ligand_option(data, opts))]
         if opts.get("loop_refinement"):
             regions = ", ".join(f"{r[0]}–{r[1]}" for r in opts.get("loop_regions") or []
                                 if isinstance(r, (list, tuple)) and len(r) == 2)
@@ -1264,6 +1278,94 @@ def _quality(doc: _Doc, data: dict) -> None:
     doc.end()
 
 
+LIGAND_TONE = {"buono": "ok", "da controllare": "warn", "problematico": "err"}
+
+
+def _ligand_data(data: dict) -> Optional[dict]:
+    """Verifica dei ligandi: quella del rapporto di qualità, altrimenti quella del risultato del job (modello migliore
+    senza analisi di qualità)."""
+    lig = ((data.get("quality") or {}).get("ligands")) or data.get("ligands")
+    return lig if isinstance(lig, dict) and lig.get("groups") else None
+
+
+def _ligand_option(data: dict, opts: dict) -> str:
+    """Riga "Ligandi (HETATM)" dei parametri: gruppi trasferiti e da quale template, altrimenti sì/no."""
+    groups = [g for g in (_ligand_data(data) or {}).get("groups") or [] if isinstance(g.get("template"), dict)]
+    if groups:
+        return _e(", ".join(f"{g['template'].get('group')} da {g['template'].get('code')}" for g in groups))
+    if isinstance(opts.get("ligands"), list) and opts.get("ligands"):
+        return _e(", ".join(f"{g.get('resname')} {g.get('chain')}{g.get('resnum')}" for g in opts["ligands"]
+                            if isinstance(g, dict)))
+    return "sì (additivi esclusi)" if opts.get("hetatm") else "no"
+
+
+def _donor_text(d: dict) -> str:
+    text = f"{_e(d.get('label'))} {_num(d.get('distance'), 2, ' Å')}"
+    if _isnum(d.get("expected")):
+        text += f' <span class="muted">(attesa {_num(d.get("expected"), 2)})</span>'
+    if d.get("status") not in (None, "nella norma"):
+        text += f' <span class="tag warn">{_e(d.get("status"))}</span>'
+    return text
+
+
+def _ligands(doc: _Doc, data: dict) -> None:
+    """Sezione "Ligandi e metalli", solo se la struttura ha gruppi eteroatomici non d'acqua."""
+    lig = _ligand_data(data)
+    if lig is None:
+        return
+    groups = [g for g in lig.get("groups") or [] if isinstance(g, dict)]
+    counts = lig.get("counts") if isinstance(lig.get("counts"), dict) else {}
+    doc.section("ligandi", "Ligandi e metalli")
+    doc.add(f"<p>{len(groups)} {'gruppo eteroatomico' if len(groups) == 1 else 'gruppi eteroatomici'} (acque "
+            f"escluse): {_e(counts.get('buono', 0))} buoni, {_e(counts.get('da controllare', 0))} da controllare, "
+            f"{_e(counts.get('problematico', 0))} problematici"
+            + (", con il confronto dei siti del template" if lig.get("template_compared") else "") + ".</p>")
+    rows = []
+    for g in groups:
+        name = f"<b>{_e(g.get('resname'))} {_e(g.get('chain'))}{_e(g.get('resnum'))}</b>"
+        if g.get("description"):
+            name += f'<div class="small muted">{_e(g.get("description"))}</div>'
+        if isinstance(g.get("template"), dict):
+            name += (f'<div class="small muted">da {_e(g["template"].get("code"))}: '
+                     f'{_e(g["template"].get("group"))}</div>')
+        coord = []
+        for m in g.get("metals") or []:
+            if not isinstance(m, dict):
+                continue
+            geo = m.get("geometry") if isinstance(m.get("geometry"), dict) else None
+            line = f"<b>{_e(m.get('symbol'))}</b>: {_e(m.get('coordination_number'))} donatori"
+            if geo:
+                line += f", {_e(geo.get('name'))} (gRMSD {_num(geo.get('grmsd'), 1)}°)"
+            donors = [d for d in m.get("donors") or [] if isinstance(d, dict)]
+            if donors:
+                line += "<br>" + "; ".join(_donor_text(d) for d in donors)
+            site = m.get("template_site") if isinstance(m.get("template_site"), dict) else None
+            if site:
+                line += (f'<br><span class="small">Sito del template: {_e(site.get("conserved"))} su '
+                         f'{_e(site.get("protein_donors"))} donatori della proteina conservati'
+                         + (f", {_e(site.get('waters'))} acque non trasferite" if site.get("waters") else "")
+                         + "</span>")
+            coord.append(line)
+        contacts = [c for c in g.get("contacts") or [] if isinstance(c, dict)]
+        near = ", ".join(f"{_e(str(c.get('resname') or '').capitalize())} {_e(c.get('chain'))}{_e(c.get('resnum'))}"
+                         for c in contacts[:6]) + (" …" if len(contacts) > 6 else "")
+        status = g.get("status")
+        rows.append("<tr>" + _td(name) + _td(_e(g.get("label")))
+                    + _td(f'<span class="tag {_lookup(LIGAND_TONE, status, "")}">{_e(status)}</span>')
+                    + _td("<br>".join(coord) or '<span class="muted">—</span>')
+                    + _td(f"{len(contacts)}" + (f'<div class="small muted">{near}</div>' if near else ""))
+                    + _td(_e(g.get("summary"))) + "</tr>")
+    doc.add(_table([("Gruppo", False), ("Classe", False), ("Esito", False), ("Coordinazione", False),
+                    ("Residui entro 4 Å", False), ("Motivazione", False)], rows))
+    for note in lig.get("notes") or []:
+        doc.add(f'<p class="small muted">{_e(note)}</p>')
+    doc.explain("ligands")
+    doc.cite("harding", "cmm", "kuppuraj")
+    if any(g.get("template") for g in groups):
+        doc.cite("biolip")
+    doc.end()
+
+
 def _warnings(doc: _Doc, data: dict) -> None:
     items: list[str] = []
     for w in [*(data.get("warnings") or []), *(((data.get("quality") or {}).get("warnings")) or [])]:
@@ -1298,7 +1400,8 @@ def render(data: dict) -> str:
     engine, identity, coverage, evalue, twilight), alignment (testo PIR), options (ModelOptions come dizionario), loop
     (source, start, end, models, level), pipeline (parametri della pipeline), models [{file, kind, dope, zdope, ga341,
     molpdf, grade, grade_score, best, chosen, failure}], quality (rapporto di engines/quality), consensus
-    (domain/consensus.compute), warnings [testo], image_png (byte di un PNG già verificato con `decode_png`) o None.
+    (domain/consensus.compute), warnings [testo], image_png (byte di un PNG già verificato con `decode_png`) o None,
+    ligands (verifica di domain/ligands per il modello senza rapporto di qualità; altrimenti quella del rapporto).
     """
     doc = _Doc()
     kind = data.get("kind")
@@ -1313,6 +1416,7 @@ def render(data: dict) -> str:
     elif (data.get("quality") or {}).get("dope"):
         doc.cite("modeller", "dope")
     _quality(doc, data)
+    _ligands(doc, data)
     _warnings(doc, data)
     _legend_and_refs(doc)
     subject = data.get("title") or data.get("model") or ""
