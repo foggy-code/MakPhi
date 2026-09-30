@@ -270,3 +270,7 @@ Le prime cinque tappe danno il beneficio più visibile con il rischio più basso
 | F1.4, F2.2 | fatto | `core/budget.py` (slot di CPU condivisi, richieste elastiche, invecchiamento), `core/dispatch.py` (coda con priorità per pool, posizione in coda); QMEAN locale uno alla volta con controllo della memoria, risorsa rilasciata prima del ripiego su SWISS-MODEL |
 | F4.1 | fatto | Estesa la sovrapposizione esistente: `domain/comparison.py` (distanze per coppia, GDT-TS/HA con ricerca per soglia, lDDT sui Cα), pagina `/compare` |
 | F4.2 | fatto | `domain/report.py`: HTML autonomo con SVG, PNG facoltativo validato, report nello ZIP della pipeline |
+| F5.2 | fatto | `domain/template_rank.py` (curva di Rost, risoluzione, R-free, …), selezione dei complementari con avviso di orientamento non vincolato, modalità pipeline `multi`; corretto l'allineamento multi-template (`salign` con template complementari) con il ripiego sugli `align2d` uniti |
+| F5.4 | fatto | Trasferimento selettivo (l'opzione `hetatm` precedente non trasferiva nulla), un solo ligando per sito con più template, verifica di contatti e coordinazione con le distanze di Harding 2006 verificate |
+| F5.5 | fatto | `domain/disorder.py` (FoldIndex, SEG), domini InterPro, avvisi di copertura prima del lancio, regioni `expected` nel consenso |
+| F7 | fatto (parte interna) | `interactions`, `interfaces`, `conservation`; job `analysis`, scheda Interazioni. fpocket ed elettrostatica nella tappa 6 (immagine di sviluppo) |
