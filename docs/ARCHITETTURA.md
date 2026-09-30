@@ -36,7 +36,7 @@ data/
   bioloom.db          progetti, sequenze, documenti, job, elementi di pipeline (SQLite, WAL esclusivo)
   jobs/<id>/          params.json, job.log, result.json e i soli risultati (niente intermedi MODELLER)
   templates/          libreria globale (ID.pdb|cif + ID.meta.json + ID.analysis.json in cache)
-  uploads/  cache/    file caricati per l'analisi; risposte remote in cache (pulizia automatica)
+  uploads/  cache/    file caricati per l'analisi; risposte remote e cache dei calcoli in cache/compute (pulizia automatica)
   licenses/           modeller.key, prosa/LicenseDB (permessi 0600, mai nelle immagini)
   databases/          pdbaa (BLAST+), pdbaa_mmseqs (database MMseqs2 senza indice)
   settings.json       impostazioni utente
@@ -62,7 +62,7 @@ data/
   cartella dati (errore chiaro).
 - **Pulizia automatica** (`services/housekeeping.py`), all'avvio, ogni 24 ore e con un pulsante:
   - upload più vecchi dei giorni impostati;
-  - cache remota oltre i 30 giorni;
+  - cache remota e cache dei calcoli oltre i 30 giorni, più i file temporanei di scritture interrotte;
   - scratch orfano.
 - **Processi esterni:** ognuno ha il proprio gruppo di processi; annullamento e timeout terminano anche i
   figli (mafft e PROCHECK sono script). Il timeout dei job vale per tutti gli strumenti.
@@ -91,7 +91,7 @@ data/
 
 | Pacchetto | Contenuto |
 |---|---|
-| `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi) |
+| `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi) |
 | `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `grading`, `procheck` (lettura del .sum), `exports` (PyMOL) |
 | `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2), `remote` (client HTTP), `tools` (rilevamento strumenti, preambolo di licenza) |
 | `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione) |
@@ -224,6 +224,51 @@ Valori sulle strutture di riferimento (test automatici):
   l'indice locale se presente.
 - Template consigliato: massimo identità × copertura, a parità miglior risoluzione.
 
+### Cache dei calcoli (`core/cache.py`)
+
+Ricerche di template e allineamenti multipli e strutturali non si rifanno se la stessa richiesta è già stata
+calcolata: rilanciare una pipeline con le stesse sequenze e altre opzioni di modellazione salta tutte le
+ricerche. Il pairwise è istantaneo e non passa dalla cache.
+
+- **Dove:** un file JSON per voce in `data/cache/compute/<operazione>/<chiave>.json` (`search`,
+  `align_multiple`, `align_structural`). Sta nella cartella dati e viaggia con la chiavetta. La pulizia automatica
+  la tratta come le risposte remote (30 giorni). In Impostazioni → Spazio l'occupazione è mostrata a parte.
+- **Chiave:** SHA-256 del JSON canonico (chiavi ordinate) con operazione, versione del formato della cache e di
+  BioLoom, input normalizzati, parametri e timbro delle dipendenze:
+
+  | Operazione | Input e parametri | Timbro |
+  |---|---|---|
+  | ricerca | sequenza (maiuscole, senza spazi), motore, E-value, risultati massimi, taxid (solo NCBI) | BLAST+ e MMseqs2: dimensione e data di tutti i file del database (`pdbaa.*`, `pdbaa_h*`), eseguibile (percorso, dimensione, data), uso dell'indice veloce MMseqs2 |
+  | multiplo | nomi e sequenze nell'ordine dato, tipo (proteina/acido nucleico), programma effettivo (`auto` risolto) | eseguibile di Clustal Omega/MAFFT/MUSCLE |
+  | strutturale | SHA-256 del contenuto e formato dei due file, catene, programma effettivo | eseguibile di TM-align/US-align |
+
+  Il nome delle strutture non entra nella chiave (un file caricato di nuovo ha un prefisso casuale): gli `ids`
+  del risultato si riapplicano dopo la lettura.
+- **Scadenza:** 7 giorni per RCSB e NCBI (il PDB cambia ogni settimana); per i motori locali decide il timbro del
+  database e la pulizia a 30 giorni. Una voce "dal futuro" di oltre un giorno (orologio di un altro computer) non
+  vale.
+- **Valore:** risultato del motore e testo dei file che il calcolo ha scritto nella cartella di lavoro
+  (`query.fasta`, `mmseqs_hits.m8`, `msa_input/output.fasta`, `mobile.pdb`, `target.pdb` e i file di TM-align).
+  Un risultato dalla cache ricrea gli stessi file del job. Nel caso strutturale il testo del PDB sovrapposto è nel
+  risultato (`superposed_pdb`) e il job lo riscrive come `superposed.pdb`. Oltre 20 MB di file, o con file non
+  testuali, il risultato non entra in cache.
+- **Cosa non entra:** calcoli falliti, job annullati, risultati parziali (ricerca locale senza i metadati RCSB,
+  output di TM-align non riconosciuto).
+- **Lettura tollerante:** un file assente, corrotto, di un altro formato, con chiave diversa o scaduto è un
+  mancato riscontro, mai un errore. Anche un errore di scrittura (disco pieno) non fa fallire il calcolo. I percorsi
+  dei file da ricreare passano da `safe_join` e non possono uscire dalla cartella di lavoro.
+- **Concorrenza:** due calcoli identici in parallelo (pipeline) possono calcolare entrambi. La scrittura atomica
+  lascia comunque una voce valida.
+- **Controllo:** il parametro `use_cache` (predefinito `true`) di `/api/search`, `/api/align` e `/api/pipeline`
+  corrisponde nell'interfaccia a "Ricalcola ignorando la cache": con `false` si ricalcola e la voce viene
+  sostituita. L'impostazione `compute_cache` (predefinita accesa; le impostazioni precedenti la ricevono accesa)
+  disattiva letture e scritture. La verifica dell'installazione ricalcola sempre (`use_cache=False`), perché deve
+  eseguire davvero gli strumenti.
+- **Provenienza:** un risultato riusato ha `cached: true` e `cached_at` (data ISO del calcolo), e il log del job
+  riporta "Risultato dalla cache del …". Nella pipeline la data finisce nelle metriche dell'elemento
+  (`search_cached_at`, badge "cache" nella tabella) e il risultato del job conta le ricerche riusate
+  (`search_cache_hits`).
+
 ## Frontend (`frontend/`)
 
 React 19 + TypeScript + Vite, nessuna libreria UI esterna: componenti propri (`components/ui.tsx`), grafici SVG
@@ -236,15 +281,15 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 |---|---|
 | Panoramica | flusso guidato, esempi, motori disponibili, risorse del computer |
 | Sequenze | import FASTA/UniProt, proprietà ProtParam, predizione GOR, annotazioni UniProt/InterPro/PDB |
-| Ricerca template | RCSB/NCBI/locale, tabella ordinabile, allineamento dell'hit, download, "modella con" |
+| Ricerca template | RCSB/NCBI/locale, tabella ordinabile, allineamento dell'hit, download, "modella con"; nota "dalla cache (data)" e ricalcolo ignorando la cache |
 | Libreria template | download RCSB, upload PDB/mmCIF, catene, residui mancanti, ligandi, DSSP, 3D |
-| Allineamenti | pairwise, multiplo, strutturale; esportazione FASTA/Clustal/PIR; salvataggio nel progetto |
+| Allineamenti | pairwise, multiplo, strutturale; esportazione FASTA/Clustal/PIR; salvataggio nel progetto; cache per multiplo e strutturale |
 | Editor PIR | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
 | Modellazione | input automatico o da PIR, parametri, vincoli, loop; modelli, 3D, PyMOL, archivio |
 | Qualità | voto, Ramachandran, profili, clash, residui problematici evidenziati in 3D, confronto analisi |
-| Pipeline batch | multi-FASTA → modelli validati, filtro zona crepuscolare, tabella paginata, CSV/ZIP |
+| Pipeline batch | multi-FASTA → modelli validati, filtro zona crepuscolare, tabella paginata, CSV/ZIP; ricerche riusate dalla cache |
 | Job | log e file di ogni calcolo |
-| Impostazioni | schede Generale (esecuzione, QMEAN, email), Licenze (MODELLER, ProSA, PROCHECK), Database (pdbaa, MMseqs2, UniClust30), Strumenti (verifica dell'installazione), Spazio e file temporanei |
+| Impostazioni | schede Generale (esecuzione, QMEAN, email), Licenze (MODELLER, ProSA, PROCHECK), Database (pdbaa, MMseqs2, UniClust30), Strumenti (verifica dell'installazione), Spazio e file temporanei (con la cache dei calcoli) |
 | Login | solo in modalità server, quando l'API risponde 401 |
 
 ## Sicurezza e privacy
@@ -271,7 +316,7 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 
 ## Test
 
-- **`backend/tests` (pytest), circa 100 test,** eseguiti sia nativamente sia nel container:
+- **`backend/tests` (pytest), circa 150 test,** eseguiti sia nativamente sia nel container:
   - dominio, job manager, API, generazione script, MODELLER end-to-end;
   - flusso dati: scratch, salvataggio definitivo, intermedi, blocco SQLite, pulizia, gruppi di processi;
   - licenze e accesso;
@@ -280,13 +325,16 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - riconoscimento di tutti i formati di UniClust30 (`test_uniclust_discovery.py`);
   - scelta della versione e fallback su SWISS-MODEL (`test_qmean_fallback.py`);
   - lettura dei formati di sequenza e caricamento di strutture (`test_fileformats.py`);
+  - cache dei calcoli (`test_compute_cache.py`): riscontri senza rieseguire i motori (simulati), invalidazione per
+    parametri, sequenza, timbro del database o dello strumento, scadenza, file corrotti, job falliti e annullati,
+    riuso nella pipeline e scritture concorrenti;
   - verifica dell'installazione.
 
   `pytest -m network` prova i servizi reali. Oltre a 1UBQ, `tests/data` contiene strutture sintetiche generate
   da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con interfaccia di contatto) e `ubq_zn.pdb` (sito Zn²⁺
   su His68 e due acque).
 - **`frontend/src/**/*.test.ts` (vitest):**
-  - parser PIR e formattazione;
+  - parser PIR e formattazione (compresa la nota "dalla cache");
   - logica QMEAN locale/remoto/fallback e avvisi delle licenze;
   - decodifica dei file, chiave MODELLER da file, vincoli da e verso file.
 - **Esecuzione:** `scripts/test.sh` (ruff, pytest nell'immagine con MODELLER reale, typecheck e vitest). La CI

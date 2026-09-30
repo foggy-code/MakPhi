@@ -229,6 +229,8 @@ export interface Settings {
   default_search_engine: SearchEngine;
   keep_intermediates: boolean;
   uploads_retention_days: number;
+  /** riusa i risultati di ricerche e allineamenti già calcolati (cache dei calcoli) */
+  compute_cache: boolean;
 }
 
 export interface Example {
@@ -365,7 +367,14 @@ export interface SearchHit {
   source: string;
 }
 
-export interface SearchResult {
+/** Provenienza di un risultato: presente e vera solo se riusato dalla cache dei calcoli. */
+export interface CacheInfo {
+  cached?: boolean;
+  /** data ISO (UTC) del calcolo riusato */
+  cached_at?: string;
+}
+
+export interface SearchResult extends CacheInfo {
   engine: string;
   engine_label: string;
   query_length: number;
@@ -386,7 +395,7 @@ export interface AlignStats {
   coverage_b: number;
 }
 
-export interface AlignResult {
+export interface AlignResult extends CacheInfo {
   mode: "pairwise" | "multiple" | "structural";
   method: string;
   ids: string[];
@@ -619,10 +628,18 @@ export interface PipelineItem {
   grade_score: number | null;
   rama_favored: number | null;
   clashscore: number | null;
-  metrics: Record<string, unknown>;
+  /** metriche del modello; `search_cached_at` = ricerca del template riusata dalla cache (data ISO) */
+  metrics: Record<string, unknown> & { search_cached_at?: string };
   error: string | null;
   started_at: string | null;
   finished_at: string | null;
+}
+
+export interface PipelineResult {
+  total: number;
+  counts: Record<string, number>;
+  /** elementi la cui ricerca del template viene dalla cache dei calcoli */
+  search_cache_hits?: number;
 }
 
 export interface PipelinePage {

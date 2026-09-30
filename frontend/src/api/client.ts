@@ -86,6 +86,7 @@ export const api = {
   health: () => get<{ status: string; version: string }>("/api/health"),
   systemInfo: (refresh = false) => get<SystemInfo>(`/api/system/info${refresh ? "?refresh=true" : ""}`),
   stats: () => get<SystemStats>("/api/system/stats"),
+  /** byte occupati; `cache` = risposte dei servizi remoti, `compute_cache` = cache dei calcoli */
   storage: () => get<Record<string, number>>("/api/system/storage"),
   examples: () => get<Example[]>("/api/examples"),
   settings: () => get<Settings>("/api/settings"),
@@ -190,7 +191,7 @@ export const api = {
   archiveUrl: (id: string) => `/api/jobs/${id}/archive`,
 
   // calcoli
-  search: (body: { project_id?: string; query: { name: string; sequence: string }; engine: string; evalue: number; max_hits: number; taxid?: string }) =>
+  search: (body: { project_id?: string; query: { name: string; sequence: string }; engine: string; evalue: number; max_hits: number; taxid?: string; use_cache?: boolean }) =>
     post<JobSummary>("/api/search", body),
   align: (body: Record<string, unknown>) => post<JobSummary>("/api/align", body),
   align2d: (body: { project_id?: string; target: { name: string; sequence: string }; templates: TemplateRef[] }) =>

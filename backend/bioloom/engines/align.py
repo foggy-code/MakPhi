@@ -1,4 +1,7 @@
-"""Allineamenti: pairwise (Biopython), multiplo (CLI o center-star integrato), strutturale (CLI o Kabsch)."""
+"""Allineamenti: pairwise (Biopython), multiplo (CLI o center-star integrato), strutturale (CLI o Kabsch).
+
+Multiplo e strutturale passano dalla cache dei calcoli (`core/cache.py`); il pairwise è istantaneo e no.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +11,7 @@ from typing import Optional
 
 import numpy as np
 
+from ..core import cache
 from ..core.errors import AppError, ToolUnavailable
 from ..core.jobs import JobContext, default_env
 from ..domain import geometry, sequences, structure
@@ -115,7 +119,9 @@ def center_star(records: list[SeqRecord], kind: str = "protein", ctx: Optional[J
     return [msa[i] for i in range(n)]
 
 
-def multiple(records: list[SeqRecord], ctx: JobContext, tool: str = "auto", kind: str = "protein") -> dict:
+def multiple(records: list[SeqRecord], ctx: JobContext, tool: str = "auto", kind: str = "protein",
+             use_cache: bool = True) -> dict:
+    """MSA con il programma scelto (o il migliore installato); `use_cache=False` ricalcola."""
     if len(records) < 2:
         raise AppError("Servono almeno due sequenze.")
     names = [r.name for r in records]
@@ -124,20 +130,30 @@ def multiple(records: list[SeqRecord], ctx: JobContext, tool: str = "auto", kind
     chosen = tool
     if tool == "auto":
         chosen = next((t for t in ("clustalo", "mafft", "muscle") if tools.find(t)), "builtin")
-    if chosen == "builtin":
-        ctx.progress(0.2, "Allineamento center-star integrato")
-        aligned = center_star(records, kind, ctx)
-        method = "Center-star progressivo (integrato BioLoom)"
-    else:
+    exe = None
+    if chosen != "builtin":
         exe = tools.find(chosen)
         if not exe:
             raise ToolUnavailable(f"{tools.TOOLS[chosen]['label']} non è installato.")
-        ctx.progress(0.2, f"Esecuzione di {tools.TOOLS[chosen]['label']}")
-        aligned = _run_cli_msa(ctx, chosen, exe, records, kind)
-        method = tools.TOOLS[chosen]["label"]
-    return {"method": method, "ids": names, "aligned": aligned,
-            "identity_matrix": sequences.identity_matrix(names, aligned),
-            "conservation": sequences.consensus_line(aligned)}
+    # nomi e ordine delle sequenze fanno parte del risultato; il programma effettivo e il suo eseguibile
+    # (percorso, dimensione, data) distinguono i risultati di versioni diverse
+    descriptor = {"records": [[r.name, r.sequence] for r in records], "kind": kind, "tool": chosen,
+                  "tool_stamp": cache.file_stamp(exe)}
+
+    def run() -> dict:
+        if chosen == "builtin":
+            ctx.progress(0.2, "Allineamento center-star integrato")
+            aligned = center_star(records, kind, ctx)
+            method = "Center-star progressivo (integrato BioLoom)"
+        else:
+            ctx.progress(0.2, f"Esecuzione di {tools.TOOLS[chosen]['label']}")
+            aligned = _run_cli_msa(ctx, chosen, exe, records, kind)
+            method = tools.TOOLS[chosen]["label"]
+        return {"method": method, "ids": names, "aligned": aligned,
+                "identity_matrix": sequences.identity_matrix(names, aligned),
+                "conservation": sequences.consensus_line(aligned)}
+
+    return cache.run_cached(ctx, "align_multiple", descriptor, run, use_cache=use_cache)
 
 
 def _run_cli_msa(ctx: JobContext, tool: str, exe: str, records: list[SeqRecord], kind: str) -> list[str]:
@@ -168,17 +184,38 @@ def _run_cli_msa(ctx: JobContext, tool: str, exe: str, records: list[SeqRecord],
 
 # ------------------------------------------------------------------------------------------ strutturale
 def structural(path_a: Path, chain_a: Optional[str], path_b: Path, chain_b: Optional[str], ctx: JobContext,
-               tool: str = "auto", names: tuple[str, str] = ("A", "B")) -> dict:
-    """Sovrappone B su A. TM-align/US-align se installati, altrimenti Kabsch + TM-score integrati."""
+               tool: str = "auto", names: tuple[str, str] = ("A", "B"), use_cache: bool = True) -> dict:
+    """Sovrappone B su A. TM-align/US-align se installati, altrimenti Kabsch + TM-score integrati.
+
+    In cache vanno anche il testo del PDB sovrapposto (`superposed_pdb`, che il job salva come
+    superposed.pdb) e i file scritti da TM-align/US-align: un risultato dalla cache ricrea gli stessi file.
+    """
     chosen = tool
     if tool == "auto":
         chosen = next((t for t in ("usalign", "tmalign") if tools.find(t)), "builtin")
+    exe = None
     if chosen != "builtin":
         exe = tools.find(chosen)
         if not exe:
             raise ToolUnavailable(f"{tools.TOOLS[chosen]['label']} non è installato.")
-        return _run_tmalign(ctx, chosen, exe, path_a, chain_a, path_b, chain_b, names)
-    return _builtin_structural(path_a, chain_a, path_b, chain_b, ctx, names)
+    # Conta il contenuto dei file, non il nome: una struttura caricata di nuovo (nome con prefisso casuale)
+    # dà lo stesso risultato. I nomi finiscono solo in `ids` e si riapplicano sotto.
+    descriptor = {
+        "structures": [{"sha256": cache.content_hash(path), "format": Path(path).suffix.lower(), "chain": chain or ""}
+                       for path, chain in ((path_a, chain_a), (path_b, chain_b))],
+        "tool": chosen, "tool_stamp": cache.file_stamp(exe),
+    }
+
+    def run() -> dict:
+        if chosen != "builtin":
+            return _run_tmalign(ctx, chosen, exe, path_a, chain_a, path_b, chain_b, names)
+        return _builtin_structural(path_a, chain_a, path_b, chain_b, ctx, names)
+
+    # un output di TM-align non riconosciuto (niente allineamento o TM-score) non entra in cache
+    result = cache.run_cached(ctx, "align_structural", descriptor, run, use_cache=use_cache,
+                              keep=lambda r: bool(r.get("aligned")) and r.get("tm_score") is not None)
+    result["ids"] = list(names)
+    return result
 
 
 def _chain_ca(path: Path, chain: Optional[str], label: str):

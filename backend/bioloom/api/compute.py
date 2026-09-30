@@ -42,6 +42,7 @@ class SearchIn(BaseModel):
     evalue: float = Field(10.0, gt=0, le=1000)
     max_hits: int = Field(50, ge=1, le=500)
     taxid: str = ""
+    use_cache: bool = Field(True, description="False = ricalcola ignorando la cache dei calcoli (e la aggiorna)")
 
 
 class AlignIn(BaseModel):
@@ -55,6 +56,8 @@ class AlignIn(BaseModel):
     gap_open: float = Field(10.0, ge=0, le=100)
     gap_extend: float = Field(0.5, ge=0, le=100)
     tool: Literal["auto", "builtin", "clustalo", "mafft", "muscle", "tmalign", "usalign"] = "auto"
+    use_cache: bool = Field(True, description="Solo multiplo e strutturale: False = ricalcola ignorando la "
+                                               "cache dei calcoli (e la aggiorna)")
 
 
 class Align2dIn(BaseModel):
@@ -114,6 +117,8 @@ class PipelineIn(BaseModel):
     quality: bool = True
     extended_quality: bool = False
     parallel: int = Field(2, ge=1, le=8)
+    use_cache: bool = Field(True, description="Ricerca dei template: False = ricalcola ignorando la cache "
+                                               "dei calcoli (e la aggiorna)")
 
 
 def _project(core: Core, project_id: Optional[str]) -> Optional[str]:

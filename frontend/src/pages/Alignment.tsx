@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { AlignResult, Sequence, StructureSource, SystemInfo } from "../api/types";
 import { AlignmentView } from "../components/AlignmentView";
+import { CachedBadge, RecomputeOption } from "../components/CacheOption";
 import { Heatmap } from "../components/charts";
 import { SequenceFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
@@ -42,6 +43,7 @@ function Results({ jobId, result }: { jobId: string; result: AlignResult }) {
   const s = result.stats;
   return (
     <div className="stack">
+      {result.cached && <div className="row"><CachedBadge result={result} /></div>}
       {result.mode === "structural" ? (
         <div className="grid grid-4">
           <Stat label="TM-score" value={fmtNum(result.tm_score, 3)} note={(result.tm_score ?? 0) > 0.5 ? "stesso fold (> 0,5)" : "fold diverso (< 0,5)"} />
@@ -105,6 +107,7 @@ export default function Alignment() {
   const [chain1, setChain1] = useState("");
   const [chain2, setChain2] = useState("");
   const [structTool, setStructTool] = useState("auto");
+  const [recompute, setRecompute] = useState(false);
   const { data: info } = useAsync<SystemInfo>(() => api.systemInfo(), []);
   const { data: projectSeqs } = useAsync<Sequence[]>(() => (projectId ? api.sequences(projectId) : Promise.resolve([])), [projectId]);
   const { job, summary, log, cancel } = useJob<AlignResult>(jobId, { withLog: true });
@@ -130,6 +133,8 @@ export default function Alignment() {
       } else {
         body = { mode, structures: [{ ...s1, chain: chain1 || undefined }, { ...s2, chain: chain2 || undefined }], tool: structTool };
       }
+      // il pairwise è istantaneo e non passa dalla cache
+      if (mode !== "pairwise") body.use_cache = !recompute;
       const j = await api.align({ ...body, project_id: projectId ?? undefined });
       setParams({ job: j.id });
     } catch (e) {
@@ -214,6 +219,7 @@ export default function Alignment() {
                 </Field>
               </>
             )}
+            {mode !== "pairwise" && <RecomputeOption checked={recompute} onChange={setRecompute} />}
             <button className="btn btn-primary" disabled={!canSubmit} onClick={submit}><Icon name="play" size={14} /> Allinea</button>
           </div>
         </Card>

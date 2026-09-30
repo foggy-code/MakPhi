@@ -395,6 +395,7 @@ const STORAGE_LABELS: [string, string, string][] = [
   ["databases", "Database locali", "cartella dati"],
   ["uploads", "File caricati", "cartella dati, pulizia automatica"],
   ["cache", "Cache servizi remoti", "cartella dati, pulizia automatica"],
+  ["compute_cache", "Cache dei calcoli", "ricerche e allineamenti, pulizia automatica"],
   ["database_file", "Database progetti", "cartella dati"],
   ["scratch", "Area di lavoro temporanea", "volume Docker, svuotata a ogni avvio"],
   ["local_cache", "Indici locali", "volume Docker di questo computer"],
@@ -438,6 +439,15 @@ export function StoragePanel({ form, set, info }: { form: Settings; set: <K exte
               <input type="checkbox" checked={form.keep_intermediates} onChange={(e) => set("keep_intermediates", e.target.checked)} />
               Conserva anche i file intermedi di MODELLER (restrizioni .rsr, traiettorie, profili di violazione)
             </label>
+            <label className="check">
+              <input type="checkbox" checked={form.compute_cache} onChange={(e) => set("compute_cache", e.target.checked)} />
+              Riusa i risultati già calcolati di ricerche di template e allineamenti multipli e strutturali (cache dei calcoli)
+            </label>
+            <p className="tiny muted" style={{ margin: 0 }}>
+              Un calcolo identico (stessa sequenza, parametri, database e programma) non viene rifatto: le ricerche online (RCSB, NCBI) valgono
+              7 giorni, le altre finché database e programmi non cambiano. Le voci si eliminano dopo 30 giorni; in Ricerca, Allineamenti e
+              Pipeline si può sempre ricalcolare.
+            </p>
             <Field label="Conservazione dei file caricati per l'analisi (giorni)" hint="0 = conserva sempre. I risultati dei job non vengono mai eliminati automaticamente.">
               <input className="input" type="number" min={0} max={3650} value={form.uploads_retention_days} onChange={(e) => set("uploads_retention_days", Number(e.target.value))} />
             </Field>

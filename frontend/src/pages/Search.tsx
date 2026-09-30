@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { JobSummary, SearchEngine, SearchHit, SearchResult, Sequence, Settings } from "../api/types";
+import { CachedBadge, RecomputeOption } from "../components/CacheOption";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { SequencePicker } from "../components/Pickers";
@@ -58,6 +59,7 @@ export default function Search() {
   const [engine, setEngine] = useState<SearchEngine>("rcsb");
   const [evalue, setEvalue] = useState(0.001);
   const [maxHits, setMaxHits] = useState(50);
+  const [recompute, setRecompute] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "evalue", dir: 1 });
   const [filter, setFilter] = useState("");
@@ -81,7 +83,7 @@ export default function Search() {
 
   const submit = async () => {
     try {
-      const j = await api.search({ project_id: projectId ?? undefined, query: { name: query.name || "query", sequence: query.sequence }, engine, evalue, max_hits: maxHits });
+      const j = await api.search({ project_id: projectId ?? undefined, query: { name: query.name || "query", sequence: query.sequence }, engine, evalue, max_hits: maxHits, use_cache: !recompute });
       setParams({ job: j.id });
     } catch (e) {
       toast.error(e);
@@ -142,6 +144,7 @@ export default function Search() {
                   <input className="input" type="number" min={5} max={500} value={maxHits} onChange={(e) => setMaxHits(Number(e.target.value))} />
                 </Field>
               </div>
+              <RecomputeOption checked={recompute} onChange={setRecompute} />
               <button className="btn btn-primary" disabled={!query.sequence.trim()} onClick={submit}>
                 <Icon name="search" /> Avvia ricerca
               </button>
@@ -167,7 +170,7 @@ export default function Search() {
           {result && (
             <Card
               title={`${result.hits.length} template trovati`}
-              sub={`${result.engine_label} · query ${result.query.name} (${result.query_length} aa)`}
+              sub={<>{result.engine_label} · query {result.query.name} ({result.query_length} aa) <CachedBadge result={result} /></>}
               right={<input className="input" style={{ width: 220 }} placeholder="Filtra (codice, titolo, organismo)" value={filter} onChange={(e) => setFilter(e.target.value)} />}
             >
               {!hits.length ? <Empty icon="search" title="Nessun template sotto la soglia di E-value">Prova ad aumentare l'E-value o a usare NCBI BLAST.</Empty> : (

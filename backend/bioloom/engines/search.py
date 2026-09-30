@@ -1,4 +1,8 @@
-"""Ricerca di template omologhi: RCSB (default), NCBI BLAST remoto, BLAST+ locale."""
+"""Ricerca di template omologhi: RCSB (default), NCBI BLAST remoto, BLAST+ locale, MMseqs2 locale.
+
+I risultati passano dalla cache dei calcoli (`core/cache.py`): la chiave comprende sequenza, motore e
+parametri e, per i motori locali, il timbro del database e dell'eseguibile.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +13,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from ..core import cache
 from ..core.errors import AppError, ToolUnavailable
 from ..core.jobs import JobContext, default_env
 from . import remote, tools
@@ -21,6 +26,9 @@ ENGINES = {
 }
 MMSEQS_FIELDS = ["query", "target", "pident", "alnlen", "evalue", "bits", "qstart", "qend", "tstart", "tend",
                  "qlen", "tlen", "qaln", "taln", "theader"]
+# Scadenza della cache per motore: RCSB e NCBI cercano nel PDB, che cambia ogni settimana. I motori locali
+# non scadono: la chiave contiene il timbro del database e la pulizia automatica elimina le voci dopo 30 giorni.
+CACHE_TTL = {"rcsb": cache.REMOTE_TTL, "ncbi": cache.REMOTE_TTL}
 
 
 _local_cache: Optional[Path] = None
@@ -148,19 +156,25 @@ def _hits_from_blast_xml(xml_text: str, query_len: int, source: str) -> list[dic
     return hits
 
 
+def database_stamp(db: Path) -> list:
+    """Timbro di un database locale: dimensione e data di tutti i file con il suo prefisso (pdbaa.pin,
+    pdbaa.00.psq, pdbaa_h.index...). Cambia a ogni aggiornamento o ricostruzione del database."""
+    try:
+        files = [p for p in db.parent.iterdir() if p.is_file() and (
+            p.name == db.name or p.name.startswith(db.name + ".") or p.name.startswith(db.name + "_"))]
+    except OSError:
+        files = []
+    return cache.files_stamp(files)
+
+
 def search(ctx: JobContext, sequence: str, *, engine: str = "rcsb", evalue: float = 10.0, max_hits: int = 50,
-           databases_dir: Optional[Path] = None, taxid: str = "") -> dict:
+           databases_dir: Optional[Path] = None, taxid: str = "", use_cache: bool = True) -> dict:
+    """Ricerca dei template; `use_cache=False` ricalcola e sostituisce il risultato in cache."""
     if engine not in ENGINES:
         raise AppError(f"Motore di ricerca sconosciuto: {engine}")
     ctx.progress(0.05, ENGINES[engine])
-    if engine == "rcsb":
-        hits = remote.rcsb_sequence_search(sequence, evalue=evalue, max_hits=max_hits, check=ctx.check, log=ctx.log)
-    elif engine == "ncbi":
-        entrez = f"txid{taxid}[ORGN]" if taxid else ""
-        xml = remote.ncbi_blast(sequence, evalue=evalue, max_hits=max_hits, entrez_query=entrez,
-                                email=ctx.settings.contact_email, check=ctx.check, log=ctx.log)
-        hits = _hits_from_blast_xml(xml, len(sequence), "ncbi")
-    elif engine == "mmseqs":
+    exe = db = fast = None
+    if engine == "mmseqs":
         exe = tools.find("mmseqs")
         if not exe:
             raise ToolUnavailable("MMseqs2 non è installato.")
@@ -168,48 +182,74 @@ def search(ctx: JobContext, sequence: str, *, engine: str = "rcsb", evalue: floa
         if db is None:
             raise ToolUnavailable("Database MMseqs2 non preparato: Impostazioni → Database → Prepara MMseqs2.")
         fast = mmseqs_local_index(databases_dir)
-        if fast is None:
-            ctx.log("Indice veloce MMseqs2 assente su questo computer: ricerca senza indice "
-                    "(crealo da Impostazioni → Database).")
-        db = fast or db
-        query = ctx.path("query.fasta")
-        query.write_text(f">query\n{sequence}\n", encoding="utf-8")
-        out = ctx.path("mmseqs_hits.m8")
-        threads = max(1, (os.cpu_count() or 2) - 1)
-        result = ctx.run([exe, "easy-search", str(query), str(db), str(out), str(ctx.tmp_dir / "mmseqs"),
-                          "-e", str(evalue), "-s", "7.5", "--max-seqs", str(max(300, max_hits * 6)),
-                          "--threads", str(threads), "--format-output", ",".join(MMSEQS_FIELDS)],
-                         log_output=False)
-        if result.returncode != 0 or not out.exists():
-            raise AppError(f"MMseqs2 è terminato con errore: {result.output[-500:]}")
-        hits = parse_mmseqs_m8(out.read_text(encoding="utf-8", errors="replace"))[:max_hits]
-    else:
+    elif engine == "local":
         exe = tools.find("blastp")
         if not exe:
             raise ToolUnavailable("BLAST+ (blastp) non è installato.")
         db = local_database(databases_dir) if databases_dir else None
         if db is None:
             raise ToolUnavailable("Database locale 'pdbaa' non trovato in data/databases/pdbaa.")
-        query = ctx.path("query.fasta")
-        query.write_text(f">query\n{sequence}\n", encoding="utf-8")
-        result = ctx.run([exe, "-query", str(query), "-db", str(db), "-evalue", str(evalue),
-                          "-max_target_seqs", str(max_hits), "-outfmt", "5"], env=default_env(), log_output=False)
-        if result.returncode != 0:
-            raise AppError(f"blastp è terminato con errore: {result.output[-500:]}")
-        start = result.output.find("<?xml")
-        hits = _hits_from_blast_xml(result.output[start:] if start >= 0 else result.output, len(sequence), "local")
-    if engine != "rcsb" and hits:
-        ctx.progress(0.9, "Metadati delle strutture (RCSB)")
-        try:
-            meta = remote.rcsb_metadata([h["pdb_id"] for h in hits[:100]])
-            for h in hits:
-                info = meta.get(h["pdb_id"], {})
-                h["method"] = info.get("method", "")
-                h["resolution"] = info.get("resolution")
-                h["title"] = h["title"] or info.get("title", "")
-        except AppError as exc:
-            ctx.log(f"Metadati RCSB non disponibili: {exc.message}")
-    return {"engine": engine, "engine_label": ENGINES[engine], "query_length": len(sequence), "hits": hits}
+    taxid = taxid if engine == "ncbi" else ""  # il filtro tassonomico esiste solo per NCBI
+    descriptor = {
+        "engine": engine, "sequence": re.sub(r"\s+", "", sequence).upper(), "evalue": float(evalue),
+        "max_hits": int(max_hits), "taxid": taxid,
+        "database": database_stamp(db) if db is not None else None,
+        # l'indice veloce di MMseqs2 è una copia su questo computer: i risultati si tengono distinti
+        "indexed": fast is not None,
+        "tool": cache.file_stamp(exe),
+    }
+    outcome = {"complete": True}
+
+    def run() -> dict:
+        if engine == "rcsb":
+            hits = remote.rcsb_sequence_search(sequence, evalue=evalue, max_hits=max_hits, check=ctx.check,
+                                               log=ctx.log)
+        elif engine == "ncbi":
+            entrez = f"txid{taxid}[ORGN]" if taxid else ""
+            xml = remote.ncbi_blast(sequence, evalue=evalue, max_hits=max_hits, entrez_query=entrez,
+                                    email=ctx.settings.contact_email, check=ctx.check, log=ctx.log)
+            hits = _hits_from_blast_xml(xml, len(sequence), "ncbi")
+        elif engine == "mmseqs":
+            if fast is None:
+                ctx.log("Indice veloce MMseqs2 assente su questo computer: ricerca senza indice "
+                        "(crealo da Impostazioni → Database).")
+            query = ctx.path("query.fasta")
+            query.write_text(f">query\n{sequence}\n", encoding="utf-8")
+            out = ctx.path("mmseqs_hits.m8")
+            threads = max(1, (os.cpu_count() or 2) - 1)
+            result = ctx.run([exe, "easy-search", str(query), str(fast or db), str(out), str(ctx.tmp_dir / "mmseqs"),
+                              "-e", str(evalue), "-s", "7.5", "--max-seqs", str(max(300, max_hits * 6)),
+                              "--threads", str(threads), "--format-output", ",".join(MMSEQS_FIELDS)],
+                             log_output=False)
+            if result.returncode != 0 or not out.exists():
+                raise AppError(f"MMseqs2 è terminato con errore: {result.output[-500:]}")
+            hits = parse_mmseqs_m8(out.read_text(encoding="utf-8", errors="replace"))[:max_hits]
+        else:
+            query = ctx.path("query.fasta")
+            query.write_text(f">query\n{sequence}\n", encoding="utf-8")
+            result = ctx.run([exe, "-query", str(query), "-db", str(db), "-evalue", str(evalue),
+                              "-max_target_seqs", str(max_hits), "-outfmt", "5"], env=default_env(), log_output=False)
+            if result.returncode != 0:
+                raise AppError(f"blastp è terminato con errore: {result.output[-500:]}")
+            start = result.output.find("<?xml")
+            hits = _hits_from_blast_xml(result.output[start:] if start >= 0 else result.output, len(sequence),
+                                        "local")
+        if engine != "rcsb" and hits:
+            ctx.progress(0.9, "Metadati delle strutture (RCSB)")
+            try:
+                meta = remote.rcsb_metadata([h["pdb_id"] for h in hits[:100]])
+                for h in hits:
+                    info = meta.get(h["pdb_id"], {})
+                    h["method"] = info.get("method", "")
+                    h["resolution"] = info.get("resolution")
+                    h["title"] = h["title"] or info.get("title", "")
+            except AppError as exc:
+                ctx.log(f"Metadati RCSB non disponibili: {exc.message}")
+                outcome["complete"] = False  # senza metodo e risoluzione: risultato parziale, non va in cache
+        return {"engine": engine, "engine_label": ENGINES[engine], "query_length": len(sequence), "hits": hits}
+
+    return cache.run_cached(ctx, "search", descriptor, run, use_cache=use_cache, ttl=CACHE_TTL.get(engine),
+                            keep=lambda _result: outcome["complete"])
 
 
 def best_template(hits: list[dict]) -> Optional[dict]:

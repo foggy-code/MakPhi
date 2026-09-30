@@ -2,7 +2,9 @@
 
 Cosa viene eliminato (all'avvio, una volta al giorno e su richiesta):
   - file caricati per l'analisi più vecchi dei giorni impostati (0 = mai);
-  - risposte dei servizi remoti in cache più vecchie di CACHE_MAX_AGE_DAYS (oltre il TTL più lungo);
+  - voci della cache più vecchie di CACHE_MAX_AGE_DAYS (oltre il TTL più lungo): risposte dei servizi remoti
+    e risultati di ricerche e allineamenti (`cache/compute`, core/cache.py), più i file temporanei di
+    scritture atomiche interrotte (es. chiavetta scollegata durante la scrittura);
   - file temporanei e cartelle di lavoro nello scratch che non appartengono a job attivi.
 I risultati dei job, la libreria template, i database e le licenze non vengono mai toccati.
 """
@@ -55,9 +57,14 @@ class Housekeeping:
                 if path.is_file() and _older_than(path, days * 86400, now):
                     drop(path, "uploads")
         if self.paths.cache.exists():
-            for path in self.paths.cache.rglob("*.json"):
-                if _older_than(path, CACHE_MAX_AGE_DAYS * 86400, now):
+            for path in list(self.paths.cache.rglob("*")):
+                if not path.is_file():
+                    continue
+                if path.suffix == ".json" and _older_than(path, CACHE_MAX_AGE_DAYS * 86400, now):
                     drop(path, "cache")
+                elif path.name.startswith(".") and path.suffix == ".tmp" \
+                        and _older_than(path, SCRATCH_TMP_MAX_AGE_HOURS * 3600, now):
+                    drop(path, "cache")  # scrittura atomica interrotta
         active = {j["id"] for j in self.jobs.list(statuses=sorted(ACTIVE), limit=500)}
         scratch_jobs = self.paths.scratch / "jobs"
         if scratch_jobs.exists() and self.jobs.scratch_jobs is not None:
@@ -74,11 +81,14 @@ class Housekeeping:
     def storage(self) -> dict:
         p = self.paths
         db_files = [p.db, p.db.with_name(p.db.name + "-wal"), p.db.with_name(p.db.name + "-journal")]
+        compute_cache = dir_size(p.compute_cache)
         return {
             "jobs": dir_size(p.jobs),
             "templates": dir_size(p.templates),
             "uploads": dir_size(p.uploads),
-            "cache": dir_size(p.cache),
+            # "cache" = risposte dei servizi remoti; la cache dei calcoli, che sta al suo interno, è a parte
+            "cache": max(0, dir_size(p.cache) - compute_cache),
+            "compute_cache": compute_cache,
             "databases": dir_size(p.databases),
             "licenses": dir_size(p.licenses),
             "database_file": sum(f.stat().st_size for f in db_files if f.exists()),

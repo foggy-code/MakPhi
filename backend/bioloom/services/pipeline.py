@@ -110,7 +110,12 @@ class PipelineService:
         ctx.check()
         counts = {row["status"]: row["n"] for row in self.db.query(
             "SELECT status, COUNT(*) AS n FROM pipeline_items WHERE job_id=? GROUP BY status", (ctx.job_id,))}
-        return {"total": total, "counts": counts}
+        cache_hits = sum(1 for row in self.db.query("SELECT metrics FROM pipeline_items WHERE job_id=?",
+                                                    (ctx.job_id,))
+                         if isinstance(row["metrics"], dict) and row["metrics"].get("search_cached_at"))
+        if cache_hits:
+            ctx.log(f"{cache_hits} ricerche di template riusate dalla cache dei calcoli")
+        return {"total": total, "counts": counts, "search_cache_hits": cache_hits}
 
     def _update(self, job_id: str, idx: int, **fields) -> None:
         if "metrics" in fields:
@@ -140,6 +145,8 @@ class PipelineService:
 
     def _run_item(self, ctx: JobContext, sub: JobContext, p: dict, item: dict) -> bool:
         job_id, idx, name = ctx.job_id, item["idx"], item["name"]
+        # provenienza della ricerca (cache dei calcoli), conservata anche nelle metriche finali
+        search_info: dict = {}
         try:
             if p.get("template_mode", "auto") == "fixed":
                 templates = p.get("templates") or []
@@ -149,7 +156,11 @@ class PipelineService:
                 self._update(job_id, idx, status="searching", stage="Ricerca del template")
                 result = search.search(sub, item["sequence"], engine=p.get("engine", "rcsb"),
                                        evalue=float(p.get("evalue", 1e-3)), max_hits=25,
-                                       databases_dir=self.compute.databases_dir)
+                                       databases_dir=self.compute.databases_dir,
+                                       use_cache=bool(p.get("use_cache", True)))
+                if result.get("cached"):
+                    search_info = {"search_cached_at": result.get("cached_at")}
+                    self._update(job_id, idx, metrics=search_info)
                 best = search.best_template(result["hits"])
                 if best is None:
                     self._update(job_id, idx, status="failed", stage="Nessun template",
@@ -182,7 +193,7 @@ class PipelineService:
                          grade_score=q.get("grade_score"), rama_favored=q.get("rama_favored"),
                          clashscore=q.get("clashscore"),
                          metrics={"zdope": best_model.get("zdope"), "molpdf": best_model.get("molpdf"),
-                                  "models": len(res["models"]), **q},
+                                  "models": len(res["models"]), **q, **search_info},
                          finished_at=now_iso())
             return True
         except JobCancelled:

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { JobSummary, PipelinePage, SearchEngine, Sequence, TemplateRef } from "../api/types";
+import type { JobSummary, PipelinePage, PipelineResult, SearchEngine, Sequence, TemplateRef } from "../api/types";
+import { RecomputeOption } from "../components/CacheOption";
 import { SequenceFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
@@ -9,7 +10,7 @@ import { TemplatePicker } from "../components/Pickers";
 import { Viewer3D } from "../components/Viewer3D";
 import { Badge, BarCell, Card, Empty, Field, Grade, Modal, PageHead, Segmented, StatusBadge } from "../components/ui";
 import { useProject, useToast } from "../lib/context";
-import { fmtEvalue, fmtNum, isActive, relTime, STATUS_LABEL } from "../lib/format";
+import { fmtDate, fmtEvalue, fmtNum, isActive, relTime, STATUS_LABEL } from "../lib/format";
 import { recordsToFasta } from "../lib/files";
 import { useAsync, useInterval, useJob } from "../lib/hooks";
 
@@ -26,7 +27,7 @@ const SORTS: { key: string; label: string }[] = [
   { key: "clashscore", label: "Clash" },
 ];
 
-function Items({ jobId, running }: { jobId: string; running: boolean }) {
+function Items({ jobId, running, cacheHits }: { jobId: string; running: boolean; cacheHits?: number }) {
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(25);
   const [status, setStatus] = useState("all");
@@ -44,6 +45,7 @@ function Items({ jobId, running }: { jobId: string; running: boolean }) {
   return (
     <Card
       title="Risultati per sequenza"
+      sub={cacheHits ? `${cacheHits} ricerche di template dalla cache` : undefined}
       right={
         <>
           <a className="btn btn-sm" href={api.pipelineCsvUrl(jobId)}><Icon name="download" size={13} /> CSV</a>
@@ -88,6 +90,7 @@ function Items({ jobId, running }: { jobId: string; running: boolean }) {
                   </td>
                   <td className="nowrap">
                     {it.template ?? "—"} {it.twilight ? <Badge tone="warn" title="Identità o copertura sotto soglia">crepuscolare</Badge> : null}
+                    {it.metrics?.search_cached_at && <Badge tone="info" title={`Ricerca del template riusata dalla cache dei calcoli (${fmtDate(it.metrics.search_cached_at)})`}>cache</Badge>}
                     {it.evalue != null && <div className="tiny muted">E {fmtEvalue(it.evalue)}</div>}
                   </td>
                   <td className="num"><BarCell value={it.identity} /></td>
@@ -150,9 +153,10 @@ export default function Pipeline() {
   const [quality, setQuality] = useState(true);
   const [extended, setExtended] = useState(false);
   const [parallel, setParallel] = useState(2);
+  const [recompute, setRecompute] = useState(false);
   const { data: projectSeqs } = useAsync<Sequence[]>(() => (projectId ? api.sequences(projectId) : Promise.resolve([])), [projectId]);
   const { data: recent } = useAsync<JobSummary[]>(() => api.jobs({ project_id: projectId ?? undefined, kind: "pipeline", limit: 10 }), [projectId, jobId]);
-  const { summary, log, cancel } = useJob(jobId, { withLog: true });
+  const { job, summary, log, cancel } = useJob<PipelineResult>(jobId, { withLog: true });
   const count = (fasta.match(/^>/gm) ?? []).length;
 
   const submit = async () => {
@@ -170,6 +174,7 @@ export default function Pipeline() {
         quality,
         extended_quality: quality && extended,
         parallel,
+        use_cache: !recompute,
       });
       setParams({ job: j.id });
       toast.push("Pipeline avviata: prosegue anche chiudendo il browser");
@@ -222,6 +227,8 @@ export default function Pipeline() {
                     <Field label="Copertura minima (%)"><input className="input" type="number" value={twCoverage} onChange={(e) => setTwCoverage(Number(e.target.value))} /></Field>
                   </div>
                   <span className="tiny muted">Con il filtro disattivato le sequenze sotto soglia vengono comunque modellate e contrassegnate (utile per proteine orfane).</span>
+                  <RecomputeOption checked={recompute} onChange={setRecompute} label="Ricalcola le ricerche ignorando la cache" />
+                  <span className="tiny muted">Rilanciando le stesse sequenze con altre opzioni di modellazione, le ricerche già fatte vengono riusate.</span>
                 </>
               ) : (
                 <TemplatePicker value={templates} onChange={setTemplates} />
@@ -261,7 +268,7 @@ export default function Pipeline() {
           {jobId ? (
             <>
               <JobPanel summary={summary} log={log} onCancel={cancel} />
-              <Items jobId={jobId} running={summary ? isActive(summary.status) : false} />
+              <Items jobId={jobId} running={summary ? isActive(summary.status) : false} cacheHits={job?.id === jobId ? job.result?.search_cache_hits : undefined} />
             </>
           ) : <Card><Empty icon="layers" title="Avvia una pipeline o aprine una recente" /></Card>}
         </div>
