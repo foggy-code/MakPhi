@@ -3,7 +3,7 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { SystemInfo } from "../api/types";
 import { useProject, useToast } from "../lib/context";
-import { SYSTEM_CHANGED, useInterval, useLocalStorage } from "../lib/hooks";
+import { SYSTEM_CHANGED, useInterval, useJobsFeed, useLocalStorage } from "../lib/hooks";
 import { Icon } from "./Icon";
 import { Confirm, Modal } from "./ui";
 
@@ -54,6 +54,14 @@ export function Layout() {
     return () => window.removeEventListener(SYSTEM_CHANGED, load);
   }, []);
 
+  // contatore dei job attivi dal flusso dell'elenco; se il flusso cade, polling (che segnala anche il server fermo)
+  const live = useJobsFeed((type, data) => {
+    const count = (data as { active?: unknown } | null)?.active;
+    if ((type === "ready" || type === "active") && typeof count === "number") {
+      setActive(count);
+      setOffline(false);
+    }
+  });
   useInterval(() => {
     api
       .jobs({ status: "queued,running,cancelling", limit: 100 })
@@ -62,7 +70,7 @@ export function Layout() {
         setOffline(false);
       })
       .catch(() => setOffline(true));
-  }, 3000);
+  }, live ? null : 3000);
 
   return (
     <div className="app">

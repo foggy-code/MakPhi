@@ -12,6 +12,7 @@ from ..services.compute import ComputeService
 from ..services.databases import DatabaseService
 from ..services.housekeeping import Housekeeping
 from ..services.licenses import LicenseService
+from ..services.live import LiveService
 from ..services.pipeline import PipelineService
 from ..services.projects import ProjectService
 from ..services.selftest import SelfTestService
@@ -37,6 +38,12 @@ class Core:
     databases: DatabaseService
     started_at: float = field(default_factory=time.time)
     server: Any = None
+    live: LiveService | None = None  # flussi SSE dei job, creato in build_core
+
+    def shutting_down(self) -> bool:
+        """Arresto in corso: segnale ricevuto da uvicorn (`should_exit`) o JobManager chiuso. I flussi SSE si
+        chiudono da soli, altrimenti uvicorn aspetterebbe all'infinito le loro connessioni prima di fermarsi."""
+        return self.jobs.closed or bool(getattr(self.server, "should_exit", False))
 
     def delete_project(self, project_id: str) -> None:
         self.projects.get(project_id)
@@ -80,6 +87,8 @@ def build_core(paths: Paths) -> Core:
         print(f"[BioLoom] pulizia iniziale non riuscita: {exc}")
     housekeeping.start()
     core = Core(paths, settings, db, jobs, library, projects, compute, pipeline, housekeeping, licenses, databases)
+    core.live = LiveService(jobs)
+    core.live.stopping = core.shutting_down
     if recovered:
         print(f"[BioLoom] {recovered} job interrotti dal precedente arresto sono stati marcati come falliti "
               "(le pipeline si possono riprendere).")

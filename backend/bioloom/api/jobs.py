@@ -1,4 +1,9 @@
-"""Job: elenco, stato, log incrementale, file prodotti, annullamento, ripresa, eliminazione."""
+"""Job: elenco, stato, log incrementale, file prodotti, annullamento, ripresa, eliminazione.
+
+I riepiloghi dei job (elenco, dettaglio, stato, annullamento, ripresa) hanno `eta_seconds`: tempo residuo
+stimato dei job in esecuzione, null se non stimabile. `GET /api/jobs/events` e `GET /api/jobs/{id}/events`
+sono flussi Server-Sent Events (services/live.py) per seguire i job senza polling.
+"""
 
 from __future__ import annotations
 
@@ -6,10 +11,11 @@ import os
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Literal, Optional
+from typing import AsyncIterator, Literal, Optional
 
+import anyio.to_thread
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import FileResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
@@ -23,6 +29,10 @@ router = APIRouter(prefix="/api/jobs", tags=["Job"])
 
 MEDIA = {".pdb": "chemical/x-pdb", ".json": "application/json", ".ali": "text/plain", ".pap": "text/plain",
          ".fasta": "text/plain", ".aln": "text/plain", ".log": "text/plain", ".py": "text/plain", ".csv": "text/csv"}
+# niente cache né buffering dei proxy (nginx: X-Accel-Buffering) sugli eventi in tempo reale
+SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+SSE_RESPONSE = {200: {"content": {"text/event-stream": {}}, "description": "Flusso Server-Sent Events"},
+                503: {"description": "Troppi flussi aperti: usare il polling"}}
 
 
 class ResumeIn(BaseModel):
@@ -30,17 +40,29 @@ class ResumeIn(BaseModel):
         "incomplete", description="incomplete = tutti gli elementi non conclusi; failed = solo i falliti")
 
 
+def _event_stream(stream: AsyncIterator[str]) -> StreamingResponse:
+    return StreamingResponse(stream, media_type="text/event-stream", headers=SSE_HEADERS)
+
+
 @router.get("")
 def list_jobs(project_id: Optional[str] = None, kind: Optional[str] = None,
               status: Optional[str] = Query(None, description="Stati separati da virgola"),
               limit: int = 100, offset: int = 0, core: Core = Depends(get_core)) -> list[dict]:
     statuses = [s for s in (status or "").split(",") if s]
-    return core.jobs.list(project_id=project_id, kind=kind, statuses=statuses or None, limit=limit, offset=offset)
+    return core.jobs.with_eta(
+        core.jobs.list(project_id=project_id, kind=kind, statuses=statuses or None, limit=limit, offset=offset))
+
+
+@router.get("/events", response_class=StreamingResponse, responses=SSE_RESPONSE)
+async def jobs_events(project_id: Optional[str] = None, core: Core = Depends(get_core)) -> StreamingResponse:
+    """Flusso SSE dell'elenco dei job (tutti o di un progetto): eventi `ready`, `job`, `items`, `active`,
+    `deleted`, `resync`, `reconnect`. Dichiarata prima di `/{job_id}`, che altrimenti la catturerebbe."""
+    return _event_stream(core.live.list_events(project_id))
 
 
 @router.get("/{job_id}")
 def get_job(job_id: str, core: Core = Depends(get_core)) -> dict:
-    job = core.jobs.get(job_id)
+    job = core.jobs.with_eta(core.jobs.get(job_id))
     job["files"] = core.jobs.list_files(job_id)
     job.update(core.pipeline.resume_state(job))  # resumable, resumable_items (solo le pipeline si riprendono)
     return job
@@ -48,7 +70,17 @@ def get_job(job_id: str, core: Core = Depends(get_core)) -> dict:
 
 @router.get("/{job_id}/status")
 def job_status(job_id: str, core: Core = Depends(get_core)) -> dict:
-    return core.jobs.get(job_id, include_result=False)
+    return core.jobs.with_eta(core.jobs.get(job_id, include_result=False))
+
+
+@router.get("/{job_id}/events", response_class=StreamingResponse, responses=SSE_RESPONSE)
+async def job_events(job_id: str, offset: int = Query(0, ge=0, description="Byte del log da cui ripartire"),
+                     log: bool = Query(True, description="false = solo stato, senza righe di log"),
+                     core: Core = Depends(get_core)) -> StreamingResponse:
+    """Flusso SSE di un job: `status` (riepilogo con eta_seconds) quando cambia, `log` (righe nuove dal byte
+    `offset`, con l'offset successivo), `end` quando il job è terminato; poi il flusso si chiude."""
+    await anyio.to_thread.run_sync(core.jobs.get, job_id, False)  # 404 (o 400) prima di aprire il flusso
+    return _event_stream(core.live.job_events(job_id, offset, log))
 
 
 @router.get("/{job_id}/log")
@@ -58,14 +90,14 @@ def job_log(job_id: str, offset: int = 0, core: Core = Depends(get_core)) -> dic
 
 @router.post("/{job_id}/cancel")
 def cancel_job(job_id: str, core: Core = Depends(get_core)) -> dict:
-    return core.jobs.cancel(job_id)
+    return core.jobs.with_eta(core.jobs.cancel(job_id))
 
 
 @router.post("/{job_id}/resume")
 def resume_job(job_id: str, body: Optional[ResumeIn] = None, core: Core = Depends(get_core)) -> dict:
     """Riprende una pipeline fallita, annullata o completata con elementi falliti: rielabora solo gli elementi
     non conclusi (o i falliti)."""
-    return core.pipeline.resume(job_id, (body or ResumeIn()).scope)
+    return core.jobs.with_eta(core.pipeline.resume(job_id, (body or ResumeIn()).scope))
 
 
 @router.delete("/{job_id}")

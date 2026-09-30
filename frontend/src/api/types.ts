@@ -20,6 +20,21 @@ export interface JobSummary {
   started_at: string | null;
   finished_at: string | null;
   updated_at: string;
+  /** secondi rimanenti stimati, solo per i job in esecuzione; null se non stimabile */
+  eta_seconds?: number | null;
+}
+
+/** Evento "log" del flusso SSE di un job: righe complete dal byte `start` al byte `offset` del log. */
+export interface JobLogChunk {
+  start: number;
+  offset: number;
+  text: string;
+}
+
+/** Evento "items" del flusso dell'elenco: elementi di una pipeline cambiati (`idx` null = molti insieme). */
+export interface JobItemsEvent {
+  job_id: string;
+  idx: number[] | null;
 }
 
 export interface JobFile {

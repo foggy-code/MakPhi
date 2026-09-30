@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { JobSummary, PipelinePage, PipelineResult, ResumeScope, SearchEngine, Sequence, TemplateItem, TemplateRef } from "../api/types";
+import type { JobItemsEvent, JobSummary, PipelinePage, PipelineResult, ResumeScope, SearchEngine, Sequence, TemplateItem, TemplateRef } from "../api/types";
 import { RecomputeOption } from "../components/CacheOption";
 import { SequenceFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
@@ -14,7 +14,7 @@ import { hasPredictedTemplate, PLDDT_DEFAULT } from "../lib/alphafold";
 import { useProject, useToast } from "../lib/context";
 import { fmtDate, fmtEvalue, fmtNum, isActive, relTime, searchCacheHitsLabel, STATUS_LABEL } from "../lib/format";
 import { recordsToFasta } from "../lib/files";
-import { useAsync, useInterval, useJob } from "../lib/hooks";
+import { useAsync, useInterval, useJob, useJobsFeed, useLiveJobList, useThrottled } from "../lib/hooks";
 
 const SORTS: { key: string; label: string }[] = [
   { key: "idx", label: "#" },
@@ -37,7 +37,12 @@ function Items({ jobId, running, cacheHits }: { jobId: string; running: boolean;
   const [q, setQ] = useState("");
   const [view, setView] = useState<{ name: string; path: string } | null>(null);
   const { data, reload } = useAsync<PipelinePage>(() => api.pipelineItems(jobId, { page, size, status, sort: sort.key, direction: sort.dir, q }), [jobId, page, size, status, sort.key, sort.dir, q]);
-  useInterval(reload, running ? 3000 : null);
+  // la pagina si ricarica quando il flusso dell'elenco segnala elementi cambiati; polling solo senza flusso
+  const refresh = useThrottled(reload, 1000);
+  const live = useJobsFeed((type, event) => {
+    if (type === "items" ? (event as JobItemsEvent | null)?.job_id === jobId : type === "ready" || type === "resync") refresh();
+  });
+  useInterval(reload, running && !live ? 3000 : null);
   const wasRunning = useRef(running);
   useEffect(() => {
     // stato finale degli elementi al termine; alla ripresa, subito gli elementi rimessi in attesa
@@ -168,7 +173,9 @@ export default function Pipeline() {
   const { data: library } = useAsync<TemplateItem[]>(() => api.templates(), [templates.map((t) => t.id).join(",")]);
   // la soglia pLDDT serve solo se i template possono essere modelli AlphaFold
   const predictedPossible = mode === "auto" ? engine === "alphafold" : hasPredictedTemplate(templates, library);
-  const { data: recent, reload: reloadRecent } = useAsync<JobSummary[]>(() => api.jobs({ project_id: projectId ?? undefined, kind: "pipeline", limit: 10 }), [projectId, jobId]);
+  const { data: recent, reload: reloadRecent, setData: setRecent } = useAsync<JobSummary[]>(() => api.jobs({ project_id: projectId ?? undefined, kind: "pipeline", limit: 10 }), [projectId, jobId]);
+  // stato delle pipeline recenti dal flusso dell'elenco (anche quelle avviate da un'altra scheda)
+  useLiveJobList(recent, setRecent, reloadRecent, (j) => j.kind === "pipeline" && (!projectId || j.project_id === projectId));
   const { job, summary, log, cancel, resume } = useJob<PipelineResult>(jobId, { withLog: true });
   const count = (fasta.match(/^>/gm) ?? []).length;
   const running = summary ? isActive(summary.status) : false;

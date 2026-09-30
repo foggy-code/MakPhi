@@ -91,6 +91,22 @@ export function fmtDuration(start: string | null, end: string | null): string {
   return `${Math.floor(m / 60)} h ${m % 60} min`;
 }
 
+/**
+ * Tempo residuo stimato dal server (`eta_seconds`), approssimato come la stima: "circa 3 min rimanenti",
+ * "meno di un minuto rimanente", "circa 1 h 20 min rimanenti". null se non c'è una stima.
+ */
+export function fmtEta(seconds: number | null | undefined): string | null {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds) || seconds < 0) return null;
+  if (seconds < 60) return "meno di un minuto rimanente";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `circa ${minutes} min ${minutes === 1 ? "rimanente" : "rimanenti"}`;
+  // oltre l'ora la stima è a passi di 5 minuti
+  const total = Math.round(seconds / 300) * 5;
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  return `circa ${h} h${m ? ` ${m} min` : ""} ${h === 1 && !m ? "rimanente" : "rimanenti"}`;
+}
+
 export function relTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   const diff = (Date.now() - new Date(iso).getTime()) / 1000;

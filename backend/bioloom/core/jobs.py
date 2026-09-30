@@ -12,10 +12,15 @@ Un job terminato con errore o annullato può essere rimesso in coda (`requeue`):
 per riprendere solo gli elementi non conclusi, conservando log e risultati già salvati (e, su richiesta
 esplicita, anche da completata, per riprovare gli elementi falliti). Ripresa, avvio ed eliminazione sono
 mutuamente esclusivi: un job rimesso in coda non può essere eliminato mentre riparte.
+
+Ogni cambiamento (stato, progresso, righe di log scritte su disco, esecuzione chiusa, eliminazione) viene
+pubblicato su `events` (core/events.py), da cui i flussi SSE lo ricevono senza interrogare di continuo il
+database; `estimate` stima il tempo residuo dei job in esecuzione (core/eta.py).
 """
 
 from __future__ import annotations
 
+import codecs
 import collections
 import fnmatch
 import os
@@ -29,12 +34,14 @@ import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 from .db import Database, encode_json, now_iso
 from .errors import AppError, Conflict, NotFound
+from .eta import progress_eta, seconds_between
+from .events import DELETED, IDLE, JOB, LOG, ChangeFeed
 from .storage import atomic_write_json, remove_tree, safe_join, validate_identifier
 
 TERMINAL = frozenset({"completed", "failed", "cancelled"})
@@ -110,12 +117,15 @@ class ProcessResult:
 
 
 Handler = Callable[["JobContext", dict], dict]
+# stima del tempo residuo di un job in esecuzione (riga di `jobs`, adesso): secondi o None
+EtaEstimator = Callable[[dict, datetime], Optional[int]]
 
 
 @dataclass
 class _Registration:
     fn: Handler
     pool: str
+    eta: Optional[EtaEstimator] = None
 
 
 class JobContext:
@@ -254,6 +264,7 @@ class JobManager:
         self._log_dirty: dict[str, float] = {}
         self._log_lock = threading.Lock()
         self._stop = threading.Event()
+        self.events = ChangeFeed()
         jobs_dir.mkdir(parents=True, exist_ok=True)
         if self.scratch_jobs is not None:
             self.scratch_jobs.mkdir(parents=True, exist_ok=True)
@@ -261,8 +272,9 @@ class JobManager:
         self._flusher.start()
 
     # ------------------------------------------------------------------ registrazione e avvio
-    def register(self, kind: str, fn: Handler, pool: str = "cpu") -> None:
-        self._handlers[kind] = _Registration(fn, pool)
+    def register(self, kind: str, fn: Handler, pool: str = "cpu", eta: Optional[EtaEstimator] = None) -> None:
+        """Registra l'handler di un tipo di job; `eta` sostituisce la stima dal progresso (es. la pipeline)."""
+        self._handlers[kind] = _Registration(fn, pool, eta)
 
     def recover(self) -> int:
         """Marca come falliti i job rimasti attivi da un'esecuzione precedente e svuota lo scratch.
@@ -299,6 +311,7 @@ class JobManager:
             prepare(job_id, workdir)
         with self._lock:
             self._cancel_events[job_id] = threading.Event()
+        self.events.publish(job_id, JOB)
         self._pools[self._handlers[kind].pool].submit(self._execute, job_id)
         return self.get(job_id)
 
@@ -350,6 +363,7 @@ class JobManager:
                     or Conflict("Ripresa non riuscita.")
             self._cancel_events[job_id] = threading.Event()
             self._preparing.add(job_id)
+        self.events.publish(job_id, JOB)  # di nuovo attivo: i client aprono un nuovo flusso
         try:
             self._log_now(job_id, "Ripresa del job" + (f": {note}" if note else ""))
             if prepare is not None:
@@ -366,6 +380,7 @@ class JobManager:
             with self._idle:
                 self._preparing.discard(job_id)
                 self._idle.notify_all()
+            self.events.publish(job_id, IDLE)
         # se nel frattempo è stato annullato, l'esecuzione trova lo stato cambiato e non parte
         self._pools[self._handlers[job["kind"]].pool].submit(self._execute, job_id)
         return self.get(job_id, include_result=False)
@@ -381,8 +396,15 @@ class JobManager:
         return job
 
     def list(self, *, project_id: Optional[str] = None, kind: Optional[str] = None,
-             statuses: Optional[list[str]] = None, limit: int = 100, offset: int = 0) -> list[dict]:
+             statuses: Optional[list[str]] = None, limit: int = 100, offset: int = 0,
+             ids: Optional[Iterable[str]] = None) -> list[dict]:
         where, args = [], []
+        if ids is not None:  # solo questi job (quelli inesistenti si ignorano)
+            ids = sorted(set(ids))
+            if not ids:
+                return []
+            where.append(f"id IN ({','.join('?' * len(ids))})")
+            args.extend(ids)
         if project_id:
             where.append("project_id=?")
             args.append(project_id)
@@ -401,6 +423,41 @@ class JobManager:
     def count_active(self) -> int:
         return int(self.db.scalar("SELECT COUNT(*) FROM jobs WHERE status IN ('queued','running','cancelling')"))
 
+    def estimate(self, job: dict, now: Optional[datetime] = None) -> Optional[int]:
+        """Secondi rimanenti stimati di un job in esecuzione (core/eta.py); None se non stimabile.
+
+        Nessuna stima per job in coda, in annullamento o terminati. I tipi che registrano uno stimatore
+        (`register(eta=...)`, la pipeline) lo usano; gli altri stimano dal progresso.
+        """
+        if job.get("status") != "running":
+            return None
+        now = now or datetime.now(timezone.utc)
+        registration = self._handlers.get(job.get("kind", ""))
+        try:
+            if registration is not None and registration.eta is not None:
+                return registration.eta(job, now)
+            return progress_eta(seconds_between(job.get("started_at"), now), job.get("progress"))
+        except (TypeError, ValueError, ArithmeticError):  # dati inattesi: la stima manca, la lettura riesce
+            return None
+
+    def with_eta(self, jobs: dict | list[dict], now: Optional[datetime] = None) -> dict | list[dict]:
+        """Aggiunge `eta_seconds` a un riepilogo di job o a un elenco (null se non stimabile); restituisce l'input."""
+        now = now or datetime.now(timezone.utc)
+        for job in ([jobs] if isinstance(jobs, dict) else jobs):
+            job["eta_seconds"] = self.estimate(job, now)
+        return jobs
+
+    def busy(self, job_id: str) -> bool:
+        """L'esecuzione del job (o la preparazione di una sua ripresa) non è ancora chiusa: anche con lo stato
+        già terminale, log e file possono non essere completi."""
+        with self._lock:
+            return job_id in self._running or job_id in self._preparing
+
+    @property
+    def closed(self) -> bool:
+        """Il gestore è stato arrestato (`shutdown`)."""
+        return self._stop.is_set()
+
     def workdir(self, job_id: str) -> Path:
         """Cartella definitiva del job (nella cartella dati)."""
         validate_identifier(job_id, "job_id")
@@ -413,16 +470,33 @@ class JobManager:
             return self.workdir(job_id)
         return safe_join(self.scratch_jobs, job_id)
 
-    def read_log(self, job_id: str, offset: int = 0, limit: int = 256 * 1024) -> dict:
+    def read_log(self, job_id: str, offset: int = 0, limit: int = 256 * 1024, whole_lines: bool = False) -> dict:
+        """Log dal byte `offset` (al massimo `limit` byte): testo, offset successivo, dimensione, inizio letto.
+
+        Con `whole_lines` restituisce solo righe complete (un flush a metà riga o a metà di un carattere
+        multibyte arriva alla lettura successiva); una riga più lunga di `limit` si spezza, ma mai dentro un
+        carattere. I flussi SSE lo usano per inviare ogni riga una volta sola e intera.
+        """
         path = self.workdir(job_id) / LOG_NAME
         if not path.exists():
-            return {"text": "", "offset": 0, "size": 0}
+            return {"text": "", "offset": 0, "size": 0, "start": 0}
         size = path.stat().st_size
         start = offset if 0 <= offset <= size else max(0, size - limit)
         with open(path, "rb") as fh:
             fh.seek(start)
             data = fh.read(limit)
-        return {"text": data.decode("utf-8", errors="replace"), "offset": start + len(data), "size": size}
+        if whole_lines and data and not data.endswith(b"\n"):
+            cut = data.rfind(b"\n")
+            if cut >= 0:
+                data = data[:cut + 1]
+            elif len(data) < limit:
+                data = b""  # riga non ancora completa su disco
+            else:
+                decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+                decoder.decode(data, final=False)
+                data = data[:len(data) - len(decoder.getstate()[0])]  # senza il carattere incompleto finale
+        return {"text": data.decode("utf-8", errors="replace"), "offset": start + len(data), "size": size,
+                "start": start}
 
     def list_files(self, job_id: str) -> list[dict]:
         """File del job: quelli definitivi più, mentre il job è attivo, quelli ancora nello scratch.
@@ -472,8 +546,9 @@ class JobManager:
         # un job in coda si chiude subito; se nel frattempo è partito, lo chiuderà la sua esecuzione
         if not (job["status"] == "queued"
                 and self._finish(job_id, "cancelled", error="Annullato dall'utente.", only_from=("queued",))):
-            self.db.execute("UPDATE jobs SET status='cancelling', stage='Annullamento in corso', updated_at=? "
-                            "WHERE id=? AND status='running'", (now_iso(), job_id))
+            if self.db.execute("UPDATE jobs SET status='cancelling', stage='Annullamento in corso', updated_at=? "
+                               "WHERE id=? AND status='running'", (now_iso(), job_id)):
+                self.events.publish(job_id, JOB)
         return self.get(job_id, include_result=False)
 
     def delete(self, job_id: str) -> None:
@@ -497,6 +572,7 @@ class JobManager:
                 self.get(job_id, include_result=False)  # NotFound se eliminato nel frattempo
                 raise Conflict("Il job è stato ripreso nel frattempo: annullalo prima di eliminarlo.")
             self._cancel_events.pop(job_id, None)
+        self.events.publish(job_id, DELETED, project_id=job.get("project_id"))
         self._close_log(job_id)
         remove_tree(self.workdir(job_id))
         remove_tree(self.live_dir(job_id))
@@ -533,6 +609,7 @@ class JobManager:
                                "WHERE id=? AND status='queued'", (now, now, job_id)) != 1:
                 return
             self._running.add(job_id)
+        self.events.publish(job_id, JOB)
         live = self.live_dir(job_id)
         live.mkdir(parents=True, exist_ok=True)
         ctx = JobContext(self, job_id, live, job["params"] or {}, event)
@@ -565,6 +642,7 @@ class JobManager:
                 self._processes.pop(job_id, None)
                 self._running.discard(job_id)
                 self._idle.notify_all()  # una ripresa o un'eliminazione in attesa può procedere
+            self.events.publish(job_id, IDLE)  # log completo su disco: i flussi SSE possono chiudersi
 
     def _end_run(self, ctx: JobContext, live: Path, status: str, error: str, message: str) -> None:
         """Chiude un'esecuzione annullata o fallita: salva i file, scrive il motivo nel log e lo stato finale.
@@ -627,10 +705,13 @@ class JobManager:
         if only_from:
             guard = f" AND status IN ({','.join('?' * len(only_from))})"
             extra = tuple(only_from)
-        return self.db.execute(
+        changed = self.db.execute(
             "UPDATE jobs SET status=?, result=?, error=?, stage=?, progress=CASE WHEN ?='completed' THEN 1 "
             f"ELSE progress END, finished_at=?, updated_at=? WHERE id=?{guard}",
             (status, encode_json(result), error, stage, status, now, now, job_id, *extra)) == 1
+        if changed:
+            self.events.publish(job_id, JOB)
+        return changed
 
     def _set_progress(self, job_id: str, fraction: Optional[float], stage: Optional[str]) -> None:
         sets, args = ["updated_at=?"], [now_iso()]
@@ -640,7 +721,8 @@ class JobManager:
         if stage is not None:
             sets.append("stage=?")
             args.append(stage[:200])
-        self.db.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=? AND status='running'", (*args, job_id))
+        if self.db.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=? AND status='running'", (*args, job_id)):
+            self.events.publish(job_id, JOB)
 
     # ------------------------------------------------------------------ log
     def _append_log(self, job_id: str, line: str) -> None:
@@ -660,6 +742,7 @@ class JobManager:
             elif now - last >= LOG_FLUSH_SECONDS:
                 fh.flush()
                 self._log_dirty.pop(job_id, None)
+                self.events.publish(job_id, LOG)  # righe nuove su disco: i flussi SSE le leggono
 
     def _log_now(self, job_id: str, message: str) -> None:
         """Riga di log con orario scritta subito su disco, fuori da un'esecuzione (es. la ripresa).
@@ -676,6 +759,7 @@ class JobManager:
                 if fh is not None:
                     try:
                         fh.flush()
+                        self.events.publish(job_id, LOG)
                     except (OSError, ValueError):
                         pass
                 self._log_dirty.pop(job_id, None)
@@ -693,6 +777,7 @@ class JobManager:
                     fh.close()
                 except OSError:  # disco pieno: le ultime righe si perdono, ma l'esecuzione si chiude comunque
                     pass
+                self.events.publish(job_id, LOG)
 
     # ------------------------------------------------------------------ processi
     def _register_process(self, job_id: str, proc: subprocess.Popen) -> None:

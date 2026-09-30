@@ -95,10 +95,10 @@ data/
 
 | Pacchetto | Contenuto |
 |---|---|
-| `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi) |
+| `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi), `eta` (stima del tempo residuo), `events` (notifiche in-process dei cambiamenti dei job) |
 | `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file) |
 | `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB), `remote` (client HTTP), `tools` (rilevamento strumenti, preambolo di licenza) |
-| `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione) |
+| `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job) |
 | `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases` oltre a sistema, progetti, calcoli, job) |
 
 ### Job
@@ -108,7 +108,9 @@ Tutti i calcoli (`search`, `align`, `align2d`, `model`, `loop`, `quality`, `qmea
 
 - stato `queued → running → completed | failed | cancelled` (più `cancelling`) salvato su SQLite;
 - log incrementale (`GET /api/jobs/{id}/log?offset=`) con l'output dei sottoprocessi in tempo reale;
-- progresso e fase aggiornati dagli handler (per MODELLER tramite marcatori `@@BIOLOOM` stampati dallo script);
+- progresso e fase aggiornati dagli handler (per MODELLER tramite marcatori `@@BIOLOOM` stampati dallo script),
+  con la stima del tempo residuo `eta_seconds` e gli aggiornamenti in tempo reale via Server-Sent Events (vedi
+  [Tempo residuo e aggiornamenti in tempo reale](#tempo-residuo-e-aggiornamenti-in-tempo-reale));
 - annullamento immediato (i processi registrati vengono terminati) e timeout configurabile;
 - al riavvio i job rimasti attivi vengono marcati come falliti (nessuno stato "fantasma"), con fase
   "Interrotto"; gli elementi di pipeline non conclusi diventano falliti con lo stesso motivo;
@@ -167,6 +169,84 @@ obbliga a rilanciare tutte le sequenze):
   suo motivo e la ripresa vale per `failed`, `cancelled` e, con elementi falliti, `completed`. Così
   `TERMINAL`/`ACTIVE`, i filtri per stato, i client e i dati esistenti non cambiano, e lo schema SQLite resta lo
   stesso (nessuna migrazione).
+
+### Tempo residuo e aggiornamenti in tempo reale
+
+**Stima del tempo residuo** (`core/eta.py`, logica pura; `JobManager.estimate`). I riepiloghi dei job (elenco,
+dettaglio, `/status`, annullamento, ripresa, eventi SSE) hanno `eta_seconds`, null quando non è stimabile. Nessuna
+colonna nuova: si calcola dai dati già salvati.
+
+| Job | Stima | Quando manca |
+|---|---|---|
+| pipeline | mediana della durata (`finished_at − started_at`) degli elementi conclusi nell'esecuzione corrente × elementi rimanenti, meno il tempo già speso da quelli in corso (al massimo la mediana ciascuno), / min(parallelismo effettivo, rimanenti) | meno di 2 elementi conclusi nell'esecuzione corrente |
+| altri | t_trascorso × (1 − p) / p dal progresso p dichiarato dall'handler | p < 0,05 o meno di 10 s di esecuzione |
+| in coda, in annullamento, terminati | — | sempre |
+
+- **Esecuzione corrente:** elementi avviati dopo lo `started_at` del job, che viene riscritto a ogni avvio. Dopo
+  una ripresa contano solo gli elementi rielaborati: le durate degli elementi conclusi in una sessione precedente
+  (altra macchina, altra rete, cache calda) non entrano nella mediana. Contano completati, filtrati e falliti:
+  anche un fallimento occupa una corsia per quel tempo.
+- **Perché la mediana:** le durate hanno code lunghe (una ricerca NCBI di venti minuti, un elemento fallito in un
+  secondo); la mediana ha punto di rottura del 50 % (Huber e Ronchetti, *Robust Statistics*, 2009). Lavoro residuo /
+  processori è il limite inferiore classico del completamento di compiti indipendenti su processori identici
+  (Graham, SIAM J. Appl. Math. 17, 1969). Togliere il tempo già speso dagli elementi in corso fa scendere la stima
+  con continuità invece che a scatti.
+- **Parallelismo effettivo:** lo stesso dell'esecuzione (`pipeline.effective_parallel`: quello chiesto, non oltre i
+  job paralleli delle Impostazioni né oltre 8).
+- **Arrotondamento:** 5 s sotto il minuto, 10 s sotto i 10 minuti, 1 min sotto l'ora, 5 min oltre; mai negativa.
+  L'interfaccia mostra "circa 3 min rimanenti" (`fmtEta`) in `JobPanel` e nell'elenco dei job.
+
+**Notifiche** (`core/events.py`). Il `JobManager` pubblica ogni cambiamento su un `ChangeFeed` in memoria: stato e
+progresso (`_set_progress`, `_finish`, avvio, annullamento, ripresa), righe di log arrivate su disco (a ogni flush,
+quindi al massimo ogni 0,5 s), esecuzione chiusa (`idle`), job eliminato (con il progetto). La pipeline pubblica ogni
+aggiornamento di un elemento. Ogni cambiamento ha una versione crescente e resta in un buffer circolare (4096): chi
+è rimasto indietro oltre il buffer lo scopre e rilegge tutto. Le coroutine dei flussi aspettano con un
+`asyncio.Event` svegliato dal thread che pubblica (`loop.call_soon_threadsafe`): nessun thread occupato per client.
+
+**Flussi SSE** (`services/live.py`, rotte in `api/jobs.py`). `text/event-stream` con `Cache-Control: no-cache` e
+`X-Accel-Buffering: no`; ogni evento ha dati JSON su una riga.
+
+| Rotta | Eventi |
+|---|---|
+| `GET /api/jobs/{id}/events?offset=&log=` | `status` (riepilogo con `eta_seconds`) quando cambia; `log` con `{start, offset, text}`: righe intere dal byte `offset` (come `/log?offset=`); `end` a job terminato, poi il flusso si chiude. `log=false`: solo stato. 404 se il job non esiste |
+| `GET /api/jobs/events?project_id=` | `ready` (con `active`) all'apertura; `job` quando un job cambia stato, progresso, fase o stima; `items` con gli `idx` degli elementi di pipeline cambiati (null = molti); `active` (numero dei job attivi); `deleted`; `resync` se il flusso ha perso cambiamenti |
+
+- **Fine di un job:** lo stato terminale si invia solo a esecuzione chiusa (`JobManager.busy` falso: log chiuso e
+  scritto tutto), insieme alle ultime righe e a `end`. Chi ricarica il job a quel punto trova il log completo. Se la
+  chiusura tarda oltre 10 s, il flusso chiude comunque con quello che c'è. Un flusso aperto su un job già terminato
+  invia subito stato, log ed `end`; una ripresa riporta il job attivo e il client apre un nuovo flusso.
+- **Righe intere:** `read_log(whole_lines=True)` non restituisce una riga a metà (flush a metà riga o a metà di un
+  carattere multibyte): ogni riga arriva una volta sola e intera. Un log lungo arriva in più passate da 1 MB.
+- **Costo:** le letture (SQLite, file di log) passano per il thread pool solo il tempo della lettura; anche senza
+  notifiche lo stato si rilegge al più ogni secondo (controllo di riserva), e le notifiche ravvicinate si
+  raggruppano (0,2 s). Commento `: ping` dopo 15 s senza eventi, così proxy e browser non chiudono la connessione.
+- **Limiti e chiusura:** al massimo 64 flussi aperti (oltre: 503 `too_many_streams` e il client resta sul
+  polling). Un flusso finisce quando il client si disconnette (`StreamingResponse` annulla il generatore e il posto
+  si libera), a fine job, dopo 30 minuti (evento `reconnect`: il client si riconnette subito dall'offset e l'accesso
+  viene ricontrollato) e all'arresto del server (`Core.shutting_down`: `should_exit` di uvicorn o JobManager
+  chiuso). Senza quest'ultimo controllo uvicorn aspetterebbe all'infinito le connessioni aperte e `docker stop`
+  finirebbe con SIGKILL; misurato: arresto in 1,4 s con un flusso aperto.
+- **Accesso:** il middleware di `app.py` controlla cookie o Bearer anche sulle rotte di streaming, prima che il
+  flusso parta (401). `EventSource` invia i cookie della stessa origine; gli script usano `Authorization: Bearer`.
+
+**Frontend** (`lib/live.ts`, logica pura testata con flussi e timer finti; `lib/hooks.ts`).
+
+- `useJob` apre il flusso del job (`LiveFeed`) quando il job è attivo, la scheda è visibile e il caricamento
+  completo è fatto, dall'offset del log appena letto; lo riapre dopo ogni caricamento completo (ripresa). Gli
+  eventi `status` passano da `recordStatus` come il polling: stesse regole di ricarica di F2.1. `sliceLogChunk`
+  accoda solo i byte nuovi (sovrapposizioni con un polling concorrente tagliate in byte UTF-8, buchi ignorati).
+- **Ricaduta sul polling:** senza `EventSource`, con la scheda nascosta o con il flusso caduto (errore, 401, 503,
+  nessun evento entro 5 s) torna il polling di prima (`jobPollInterval`), mentre il flusso riprova con backoff
+  1, 2, 4… fino a 30 s; il primo evento ricevuto azzera il backoff. Il controllo lento dei job terminati ma
+  riprendibili (5 s) resta com'era.
+- **Flusso dell'elenco condiviso:** uno per scheda (`FeedHub`), usato dal contatore della barra laterale, dalla
+  pagina Job, dalle pipeline recenti e dai job recenti della Panoramica (`useLiveJobList`: aggiornamenti sul posto
+  con `mergeJob`, ricarica per job nuovi o eliminati) e dalla tabella della Pipeline (ricarica al più una volta al
+  secondo sugli eventi `items` del job). Ognuno sospende il proprio polling mentre il flusso è attivo e ricarica a
+  ogni `ready` (dopo una riconnessione). CPU, memoria e disco della Panoramica restano periodici.
+- **Connessioni:** un browser tiene al massimo 6 connessioni HTTP/1.1 per server, contando tutte le schede: per
+  questo l'elenco è condiviso e le schede nascoste chiudono i flussi e li riaprono quando tornano visibili. Una
+  scheda ne usa al massimo due (elenco e job aperto; tre sulla pagina Qualità con QMEAN e analisi insieme).
 
 ### MODELLER
 
@@ -513,8 +593,8 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 | Editor PIR | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
 | Modellazione | input automatico o da PIR, parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); modelli, 3D, PyMOL, archivio |
 | Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi |
-| Pipeline batch | multi-FASTA → modelli validati, filtro zona crepuscolare, tabella paginata, CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti) |
-| Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate |
+| Pipeline batch | multi-FASTA → modelli validati, filtro zona crepuscolare, tabella paginata, CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
+| Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione |
 | Impostazioni | schede Generale (esecuzione, QMEAN, email), Licenze (MODELLER, ProSA, PROCHECK), Database (pdbaa, MMseqs2, UniClust30), Strumenti (verifica dell'installazione), Spazio e file temporanei (con la cache dei calcoli) |
 | Login | solo in modalità server, quando l'API risponde 401 |
 
@@ -578,6 +658,12 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - cache dei calcoli (`test_compute_cache.py`): riscontri senza rieseguire i motori (simulati), invalidazione per
     parametri, sequenza, timbro del database o dello strumento, scadenza, file corrotti, job falliti e annullati,
     riuso nella pipeline e scritture concorrenti;
+  - tempo residuo e flussi SSE (`test_live.py`): formule dell'ETA (arrotondamento, soglie, mai negativa), pipeline con
+    durate note e dopo una ripresa, job con progresso; notifiche fra thread; righe intere del log; flusso di un job
+    con TestClient (stato, log contiguo, fine, offset, 404, ripresa), limite dei flussi, flusso dell'elenco (job,
+    elementi di pipeline, filtro per progetto, eliminazioni, heartbeat), chiusura all'arresto, accesso con chiave
+    (401 senza cookie, 200 con cookie o Bearer); con un server uvicorn vero: eventi mentre il job è fermo,
+    chiusura dopo `end`, posto liberato alla disconnessione del client, arresto non bloccato dai flussi aperti;
   - verifica dell'installazione.
 
   `pytest -m network` prova i servizi reali. Oltre a 1UBQ, `tests/data` contiene strutture sintetiche generate
@@ -588,6 +674,9 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - logica QMEAN locale/remoto/fallback e avvisi delle licenze;
   - pulsanti di ripresa delle pipeline e ricarica del job quando cambia stato, dopo l'annullamento e dopo la
     ripresa;
+  - tempo residuo leggibile (`fmtEta`); scelta fra flusso e polling, riconnessione con backoff, timeout di
+    connessione, fine del flusso, flusso condiviso dell'elenco, ricomposizione del log e aggiornamento degli elenchi
+    (`live.test.ts`, con flussi e timer finti);
   - decodifica dei file, chiave MODELLER da file, vincoli da e verso file;
   - scale di colore e legende (`colorscale.test.ts`), conversione del rapporto nei valori per residuo, pLDDT
     compreso (`residueColoring.test.ts`), confidenza degli allineamenti (`alignConfidence.test.ts`).

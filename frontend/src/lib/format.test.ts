@@ -1,5 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { cachedLabel, searchCacheHitsLabel } from "./format";
+import { cachedLabel, fmtEta, searchCacheHitsLabel } from "./format";
+
+describe("fmtEta", () => {
+  it("nessuna nota senza stima", () => {
+    expect(fmtEta(null)).toBeNull();
+    expect(fmtEta(undefined)).toBeNull();
+    expect(fmtEta(Number.NaN)).toBeNull();
+    expect(fmtEta(-5)).toBeNull();
+  });
+  it("sotto il minuto, a minuti e oltre l'ora", () => {
+    expect(fmtEta(0)).toBe("meno di un minuto rimanente");
+    expect(fmtEta(55)).toBe("meno di un minuto rimanente");
+    expect(fmtEta(60)).toBe("circa 1 min rimanente");
+    expect(fmtEta(90)).toBe("circa 2 min rimanenti");
+    expect(fmtEta(180)).toBe("circa 3 min rimanenti");
+    expect(fmtEta(3540)).toBe("circa 59 min rimanenti");
+    expect(fmtEta(3600)).toBe("circa 1 h rimanente");
+    expect(fmtEta(4800)).toBe("circa 1 h 20 min rimanenti");
+    expect(fmtEta(3 * 3600 + 100)).toBe("circa 3 h rimanenti"); // passi di 5 minuti oltre l'ora
+  });
+  it("una stima di quasi un'ora non diventa '60 min'", () => {
+    expect(fmtEta(3580)).toBe("circa 1 h rimanente");
+  });
+});
 
 describe("searchCacheHitsLabel", () => {
   it("nessuna nota senza ricerche riusate", () => {
