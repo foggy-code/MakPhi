@@ -60,7 +60,8 @@ data/
   annullata o interrotta dal riavvio, o completata con elementi falliti, si riprende senza rifare gli elementi
   conclusi (vedi [Ripresa delle pipeline](#ripresa-delle-pipeline)).
 - **Archivi ZIP** (job e pipeline): vengono scritti in un file temporaneo dello scratch e inviati con
-  `FileResponse`, che lo elimina dopo l'invio. Nessun archivio passa dalla memoria.
+  `FileResponse`, che lo elimina dopo l'invio. Nessun archivio passa dalla memoria. Quello della pipeline contiene
+  anche un report HTML per elemento, generato e scritto uno alla volta (vedi [Report del modello](#report-del-modello)).
 - **SQLite:** `locking_mode=EXCLUSIVE` impostato prima del WAL, quindi nessun file `-shm`. È affidabile
   sui bind mount di Docker Desktop e su exFAT, e impedisce a una seconda istanza di aprire la stessa
   cartella dati (errore chiaro).
@@ -96,9 +97,9 @@ data/
 | Pacchetto | Contenuto |
 |---|---|
 | `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi), `eta` (stima del tempo residuo), `events` (notifiche in-process dei cambiamenti dei job) |
-| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file) |
+| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG) |
 | `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB), `remote` (client HTTP), `tools` (rilevamento strumenti, preambolo di licenza) |
-| `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job) |
+| `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job), `reports` (dati del report di un modello o di un'analisi) |
 | `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases` oltre a sistema, progetti, calcoli, job) |
 
 ### Job
@@ -432,6 +433,72 @@ Il voto A–D non cambia: `consensus` è un campo in più del rapporto di qualit
   - un clash su Arg72;
   - il picco DOPE sulla coda C-terminale flessibile (73–76; soglia −0,0355).
 
+### Report del modello
+
+`domain/report.py` (HTML e grafici, logica pura) e `services/reports.py` (raccolta dei dati): un file HTML autonomo,
+stampabile in PDF dal browser, generato al volo dai file già salvati del job, senza ricalcoli.
+
+- **Rotte:**
+  - `GET /api/jobs/{id}/report/{modello}` per i job `model`, `loop` e `pipeline` (per la pipeline
+    `items/<idx>_<nome>/<modello>` di un elemento completato);
+  - `GET /api/jobs/{id}/report` per un job `quality`: report ridotto, senza template, allineamento e parametri;
+  - le varianti `POST`, con corpo `{"image_png_base64"}`, incorporano la vista 3D;
+  - `qmean_job=` aggiunge QMEAN con gli stessi controlli della rotta del consenso; `download=false` restituisce il
+    file `inline` invece che `attachment`.
+
+  Nome del file: `report_<modello>.html` o `report_qualita_<struttura>.html`, solo `[A-Za-z0-9_.-]`.
+- **Errori:** modello non tra quelli riusciti del job, file che non è un modello, elemento con un altro nome → 404; job
+  o elemento non completato → 409; nessun modello per un job model/loop/pipeline → 400 `report_model_required`; job di
+  altro tipo, o un file per un'analisi di qualità → 400 `report_unsupported`; immagine non PNG → 400
+  `report_image_invalid`; oltre 3 MB → 413 `report_image_too_large`.
+- **Dati:**
+
+  | Sezione | Da dove |
+  |---|---|
+  | Intestazione | job (titolo, progetto, date); versione di BioLoom; MODELLER dall'`EXPDTA THEORETICAL MODEL, MODELLER 10.8` del modello; metodo DSSP, PROCHECK e ProSA dal rapporto; QMEAN (versione, metodo, locale o SWISS-MODEL) dal job qmean |
+  | Bersaglio | voce `sequence` del PIR (catene separate da '/'); pipeline: riga dell'elemento; loop e quality: residui del rapporto |
+  | Template | job model: template preparati del risultato e metadati della libreria (sorgente, titolo, metodo, risoluzione, pLDDT medio); pipeline: voci del PIR, copia preparata nella cartella dell'elemento (catene, intervallo, `REMARK 999 BIOLOOM PLDDT_TRIM`), righe `TEMPLATE … ALPHAFOLD` del modello e ricerca (motore, identità, copertura, E-value, zona crepuscolare) |
+  | Identità e copertura | ricalcolate sull'allineamento usato da MODELLER: residui identici / colonne con un residuo in entrambe le righe, come `validate_pir` e il `% SEQ ID` di MODELLER (ubiquitina di lievito su 1UBQ: 96,05%); copertura = quelle colonne / residui del bersaglio |
+  | Allineamento | PIR del risultato o `alignment.ali` dell'elemento, a blocchi di 60 colonne: righello, primo e ultimo residuo di ogni riga, residui identici al bersaglio evidenziati, riga di conservazione Clustal (`sequences.consensus_line`) |
+  | Parametri | `options` del risultato; pipeline: `parse_options` dei parametri più motore, E-value e soglie della zona crepuscolare; loop: regione, modelli e dinamica |
+  | Modelli | risultato del job o `models.json` dell'elemento; voto solo per i modelli analizzati |
+  | Qualità | `<modello>.quality.json` (o risultato del job quality); consenso ricomposto con GA341 e zDOPE del modello (`consensus.compute`), oppure dalla rotta del consenso quando c'è QMEAN |
+
+  Un modello senza rapporto di qualità ha il report dei soli risultati di MODELLER, con un avviso.
+- **Grafici SVG** (generati dal backend, XML ben formato):
+  - Ramachandran: un pannello per classe, come nell'interfaccia (generale con la pre-prolina, glicina, prolina), con i
+    rettangoli favoriti/consentiti di `domain/ramachandran` e un cerchio per residuo con φ e ψ (74 su 76 in 1UBQ); gli
+    outlier sono sopra gli altri punti ed etichettati;
+  - profili per residuo: DOPE (media mobile di MODELLER, soglia media + 1 DS del consenso: picco 73–76 su 1UBQ), QMEAN
+    locale (sotto 0,6), energia ProSA sulla finestra di 10 residui (sopra 0) e pLDDT (linee a 50, 70 e 90). La linea
+    si interrompe tra catene e dove la numerazione salta;
+  - striscia della struttura secondaria a 3 stati.
+- **Legenda e fonti:** solo le metriche presenti, con le soglie usate da BioLoom, e solo le fonti dei metodi presenti
+  (Šali & Blundell 1993, Shen & Sali 2006, Melo et al. 2002, John & Sali 2003, Benkert et al. 2011, Sippl 1993,
+  Wiederstein & Sippl 2007, Laskowski et al. 1993, Jumper et al. 2021, Tunyasuvunakool et al. 2021, Mariani et al.
+  2013, Ramachandran et al. 1963, Lovell et al. 2003, Word et al. 1999, Kabsch & Sander 1983, Shrake & Rupley 1973,
+  Tien et al. 2013, Rost 1999).
+- **Stampa:** `@page` A4 e regole `@media print`: niente indice, intestazioni delle tabelle ripetute, nessuna
+  interruzione dentro grafici, blocchi di allineamento, riquadri e righe, allineamento e qualità da una pagina nuova,
+  colori conservati (`print-color-adjust: exact`).
+- **Immagine 3D:**
+  - `Viewer3D` espone `handle.pngDataUri()` (3Dmol `pngURI`), che risponde solo con la struttura disegnata e nessun
+    caricamento in corso. Il frontend la invia solo per il modello mostrato dal viewer (in Modellazione il modello
+    selezionato, in Qualità con la scheda 3D aperta) e solo se è un PNG entro 3 MB (`lib/report.ts`); altrimenti il
+    report si genera senza immagine, con un avviso.
+  - `decode_png` accetta base64 o un data URI `image/png` e controlla la lunghezza prima di decodificare. Poi verifica
+    firma, blocchi (lunghezza, tipo, CRC-32), IHDR (lati fino a 16384, profondità ammessa per il tipo di colore),
+    almeno un IDAT, IEND finale e nessun dato dopo. Il data URI del report è ricodificato dai byte verificati.
+- **Sicurezza:**
+  - tutti i testi passano da `html.escape`, virgolette comprese: nomi di sequenze e di file, titoli e metadati
+    RCSB/UniProt/AlphaFold, nomi di residui e atomi dei file caricati;
+  - gli attributi contengono solo costanti e numeri, nessun URL viene da dati in ingresso, nessuno script;
+  - `Content-Security-Policy: default-src 'none'; img-src data:; style-src 'unsafe-inline'` sia nel documento (vale
+    anche aperto da disco) sia nella risposta, con `X-Content-Type-Options: nosniff` e `Cache-Control: no-store`.
+- **Pipeline:** `export_zip` aggiunge `report/<nome>.html` per ogni elemento completato (senza immagine), generati e
+  scritti uno alla volta: in memoria c'è al più un report. Un report che non si può generare finisce in
+  `report/non_generati.txt` e non ferma l'esportazione. Il LEGGIMI dello ZIP descrive la cartella.
+
 ### Allineamenti
 
 - **Pairwise**: Biopython `PairwiseAligner` (NW/SW, BLOSUM/PAM/GONNET, NUC.4.4), gap terminali gratuiti nel globale.
@@ -639,8 +706,8 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 | Libreria template | download RCSB e "Da AlphaFold DB (UniProt)", upload PDB/mmCIF, catene, residui mancanti, ligandi, DSSP, 3D; badge "AlphaFold", pLDDT medio e fasce di confidenza |
 | Allineamenti | pairwise, multiplo, strutturale; esportazione FASTA/Clustal/PIR; salvataggio nel progetto; cache per multiplo e strutturale |
 | Editor PIR | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
-| Modellazione | input automatico o da PIR, parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); modelli, 3D, PyMOL, archivio |
-| Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi |
+| Modellazione | input automatico o da PIR, parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio |
+| Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente) |
 | Pipeline batch | multi-FASTA → modelli validati, filtro zona crepuscolare, tabella paginata, CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
 | Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione |
 | Impostazioni | schede Generale (esecuzione, QMEAN, email), Licenze (MODELLER, ProSA, PROCHECK), Database (pdbaa, MMseqs2, UniClust30), Strumenti (verifica dell'installazione), Spazio e file temporanei (con la cache dei calcoli) |
@@ -663,6 +730,8 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 - **Script MODELLER:** generati con valori validati (regex per residui e atomi, numeri con limiti) e
   `repr()`.
 - **CSV esportati:** con neutralizzazione delle formule.
+- **Report HTML:** testi sempre escapati, nessuno script né risorsa esterna, CSP nel documento e nella risposta,
+  immagine accettata solo come PNG verificato (vedi [Report del modello](#report-del-modello)).
 - **Privacy:** le coordinate lasciano il computer solo per QMEAN su SWISS-MODEL, scelto o come fallback, e
   sempre con il consenso esplicito all'invio. QMEAN locale, BLAST+ e MMseqs2 non usano la rete.
 - **AlphaFold DB:** l'importazione nella libreria e il motore `alphafold` inviano a EBI (alphafold.ebi.ac.uk) solo
@@ -719,6 +788,13 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     chiusura dopo `end`, posto liberato alla disconnessione del client, arresto non bloccato dai flussi aperti.
     I test aspettano le condizioni, non tempi fissi: un flusso in attesa di notifiche (`ChangeFeed.waiting`) ha
     già inviato tutto ciò che era stato pubblicato prima;
+  - report del modello (`test_report.py`, MODELLER simulato con le coordinate e il profilo DOPE reali di 1UBQ, più un
+    test con MODELLER reale): tutte le sezioni; identità 96,1% dell'ubiquitina di lievito su 1UBQ, voto 98,9,
+    consenso 99,6; SVG ben formati con 74 punti di Ramachandran e il picco DOPE 73–76; escape di `<script>`, `"` e `&`
+    in titoli, nomi, metadati, residui e atomi; PNG valido incorporato, PNG malformati (firma, CRC, troncati, dati
+    dopo IEND, senza IDAT, altri tipi) e oltre 3 MB rifiutati; modelli non del job, falliti, job non completato;
+    loop; report di un job quality con QMEAN simulato (70–76 sotto 0,6); ZIP della pipeline con un report per
+    elemento completato e rotta del report di un elemento; nomi di file sicuri;
   - verifica dell'installazione.
 
   `pytest -m network` prova i servizi reali. Oltre a 1UBQ, `tests/data` contiene strutture sintetiche generate
@@ -741,6 +817,8 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - AlphaFold (`alphafold.test.ts`): accessioni e id `AF-…`, accessione precompilata che segue la sequenza,
     intestazioni `sp|`/`tr|` della pipeline, fasce di pLDDT, quando mostrare la soglia, riepilogo del ritaglio
     (anche con i frammenti isolati).
+  - report (`report.test.ts`): vista 3D inviata solo se è un PNG entro 3 MB, nome del file da Content-Disposition
+    (senza percorsi) e nome di riserva come quello del server.
 - **Esecuzione:** `scripts/test.sh` (ruff, pytest nell'immagine con MODELLER reale, typecheck e vitest). La CI
   (`.github/workflows/ci.yml`) esegue gli stessi controlli: test rapidi senza strumenti esterni, frontend, e
   immagine completa con i test al suo interno.

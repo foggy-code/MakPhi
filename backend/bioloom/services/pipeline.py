@@ -31,10 +31,12 @@ from ..core.errors import AppError, Conflict, NotFound
 from ..core.events import ITEM
 from ..core.jobs import REQUEUABLE, JobCancelled, JobContext, JobManager, requeue_error
 from ..core.storage import remove_tree, safe_join
+from ..domain import report as report_domain
 from ..domain import sequences
 from ..domain.sequences import SeqRecord
 from ..engines import search
 from .compute import ComputeService
+from .reports import ReportService
 
 TERMINAL_ITEM = {"completed", "failed", "cancelled", "filtered"}
 # Elementi che una ripresa rielabora, per ambito: "incomplete" = tutto ciò che non è completato o filtrato
@@ -432,9 +434,17 @@ class PipelineService:
         return buf.getvalue()
 
     def export_zip(self, job_id: str, dest: Path) -> None:
-        """Scrive l'archivio su file (nello scratch): una pipeline di migliaia di modelli non passa dalla RAM."""
-        rows = self.db.query(f"SELECT {ITEM_COLUMNS} FROM pipeline_items WHERE job_id=? AND status='completed' "
-                             "ORDER BY idx", (job_id,))
+        """Scrive l'archivio su file (nello scratch): una pipeline di migliaia di modelli non passa dalla RAM.
+
+        Il report HTML di ogni elemento completato (senza immagine 3D) si genera e si scrive uno alla volta: in
+        memoria c'è al più un report. Un report non generato (file dell'elemento illeggibili) non ferma
+        l'esportazione: il motivo finisce in `report/non_generati.txt`.
+        """
+        job = self.jobs.get(job_id)
+        rows = self.db.query(f"SELECT {ITEM_COLUMNS}, sequence FROM pipeline_items WHERE job_id=? "
+                             "AND status='completed' ORDER BY idx", (job_id,))
+        reports = ReportService(self.jobs, self.compute, self.db)
+        missing: list[str] = []
         with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("riepilogo.csv", self.export_csv(job_id))
             zf.writestr("LEGGIMI.txt", README_ZIP)
@@ -444,10 +454,18 @@ class PipelineService:
                 except NotFound:
                     continue
                 zf.write(model, f"modelli/{r['name']}.pdb")
-                report = Path(str(model) + ".quality.json")
-                if report.exists():
-                    zf.write(report, f"qualita/{r['name']}.quality.json")
-            zf.writestr("parametri.json", json.dumps(self.jobs.get(job_id)["params"], indent=2, ensure_ascii=False))
+                quality = Path(str(model) + ".quality.json")
+                if quality.exists():
+                    zf.write(quality, f"qualita/{r['name']}.quality.json")
+                try:
+                    text = reports.pipeline_item(job, r)
+                except Exception as exc:  # un report non generato non deve fermare l'esportazione
+                    missing.append(f"{r['name']}: {getattr(exc, 'message', None) or f'{type(exc).__name__}: {exc}'}")
+                    continue
+                zf.writestr(f"report/{report_domain.safe_filename(r['name'])}", text)
+            if missing:
+                zf.writestr("report/non_generati.txt", "Report non generati\n\n" + "\n".join(missing) + "\n")
+            zf.writestr("parametri.json", json.dumps(job["params"], indent=2, ensure_ascii=False))
 
 
 def _seqs(n: int) -> str:
@@ -485,6 +503,10 @@ README_ZIP = """BioLoom v4 - esportazione pipeline
 =====================================
 modelli/            miglior modello (DOPE minimo) per ogni sequenza completata
 qualita/            rapporto di qualità completo (JSON) per ogni modello
+report/             report HTML di ogni modello: un file autonomo (nessuna risorsa esterna) da aprire nel
+                    browser e da stampare in PDF, con bersaglio, template, allineamento, parametri di
+                    MODELLER, voto, consenso, grafici di Ramachandran e profili per residuo, legenda e
+                    riferimenti (senza la vista 3D, che si aggiunge generando il report dall'interfaccia)
 riepilogo.csv       una riga per sequenza con template, identità, copertura e metriche
 parametri.json      parametri con cui è stata eseguita la pipeline
 

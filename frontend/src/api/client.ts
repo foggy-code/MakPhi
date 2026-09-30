@@ -17,6 +17,8 @@ import type {
   PirReport,
   Project,
   QualityReport,
+  ReportFile,
+  ReportRequest,
   ResumeScope,
   Sequence,
   SequenceAnalysis,
@@ -30,6 +32,7 @@ import type {
   UniProtEntry,
   UniProtHit,
 } from "./types";
+import { filenameFromDisposition, reportFallbackName } from "../lib/report";
 
 export class ApiError extends Error {
   status: number;
@@ -67,6 +70,24 @@ async function request<T>(method: string, path: string, body?: unknown, isForm =
     throw new ApiError(err?.message || `Errore ${resp.status}`, resp.status, err?.code || "http_error", err?.details);
   }
   return payload as T;
+}
+
+/** POST JSON che restituisce un file (report HTML): contenuto e nome da Content-Disposition, errori come `request`. */
+async function requestFile(path: string, body: unknown, fallback: string): Promise<ReportFile> {
+  let resp: Response;
+  try {
+    resp = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
+  } catch {
+    throw new ApiError("Server BioLoom non raggiungibile. È ancora in esecuzione?", 0, "network");
+  }
+  if (!resp.ok) {
+    const json = (resp.headers.get("content-type") || "").includes("application/json");
+    const payload = json ? await resp.json().catch(() => null) : null;
+    const err = payload && typeof payload === "object" ? (payload as { error?: { message?: string; code?: string; details?: unknown } }).error : undefined;
+    if (resp.status === 401 && err?.code === "auth_required") notifyAuthRequired();
+    throw new ApiError(err?.message || `Errore ${resp.status}`, resp.status, err?.code || "http_error", err?.details);
+  }
+  return { blob: await resp.blob(), filename: filenameFromDisposition(resp.headers.get("content-disposition"), fallback) };
 }
 
 /** Evento globale: il server (modalità server) richiede la chiave d'accesso. */
@@ -196,6 +217,13 @@ export const api = {
   consensus: (id: string, model?: string | null, qmeanJob?: string | null) =>
     get<ConsensusResult>(`/api/jobs/${id}/consensus${model ? `/${model.split("/").map(enc).join("/")}` : ""}${qmeanJob ? `?qmean_job=${enc(qmeanJob)}` : ""}`),
   pymolUrl: (id: string, model: string, scheme = "ss") => `/api/jobs/${id}/pymol/${model.split("/").map(enc).join("/")}?scheme=${scheme}`,
+  /** report HTML autonomo (stampabile in PDF) di un modello (job model, loop, pipeline) o, senza `model`, di
+   * un'analisi di qualità; `qmeanJob` = job qmean sulla stessa struttura da includere */
+  reportUrl: (id: string, model?: string | null, qmeanJob?: string | null) =>
+    `/api/jobs/${id}/report${model ? `/${model.split("/").map(enc).join("/")}` : ""}${qmeanJob ? `?qmean_job=${enc(qmeanJob)}` : ""}`,
+  /** genera il report, con la vista 3D se `body.image_png_base64` c'è, e lo restituisce come file da salvare */
+  report: (id: string, model: string | null, body: ReportRequest = {}, qmeanJob?: string | null): Promise<ReportFile> =>
+    requestFile(api.reportUrl(id, model, qmeanJob), body, reportFallbackName(model, id)),
   archiveUrl: (id: string) => `/api/jobs/${id}/archive`,
   /** flusso SSE di un job (status, log dal byte `offset`, end); `offset` null = senza righe di log */
   jobEventsUrl: (id: string, offset: number | null) =>

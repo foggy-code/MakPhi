@@ -112,6 +112,22 @@ sequenze e altre opzioni di modellazione salta così tutte le ricerche.
   **Confidenza** colora le colonne per identità locale rispetto al bersaglio e segnala la zona crepuscolare
   (sotto il 25%) e i residui non coperti dal template.
 
+## Report del modello
+
+Il pulsante **Report** (tabella dei modelli in Modellazione, pagina Qualità) scarica un file HTML autonomo, da aprire
+con qualunque browser anche senza BioLoom e da stampare in PDF (Stampa → Salva come PDF):
+
+- intestazione con job, progetto, date e versioni (BioLoom, MODELLER, strumenti di validazione usati);
+- bersaglio, template (sorgente, identità e copertura; avviso e ritaglio pLDDT per i modelli AlphaFold), allineamento
+  PIR a blocchi, parametri di MODELLER e tabella dei modelli con il migliore evidenziato;
+- per il modello: voto con le penalità, consenso tra i metodi (discordanze e regioni problematiche), grafici di
+  Ramachandran e profili per residuo (DOPE; QMEAN locale se calcolato nella pagina Qualità), struttura secondaria,
+  contatti sterici principali, avvisi, legenda delle metriche e riferimenti bibliografici;
+- la **vista 3D corrente**, se il viewer è aperto su quel modello (in Qualità: scheda 3D).
+
+Per un'analisi di qualità di una struttura qualsiasi il report è ridotto (niente template, allineamento e parametri).
+L'archivio ZIP della pipeline contiene un report per ogni sequenza completata (cartella `report/`, senza vista 3D).
+
 ## Modelli AlphaFold DB come template
 
 Per le proteine senza una struttura sperimentale omologa si può usare un modello predetto di
@@ -141,7 +157,7 @@ sperimentale**, con il pLDDT medio (confidenza della predizione, 0–100).
 | Modellazione | MODELLER 10.8 (AutoModel, loop, allineamenti `align2d`/`salign`) |
 | Ricerca template | RCSB, NCBI BLAST e modelli predetti di AlphaFold DB (online); BLAST+ e MMseqs2 sul database locale pdbaa |
 | Allineamenti | Clustal Omega, MAFFT, MUSCLE, TM-align, US-align, più motori integrati |
-| Qualità | Ramachandran, clashscore, DSSP (mkdssp), SASA, profilo DOPE, **PROCHECK**, **ProSA II**, **QMEAN locale** (UniClust30) o SWISS-MODEL, voto A–D, consenso tra i metodi, qualità per residuo nel 3D (anche pLDDT di AlphaFold) |
+| Qualità | Ramachandran, clashscore, DSSP (mkdssp), SASA, profilo DOPE, **PROCHECK**, **ProSA II**, **QMEAN locale** (UniClust30) o SWISS-MODEL, voto A–D, consenso tra i metodi, qualità per residuo nel 3D (anche pLDDT di AlphaFold), report HTML stampabile in PDF |
 | Automazione | pipeline batch da multi-FASTA, riprendibili dopo un annullamento, un errore o un riavvio ("Riprendi" o "Riprova solo i falliti": le sequenze già modellate non si rifanno) e, se completate con sequenze fallite, "Riprova i falliti"; avanzamento, log e tabella dei risultati aggiornati in tempo reale, con la stima del tempo residuo ("circa 3 min rimanenti"); verifica dell'installazione (Impostazioni → Strumenti) |
 
 ## Dove stanno i dati

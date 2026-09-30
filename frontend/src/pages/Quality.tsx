@@ -8,7 +8,8 @@ import { ConsensusTracks, RamachandranPlot, ResidueProfile, ResidueStrip, StackB
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { StructurePicker } from "../components/Pickers";
-import { Viewer3D } from "../components/Viewer3D";
+import { ReportButton } from "../components/ReportButton";
+import { Viewer3D, type Viewer3DHandle } from "../components/Viewer3D";
 import { Alert, Badge, BarCell, Card, DropZone, Empty, Grade, PageHead, Stat, Tabs } from "../components/ui";
 import { useProject, useToast } from "../lib/context";
 import { fmtNum, relTime } from "../lib/format";
@@ -332,6 +333,8 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
   const [qmeanJob, setQmeanJob] = useState<string | null>(null);
   const [consensus, setConsensus] = useState<ConsensusResult | null>(report.consensus ?? null);
   const [consensusError, setConsensusError] = useState<string | null>(null);
+  // vista 3D per il report: c'è solo con la scheda 3D aperta
+  const viewer = useRef<Viewer3DHandle>(null);
   const g = report.grade;
   const rs = report.ramachandran.summary;
   const url = structureUrl(source ?? report.source);
@@ -412,6 +415,12 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
               {consensus?.score != null && <> · consenso {fmtNum(consensus.score, 0)}/100 ({consensus.band}, {consensus.methods_used} metodi)</>}
             </div>
             {plddt && <div style={{ marginTop: 6 }}><Badge tone="info" title="Riconosciuto come nella libreria dei template: intestazione di AlphaFold DB (TITLE «ALPHAFOLD … PREDICTION» senza EXPDTA, oppure ModelCIF senza _exptl.method) o nome AF-<accessione>-F<n> senza un altro metodo dichiarato, e valori tra 0 e 100">Modello AlphaFold: la colonna B-factor contiene il pLDDT</Badge></div>}
+            {consensusRef && (
+              <div className="row tiny muted" style={{ marginTop: 8, gap: 8 }}>
+                <ReportButton jobId={consensusRef.job} model={consensusRef.model} qmeanJob={qmeanJob} viewer={viewer} />
+                <span>{tab === "3d" ? "Include la vista 3D corrente" : "Apri la scheda 3D per includere la vista nel report"}{qmeanJob ? " e il QMEAN calcolato qui" : ""}.</span>
+              </div>
+            )}
           </div>
           {source && <QmeanPanel source={source} onDone={onQmean} />}
         </div>
@@ -509,7 +518,7 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
                 <button className="btn btn-sm btn-ghost" onClick={() => { setFocus([]); setSelected(null); }}>Nessuna evidenza</button>
                 <span className="muted">Evidenziati a bastoncini arancioni · clic su un residuo per selezionarlo.</span>
               </div>
-              <Viewer3D url={url} highlight={focus} format={url.endsWith(".cif") ? "cif" : "pdb"} coloring={coloring} onPickResidue={pick3d} centerKey={centerKey} />
+              <Viewer3D url={url} highlight={focus} format={url.endsWith(".cif") ? "cif" : "pdb"} coloring={coloring} onPickResidue={pick3d} centerKey={centerKey} handle={viewer} />
               {coloring && <ResidueStrip residues={report.residues} coloring={coloring} selected={selected} onSelect={pick} />}
               {selected && <ResidueDetail report={report} selected={selected} consensus={consensus} onTable={() => setTab("residues")} />}
             </div>

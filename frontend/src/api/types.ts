@@ -823,3 +823,17 @@ export interface TemplateRef {
   chains: string[];
   hetatm?: boolean;
 }
+
+// ---------------------------------------------------------------------------------- report (domain/report.py)
+/** Corpo facoltativo di POST /api/jobs/{id}/report[/{modello}] (la GET genera il report senza immagine). */
+export interface ReportRequest {
+  /** vista 3D in PNG: data URI data:image/png;base64,… (3Dmol `pngURI`) o solo base64; al massimo 3 MB */
+  image_png_base64?: string | null;
+}
+
+/** Report HTML autonomo ricevuto dal server, pronto da salvare. */
+export interface ReportFile {
+  blob: Blob;
+  /** da Content-Disposition, es. report_yeast.B99990001.html */
+  filename: string;
+}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { DocumentItem, JobSummary, LoopResult, ModelEntry, ModelResult, Sequence, StructureSource, SystemInfo, TemplateItem, TemplateRef } from "../api/types";
@@ -7,7 +7,8 @@ import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { TextFileButton } from "../components/FileLoad";
 import { SequencePicker, StructurePicker, TemplatePicker } from "../components/Pickers";
-import { Viewer3D } from "../components/Viewer3D";
+import { ReportButton } from "../components/ReportButton";
+import { Viewer3D, type Viewer3DHandle } from "../components/Viewer3D";
 import { Alert, Badge, Card, Empty, Field, Grade, Modal, PageHead, Segmented, Stat } from "../components/ui";
 import { pirReference } from "../lib/alignConfidence";
 import { PlddtOption } from "../components/PlddtOption";
@@ -27,7 +28,7 @@ const REFINEMENT = [
 
 type Restraint = RestraintRow;
 
-function ModelsTable({ jobId, models, selected, onSelect }: { jobId: string; models: ModelEntry[]; selected: string; onSelect: (f: string) => void }) {
+function ModelsTable({ jobId, models, selected, onSelect, viewer }: { jobId: string; models: ModelEntry[]; selected: string; onSelect: (f: string) => void; viewer?: RefObject<Viewer3DHandle | null> }) {
   const navigate = useNavigate();
   return (
     <div className="table-wrap">
@@ -60,7 +61,9 @@ function ModelsTable({ jobId, models, selected, onSelect }: { jobId: string; mod
                   <Icon name="shield" size={13} />
                 </button>{" "}
                 <a className="btn btn-sm" href={api.jobFileUrl(jobId, m.file, true)} title="Scarica PDB"><Icon name="download" size={13} /></a>{" "}
-                <a className="btn btn-sm" href={api.pymolUrl(jobId, m.file)} title="Sessione PyMOL (.pml)">PyMOL</a>
+                <a className="btn btn-sm" href={api.pymolUrl(jobId, m.file)} title="Sessione PyMOL (.pml)">PyMOL</a>{" "}
+                {/* il viewer mostra il modello selezionato: solo il suo report riceve la vista 3D */}
+                <ReportButton jobId={jobId} model={m.file} viewer={m.file === selected ? viewer : undefined} disabled={!!m.failure} />
               </td>
             </tr>
           ))}
@@ -116,6 +119,7 @@ function Results({ jobId, result, kind }: { jobId: string; result: ModelResult |
   const toast = useToast();
   const [selected, setSelected] = useState(result.best_model);
   const [loop, setLoop] = useState(false);
+  const viewer = useRef<Viewer3DHandle>(null);
   const best = result.models.find((m) => m.best);
   const full = kind === "model" ? (result as ModelResult) : null;
   const entries = useMemo(() => (full ? parsePir(full.alignment) : []), [full]);
@@ -156,10 +160,10 @@ function Results({ jobId, result, kind }: { jobId: string; result: ModelResult |
           </>
         }
       >
-        <ModelsTable jobId={jobId} models={result.models} selected={selected} onSelect={setSelected} />
+        <ModelsTable jobId={jobId} models={result.models} selected={selected} onSelect={setSelected} viewer={viewer} />
       </Card>
-      <Card title={`Struttura 3D · ${selected}`}>
-        <Viewer3D url={api.jobFileUrl(jobId, selected)} />
+      <Card title={`Struttura 3D · ${selected}`} sub="Il report del modello selezionato include questa vista">
+        <Viewer3D url={api.jobFileUrl(jobId, selected)} handle={viewer} />
       </Card>
       {full && (
         <Card title="Allineamento usato da MODELLER" right={<button className="btn btn-sm" onClick={savePir}><Icon name="save" size={14} /> Salva PIR nel progetto</button>}>

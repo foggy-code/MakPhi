@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 import { hexToInt, legendFor, NO_VALUE_COLOR } from "../lib/colorscale";
 import { atomKey, coloringMap, describeResidue, hasMissing, type ResidueColoring, type ResidueRef } from "../lib/residueColoring";
 import { Spinner } from "./ui";
@@ -24,6 +24,14 @@ interface Props {
   onPickResidue?: (residue: ResidueRef) => void;
   /** quando cambia, la vista si centra sui residui evidenziati */
   centerKey?: number | string;
+  /** accesso facoltativo alla vista corrente (immagine PNG per il report del modello) */
+  handle?: Ref<Viewer3DHandle>;
+}
+
+/** Vista corrente del viewer, per chi la vuole incorporare (report del modello). */
+export interface Viewer3DHandle {
+  /** PNG della vista come data URI (3Dmol `pngURI`); null se il viewer non mostra una struttura */
+  pngDataUri: () => string | null;
 }
 
 const NO_VALUE_INT = hexToInt(NO_VALUE_COLOR);
@@ -82,7 +90,7 @@ function ViewerLegend({ coloring }: { coloring: ResidueColoring }) {
 }
 
 /** Visualizzatore 3D (3Dmol.js caricato su richiesta, contesto WebGL rilasciato allo smontaggio). */
-export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highlight = [], format = "pdb", coloring = null, onPickResidue, centerKey }: Props) {
+export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highlight = [], format = "pdb", coloring = null, onPickResidue, centerKey, handle }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewer = useRef<any>(null);
   const [text, setText] = useState<string | null>(pdb ?? null);
@@ -100,6 +108,24 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
   // i callback di 3Dmol leggono sempre i valori correnti
   const live = useRef({ scheme, highlight, colors, coloring, onPickResidue, centerKey, interactive });
   live.current = { scheme, highlight, colors, coloring, onPickResidue, centerKey, interactive };
+
+  // Immagine per il report: solo con la struttura disegnata e nessun caricamento in corso (con un altro `url` il
+  // viewer mostra ancora la struttura precedente finché il file nuovo non arriva) né errore.
+  const shown = useRef(false);
+  const idle = useRef(true);
+  idle.current = !loading && !error && !!text;
+  useImperativeHandle(handle, () => ({
+    pngDataUri: () => {
+      const v = viewer.current;
+      if (!v || !shown.current || !idle.current || typeof v.pngURI !== "function") return null;
+      try {
+        v.render(); // il canvas WebGL di 3Dmol conserva il buffer: l'immagine è la vista corrente
+        return v.pngURI() as string;
+      } catch {
+        return null;
+      }
+    },
+  }), []);
 
   const enablePicking = (v: any) => {
     if (!live.current.interactive) return;
@@ -137,6 +163,7 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
 
   useEffect(() => {
     let cancelled = false;
+    shown.current = false; // finché la struttura nuova non è disegnata
     if (!text || !host.current) return;
     import("3dmol")
       .then((mod: any) => {
@@ -154,8 +181,12 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
         v.zoomTo();
         if (cur.centerKey !== undefined) centerOn(v, cur.highlight);
         v.render();
+        shown.current = true;
       })
-      .catch((e) => setError(`Impossibile avviare il visualizzatore 3D: ${e}`));
+      .catch((e) => {
+        shown.current = false;
+        setError(`Impossibile avviare il visualizzatore 3D: ${e}`);
+      });
     return () => {
       cancelled = true;
     };
@@ -188,6 +219,7 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
         /* nulla da rilasciare */
       }
       viewer.current = null;
+      shown.current = false;
     },
     [],
   );
