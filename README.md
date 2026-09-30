@@ -97,6 +97,21 @@ sequenze e altre opzioni di modellazione salta così tutte le ricerche.
 - **Disattivazione e spazio:** da Impostazioni → Spazio e file temporanei, che mostra anche lo spazio occupato. La
   cache sta in `data/cache/compute` e si pulisce da sola dopo 30 giorni.
 
+## Qualità per residuo e consenso
+
+- **Viewer 3D colorato per valore:** nella pagina Qualità (schede 3D e Profili) il menu **Colora per** colora la
+  struttura per struttura secondaria, Ramachandran, clash, DOPE per residuo, RSA, B-factor, **pLDDT** dei modelli
+  AlphaFold (scala ufficiale di AlphaFold DB), QMEAN locale calcolato nella pagina e consenso per residuo, con la
+  legenda sul viewer. Un clic su grafici o tabelle evidenzia e centra il residuo nel 3D; un clic nel 3D lo seleziona
+  nella tabella e nei grafici.
+- **Consenso tra i metodi:** voto BioLoom, z-DOPE, GA341, QMEAN, ProSA e PROCHECK, quando disponibili, sono portati
+  su una scala 0–100 dichiarata e combinati in un punteggio con fascia buona / intermedia / scarsa. Il riquadro
+  spiega i metodi che discordano ed elenca le **regioni problematiche** (tratti segnalati da almeno due metodi),
+  cliccabili. Il voto A–D non cambia.
+- **Confidenza dell'allineamento:** negli allineamenti (Allineamenti, Modellazione, Editor PIR) la modalità
+  **Confidenza** colora le colonne per identità locale rispetto al bersaglio e segnala la zona crepuscolare
+  (sotto il 25%) e i residui non coperti dal template.
+
 ## Cosa contiene
 
 | Area | Strumenti |
@@ -104,7 +119,7 @@ sequenze e altre opzioni di modellazione salta così tutte le ricerche.
 | Modellazione | MODELLER 10.8 (AutoModel, loop, allineamenti `align2d`/`salign`) |
 | Ricerca template | RCSB e NCBI BLAST (online); BLAST+ e MMseqs2 sul database locale pdbaa |
 | Allineamenti | Clustal Omega, MAFFT, MUSCLE, TM-align, US-align, più motori integrati |
-| Qualità | Ramachandran, clashscore, DSSP (mkdssp), SASA, profilo DOPE, **PROCHECK**, **ProSA II**, **QMEAN locale** (UniClust30) o SWISS-MODEL, voto A–D |
+| Qualità | Ramachandran, clashscore, DSSP (mkdssp), SASA, profilo DOPE, **PROCHECK**, **ProSA II**, **QMEAN locale** (UniClust30) o SWISS-MODEL, voto A–D, consenso tra i metodi, qualità per residuo nel 3D (anche pLDDT di AlphaFold) |
 | Automazione | pipeline batch da multi-FASTA, riprendibili dopo un annullamento, un errore o un riavvio ("Riprendi" o "Riprova solo i falliti": le sequenze già modellate non si rifanno) e, se completate con sequenze fallite, "Riprova i falliti"; verifica dell'installazione (Impostazioni → Strumenti) |
 
 ## Dove stanno i dati

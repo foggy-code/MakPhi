@@ -2,6 +2,7 @@ import type {
   Align2dResult,
   AlignResult,
   AuthStatus,
+  ConsensusResult,
   DatabaseStatus,
   DocumentItem,
   LicenseStatus,
@@ -189,6 +190,9 @@ export const api = {
     `/api/jobs/${id}/files/${path.split("/").map(enc).join("/")}${download ? "?download=true" : ""}`,
   jobFileText: (id: string, path: string) => get<string>(`/api/jobs/${id}/files/${path.split("/").map(enc).join("/")}`),
   modelQuality: (id: string, model: string) => get<QualityReport>(`/api/jobs/${id}/quality/${model.split("/").map(enc).join("/")}`),
+  /** consenso di un'analisi di qualità (senza `model`) o di un modello; `qmeanJob` = job qmean sulla stessa struttura */
+  consensus: (id: string, model?: string | null, qmeanJob?: string | null) =>
+    get<ConsensusResult>(`/api/jobs/${id}/consensus${model ? `/${model.split("/").map(enc).join("/")}` : ""}${qmeanJob ? `?qmean_job=${enc(qmeanJob)}` : ""}`),
   pymolUrl: (id: string, model: string, scheme = "ss") => `/api/jobs/${id}/pymol/${model.split("/").map(enc).join("/")}?scheme=${scheme}`,
   archiveUrl: (id: string) => `/api/jobs/${id}/archive`,
 

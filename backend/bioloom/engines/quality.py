@@ -9,7 +9,7 @@ from typing import Optional
 
 from ..core.errors import AppError, ToolUnavailable
 from ..core.jobs import JobContext
-from ..domain import clashes, grading, ramachandran, secondary, structure
+from ..domain import clashes, consensus, grading, perresidue, ramachandran, secondary, structure
 from . import modeller, procheck, prosa, tools
 
 # ASA massima teorica per residuo (Tien et al. 2013), per la SASA relativa.
@@ -86,10 +86,9 @@ def analyze(path: Path, ctx: Optional[JobContext] = None, *, with_dope: bool = T
     step(0.05, "Lettura della struttura")
     st = structure.load_structure(path, path.stem)
     model = structure.first_model(st)
-    if path.suffix.lower() in (".cif", ".mmcif"):
-        header = structure.parse_cif_header(path)
-    else:
-        header = structure.parse_header(structure.read_text_head(path))
+    is_cif = path.suffix.lower() in (".cif", ".mmcif")
+    head = structure.read_text_head(path, 200_000 if is_cif else 2_000_000)
+    header = structure.parse_cif_header(path) if is_cif else structure.parse_header(head)
     stats = structure.structure_stats(model)
     if stats["residues"] == 0:
         raise AppError("La struttura non contiene residui amminoacidici con C-alfa.")
@@ -194,13 +193,16 @@ def analyze(path: Path, ctx: Optional[JobContext] = None, *, with_dope: bool = T
             warnings.append(f"Profilo DOPE ({len(profile)} residui) non allineabile alla struttura "
                             f"({len(residues)} residui): mostrato per indice.")
     bvals = [r["bfactor"] for r in residues if r["bfactor"] is not None]
+    # pLDDT di AlphaFold nella colonna B-factor? (euristica documentata in domain/perresidue.bfactor_kind)
+    atom_b = [a.bfactor for ch in model for res in ch if structure.is_amino_residue(res) for a in res]
+    bfactor_kind = perresidue.bfactor_kind(path.name, head, atom_b, "cif" if is_cif else "pdb")
     zdope = dope.get("zdope") if dope else None
     grade = grading.grade(rama["summary"]["outlier_pct"], clash["clashscore"], zdope)
     rsa_values = [r["rsa"] for r in residues if r["rsa"] is not None]
-    return {
+    report = {
         "structure": {"file": path.name, "title": header.get("title", ""), "method": header.get("method", ""),
                       "resolution": header.get("resolution"), **stats,
-                      "chains_detail": structure.chain_summaries(model)},
+                      "chains_detail": structure.chain_summaries(model), "bfactor_kind": bfactor_kind},
         "grade": grade,
         "ramachandran": {"summary": rama["summary"], "points": rama["points"], "regions": rama["regions"]},
         "clashes": clash,
@@ -218,6 +220,9 @@ def analyze(path: Path, ctx: Optional[JobContext] = None, *, with_dope: bool = T
         "residues": residues,
         "warnings": warnings,
     }
+    # consenso con i metodi di questa analisi; QMEAN e GA341 si aggiungono dopo (run_modeling, rotta del consenso)
+    report["consensus"] = consensus.compute(report)
+    return report
 
 
 def summary_metrics(report: dict) -> dict:

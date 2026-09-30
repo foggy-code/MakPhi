@@ -91,6 +91,24 @@ def model_quality(job_id: str, model: str, core: Core = Depends(get_core)) -> di
     return report
 
 
+QMEAN_JOB_HELP = "Job qmean completato sulla stessa struttura"
+
+
+@router.get("/{job_id}/consensus")
+def quality_consensus(job_id: str, qmean_job: Optional[str] = Query(None, max_length=64, description=QMEAN_JOB_HELP),
+                      core: Core = Depends(get_core)) -> dict:
+    """Consenso di un'analisi di qualità (job quality), con QMEAN e, per i modelli, GA341/zDOPE di MODELLER."""
+    return core.compute.consensus(job_id, None, qmean_job or None)
+
+
+@router.get("/{job_id}/consensus/{model:path}")
+def model_consensus(job_id: str, model: str,
+                    qmean_job: Optional[str] = Query(None, max_length=64, description=QMEAN_JOB_HELP),
+                    core: Core = Depends(get_core)) -> dict:
+    """Consenso di un modello di un job model, loop o pipeline (rapporto `<modello>.quality.json`)."""
+    return core.compute.consensus(job_id, model, qmean_job or None)
+
+
 @router.get("/{job_id}/pymol/{model:path}", response_class=PlainTextResponse)
 def model_pymol(job_id: str, model: str, scheme: str = "ss", core: Core = Depends(get_core)) -> Response:
     file = core.jobs.file_path(job_id, model)

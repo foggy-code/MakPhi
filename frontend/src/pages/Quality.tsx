@@ -1,16 +1,21 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { DatabaseStatus, Job, JobSummary, QmeanResult, QualityReport, ResidueRow, Settings, StructureSource } from "../api/types";
-import { RamachandranPlot, ResidueProfile, StackBar } from "../components/charts";
+import type {
+  ConsensusBand, ConsensusMethod, ConsensusRegion, ConsensusResult, DatabaseStatus, Job, JobSummary, QmeanResult, QualityReport, ResidueRow, Settings, StructureSource,
+} from "../api/types";
+import { ConsensusTracks, RamachandranPlot, ResidueProfile, ResidueStrip, StackBar } from "../components/charts";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { StructurePicker } from "../components/Pickers";
 import { Viewer3D } from "../components/Viewer3D";
-import { Alert, Badge, Card, DropZone, Empty, Grade, PageHead, Stat, Tabs } from "../components/ui";
+import { Alert, Badge, BarCell, Card, DropZone, Empty, Grade, PageHead, Stat, Tabs } from "../components/ui";
 import { useProject, useToast } from "../lib/context";
 import { fmtNum, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
+import {
+  colorOptions, isPlddt, QMEAN_LOCAL_THRESHOLD, regionResidues, residueColoring, resiNumber, SIGNAL_LABEL, type ColorBy, type ColorOption, type ResidueRef,
+} from "../lib/residueColoring";
 import { qmeanRoute } from "../lib/status";
 
 type Tab = "rama" | "profiles" | "clashes" | "residues" | "3d";
@@ -23,7 +28,7 @@ function structureUrl(source: StructureSource | undefined): string | null {
   return null;
 }
 
-function QmeanPanel({ source }: { source: StructureSource }) {
+function QmeanPanel({ source, onDone }: { source: StructureSource; onDone?: (jobId: string) => void }) {
   const { projectId } = useProject();
   const toast = useToast();
   const [jobId, setJobId] = useState<string | null>(null);
@@ -31,6 +36,11 @@ function QmeanPanel({ source }: { source: StructureSource }) {
   const { data: dbs } = useAsync<DatabaseStatus>(() => api.databases(), []);
   const { job, summary, cancel } = useJob<QmeanResult>(jobId);
   const [fallback, setFallback] = useState<boolean | null>(null);
+  const done = job?.status === "completed";
+  useEffect(() => {
+    if (jobId && done) onDone?.(jobId); // il consenso si ricalcola includendo QMEAN
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId, done]);
   if (!settings || !dbs) return null;
   const useFallback = fallback ?? settings.qmean_fallback_remote;
   const route = qmeanRoute({ ...settings, qmean_fallback_remote: useFallback }, dbs.qmean);
@@ -139,32 +149,47 @@ function ProsaProfile({ profile }: { profile: { index: number; energy_w10: numbe
   );
 }
 
-function ResidueTable({ residues, onPick }: { residues: ResidueRow[]; onPick: (r: ResidueRow) => void }) {
-  const [only, setOnly] = useState<"all" | "problems">("problems");
-  const rows = residues.filter((r) => only === "all" || r.rama === "outlier" || r.clashes > 0);
+const sameResidue = (a: ResidueRef | null | undefined, b: ResidueRef) => !!a && a.chain === b.chain && a.resnum === b.resnum;
+
+function ResidueTable({ residues, onPick, selected, consensus, plddt }: { residues: ResidueRow[]; onPick: (r: ResidueRow) => void; selected: ResidueRef | null; consensus: ConsensusResult | null; plddt: boolean }) {
+  const counts = consensus && consensus.per_residue.counts.length === residues.length ? consensus.per_residue : null;
+  const problem = (r: ResidueRow, i: number) => r.rama === "outlier" || r.clashes > 0 || (counts ? counts.counts[i] >= 2 : false);
+  const selectedIsProblem = selected ? residues.some((r, i) => sameResidue(selected, r) && problem(r, i)) : true;
+  const [only, setOnly] = useState<"all" | "problems">(selectedIsProblem ? "problems" : "all");
+  const rows = residues.map((r, i) => ({ r, i })).filter(({ r, i }) => only === "all" || problem(r, i));
+  const selRow = useRef<HTMLTableRowElement>(null);
+  useEffect(() => {
+    selRow.current?.scrollIntoView({ block: "center" });
+  }, [selected, only]);
   return (
     <div className="stack-sm">
       <div className="row small">
         <label className="check"><input type="radio" checked={only === "problems"} onChange={() => setOnly("problems")} /> Solo residui problematici</label>
         <label className="check"><input type="radio" checked={only === "all"} onChange={() => setOnly("all")} /> Tutti ({residues.length})</label>
+        {counts && <span className="muted">Problematici: outlier, clash o segnalati da almeno 2 metodi del consenso.</span>}
       </div>
       {!rows.length ? <Alert tone="ok">Nessun outlier di Ramachandran né residuo coinvolto in clash.</Alert> : (
         <div className="table-wrap" style={{ maxHeight: 420, overflowY: "auto" }}>
           <table className="table">
-            <thead><tr><th>Residuo</th><th>DSSP</th><th className="num">φ</th><th className="num">ψ</th><th>Ramachandran</th><th className="num">Clash</th><th className="num">RSA</th><th className="num">DOPE</th></tr></thead>
+            <thead><tr><th>Residuo</th><th>DSSP</th><th className="num">φ</th><th className="num">ψ</th><th>Ramachandran</th><th className="num">Clash</th><th className="num">RSA</th><th className="num">DOPE</th><th className="num">{plddt ? "pLDDT" : "B-factor"}</th>{counts && <th>Consenso</th>}</tr></thead>
             <tbody>
-              {rows.map((r) => (
-                <tr key={`${r.chain}${r.resnum}`} className="clickable" onClick={() => onPick(r)}>
-                  <td className="nowrap"><b>{r.resname}</b> {r.chain}{r.resnum}</td>
-                  <td>{r.ss}</td>
-                  <td className="num">{fmtNum(r.phi, 0)}</td>
-                  <td className="num">{fmtNum(r.psi, 0)}</td>
-                  <td>{r.rama ? <Badge tone={r.rama === "favored" ? "ok" : r.rama === "allowed" ? "info" : "err"}>{r.rama === "favored" ? "favorita" : r.rama === "allowed" ? "consentita" : "outlier"}</Badge> : "—"}</td>
-                  <td className="num">{r.clashes || ""}</td>
-                  <td className="num">{fmtNum(r.rsa, 2)}</td>
-                  <td className="num">{fmtNum(r.dope, 3)}</td>
-                </tr>
-              ))}
+              {rows.map(({ r, i }) => {
+                const sel = sameResidue(selected, r);
+                return (
+                  <tr key={`${r.chain}${r.resnum}`} ref={sel ? selRow : undefined} className={`clickable${sel ? " selected" : ""}`} onClick={() => onPick(r)}>
+                    <td className="nowrap"><b>{r.resname}</b> {r.chain}{r.resnum}</td>
+                    <td>{r.ss}</td>
+                    <td className="num">{fmtNum(r.phi, 0)}</td>
+                    <td className="num">{fmtNum(r.psi, 0)}</td>
+                    <td>{r.rama ? <Badge tone={r.rama === "favored" ? "ok" : r.rama === "allowed" ? "info" : "err"}>{r.rama === "favored" ? "favorita" : r.rama === "allowed" ? "consentita" : "outlier"}</Badge> : "—"}</td>
+                    <td className="num">{r.clashes || ""}</td>
+                    <td className="num">{fmtNum(r.rsa, 2)}</td>
+                    <td className="num">{fmtNum(r.dope, 3)}</td>
+                    <td className="num">{fmtNum(r.bfactor, 1)}</td>
+                    {counts && <td className="small">{counts.flags[i].map((k) => SIGNAL_LABEL[k] ?? k).join(", ")}</td>}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -173,23 +198,206 @@ function ResidueTable({ residues, onPick }: { residues: ResidueRow[]; onPick: (r
   );
 }
 
-function Report({ report, source }: { report: QualityReport; source?: StructureSource }) {
+/** Scheda del residuo selezionato (dal 3D, dai grafici o dalla tabella). */
+function ResidueDetail({ report, selected, consensus, onTable }: { report: QualityReport; selected: ResidueRef; consensus: ConsensusResult | null; onTable: () => void }) {
+  const i = report.residues.findIndex((r) => sameResidue(selected, r));
+  if (i < 0) return null;
+  const r = report.residues[i];
+  const per = consensus && consensus.per_residue.counts.length === report.residues.length ? consensus.per_residue : null;
+  const qmean = per?.values.qmean?.[i];
+  const flags = per?.flags[i] ?? [];
+  return (
+    <div className="row small" style={{ gap: 14 }}>
+      <b>{r.resname} {r.chain}{r.resnum}</b>
+      <span>DSSP {r.ss}</span>
+      <span>φ/ψ {fmtNum(r.phi, 0)}/{fmtNum(r.psi, 0)} · {r.rama ? { favored: "favorita", allowed: "consentita", outlier: "outlier" }[r.rama] : "—"}</span>
+      <span>clash {r.clashes}</span>
+      <span>RSA {fmtNum(r.rsa, 2)}</span>
+      <span>DOPE {fmtNum(r.dope, 3)}</span>
+      <span>{isPlddt(report) ? "pLDDT" : "B-factor"} {fmtNum(r.bfactor, 1)}</span>
+      {qmean != null && <span>QMEAN {fmtNum(qmean, 2)}</span>}
+      {per && <span>{flags.length ? <>segnalato da <b>{flags.map((k) => SIGNAL_LABEL[k] ?? k).join(", ")}</b></> : "nessuna segnalazione"}</span>}
+      <button className="btn btn-sm btn-ghost" onClick={onTable}>Mostra nella tabella</button>
+    </div>
+  );
+}
+
+const BAND_TONE: Record<ConsensusBand, "ok" | "warn" | "err"> = { buona: "ok", intermedia: "warn", scarsa: "err" };
+
+function fmtRaw(m: ConsensusMethod): string {
+  if (m.key === "grade") return `${fmtNum(m.raw, 1)}/100`;
+  if (m.key === "procheck") return `${fmtNum(m.raw, 1)}%`;
+  return fmtNum(m.raw, 2);
+}
+
+/** Consenso tra i metodi: punteggio, valori normalizzati, discordanze, regioni e segnalazioni per residuo. */
+function ConsensusPanel({ report, consensus, error, selected, onSelect, onRegion }: {
+  report: QualityReport;
+  consensus: ConsensusResult | null;
+  error: string | null;
+  selected: ResidueRef | null;
+  onSelect: (r: ResidueRow) => void;
+  onRegion: (region: ConsensusRegion) => void;
+}) {
+  if (!consensus) {
+    return error ? <Card title="Consenso tra i metodi"><Alert tone="warn">{error}</Alert></Card> : null;
+  }
+  const c = consensus;
+  return (
+    <Card title="Consenso tra i metodi" sub="scale e pesi dichiarati in domain/consensus.py" right={c.band && <Badge tone={BAND_TONE[c.band]}>fascia {c.band}</Badge>}>
+      <div className="stack">
+        {error && <Alert tone="warn">{error}</Alert>}
+        <div className="row" style={{ gap: 18, alignItems: "center" }}>
+          <Stat label="Punteggio di consenso" value={<>{fmtNum(c.score, 0)}<small>/100</small></>} note={`${c.methods_used} metodi su ${c.methods_total} · buona ≥ 70, scarsa < 40`} />
+          <div className="small text-2" style={{ flex: 1, minWidth: 240 }}>
+            Ogni metodo è portato su 0–100 con una scala lineare a tratti costruita sulle soglie della letteratura (70 = soglia di affidabilità, 40 = soglia dei problemi); il consenso è la media pesata dei soli metodi disponibili. Il voto A–D resta quello di BioLoom.
+            {c.missing.length > 0 && <div className="muted" style={{ marginTop: 4 }}>Non disponibili: {c.missing.map((m) => `${m.label} (${m.reason})`).join("; ")}.</div>}
+          </div>
+        </div>
+        <div className="table-wrap">
+          <table className="table">
+            <thead><tr><th>Metodo</th><th className="num">Valore</th><th>Normalizzato</th><th className="num">Peso</th><th>Fascia</th></tr></thead>
+            <tbody>
+              {c.methods.map((m) => (
+                <tr key={m.key}>
+                  <td><b>{m.label}</b><div className="tiny muted">{m.measures}</div></td>
+                  <td className="num nowrap">{fmtRaw(m)}</td>
+                  <td><BarCell value={m.normalized} label={fmtNum(m.normalized, 0)} /></td>
+                  <td className="num">{fmtNum(m.weight, 2)}</td>
+                  <td><Badge tone={BAND_TONE[m.band]}>{m.band}</Badge></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <details className="small text-2">
+          <summary>Scale e fonti</summary>
+          <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+            {c.methods.map((m) => (
+              <li key={m.key}>
+                <b>{m.label}</b>: {m.points.map(([raw, score]) => `${fmtNum(raw, m.key === "grade" || m.key === "procheck" ? 0 : 1)} → ${score}`).join(" · ")} (lineare tra i punti). <span className="muted">{m.source}.</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+        {c.discordances.length > 0 ? (
+          <div className="stack-sm">
+            <h4>Discordanze</h4>
+            {c.discordances.map((d, k) => <Alert key={k} tone="warn">{d.text}</Alert>)}
+          </div>
+        ) : c.methods_used > 1 && <Alert tone="ok">I metodi disponibili concordano: nessuno è in fascia buona mentre un altro è in fascia scarsa.</Alert>}
+        <div className="stack-sm">
+          <h4>Regioni problematiche</h4>
+          {c.regions.length ? (
+            <div className="row">
+              {c.regions.map((r) => (
+                <button key={`${r.chain}${r.start}`} className="chip" onClick={() => onRegion(r)} title="Evidenzia nel 3D">{r.text}</button>
+              ))}
+            </div>
+          ) : <p className="small muted">Nessun tratto di almeno 3 residui segnalato da almeno 2 metodi.</p>}
+          <ConsensusTracks residues={report.residues} consensus={c} selected={selected} onSelect={onSelect} onRegion={onRegion} />
+        </div>
+        {c.warnings.map((w, k) => <p key={k} className="tiny muted">{w}</p>)}
+      </div>
+    </Card>
+  );
+}
+
+function ColorBySelect({ options, value, onChange }: { options: ColorOption[]; value: ColorBy; onChange: (v: ColorBy) => void }) {
+  return (
+    <label className="check">
+      Colora per
+      <select className="input" style={{ width: 220, minHeight: 28, padding: "2px 6px" }} value={value} onChange={(e) => onChange(e.target.value as ColorBy)}>
+        {options.map((o) => (
+          <option key={o.value} value={o.value} disabled={!o.available}>{o.label}{!o.available && o.note ? ` (${o.note})` : ""}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+/** Rapporto da mostrare e dove chiederne il consenso (job di qualità, oppure modello di un job). */
+interface ConsensusRef {
+  job: string;
+  model?: string | null;
+}
+
+function Report({ report, source, consensusRef }: { report: QualityReport; source?: StructureSource; consensusRef?: ConsensusRef | null }) {
   const [tab, setTab] = useState<Tab>("rama");
   const [focus, setFocus] = useState<{ chain: string; resi: number }[]>([]);
+  const [selected, setSelected] = useState<ResidueRef | null>(null);
+  const [centerKey, setCenterKey] = useState(0);
+  const [colorBy, setColorBy] = useState<ColorBy>("ss");
+  const [qmeanJob, setQmeanJob] = useState<string | null>(null);
+  const [consensus, setConsensus] = useState<ConsensusResult | null>(report.consensus ?? null);
+  const [consensusError, setConsensusError] = useState<string | null>(null);
   const g = report.grade;
   const rs = report.ramachandran.summary;
   const url = structureUrl(source ?? report.source);
-  const pick = (r: { chain: string; resnum: string }) => {
-    setFocus([{ chain: r.chain, resi: parseInt(r.resnum, 10) }]);
+  const plddt = isPlddt(report);
+
+  // Il consenso della rotta aggiunge GA341 di MODELLER, QMEAN calcolato qui e vale anche per i rapporti precedenti.
+  useEffect(() => {
+    if (!consensusRef) return;
+    let stop = false;
+    api.consensus(consensusRef.job, consensusRef.model, qmeanJob)
+      .then((c) => {
+        if (stop) return;
+        setConsensus(c);
+        setConsensusError(null);
+      })
+      .catch((e) => !stop && setConsensusError(`Consenso non aggiornato: ${e instanceof Error ? e.message : String(e)}`));
+    return () => {
+      stop = true;
+    };
+  }, [consensusRef?.job, consensusRef?.model, qmeanJob]);
+
+  const options = useMemo(() => colorOptions(report, consensus), [report, consensus]);
+  // un'opzione non (ancora) disponibile, es. QMEAN in attesa del consenso, ripiega sulla struttura secondaria
+  const shownBy: ColorBy = options.find((o) => o.value === colorBy)?.available ? colorBy : "ss";
+  const coloring = useMemo(() => residueColoring(report, shownBy, consensus), [report, shownBy, consensus]);
+  const onQmean = (jobId: string) => {
+    setQmeanJob(jobId);
+    setColorBy("qmean");
+  };
+
+  /** Dal grafico o dalla tabella: evidenzia e centra nel 3D. */
+  const pick = (r: ResidueRef) => {
+    setSelected({ chain: r.chain, resnum: r.resnum });
+    setFocus([{ chain: r.chain, resi: resiNumber(r.resnum) }]);
+    setCenterKey((k) => k + 1);
+    setTab("3d");
+  };
+  /** Dal 3D: seleziona il residuo (tabella, grafici, scheda) senza spostare la vista. */
+  const pick3d = (r: ResidueRef) => {
+    setSelected(r);
+    setFocus([{ chain: r.chain, resi: resiNumber(r.resnum) }]);
+  };
+  const pickRegion = (region: ConsensusRegion) => {
+    const res = regionResidues(report, region);
+    setSelected(res[0] ?? null);
+    setFocus(res.map((r) => ({ chain: r.chain, resi: resiNumber(r.resnum) })));
+    setColorBy("consensus");
+    setCenterKey((k) => k + 1);
     setTab("3d");
   };
   const problems = useMemo(() => {
     const out: { chain: string; resi: number }[] = [];
     report.residues.forEach((r) => {
-      if (r.rama === "outlier" || r.clashes > 0) out.push({ chain: r.chain, resi: parseInt(r.resnum, 10) });
+      if (r.rama === "outlier" || r.clashes > 0) out.push({ chain: r.chain, resi: resiNumber(r.resnum) });
     });
     return out;
   }, [report]);
+  const per = consensus && consensus.per_residue.counts.length === report.residues.length ? consensus.per_residue : null;
+  const strip = coloring && (
+    <div className="stack-sm">
+      <div className="row small">
+        <ColorBySelect options={options} value={shownBy} onChange={setColorBy} />
+        <span className="muted">Striscia per residuo: {coloring.title}. Clic su un residuo per evidenziarlo nel 3D.</span>
+      </div>
+      <ResidueStrip residues={report.residues} coloring={coloring} selected={selected} onSelect={pick} />
+    </div>
+  );
   return (
     <div className="stack">
       <Card>
@@ -201,12 +409,15 @@ function Report({ report, source }: { report: QualityReport; source?: StructureS
               {report.structure.residues} residui · {report.structure.chains} catene · {report.structure.heavy_atoms} atomi
               {report.structure.method && ` · ${report.structure.method}`}
               {report.structure.resolution && ` · ${report.structure.resolution} Å`}
+              {plddt && ` · pLDDT medio ${fmtNum(report.bfactor.mean, 1)}`}
             </div>
             <div className="small muted" style={{ marginTop: 4 }}>
               Punteggio {fmtNum(g.score, 1)}/100 — penalità: Ramachandran {g.penalties.ramachandran}, clash {g.penalties.clashes}, DOPE {g.penalties.dope}
+              {consensus?.score != null && <> · consenso {fmtNum(consensus.score, 0)}/100 ({consensus.band}, {consensus.methods_used} metodi)</>}
             </div>
+            {plddt && <div style={{ marginTop: 6 }}><Badge tone="info" title="Riconosciuto dall'intestazione o dal nome del file (AlphaFold DB) e dai valori tra 0 e 100">Modello AlphaFold: la colonna B-factor contiene il pLDDT</Badge></div>}
           </div>
-          {source && <QmeanPanel source={source} />}
+          {source && <QmeanPanel source={source} onDone={onQmean} />}
         </div>
       </Card>
       {report.warnings.map((w, i) => <Alert key={i} tone="warn">{w}</Alert>)}
@@ -217,6 +428,7 @@ function Report({ report, source }: { report: QualityReport; source?: StructureS
         <Stat label="Superficie" value={report.sasa.mean_rsa != null ? <>{fmtNum(report.sasa.mean_rsa * 100, 0)}<small>% RSA media</small></> : "—"} note={report.sasa.buried_pct != null ? `${fmtNum(report.sasa.buried_pct)}% residui sepolti` : undefined} />
       </div>
       <ExternalValidation report={report} />
+      <ConsensusPanel report={report} consensus={consensus} error={consensusError} selected={selected} onSelect={pick} onRegion={pickRegion} />
       <Card title="Struttura secondaria" sub={report.secondary_structure.method}>
         <StackBar parts={[
           { label: "Elica", value: report.secondary_structure.helix_pct, color: "var(--helix)" },
@@ -253,9 +465,19 @@ function Report({ report, source }: { report: QualityReport; source?: StructureS
         )}
         {tab === "profiles" && (
           <div className="stack">
-            <ResidueProfile residues={report.residues} metric="dope" onSelect={pick} />
-            <ResidueProfile residues={report.residues} metric="rsa" onSelect={pick} height={150} />
-            <ResidueProfile residues={report.residues} metric="bfactor" onSelect={pick} height={150} />
+            {strip}
+            <ResidueProfile residues={report.residues} metric="dope" onSelect={pick} selected={selected}
+              threshold={per?.dope_threshold != null ? { value: per.dope_threshold, label: "picchi segnalati (media + 1 DS)" } : null} />
+            {per?.values.qmean && (
+              <ResidueProfile residues={report.residues} values={per.values.qmean} label="QMEAN locale per residuo" hint="Da 0 a 1; sotto 0,6 qualità bassa attesa (SWISS-MODEL)." onSelect={pick} selected={selected} height={150}
+                threshold={{ value: QMEAN_LOCAL_THRESHOLD, label: "0,6" }} />
+            )}
+            {per?.values.prosa && (
+              <ResidueProfile residues={report.residues} values={per.values.prosa} label="Energia ProSA (finestra 10)" hint="Valori positivi: parti potenzialmente problematiche (Wiederstein & Sippl 2007)." onSelect={pick} selected={selected} height={150}
+                threshold={{ value: 0, label: "0" }} />
+            )}
+            <ResidueProfile residues={report.residues} metric="rsa" onSelect={pick} selected={selected} height={150} />
+            <ResidueProfile residues={report.residues} metric={plddt ? "plddt" : "bfactor"} onSelect={pick} selected={selected} height={150} />
           </div>
         )}
         {tab === "clashes" && (
@@ -268,7 +490,9 @@ function Report({ report, source }: { report: QualityReport; source?: StructureS
                     <tr key={i} className="clickable" onClick={() => {
                       const [c1, r1] = c.atom1.split(" ");
                       const [c2, r2] = c.atom2.split(" ");
-                      setFocus([{ chain: c1, resi: parseInt(r1, 10) }, { chain: c2, resi: parseInt(r2, 10) }]);
+                      setSelected({ chain: c1, resnum: r1 });
+                      setFocus([{ chain: c1, resi: resiNumber(r1) }, { chain: c2, resi: resiNumber(r2) }]);
+                      setCenterKey((k) => k + 1);
                       setTab("3d");
                     }}>
                       <td className="mono">{c.atom1}</td><td className="mono">{c.atom2}</td><td className="num">{c.distance.toFixed(2)}</td><td className="num">{c.overlap.toFixed(2)}</td>
@@ -279,16 +503,19 @@ function Report({ report, source }: { report: QualityReport; source?: StructureS
             </div>
           )
         )}
-        {tab === "residues" && <ResidueTable residues={report.residues} onPick={pick} />}
+        {tab === "residues" && <ResidueTable residues={report.residues} onPick={pick} selected={selected} consensus={consensus} plddt={plddt} />}
         {tab === "3d" && (
           url ? (
             <div className="stack-sm">
               <div className="row small">
-                <button className="btn btn-sm" onClick={() => setFocus(problems)}>Evidenzia tutti i residui problematici ({problems.length})</button>
-                <button className="btn btn-sm btn-ghost" onClick={() => setFocus([])}>Nessuna evidenza</button>
-                <span className="muted">Residui evidenziati in arancione.</span>
+                <ColorBySelect options={options} value={shownBy} onChange={setColorBy} />
+                <button className="btn btn-sm" onClick={() => { setFocus(problems); setCenterKey((k) => k + 1); }}>Evidenzia tutti i residui problematici ({problems.length})</button>
+                <button className="btn btn-sm btn-ghost" onClick={() => { setFocus([]); setSelected(null); }}>Nessuna evidenza</button>
+                <span className="muted">Evidenziati a bastoncini arancioni · clic su un residuo per selezionarlo.</span>
               </div>
-              <Viewer3D url={url} highlight={focus} format={url.endsWith(".cif") ? "cif" : "pdb"} />
+              <Viewer3D url={url} highlight={focus} format={url.endsWith(".cif") ? "cif" : "pdb"} coloring={coloring} onPickResidue={pick3d} centerKey={centerKey} />
+              {coloring && <ResidueStrip residues={report.residues} coloring={coloring} selected={selected} onSelect={pick} />}
+              {selected && <ResidueDetail report={report} selected={selected} consensus={consensus} onTable={() => setTab("residues")} />}
             </div>
           ) : <p className="small muted">Struttura non disponibile per la visualizzazione 3D.</p>
         )}
@@ -310,7 +537,7 @@ function Compare() {
     <Card title="Confronto delle analisi del progetto" sub="Ultime 12 analisi completate">
       <div className="table-wrap">
         <table className="table">
-          <thead><tr><th>Struttura</th><th>Voto</th><th className="num">Fav. %</th><th className="num">Outlier %</th><th className="num">Clashscore</th><th className="num">DOPE</th><th className="num">zDOPE</th><th className="num">Elica %</th><th className="num">β %</th><th /></tr></thead>
+          <thead><tr><th>Struttura</th><th>Voto</th><th className="num">Consenso</th><th className="num">Fav. %</th><th className="num">Outlier %</th><th className="num">Clashscore</th><th className="num">DOPE</th><th className="num">zDOPE</th><th className="num">Elica %</th><th className="num">β %</th><th /></tr></thead>
           <tbody>
             {full.filter((j) => j.result).map((j) => {
               const r = j.result!;
@@ -318,6 +545,7 @@ function Compare() {
                 <tr key={j.id}>
                   <td><b>{r.label ?? r.structure.file}</b><div className="tiny muted">{relTime(j.finished_at)}</div></td>
                   <td><Grade grade={r.grade.grade} /></td>
+                  <td className="num" title={r.consensus ? `${r.consensus.methods_used} metodi (senza QMEAN)` : "analisi precedente al consenso"}>{fmtNum(r.consensus?.score ?? null, 0)}</td>
                   <td className="num">{fmtNum(r.ramachandran.summary.favored_pct)}</td>
                   <td className="num">{fmtNum(r.ramachandran.summary.outlier_pct)}</td>
                   <td className="num">{fmtNum(r.clashes.clashscore, 2)}</td>
@@ -380,6 +608,8 @@ export default function Quality() {
   };
   const report = qjob ? (job?.status === "completed" ? job.result : null) : stored;
   const reportSource = qjob ? (job?.params?.source as StructureSource | undefined) : source ?? undefined;
+  // dove chiedere il consenso ricalcolato (QMEAN, GA341): il job di qualità oppure il modello del job
+  const consensusRef = useMemo(() => (qjob ? { job: qjob } : modelJob && modelFile ? { job: modelJob, model: modelFile } : null), [qjob, modelJob, modelFile]);
 
   return (
     <div className="page">
@@ -403,6 +633,7 @@ export default function Quality() {
               <div className="row"><Grade grade="C" /> ≥ 55: da rifinire (loop, allineamento).</div>
               <div className="row"><Grade grade="D" /> &lt; 55: problematico; rivedi template e allineamento.</div>
               <p className="tiny muted">Punteggio = 100 − penalità Ramachandran (outlier oltre lo 0,5%) − penalità clashscore − penalità zDOPE (se &gt; −1).</p>
+              <p className="tiny muted">Il consenso (0–100) combina voto, z-DOPE, GA341, QMEAN, ProSA e PROCHECK, quando disponibili, e indica i metodi che discordano e le regioni segnalate da più metodi.</p>
             </div>
           </Card>
         </div>
@@ -417,7 +648,7 @@ export default function Quality() {
               ) : <Empty icon="shield" title="Scegli una struttura o carica un file" />}
             </Card>
           )}
-          {report && <Report report={report} source={reportSource} />}
+          {report && <Report key={qjob ?? `${modelJob}/${modelFile}`} report={report} source={reportSource} consensusRef={consensusRef} />}
           <Compare />
         </div>
       </div>

@@ -96,7 +96,7 @@ data/
 | Pacchetto | Contenuto |
 |---|---|
 | `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi) |
-| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `grading`, `procheck` (lettura del .sum), `exports` (PyMOL) |
+| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL) |
 | `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2), `remote` (client HTTP), `tools` (rilevamento strumenti, preambolo di licenza) |
 | `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione) |
 | `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases` oltre a sistema, progetti, calcoli, job) |
@@ -267,6 +267,82 @@ Valori sulle strutture di riferimento (test automatici):
 | 3IU0 | 77,1 % | 94,3 % | 24,9 | 0,4 |
 | 9QB7 | 72,7 % | 94,0 % | — | 0,2 |
 
+### Consenso tra i metodi e qualità per residuo (`domain/consensus.py`, `domain/perresidue.py`)
+
+Il voto A–D non cambia: `consensus` è un campo in più del rapporto di qualità.
+
+- **Scale:** ogni metodo è portato su 0–100 con una funzione lineare a tratti (saturata fuori dai punti). I punti
+  mettono la soglia "affidabile" della letteratura a 70 e quella "problematica" a 40, così le fasce (buona ≥ 70,
+  intermedia 40–70, scarsa < 40) valgono per tutti i metodi e per il consenso.
+
+  | Metodo | Punti (valore → punteggio) | Peso | Fonte |
+  |---|---|---|---|
+  | Voto BioLoom | 0 → 0, 55 → 40, 70 → 70, 100 → 100 | 1 | soglie del voto (D sotto 55, B da 70) |
+  | z-DOPE | −2 → 100, −1 → 70, 0 → 40, 2 → 0 | 1 | Shen & Sali 2006; manuale MODELLER: sotto −1 simile a strutture native, positivo probabilmente scarso |
+  | GA341 | 0 → 0, 0,7 → 70, 1 → 100 | 0,5 | Melo et al. 2002; John & Sali 2003: ripiegamento affidabile sopra 0,7 |
+  | QMEAN4 Z-score | −8 → 0, −4 → 40, −2 → 70, 0 → 100 | 1,5 | Benkert et al. 2011; SWISS-MODEL: −4 o meno bassa qualità, vicino a 0 ottimo |
+  | ProSA z-score | 2 → 0, −2 → 40, −6 → 70, −8 → 100 | 1 | Sippl 1993; Wiederstein & Sippl 2007: positivo o vicino a zero = errore (−0,60 "troppo alto"), −8,29 nativo; −6 scelta BioLoom |
+  | PROCHECK core | 50 → 0, 70 → 40, 90 → 70, 100 → 100 | 0,75 | Laskowski et al. 1993: oltre il 90% atteso a 2 Å o meglio; 70% scelta BioLoom |
+
+  Pesi: QMEAN combina quattro potenziali ed è già riferito a strutture sperimentali di pari dimensione; GA341 valuta
+  solo il ripiegamento e, contenendo l'identità con il template, satura vicino a 1 per quasi tutti i modelli per
+  omologia; PROCHECK misura i soli diedri dello scheletro, già nel voto. Il voto contiene una penalità zDOPE (al
+  massimo 20 punti, solo sopra −1): la sovrapposizione con z-DOPE è parziale e accettata. L'intervallo nativo di
+  ProSA dipende dalla lunghezza (meno negativo per le catene corte): una catena nativa sotto i 100 residui può
+  risultare "intermedia".
+- **Punteggio:** media pesata dei soli metodi disponibili, con numero di metodi usati, metodi mancanti (con il
+  motivo) e fascia. Con un solo metodo il rapporto lo avverte.
+- **Discordanze:** ogni coppia con un metodo in fascia buona e uno in fascia scarsa, con una frase che dice che
+  cosa misura ciascuno (ambiti geometria, energia, ripiegamento) e come leggere la differenza.
+- **Consenso per residuo:** segnali allineati a `report.residues`:
+
+  | Segnale | Regola |
+  |---|---|
+  | Ramachandran | outlier |
+  | clash | almeno un contatto grave |
+  | DOPE | profilo per residuo oltre media + 1 DS del profilo della stessa struttura. Il profilo è già una media mobile calcolata da MODELLER (`assess_dope(smoothing_window=15)`, come nel tutorial; l'intestazione di `dope.profile` dichiara una finestra effettiva di 13 residui) e non si smussa di nuovo. Non ha una soglia assoluta: se ne leggono i picchi |
+  | QMEAN | punteggio locale sotto 0,6 (SWISS-MODEL); indice 1-based per catena, escluso con avviso se il numero di residui non corrisponde |
+  | ProSA | energia sulla finestra di 10 residui sopra 0; indice sequenziale, escluso con avviso se non corrisponde |
+
+  Regioni problematiche: almeno 3 residui segnalati da almeno 2 metodi, con un residuo non segnalato tollerato
+  tra due segnalati (anche più volte nello stesso tratto). Un tratto non attraversa catene né interruzioni della
+  numerazione. Testo del tipo "DOPE e Ramachandran segnalano 40-52 (catena A)", con gli indici per il viewer.
+- **Dove si calcola:**
+  - `quality.analyze` con ciò che l'analisi ha (niente QMEAN né GA341);
+  - `run_modeling` lo ricalcola con GA341 e zDOPE di MODELLER prima di salvare `<modello>.quality.json`;
+  - `GET /api/jobs/{id}/consensus?qmean_job=` per un job `quality` (rapporto nel risultato) e
+    `GET /api/jobs/{id}/consensus/{modello}?qmean_job=` per i modelli di job `model`, `loop` e `pipeline`
+    (rapporto nel file). Sono due rotte perché i due rapporti stanno in posti diversi. Entrambe leggono GA341 e
+    zDOPE dal `models.json` accanto al modello, se la struttura è un modello salvato da un job: questo vale
+    anche per un'analisi di qualità lanciata su quel modello. Con `qmean_job` aggiungono Z-score e punteggi
+    locali di un job QMEAN completato.
+- **Controlli della rotta:** la sorgente del job QMEAN (nei parametri: nel risultato `source` è il servizio) deve
+  indicare la stessa struttura. Si confrontano template normalizzato, job + file, nome del file caricato. Una
+  sorgente diversa dà 400 `qmean_source_mismatch` e non viene esclusa in silenzio, perché i punteggi di un'altra
+  struttura renderebbero il consenso fuorviante. Un job che non è QMEAN dà 400 `qmean_job_invalid`, un QMEAN non
+  completato 409. I rapporti delle versioni precedenti, senza consenso, funzionano: la rotta lo calcola.
+- **pLDDT (`perresidue.bfactor_kind`):** `report.structure.bfactor_kind = "plddt"` se il file è di AlphaFold e
+  tutti i valori della colonna B-factor stanno in 0–100 e non sono tutti nulli. Il file è di AlphaFold se:
+  - HEADER, TITLE o REMARK citano AlphaFold (esclusi i `REMARK 999 BIOLOOM`); per mmCIF basta una voce prima di
+    `_atom_site`;
+  - oppure il nome segue lo schema di AlphaFold DB `AF-<accessione UniProt>-F<n>[-model_v<k>]`: file scaricati,
+    caricati con prefisso, id di libreria `AF-<ACC>-F1`.
+
+  I B-factor cristallografici stanno spesso in 0–100 (1UBQ: massimo 42,75): per questo la sola scala non basta.
+- **Valori su 1UBQ** (uscite reali di MODELLER, PROCHECK e ProSA in `tests/data`):
+
+  | Metodo | Valore | Punteggio |
+  |---|---|---|
+  | voto | 98,9 | 98,9 |
+  | zDOPE | −2,73 | 100 |
+  | ProSA | −9,26 | 100 |
+  | PROCHECK core | 95,5% | 86,5 |
+  | **consenso** | | **97,0, fascia buona** |
+
+  Nessuna discordanza e nessuna regione problematica. Segnali isolati:
+  - un clash su Arg72;
+  - il picco DOPE sulla coda C-terminale flessibile (73–76; soglia −0,0355).
+
 ### Allineamenti
 
 - **Pairwise**: Biopython `PairwiseAligner` (NW/SW, BLOSUM/PAM/GONNET, NUC.4.4), gap terminali gratuiti nel globale.
@@ -335,6 +411,33 @@ React 19 + TypeScript + Vite, nessuna libreria UI esterna: componenti propri (`c
 (`components/charts.tsx`: Ramachandran, profili per residuo con striscia di struttura secondaria, heatmap,
 mappa delle feature UniProt), viewer 3D 3Dmol.js caricato su richiesta con rilascio del contesto WebGL.
 Il client API (`api/client.ts`) e i tipi (`api/types.ts`) sono l'unico punto di contatto con il backend.
+
+**Qualità per residuo nel 3D e confidenza degli allineamenti:**
+
+- **`Viewer3D`:** accetta una colorazione per valore per residuo (`coloring`: valori, scala, titolo) applicata al
+  cartoon con `colorfunc`. Mostra la legenda sovrapposta e lascia in grigio i residui senza valore. Con una
+  colorazione i pulsanti degli schemi predefiniti spariscono; senza, il viewer resta com'era (Modellazione,
+  Allineamenti, Template, Pipeline).
+- **Interazione:** con `onPickResidue` un clic su un atomo sceglie il residuo (`setClickable`) e il passaggio del
+  mouse mostra residuo e valore (`setHoverable`). `centerKey` centra la vista sui residui evidenziati.
+- **Logica pura con test:**
+  - `lib/colorscale.ts`: scale continue con salti netti alle soglie, a fasce, categoriali; legende;
+  - `lib/residueColoring.ts`: conversione del rapporto nelle opzioni "Colora per", compresa la scala pLDDT di
+    AlphaFold DB (> 90 #0053D6, 70–90 #65CBF3, 50–70 #FFDB13, ≤ 50 #FF7D45, come il tema pLDDT di Mol\*);
+  - `lib/alignConfidence.ts`.
+- **Selezione bidirezionale (pagina Qualità):**
+  - un clic su grafici, tabelle, clash o regioni del consenso evidenzia e centra nel 3D;
+  - un clic nel 3D seleziona il residuo: scheda del residuo, riga evidenziata nella tabella, linea nei profili e
+    nel grafico del consenso.
+  - Il QMEAN calcolato nella pagina fa ricalcolare il consenso dalla rotta e diventa un'opzione di colorazione.
+- **Confidenza dell'allineamento (`AlignmentView`, modalità "Confidenza"):**
+  - **Riferimento:** il bersaglio è la prima riga, oppure la voce `sequence` del PIR in Modellazione ed Editor PIR.
+  - **Identità locale:** per ogni template, su 9 colonne centrate. Le colonne di gap del bersaglio non contano; un
+    gap del template di fronte a un residuo del bersaglio conta come non identico. Per ogni colonna vale il miglior
+    template che la copre.
+  - **Evidenze:** gap del template, zona crepuscolare sotto il 25% (soglia della pipeline; Rost 1999) e residui del
+    bersaglio non coperti. Una traccia riassuntiva sopra l'allineamento elenca le regioni in numerazione del
+    bersaglio.
 Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni risultato ha un link stabile.
 
 | Pagina | Funzione |
@@ -346,7 +449,7 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 | Allineamenti | pairwise, multiplo, strutturale; esportazione FASTA/Clustal/PIR; salvataggio nel progetto; cache per multiplo e strutturale |
 | Editor PIR | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
 | Modellazione | input automatico o da PIR, parametri, vincoli, loop; modelli, 3D, PyMOL, archivio |
-| Qualità | voto, Ramachandran, profili, clash, residui problematici evidenziati in 3D, confronto analisi |
+| Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi |
 | Pipeline batch | multi-FASTA → modelli validati, filtro zona crepuscolare, tabella paginata, CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti) |
 | Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate |
 | Impostazioni | schede Generale (esecuzione, QMEAN, email), Licenze (MODELLER, ProSA, PROCHECK), Database (pdbaa, MMseqs2, UniClust30), Strumenti (verifica dell'installazione), Spazio e file temporanei (con la cache dei calcoli) |
@@ -389,6 +492,15 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - riconoscimento di tutti i formati di UniClust30 (`test_uniclust_discovery.py`);
   - scelta della versione e fallback su SWISS-MODEL (`test_qmean_fallback.py`);
   - lettura dei formati di sequenza e caricamento di strutture (`test_fileformats.py`);
+  - consenso tra i metodi (`test_consensus.py`):
+    - scale, pesi, fasce, metodi mancanti, discordanze;
+    - segnali per residuo, regioni con tolleranza, confini di catena e numerazione;
+    - QMEAN e ProSA per residuo;
+    - 1UBQ con le uscite reali di MODELLER (`dope_1ubq.profile`), PROCHECK e ProSA;
+    - rotta con QMEAN simulato (stessa struttura, altra struttura, job non QMEAN o non completato) e modelli
+      MODELLER simulati;
+    - riconoscimento del pLDDT (intestazione AlphaFold sintetica, nome di AlphaFold DB, file normale, valori fuori
+      scala);
   - cache dei calcoli (`test_compute_cache.py`): riscontri senza rieseguire i motori (simulati), invalidazione per
     parametri, sequenza, timbro del database o dello strumento, scadenza, file corrotti, job falliti e annullati,
     riuso nella pipeline e scritture concorrenti;
@@ -402,7 +514,9 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - logica QMEAN locale/remoto/fallback e avvisi delle licenze;
   - pulsanti di ripresa delle pipeline e ricarica del job quando cambia stato, dopo l'annullamento e dopo la
     ripresa;
-  - decodifica dei file, chiave MODELLER da file, vincoli da e verso file.
+  - decodifica dei file, chiave MODELLER da file, vincoli da e verso file;
+  - scale di colore e legende (`colorscale.test.ts`), conversione del rapporto nei valori per residuo, pLDDT
+    compreso (`residueColoring.test.ts`), confidenza degli allineamenti (`alignConfidence.test.ts`).
 - **Esecuzione:** `scripts/test.sh` (ruff, pytest nell'immagine con MODELLER reale, typecheck e vitest). La CI
   (`.github/workflows/ci.yml`) esegue gli stessi controlli: test rapidi senza strumenti esterni, frontend, e
   immagine completa con i test al suo interno.

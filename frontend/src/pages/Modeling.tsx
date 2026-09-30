@@ -9,6 +9,7 @@ import { TextFileButton } from "../components/FileLoad";
 import { SequencePicker, StructurePicker, TemplatePicker } from "../components/Pickers";
 import { Viewer3D } from "../components/Viewer3D";
 import { Alert, Badge, Card, Empty, Field, Grade, Modal, PageHead, Segmented, Stat } from "../components/ui";
+import { pirReference } from "../lib/alignConfidence";
 import { useProject, useToast } from "../lib/context";
 import { fileStem, formatRestraints, parseRestraints, type RestraintRow } from "../lib/files";
 import { downloadText, fmtNum, relTime } from "../lib/format";
@@ -164,7 +165,7 @@ function Results({ jobId, result, kind }: { jobId: string; result: ModelResult |
             <div className="small text-2">
               Template: {full.templates.map((t) => `${t.code} (${t.first}–${t.last}${t.ligands ? `, ${t.ligands} ligandi` : ""})`).join(", ")}
             </div>
-            {entries.length > 1 && <AlignmentView ids={entries.map((e) => e.code)} aligned={entries.map((e) => e.sequence)} />}
+            {entries.length > 1 && <AlignmentView ids={entries.map((e) => e.code)} aligned={entries.map((e) => e.sequence)} reference={pirReference(entries.map((e) => e.kind))} />}
           </div>
         </Card>
       )}

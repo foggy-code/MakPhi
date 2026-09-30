@@ -8,6 +8,7 @@ import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { SequencePicker, TemplatePicker } from "../components/Pickers";
 import { Alert, BarCell, Card, Confirm, Empty, Modal, PageHead } from "../components/ui";
+import { pirReference } from "../lib/alignConfidence";
 import { useProject, useToast } from "../lib/context";
 import { fileStem } from "../lib/files";
 import { downloadText, relTime } from "../lib/format";
@@ -233,7 +234,7 @@ export default function PirEditor() {
           )}
           {entries.length > 1 && entries.every((e) => e.sequence.length === entries[0].sequence.length) && (
             <Card title="Anteprima">
-              <AlignmentView ids={entries.map((e) => e.code)} aligned={entries.map((e) => e.sequence)} />
+              <AlignmentView ids={entries.map((e) => e.code)} aligned={entries.map((e) => e.sequence)} reference={pirReference(entries.map((e) => e.kind))} />
             </Card>
           )}
         </div>
