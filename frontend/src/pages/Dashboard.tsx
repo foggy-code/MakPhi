@@ -6,7 +6,7 @@ import { Icon } from "../components/Icon";
 import { Badge, Card, Empty, PageHead, Progress, Stat, StatusBadge } from "../components/ui";
 import { useProject, useToast } from "../lib/context";
 import { fmtBytes, KIND_LABEL, relTime } from "../lib/format";
-import { useAsync, useInterval } from "../lib/hooks";
+import { useAsync, useInterval, useLiveJobList } from "../lib/hooks";
 
 const FLOW = [
   { to: "/sequences", icon: "dna", title: "Sequenza", text: "Importa la proteina bersaglio da UniProt o FASTA." },
@@ -22,12 +22,14 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const { data: info } = useAsync<SystemInfo>(() => api.systemInfo(), []);
   const { data: examples } = useAsync<Example[]>(() => api.examples(), []);
-  const { data: jobs, reload: reloadJobs } = useAsync<JobSummary[]>(() => api.jobs({ project_id: projectId ?? undefined, limit: 8 }), [projectId]);
+  const { data: jobs, reload: reloadJobs, setData: setJobs } = useAsync<JobSummary[]>(() => api.jobs({ project_id: projectId ?? undefined, limit: 8 }), [projectId]);
   const [stats, setStats] = useState<SystemStats | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // job recenti dal flusso dell'elenco; CPU, memoria e disco restano periodici
+  const live = useLiveJobList(jobs, setJobs, reloadJobs, (j) => !projectId || j.project_id === projectId);
   useInterval(() => {
     api.stats().then(setStats).catch(() => undefined);
-    reloadJobs();
+    if (!live) reloadJobs();
   }, 5000);
 
   const addExample = async (ex: Example) => {

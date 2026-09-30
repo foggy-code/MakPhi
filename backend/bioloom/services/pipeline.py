@@ -7,6 +7,10 @@ Ripresa: una pipeline fallita, annullata o interrotta dal riavvio, oppure comple
 si riprende (`resume`) rimettendo in attesa solo gli elementi non conclusi (o solo i falliti); quelli
 completati restano come sono, con i loro file già salvati, e l'esecuzione elabora soltanto gli elementi in
 attesa. Un elemento diventa 'completed' solo dopo che i suoi file sono arrivati nella cartella definitiva.
+
+Tempo residuo (`eta`): mediana della durata degli elementi conclusi nell'esecuzione corrente × elementi
+rimanenti / parallelismo effettivo (core/eta.py). Ogni cambiamento di un elemento viene pubblicato sulle
+notifiche del JobManager, così la tabella dell'interfaccia si aggiorna dal flusso SSE dell'elenco dei job.
 """
 
 from __future__ import annotations
@@ -17,11 +21,14 @@ import json
 import threading
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from ..core import eta as eta_estimate
 from ..core.db import Database, encode_json, now_iso
 from ..core.errors import AppError, Conflict, NotFound
+from ..core.events import ITEM
 from ..core.jobs import REQUEUABLE, JobCancelled, JobContext, JobManager, requeue_error
 from ..core.storage import remove_tree, safe_join
 from ..domain import sequences
@@ -46,6 +53,8 @@ RESET_ITEM = ("status='pending', stage='', template=NULL, template_source=NULL, 
               "rama_favored=NULL, clashscore=NULL, metrics='{}', error=NULL, started_at=NULL, finished_at=NULL")
 # Stati con cui un elemento conta come elaborato nel progresso (anche un fallimento è un esito).
 PROCESSED_ITEM = ("completed", "filtered", "failed")
+# Elementi che l'esecuzione in corso deve ancora concludere: in attesa o in lavorazione.
+OPEN_ITEM = ("pending", "running", "searching", "modeling")
 SORTABLE = {"idx", "name", "status", "identity", "coverage", "dope", "ga341", "grade_score", "rama_favored",
             "clashscore", "template"}
 ITEM_COLUMNS = ("idx, name, length(sequence) AS length, status, stage, template, template_source, identity, "
@@ -58,7 +67,7 @@ class PipelineService:
         self.db = db
         self.jobs = jobs
         self.compute = compute
-        jobs.register("pipeline", self.handle)
+        jobs.register("pipeline", self.handle, eta=self.eta)
 
     # ------------------------------------------------------------------------------ sottomissione
     def submit(self, params: dict, project_id: Optional[str]) -> dict:
@@ -125,6 +134,7 @@ class PipelineService:
                 conn.execute(f"UPDATE pipeline_items SET {RESET_ITEM} WHERE job_id=? AND {where}", (job_id,))
                 conn.executemany(f"UPDATE pipeline_items SET {RESET_ITEM} WHERE job_id=? AND idx=? "
                                  "AND status='completed'", [(job_id, r["idx"]) for r in missing])
+            self.jobs.events.publish(job_id, ITEM)  # più elementi insieme: la tabella si ricarica
             # niente file vecchi accanto a quelli nuovi: la cartella dell'elemento riparte vuota
             for row in rows + missing:
                 remove_tree(safe_join(final_dir, "items", f"{row['idx']:04d}_{row['name']}"))
@@ -155,6 +165,37 @@ class PipelineService:
         counts = {k: int(row[k]) for k in ("total", "incomplete", "failed")} if row else \
             {"total": 0, "incomplete": 0, "failed": 0}
         return {"resumable": counts["incomplete"] > 0, "resumable_items": counts}
+
+    # ------------------------------------------------------------------------------ tempo residuo
+    def eta(self, job: dict, now: datetime) -> Optional[int]:
+        """Secondi rimanenti di una pipeline in esecuzione (core/eta.pipeline_eta); None se non stimabile.
+
+        Contano solo gli elementi conclusi (completati, filtrati o falliti: anche un fallimento occupa una
+        corsia) nell'esecuzione corrente, cioè avviati dopo il suo inizio (`started_at` del job, riscritto a
+        ogni ripresa): dopo una ripresa gli elementi conclusi in precedenza, con durate di un'altra sessione,
+        restano fuori. Rimanenti = in attesa o in lavorazione; per questi ultimi si toglie il tempo già speso.
+        Una query sulla chiave primaria degli elementi, solo per pipeline in esecuzione.
+        """
+        started = job.get("started_at")
+        if not started:
+            return None
+        rows = self.db.query(
+            "SELECT status, started_at, finished_at FROM pipeline_items WHERE job_id=? AND "
+            f"(status IN ({','.join('?' * len(OPEN_ITEM))}) OR "
+            f"(status IN ({','.join('?' * len(PROCESSED_ITEM))}) AND started_at >= ?))",
+            (job["id"], *OPEN_ITEM, *PROCESSED_ITEM, started))
+        durations, running, remaining = [], [], 0
+        for row in rows:
+            if row["status"] in PROCESSED_ITEM:
+                durations.append(eta_estimate.seconds_between(row["started_at"], row["finished_at"]))
+            else:
+                remaining += 1
+                if row["status"] != "pending":
+                    running.append(eta_estimate.seconds_between(row["started_at"], now))
+        stored = self.db.query_one("SELECT params FROM jobs WHERE id=?", (job["id"],)) or {}
+        params = stored.get("params") if isinstance(stored.get("params"), dict) else {}
+        parallel = effective_parallel(params, self.jobs.settings_provider().effective_workers())
+        return eta_estimate.pipeline_eta(durations, remaining, parallel, running)
 
     @staticmethod
     def _records(params: dict) -> list[SeqRecord]:
@@ -188,7 +229,7 @@ class PipelineService:
         already = int(self.db.scalar(
             f"SELECT COUNT(*) FROM pipeline_items WHERE job_id=? AND status IN ({','.join('?' * len(PROCESSED_ITEM))})",
             (ctx.job_id, *PROCESSED_ITEM)))
-        parallel = max(1, min(int(p.get("parallel", 2)), ctx.settings.effective_workers(), 8))
+        parallel = effective_parallel(p, ctx.settings.effective_workers())
         done_lock = threading.Lock()
         done = {"n": already}
         ctx.log(f"Pipeline di {_seqs(total)}, {parallel} in parallelo")
@@ -237,6 +278,7 @@ class PipelineService:
             fields["metrics"] = encode_json(fields["metrics"])
         sets = ", ".join(f"{k}=?" for k in fields)
         self.db.execute(f"UPDATE pipeline_items SET {sets} WHERE job_id=? AND idx=?", (*fields.values(), job_id, idx))
+        self.jobs.events.publish(job_id, ITEM, idx)
 
     def _process_item(self, ctx: JobContext, p: dict, item: dict) -> None:
         job_id, idx, name = ctx.job_id, item["idx"], item["name"]
@@ -399,6 +441,16 @@ class PipelineService:
 
 def _seqs(n: int) -> str:
     return f"{n} sequenza" if n == 1 else f"{n} sequenze"
+
+
+def effective_parallel(params: dict, workers: int) -> int:
+    """Elementi elaborati insieme: quelli chiesti (predefinito 2), non oltre i job paralleli delle Impostazioni
+    né oltre 8. Lo usano l'esecuzione e la stima del tempo residuo."""
+    try:
+        requested = int(params.get("parallel", 2))
+    except (TypeError, ValueError):
+        requested = 2
+    return max(1, min(requested, int(workers), 8))
 
 
 def _saved(final_dir: Path, rel: Optional[str]) -> bool:

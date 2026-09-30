@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { JobSummary, ResumeItems, ResumeScope } from "../api/types";
-import { fmtDuration, isActive, KIND_LABEL } from "../lib/format";
+import { fmtDuration, fmtEta, isActive, KIND_LABEL } from "../lib/format";
 import { resumeOptions } from "../lib/status";
 import { Icon } from "./Icon";
 import { Alert, Progress, StatusBadge } from "./ui";
@@ -27,6 +27,7 @@ export function JobPanel({ summary, log, onCancel, resume, onResume, compact = f
   }, [log, showLog]);
   if (!summary) return null;
   const running = isActive(summary.status);
+  const eta = running ? fmtEta(summary.eta_seconds) : null;
   const options = onResume ? resumeOptions(summary.status, resume) : null;
   const doResume = async (scope: ResumeScope) => {
     if (!onResume) return;
@@ -64,7 +65,10 @@ export function JobPanel({ summary, log, onCancel, resume, onResume, compact = f
       {running && (
         <div className="stack-sm">
           <Progress value={summary.progress} indeterminate={summary.progress < 0.03} />
-          <span className="small text-2">{summary.stage}</span>
+          <div className="row small">
+            <span className="text-2">{summary.stage}</span>
+            {eta && <span className="right muted nowrap" title="Stima dal ritmo del calcolo finora">{eta}</span>}
+          </div>
         </div>
       )}
       {summary.status === "failed" && summary.error && (

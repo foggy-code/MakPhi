@@ -6,8 +6,9 @@ import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { Card, Confirm, Empty, PageHead, Progress, StatusBadge } from "../components/ui";
 import { useProject, useToast } from "../lib/context";
-import { fmtBytes, fmtDate, fmtDuration, isActive, KIND_LABEL } from "../lib/format";
-import { useAsync, useInterval, useJob } from "../lib/hooks";
+import { fmtBytes, fmtDate, fmtDuration, fmtEta, isActive, KIND_LABEL } from "../lib/format";
+import { useAsync, useInterval, useJob, useLiveJobList } from "../lib/hooks";
+import { listPollInterval } from "../lib/live";
 
 const OPEN_IN: Record<JobKind, (id: string) => string> = {
   search: (id) => `/search?job=${id}`,
@@ -93,8 +94,11 @@ export default function Jobs() {
   const selected = params.get("id");
   const [scope, setScope] = useState<"project" | "all">("project");
   const [kind, setKind] = useState("");
-  const { data: jobs, reload } = useAsync<JobSummary[]>(() => api.jobs({ project_id: scope === "project" ? projectId ?? undefined : undefined, kind: kind || undefined, limit: 200 }), [scope, kind, projectId]);
-  useInterval(reload, jobs?.some((j) => isActive(j.status)) ? 2000 : 8000);
+  const { data: jobs, reload, setData } = useAsync<JobSummary[]>(() => api.jobs({ project_id: scope === "project" ? projectId ?? undefined : undefined, kind: kind || undefined, limit: 200 }), [scope, kind, projectId]);
+  // flusso dell'elenco: i job in elenco si aggiornano sul posto, un job nuovo o eliminato ricarica l'elenco
+  const live = useLiveJobList(jobs, setData, reload,
+    (j) => (scope === "all" || !projectId || j.project_id === projectId) && (!kind || j.kind === kind));
+  useInterval(reload, listPollInterval(live, !!jobs?.some((j) => isActive(j.status)), 2000, 8000));
   return (
     <div className="page">
       <PageHead title="Job" lead="Tutti i calcoli eseguiti in background, con stato, log, file prodotti e durata. I job attivi possono essere annullati." />
@@ -124,6 +128,7 @@ export default function Jobs() {
                         <div className="row" style={{ gap: 6 }}><StatusBadge status={j.status} /><span className="tiny muted">{KIND_LABEL[j.kind]}</span></div>
                         <div className="ellipsis small" style={{ maxWidth: 330, marginTop: 3 }}>{j.title}</div>
                         {isActive(j.status) && <div style={{ marginTop: 4 }}><Progress value={j.progress} /></div>}
+                        {isActive(j.status) && fmtEta(j.eta_seconds) && <div className="tiny muted" style={{ marginTop: 2 }}>{fmtEta(j.eta_seconds)}</div>}
                       </td>
                       <td className="tiny muted nowrap">{fmtDate(j.created_at)}</td>
                     </tr>

@@ -191,6 +191,11 @@ export const api = {
   modelQuality: (id: string, model: string) => get<QualityReport>(`/api/jobs/${id}/quality/${model.split("/").map(enc).join("/")}`),
   pymolUrl: (id: string, model: string, scheme = "ss") => `/api/jobs/${id}/pymol/${model.split("/").map(enc).join("/")}?scheme=${scheme}`,
   archiveUrl: (id: string) => `/api/jobs/${id}/archive`,
+  /** flusso SSE di un job (status, log dal byte `offset`, end); `offset` null = senza righe di log */
+  jobEventsUrl: (id: string, offset: number | null) =>
+    `/api/jobs/${id}/events?${offset === null ? "log=false" : `offset=${Math.max(0, Math.floor(offset))}`}`,
+  /** flusso SSE dell'elenco dei job (ready, job, items, active, deleted, resync), tutti o di un progetto */
+  jobsEventsUrl: (projectId?: string) => `/api/jobs/events${projectId ? `?project_id=${enc(projectId)}` : ""}`,
 
   // calcoli
   search: (body: { project_id?: string; query: { name: string; sequence: string }; engine: string; evalue: number; max_hits: number; taxid?: string; use_cache?: boolean }) =>

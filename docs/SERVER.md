@@ -94,6 +94,12 @@ bioloom.example.org {
 
 Con HTTPS il cookie di sessione viene marcato `Secure`.
 
+Gli aggiornamenti in tempo reale dei job usano Server-Sent Events (`/api/jobs/events`, `/api/jobs/<id>/events`):
+connessioni lunghe su cui il server scrive man mano. Caddy le inoltra senza configurazione; nginx rispetta
+l'header `X-Accel-Buffering: no` che BioLoom invia (`proxy_read_timeout` deve superare i 15 s fra un
+heartbeat e l'altro: il predefinito di 60 s va bene). Se un proxy bufferizza lo stesso, l'interfaccia se ne accorge (nessun
+evento entro 5 s) e torna agli aggiornamenti periodici.
+
 ## Dati e backup
 
 | Percorso | Contenuto | Backup |
