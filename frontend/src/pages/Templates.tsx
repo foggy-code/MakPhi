@@ -6,9 +6,40 @@ import { SSStrip } from "../components/charts";
 import { Icon } from "../components/Icon";
 import { Viewer3D } from "../components/Viewer3D";
 import { Alert, Badge, Card, Confirm, DropZone, Empty, PageHead, Spinner, Stat } from "../components/ui";
+import { isAlphaFoldId, isUniProtAccession, normalizeAccession, PLDDT_BAND_LABEL, PLDDT_BAND_TONE, plddtLabel, plddtTone, type PlddtBand } from "../lib/alphafold";
 import { useToast } from "../lib/context";
 import { fmtBytes, fmtNum, relTime } from "../lib/format";
 import { useAsync } from "../lib/hooks";
+
+/** Avviso e dettagli di un modello predetto (AlphaFold): versione, intervallo UniProt, fasce di pLDDT. */
+function PredictedNote({ meta }: { meta: TemplateItem }) {
+  const af = meta.alphafold;
+  const fractions = meta.plddt_fractions;
+  return (
+    <Alert tone="warn">
+      <div className="stack-sm">
+        <span>
+          <b>Modello predetto, non struttura sperimentale</b>
+          {af ? <> · AlphaFold DB {af.version ? `v${af.version}` : ""} · UniProt {af.accession}{af.uniprot_start && af.uniprot_end ? ` (residui ${af.uniprot_start}–${af.uniprot_end})` : ""}{af.gene ? ` · ${af.gene}` : ""}</> : " · file di AlphaFold caricato"}
+          {" "}· {plddtLabel(meta.plddt_mean)}
+        </span>
+        {fractions && (
+          <span className="row" style={{ gap: 4 }}>
+            {(Object.keys(PLDDT_BAND_LABEL) as PlddtBand[]).map((k) => (
+              <Badge key={k} tone={PLDDT_BAND_TONE[k]}>
+                {PLDDT_BAND_LABEL[k]} {fmtNum((fractions[k] ?? 0) * 100, 0)}%
+              </Badge>
+            ))}
+          </span>
+        )}
+        <span className="tiny">
+          Il pLDDT sta nella colonna B-factor. In modellazione i residui con pLDDT &lt; 70 (spesso regioni disordinate) vengono tolti dal template, salvo diversa scelta.
+          {af && <> <a href={`https://alphafold.ebi.ac.uk/entry/${encodeURIComponent(af.accession)}`} target="_blank" rel="noreferrer">Scheda su AlphaFold DB</a></>}
+        </span>
+      </div>
+    </Alert>
+  );
+}
 
 function TemplateDetail({ id, onDeleted }: { id: string; onDeleted: () => void }) {
   const navigate = useNavigate();
@@ -20,10 +51,12 @@ function TemplateDetail({ id, onDeleted }: { id: string; onDeleted: () => void }
   if (!a) return null;
   const ligands = a.ligands.filter((l) => !l.additive);
   const additives = a.ligands.filter((l) => l.additive);
+  const predicted = !!a.meta.predicted;
   return (
     <div className="stack">
+      {predicted && <PredictedNote meta={a.meta} />}
       <Card
-        title={a.id}
+        title={<>{a.id} {predicted && <Badge tone="warn" title="Modello predetto da AlphaFold">AlphaFold</Badge>}</>}
         sub={a.header.title}
         right={
           <>
@@ -35,8 +68,10 @@ function TemplateDetail({ id, onDeleted }: { id: string; onDeleted: () => void }
         }
       >
         <div className="grid grid-4">
-          <Stat label="Metodo" value={<span style={{ fontSize: 14 }}>{a.header.method || "—"}</span>} />
-          <Stat label="Risoluzione" value={a.header.resolution ? <>{fmtNum(a.header.resolution, 2)}<small> Å</small></> : "—"} />
+          <Stat label="Metodo" value={<span style={{ fontSize: 14 }}>{a.header.method || a.meta.method || "—"}</span>} />
+          {predicted
+            ? <Stat label="pLDDT medio" value={fmtNum(a.meta.plddt_mean ?? null, 1)} note="confidenza della predizione (0–100)" />
+            : <Stat label="Risoluzione" value={a.header.resolution ? <>{fmtNum(a.header.resolution, 2)}<small> Å</small></> : "—"} />}
           <Stat label="Residui" value={a.stats.residues} note={`${a.stats.chains} catene · ${a.stats.heavy_atoms} atomi`} />
           <Stat label="Residui mancanti" value={a.header.missing_residues.length} note={a.models > 1 ? `${a.models} modelli (usato il primo)` : "REMARK 465"} />
         </div>
@@ -94,6 +129,8 @@ export default function Templates() {
   const [pdbId, setPdbId] = useState("");
   const [format, setFormat] = useState("pdb");
   const [busy, setBusy] = useState(false);
+  const [accession, setAccession] = useState("");
+  const accessionOk = isUniProtAccession(accession) || isAlphaFoldId(accession);
   useEffect(() => {
     if (!selected && list?.length) setParams({ id: list[0].id }, { replace: true });
   }, [list, selected, setParams]);
@@ -104,6 +141,20 @@ export default function Templates() {
       const t = await api.fetchTemplate(pdbId.trim(), format);
       toast.push(t.cached ? `${t.id} era già in libreria` : `${t.id} scaricato (${t.format.toUpperCase()})`);
       setPdbId("");
+      reload();
+      setParams({ id: t.id });
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const fetchAlphaFold = async () => {
+    setBusy(true);
+    try {
+      const t = await api.fetchAlphaFold(normalizeAccession(accession));
+      toast.push(t.cached ? `${t.id} era già in libreria` : `${t.id} scaricato da AlphaFold DB (${plddtLabel(t.plddt_mean)})`);
+      setAccession("");
       reload();
       setParams({ id: t.id });
     } catch (e) {
@@ -127,7 +178,7 @@ export default function Templates() {
   };
   return (
     <div className="page">
-      <PageHead title="Libreria template" lead="Strutture sperimentali o personalizzate disponibili per tutti i progetti. Ogni template è analizzato: catene, residui mancanti, ligandi e struttura secondaria." />
+      <PageHead title="Libreria template" lead="Strutture sperimentali, modelli predetti di AlphaFold DB o file personalizzati disponibili per tutti i progetti. Ogni template è analizzato: catene, residui mancanti, ligandi e struttura secondaria." />
       <div className="split">
         <div className="stack">
           <Card title="Aggiungi template">
@@ -139,6 +190,17 @@ export default function Templates() {
                   <option value="cif">mmCIF</option>
                 </select>
                 <button className="btn btn-primary" disabled={pdbId.trim().length !== 4 || busy} onClick={fetchPdb}>{busy ? <Spinner /> : <Icon name="download" />} Scarica</button>
+              </div>
+              <div className="stack-sm">
+                <span className="small text-2" style={{ fontWeight: 550 }}>Da AlphaFold DB (UniProt)</span>
+                <div className="row">
+                  <input className="input" style={{ flex: 1, textTransform: "uppercase" }} placeholder="Accessione UniProt (es. P69905)" maxLength={40} value={accession} onChange={(e) => setAccession(e.target.value)} onKeyDown={(e) => e.key === "Enter" && accessionOk && !busy && fetchAlphaFold()} />
+                  <button className="btn" disabled={!accessionOk || busy} onClick={fetchAlphaFold}>{busy ? <Spinner /> : <Icon name="download" />} Scarica</button>
+                </div>
+                <span className="tiny muted">
+                  Modello predetto (non una struttura sperimentale), con il pLDDT nella colonna B-factor. L'accessione viene inviata a EBI.
+                  {accession.trim() && !accessionOk && <span style={{ color: "var(--err)" }}> Accessione non valida (formato UniProtKB, oppure AF-P69905-F1).</span>}
+                </span>
               </div>
               <DropZone accept=".pdb,.ent,.cif,.mmcif" onFile={upload} label={<>Trascina un file <b>.pdb</b> o <b>.cif</b> oppure fai clic (max 50 MB)</>} />
             </div>
@@ -154,10 +216,13 @@ export default function Templates() {
                       <tr key={t.id} className={`clickable ${t.id === selected ? "selected" : ""}`} onClick={() => setParams({ id: t.id })}>
                         <td>
                           <b>{t.id}</b> <span className="tiny muted">{t.format.toUpperCase()}</span>
+                          {t.predicted && <> <Badge tone="warn" title="Modello predetto da AlphaFold, non struttura sperimentale">AlphaFold</Badge></>}
                           <div className="tiny muted ellipsis" style={{ maxWidth: 230 }}>{t.title || t.source}</div>
                         </td>
                         <td className="num small nowrap">
-                          {t.resolution ? `${fmtNum(t.resolution, 2)} Å` : "—"}
+                          {t.predicted
+                            ? <span title="pLDDT medio (confidenza della predizione)"><Badge tone={plddtTone(t.plddt_mean)}>pLDDT {fmtNum(t.plddt_mean ?? null, 1)}</Badge></span>
+                            : t.resolution ? `${fmtNum(t.resolution, 2)} Å` : "—"}
                           <div className="tiny muted">{fmtBytes(t.size)} · {relTime(t.added_at)}</div>
                         </td>
                       </tr>

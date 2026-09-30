@@ -1,4 +1,4 @@
-"""Client dei servizi remoti: UniProt, InterPro, RCSB PDB, NCBI BLAST, SWISS-MODEL QMEAN."""
+"""Client dei servizi remoti: UniProt, InterPro, RCSB PDB, NCBI BLAST, AlphaFold DB, SWISS-MODEL QMEAN."""
 
 from __future__ import annotations
 
@@ -25,9 +25,18 @@ RCSB_SEARCH = "https://search.rcsb.org/rcsbsearch/v2/query"
 RCSB_GRAPHQL = "https://data.rcsb.org/graphql"
 NCBI_BLAST = "https://blast.ncbi.nlm.nih.gov/Blast.cgi"
 SWISSMODEL_QMEAN = "https://swissmodel.expasy.org/qmean/submit/"
+ALPHAFOLD = "https://alphafold.ebi.ac.uk"
+ALPHAFOLD_API = f"{ALPHAFOLD}/api/prediction"
 
 _ACCESSION = re.compile(r"^[A-Za-z0-9_]{3,20}$")
 _PDB_ID = re.compile(r"^[0-9][A-Za-z0-9]{3}$")
+# Formato ufficiale delle accessioni UniProtKB (https://www.uniprot.org/help/accession_numbers)
+_UNIPROT_ACCESSION = re.compile(r"^(?:[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9](?:[A-Z][A-Z0-9]{2}[0-9]){1,2})$")
+# Modelli di AlphaFold DB: AF-<accessione>-F<frammento> (F2, F3... solo per le proteine lunghe divise in frammenti)
+_AF_ID = re.compile(r"^AF-([A-Z0-9]{6,10})-F([1-9][0-9]{0,3})$")
+# Si scaricano solo file del dominio di AlphaFold DB, qualunque URL contenga la risposta
+_AF_FILE_URL = re.compile(r"^https://alphafold\.ebi\.ac\.uk/files/[A-Za-z0-9_.-]+$")
+_AF_URL_VERSION = re.compile(r"_v(\d+)\.(?:pdb|cif|bcif)$")
 
 _client: Optional[httpx.Client] = None
 _cache_dir: Optional[Path] = None
@@ -470,6 +479,173 @@ def _sleep_checked(seconds: float, check: Optional[Callable[[], None]], sleep: C
         step = min(1.0, remaining)
         sleep(step)
         remaining -= step
+
+
+# ------------------------------------------------------------------------------------------ AlphaFold DB
+def validate_uniprot_accession(accession: str) -> str:
+    """Accessione UniProtKB in maiuscolo, controllata con il formato ufficiale (es. P69905, A0A0B4J2F0)."""
+    clean = (accession or "").strip().upper()
+    if not _UNIPROT_ACCESSION.match(clean):
+        raise AppError(f"Accessione UniProt non valida: '{accession}' (formato UniProtKB, es. P69905 o A0A0B4J2F0; "
+                       "le isoforme non sono supportate).", code="invalid_accession")
+    return clean
+
+
+def parse_alphafold_id(value: str) -> Optional[tuple[str, int]]:
+    """(accessione, frammento) da un identificativo AF-<ACC>-F<n>; None se non è un modello di AlphaFold DB."""
+    m = _AF_ID.match((value or "").strip().upper())
+    if m and _UNIPROT_ACCESSION.match(m.group(1)):
+        return m.group(1), int(m.group(2))
+    return None
+
+
+def _as_int(value) -> Optional[int]:
+    try:
+        return int(value) if value is not None and not isinstance(value, bool) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_float(value, low: float = 0.0, high: float = 100.0) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and low <= number <= high else None
+
+
+def _af_url(value) -> Optional[str]:
+    return value if isinstance(value, str) and _AF_FILE_URL.match(value) else None
+
+
+def _entry_sequence(item: dict, start: Optional[int], end: Optional[int]) -> str:
+    """Sequenza modellata: quella della voce, oppure il tratto start–end della sequenza UniProt completa."""
+    candidates = [re.sub(r"[^A-Z]", "", str(item.get(k) or "").upper()) for k in ("sequence", "uniprotSequence")]
+    candidates = [c for c in candidates if c]
+    if not candidates:
+        return ""
+    if start is not None and end is not None and end >= start:
+        expected = end - start + 1
+        for seq in candidates:
+            if len(seq) == expected:
+                return seq
+        for seq in candidates:  # sequenza UniProt intera con l'intervallo del frammento
+            if len(seq) >= end:
+                return seq[start - 1:end]
+    return candidates[0]
+
+
+def parse_alphafold_entries(data: object, accession: str) -> list[dict]:
+    """Voci della risposta di `/api/prediction/{accessione}`, tollerante a campi mancanti e a versioni diverse.
+
+    Campi usati (API del 2021–2025): entryId (o modelEntityId), uniprotAccession, uniprotStart/uniprotEnd (o
+    sequenceStart/sequenceEnd), uniprotSequence (o sequence), latestVersion (o la versione negli URL, o il
+    massimo di allVersions), globalMetricValue (pLDDT medio), fractionPlddt*, pdbUrl, cifUrl, paeDocUrl. Le voci
+    senza un identificativo AF-<ACC>-F<n> (complessi, altri formati) non sono template monomerici e si scartano;
+    a parità di identificativo resta la versione più recente. Ordine: per frammento.
+    """
+    items = data if isinstance(data, list) else [data] if isinstance(data, dict) and data else []
+    found: dict[str, dict] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        acc = str(item.get("uniprotAccession") or accession or "").strip().upper()
+        entry_id = str(item.get("entryId") or item.get("modelEntityId") or f"AF-{acc}-F1").strip().upper()
+        parsed = parse_alphafold_id(entry_id)
+        if parsed is None:
+            continue
+        acc, fragment = parsed
+        pdb_url, cif_url = _af_url(item.get("pdbUrl")), _af_url(item.get("cifUrl"))
+        versions = sorted({v for v in (_as_int(x) for x in item.get("allVersions") or []) if v})
+        url_version = next((int(m.group(1)) for m in (_AF_URL_VERSION.search(u or "") for u in (pdb_url, cif_url))
+                            if m), None)
+        version = _as_int(item.get("latestVersion")) or url_version or (versions[-1] if versions else None)
+        if version and not pdb_url:
+            pdb_url = f"{ALPHAFOLD}/files/{entry_id}-model_v{version}.pdb"
+        if version and not cif_url:
+            cif_url = f"{ALPHAFOLD}/files/{entry_id}-model_v{version}.cif"
+        start = _as_int(item.get("uniprotStart")) or _as_int(item.get("sequenceStart"))
+        end = _as_int(item.get("uniprotEnd")) or _as_int(item.get("sequenceEnd"))
+        sequence = _entry_sequence(item, start, end)
+        if sequence and (start is None or end is None) and fragment == 1:
+            start, end = 1, len(sequence)  # modello dell'intera proteina
+        fractions = {key: _as_float(item.get(field), 0.0, 1.0) for key, field in (
+            ("very_high", "fractionPlddtVeryHigh"), ("confident", "fractionPlddtConfident"),
+            ("low", "fractionPlddtLow"), ("very_low", "fractionPlddtVeryLow"))}
+        entry = {
+            "entry_id": entry_id, "accession": acc, "fragment": fragment, "version": version, "versions": versions,
+            "plddt": _as_float(item.get("globalMetricValue")),
+            "plddt_fractions": fractions if any(v is not None for v in fractions.values()) else None,
+            "uniprot_start": start, "uniprot_end": end, "sequence": sequence,
+            "uniprot_id": str(item.get("uniprotId") or ""), "gene": str(item.get("gene") or ""),
+            "description": str(item.get("uniprotDescription") or ""),
+            "organism": str(item.get("organismScientificName") or ""), "tax_id": _as_int(item.get("taxId")),
+            "chain": str(item.get("chainId") or "A")[:1] or "A",
+            "created": str(item.get("modelCreatedDate") or "")[:10], "tool": str(item.get("toolUsed") or ""),
+            "pdb_url": pdb_url, "cif_url": cif_url, "pae_url": _af_url(item.get("paeDocUrl")),
+        }
+        previous = found.get(entry_id)
+        if previous is None or (entry["version"] or 0) > (previous["version"] or 0):
+            found[entry_id] = entry
+    return sorted(found.values(), key=lambda e: e["fragment"])
+
+
+def alphafold_entries(accession: str, *, check: Optional[Callable[[], None]] = None,
+                      log: Optional[Callable[[str], None]] = None) -> list[dict]:
+    """Modelli di AlphaFold DB (EBI) per un'accessione UniProt, in cache per 7 giorni come le altre risposte remote.
+
+    404, oppure una risposta senza voci utilizzabili: NotFound con un messaggio chiaro (nessun modello).
+    """
+    acc = validate_uniprot_accession(accession)
+    cached = _cache_get("alphafold", acc, 7 * 86400)
+    if isinstance(cached, list) and cached and all(isinstance(e, dict) and e.get("entry_id") for e in cached):
+        return cached
+    missing = NotFound(f"AlphaFold DB non ha un modello per l'accessione UniProt {acc} (proteina non coperta, ad "
+                       "esempio più lunga di 2700 residui, oppure accessione secondaria o obsoleta).",
+                       code="alphafold_not_found")
+    try:
+        resp = _request_retry("GET", f"{ALPHAFOLD_API}/{acc}", "AlphaFold DB", attempts=3, wait=5.0, check=check,
+                              log=log, headers={"Accept": "application/json"})
+    except NotFound:
+        raise missing
+    try:
+        data = resp.json()
+    except ValueError:
+        raise RemoteServiceError("AlphaFold DB ha inviato una risposta non leggibile.", details=resp.text[:300])
+    entries = parse_alphafold_entries(data, acc)
+    if not entries:
+        raise missing
+    _cache_put("alphafold", acc, entries)
+    return entries
+
+
+def _looks_like_model(text: str, fmt: str) -> bool:
+    if fmt == "cif":
+        return "_atom_site." in text and re.search(r"^ATOM\s", text, re.MULTILINE) is not None
+    return re.search(r"^ATOM  ", text, re.MULTILINE) is not None
+
+
+def alphafold_download(entry: dict, *, check: Optional[Callable[[], None]] = None,
+                       log: Optional[Callable[[str], None]] = None) -> tuple[str, str]:
+    """File del modello: PDB, oppure mmCIF se il PDB non c'è. Restituisce (testo, formato) dopo aver verificato
+    che contenga coordinate atomiche (non una pagina d'errore)."""
+    entry_id = entry.get("entry_id", "?")
+    for fmt, key in (("pdb", "pdb_url"), ("cif", "cif_url")):
+        url = _af_url(entry.get(key))
+        if not url:
+            continue
+        try:
+            resp = _request_retry("GET", url, "AlphaFold DB", attempts=3, wait=5.0, check=check, log=log,
+                                  timeout=httpx.Timeout(120.0, connect=15.0))
+        except NotFound:
+            continue
+        text = resp.text
+        if not _looks_like_model(text, fmt):
+            raise RemoteServiceError(f"AlphaFold DB: il file {fmt.upper()} di {entry_id} non contiene coordinate "
+                                     "atomiche.", details=text[:300])
+        return text, fmt
+    raise NotFound(f"AlphaFold DB: file del modello {entry_id} non trovato (né PDB né mmCIF).",
+                   code="alphafold_not_found")
 
 
 # ------------------------------------------------------------------------------------------ SWISS-MODEL QMEAN

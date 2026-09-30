@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { DocumentItem, JobSummary, LoopResult, ModelEntry, ModelResult, Sequence, StructureSource, SystemInfo, TemplateRef } from "../api/types";
+import type { DocumentItem, JobSummary, LoopResult, ModelEntry, ModelResult, Sequence, StructureSource, SystemInfo, TemplateItem, TemplateRef } from "../api/types";
 import { AlignmentView } from "../components/AlignmentView";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
@@ -9,6 +9,8 @@ import { TextFileButton } from "../components/FileLoad";
 import { SequencePicker, StructurePicker, TemplatePicker } from "../components/Pickers";
 import { Viewer3D } from "../components/Viewer3D";
 import { Alert, Badge, Card, Empty, Field, Grade, Modal, PageHead, Segmented, Stat } from "../components/ui";
+import { PlddtOption } from "../components/PlddtOption";
+import { hasPredictedTemplate, PLDDT_DEFAULT, removedRanges, trimSummary } from "../lib/alphafold";
 import { useProject, useToast } from "../lib/context";
 import { fileStem, formatRestraints, parseRestraints, type RestraintRow } from "../lib/files";
 import { downloadText, fmtNum, relTime } from "../lib/format";
@@ -164,6 +166,12 @@ function Results({ jobId, result, kind }: { jobId: string; result: ModelResult |
             <div className="small text-2">
               Template: {full.templates.map((t) => `${t.code} (${t.first}–${t.last}${t.ligands ? `, ${t.ligands} ligandi` : ""})`).join(", ")}
             </div>
+            {full.templates.filter((t) => t.predicted).map((t) => (
+              <div key={t.code} className="small row" style={{ gap: 6 }}>
+                <Badge tone="warn" title="Modello predetto da AlphaFold, non struttura sperimentale">AlphaFold</Badge>
+                <span className="text-2">{t.code}: {trimSummary(t)}{removedRanges(t) && <span className="muted"> · tolti {removedRanges(t)}</span>}</span>
+              </div>
+            ))}
             {entries.length > 1 && <AlignmentView ids={entries.map((e) => e.code)} aligned={entries.map((e) => e.sequence)} />}
           </div>
         </Card>
@@ -192,9 +200,15 @@ export default function Modeling() {
   const [loopRegions, setLoopRegions] = useState("");
   const [restraints, setRestraints] = useState<Restraint[]>([]);
   const [seed, setSeed] = useState(-8123);
+  const [plddtTrim, setPlddtTrim] = useState(true);
+  const [plddtMin, setPlddtMin] = useState(PLDDT_DEFAULT);
   const [loopSource, setLoopSource] = useState<StructureSource | null>(null);
   const [loopOpen, setLoopOpen] = useState(false);
   const { data: info } = useAsync<SystemInfo>(() => api.systemInfo(), []);
+  // libreria riletta quando cambiano i template scelti: un modello AlphaFold appena scaricato risulta predetto
+  const templateKey = templates.map((t) => t.id).join(",");
+  const { data: library } = useAsync<TemplateItem[]>(() => api.templates(), [templateKey]);
+  const predictedChosen = hasPredictedTemplate(templates, library);
   const { data: docs, reload: reloadDocs } = useAsync<DocumentItem[]>(() => (projectId ? api.documents(projectId) : Promise.resolve([])), [projectId]);
   const { data: recent } = useAsync<JobSummary[]>(() => api.jobs({ project_id: projectId ?? undefined, kind: "model", limit: 8 }), [projectId, jobId]);
   const { job, summary, log, cancel } = useJob<ModelResult | LoopResult>(jobId, { withLog: true });
@@ -244,6 +258,9 @@ export default function Modeling() {
         seed,
         loop: { enabled: loopOn, models: loopModels, level: "fast", regions },
         restraints,
+        // solo per i template AlphaFold; le strutture sperimentali non si ritagliano mai
+        plddt_trim: plddtTrim,
+        plddt_min: plddtMin,
       };
       const j = await api.model({
         project_id: projectId ?? undefined,
@@ -341,6 +358,7 @@ export default function Modeling() {
               <Field label="Raffinamento" hint={REFINEMENT.find((r) => r.value === refinement)?.note}>
                 <Segmented value={refinement} onChange={setRefinement} options={REFINEMENT.map((r) => ({ value: r.value, label: r.label }))} />
               </Field>
+              {predictedChosen && <PlddtOption enabled={plddtTrim} threshold={plddtMin} onEnabled={setPlddtTrim} onThreshold={setPlddtMin} />}
               <button className="btn btn-ghost btn-sm" style={{ justifySelf: "start" }} onClick={() => setAdvanced(!advanced)}>
                 <Icon name="chevron" size={13} /> Opzioni avanzate
               </button>

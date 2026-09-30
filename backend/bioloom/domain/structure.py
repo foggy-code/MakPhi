@@ -178,12 +178,14 @@ def parse_cif_header(path: Path) -> dict:
 
 
 class _Selector:
-    """Selettore per PDBIO: catene scelte, ligandi facoltativi, niente acqua, prima altloc."""
+    """Selettore per PDBIO: catene scelte, ligandi facoltativi, niente acqua, prima altloc, residui esclusi."""
 
-    def __init__(self, chains: Optional[set[str]], keep_hetero: bool | set[str], keep_water: bool) -> None:
+    def __init__(self, chains: Optional[set[str]], keep_hetero: bool | set[str], keep_water: bool,
+                 exclude: Optional[set] = None) -> None:
         self.chains = chains
         self.keep_hetero = keep_hetero
         self.keep_water = keep_water
+        self.exclude = exclude or set()
 
     def accept_model(self, model) -> bool:
         return model.id == first_model(model.get_parent()).id
@@ -194,6 +196,8 @@ class _Selector:
     def accept_residue(self, residue) -> bool:
         flag = residue.id[0]
         name = residue.get_resname().strip()
+        if self.exclude and (residue.get_parent().id, residue.id) in self.exclude:
+            return False
         if flag == " ":
             return True
         if flag == "W" or name in WATER_NAMES:
@@ -207,8 +211,12 @@ class _Selector:
 
 
 def write_pdb(structure, dest: Path, chains: Optional[Iterable[str]] = None,
-              keep_hetero: bool | set[str] = False, keep_water: bool = False) -> None:
-    """Scrive un PDB filtrato (catene, ligandi) — usato anche per convertire mmCIF in PDB."""
+              keep_hetero: bool | set[str] = False, keep_water: bool = False,
+              exclude: Optional[set] = None) -> None:
+    """Scrive un PDB filtrato (catene, ligandi) — usato anche per convertire mmCIF in PDB.
+
+    `exclude`: residui da togliere, come coppie (catena, id Biopython del residuo), es. quelli a basso pLDDT.
+    """
     from Bio.PDB import PDBIO
 
     chain_set = {c for c in chains if c} if chains else None
@@ -223,7 +231,7 @@ def write_pdb(structure, dest: Path, chains: Optional[Iterable[str]] = None,
             raise AppError("Il formato PDB supporta solo identificativi di catena di un carattere.")
     io_ = PDBIO()
     io_.set_structure(structure)
-    io_.save(str(dest), select=_Selector(chain_set, keep_hetero, keep_water))
+    io_.save(str(dest), select=_Selector(chain_set, keep_hetero, keep_water, exclude))
 
 
 def pdb_text(structure, **kwargs) -> str:

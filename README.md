@@ -89,7 +89,7 @@ Ricerche di template e allineamenti multipli e strutturali già calcolati con gl
 vengono rifatti. Il risultato riporta la nota **dalla cache (data)**. Rilanciare una pipeline con le stesse
 sequenze e altre opzioni di modellazione salta così tutte le ricerche.
 
-- **Validità:** le ricerche su RCSB e NCBI valgono 7 giorni, perché il PDB si aggiorna ogni settimana. Le altre
+- **Validità:** le ricerche su RCSB, NCBI e AlphaFold DB valgono 7 giorni, perché il PDB si aggiorna ogni settimana. Le altre
   valgono finché non cambiano il database locale (pdbaa, MMseqs2), il programma usato o il contenuto delle
   strutture.
 - **Ricalcolo:** in Ricerca, Allineamenti e Pipeline l'opzione **Ricalcola ignorando la cache** rifà il calcolo e
@@ -97,12 +97,28 @@ sequenze e altre opzioni di modellazione salta così tutte le ricerche.
 - **Disattivazione e spazio:** da Impostazioni → Spazio e file temporanei, che mostra anche lo spazio occupato. La
   cache sta in `data/cache/compute` e si pulisce da sola dopo 30 giorni.
 
+## Modelli AlphaFold DB come template
+
+Per le proteine senza una struttura sperimentale omologa si può usare un modello predetto di
+[AlphaFold DB](https://alphafold.ebi.ac.uk) (EBI). È sempre segnato come **modello predetto, non struttura
+sperimentale**, con il pLDDT medio (confidenza della predizione, 0–100).
+
+- **Libreria template → Da AlphaFold DB (UniProt):** scarica il modello di un'accessione (es. `P69905`); resta in
+  libreria come `AF-P69905-F1`, con il file originale.
+- **Ricerca template → AlphaFold DB:** con l'accessione UniProt (precompilata per le sequenze importate da UniProt)
+  prende i suoi modelli; senza, cerca le proteine più simili con NCBI BLAST su Swiss-Prot (1–5 min). Nella pipeline
+  l'accessione si legge dall'intestazione FASTA di UniProt (`>sp|P69905|HBA_HUMAN`).
+- **Modellazione e Pipeline:** con un template AlphaFold, i residui con pLDDT sotto la soglia (predefinita 70) vengono
+  tolti dal template, perché le regioni a bassa confidenza (spesso disordinate) peggiorano il modello; MODELLER li
+  costruisce senza template. Il numero di residui tolti è nel log e nei risultati.
+- **Privacy:** a EBI va solo l'accessione; senza accessione la sequenza va a NCBI, come per il motore NCBI BLAST.
+
 ## Cosa contiene
 
 | Area | Strumenti |
 |---|---|
 | Modellazione | MODELLER 10.8 (AutoModel, loop, allineamenti `align2d`/`salign`) |
-| Ricerca template | RCSB e NCBI BLAST (online); BLAST+ e MMseqs2 sul database locale pdbaa |
+| Ricerca template | RCSB, NCBI BLAST e modelli predetti di AlphaFold DB (online); BLAST+ e MMseqs2 sul database locale pdbaa |
 | Allineamenti | Clustal Omega, MAFFT, MUSCLE, TM-align, US-align, più motori integrati |
 | Qualità | Ramachandran, clashscore, DSSP (mkdssp), SASA, profilo DOPE, **PROCHECK**, **ProSA II**, **QMEAN locale** (UniClust30) o SWISS-MODEL, voto A–D |
 | Automazione | pipeline batch da multi-FASTA, riprendibili dopo un annullamento, un errore o un riavvio ("Riprendi" o "Riprova solo i falliti": le sequenze già modellate non si rifanno) e, se completate con sequenze fallite, "Riprova i falliti"; verifica dell'installazione (Impostazioni → Strumenti) |

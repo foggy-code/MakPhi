@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..core.container import Core
 from .deps import get_core, read_upload
@@ -19,6 +19,11 @@ class FetchIn(BaseModel):
     format: str = "pdb"
 
 
+class AlphaFoldIn(BaseModel):
+    accession: str = Field(..., max_length=40, description="Accessione UniProt (es. P69905) oppure identificativo "
+                                                           "AlphaFold DB AF-<ACC>-F<n>")
+
+
 @router.get("")
 def list_templates(core: Core = Depends(get_core)) -> list[dict]:
     return core.library.list()
@@ -27,6 +32,12 @@ def list_templates(core: Core = Depends(get_core)) -> list[dict]:
 @router.post("/fetch")
 def fetch_template(body: FetchIn, core: Core = Depends(get_core)) -> dict:
     return core.library.fetch(body.pdb_id, body.format)
+
+
+@router.post("/alphafold")
+def fetch_alphafold(body: AlphaFoldIn, core: Core = Depends(get_core)) -> dict:
+    """Modello predetto di AlphaFold DB (EBI) nella libreria, con id AF-<ACC>-F<n>: l'accessione va a EBI."""
+    return core.library.fetch_alphafold(body.accession)
 
 
 @router.post("/upload")

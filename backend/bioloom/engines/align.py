@@ -55,12 +55,16 @@ def pairwise(a: SeqRecord, b: SeqRecord, *, mode: str = "global", matrix: str = 
         aligned = [_restore(aligned[0], a.sequence), _restore(aligned[1], b.sequence)]
     matrix_name = matrix or ("NUC.4.4" if kind == "nucleic" else "BLOSUM62")
     algorithm = "Smith-Waterman (locale)" if mode == "local" else "Needleman-Wunsch (globale)"
+    blocks = aln.aligned
+    # tratto allineato di ciascuna sequenza (1-based, estremi compresi): nel locale solo la regione allineata
+    ranges = [[int(blocks[k][0][0]) + 1, int(blocks[k][-1][1])] for k in (0, 1)] if len(blocks[0]) else None
     return {
         "method": f"{algorithm} · {matrix_name} · gap {abs(gap_open):g}/{abs(gap_extend):g}",
         "ids": [a.name, b.name],
         "aligned": aligned,
         "score": float(aln.score),
         "stats": sequences.alignment_stats(aligned[0], aligned[1]),
+        "ranges": ranges,
     }
 
 

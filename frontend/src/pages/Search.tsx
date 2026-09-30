@@ -7,6 +7,7 @@ import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { SequencePicker } from "../components/Pickers";
 import { Badge, BarCell, Card, Empty, Field, PageHead, Segmented } from "../components/ui";
+import { isUniProtAccession, normalizeAccession, plddtLabel, plddtTone, sequenceAccession } from "../lib/alphafold";
 import { useProject, useToast } from "../lib/context";
 import { fmtEvalue, fmtNum, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
@@ -60,11 +61,15 @@ export default function Search() {
   const [evalue, setEvalue] = useState(0.001);
   const [maxHits, setMaxHits] = useState(50);
   const [recompute, setRecompute] = useState(false);
+  // motore AlphaFold DB: accessione UniProt facoltativa, precompilata dalle sequenze importate da UniProt
+  const [uniprot, setUniprot] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "evalue", dir: 1 });
   const [filter, setFilter] = useState("");
   const [fetching, setFetching] = useState<string | null>(null);
   const { data: library, reload: reloadLibrary } = useAsync(() => api.templates(), []);
+  const { data: projectSeqs } = useAsync<Sequence[]>(() => (projectId ? api.sequences(projectId) : Promise.resolve([])), [projectId]);
+  const uniprotInvalid = engine === "alphafold" && !!uniprot.trim() && !isUniProtAccession(uniprot);
   const { data: recent } = useAsync<JobSummary[]>(() => api.jobs({ kind: "search", project_id: projectId ?? undefined, limit: 10 }), [projectId, jobId]);
   const { job, summary, log, cancel } = useJob<SearchResult>(jobId, { withLog: true });
 
@@ -76,14 +81,20 @@ export default function Search() {
     if (sid && projectId) {
       api.sequences(projectId).then((list: Sequence[]) => {
         const s = list.find((x) => x.id === sid);
-        if (s) setQuery({ name: s.name, sequence: s.sequence });
+        if (s) {
+          setQuery({ name: s.name, sequence: s.sequence });
+          setUniprot(sequenceAccession(s));
+        }
       });
     }
   }, [params, projectId]);
 
   const submit = async () => {
     try {
-      const j = await api.search({ project_id: projectId ?? undefined, query: { name: query.name || "query", sequence: query.sequence }, engine, evalue, max_hits: maxHits, use_cache: !recompute });
+      const j = await api.search({
+        project_id: projectId ?? undefined, query: { name: query.name || "query", sequence: query.sequence }, engine, evalue, max_hits: maxHits, use_cache: !recompute,
+        uniprot: engine === "alphafold" ? normalizeAccession(uniprot) : undefined,
+      });
       setParams({ job: j.id });
     } catch (e) {
       toast.error(e);
@@ -106,7 +117,8 @@ export default function Search() {
   const addToLibrary = async (hit: SearchHit) => {
     setFetching(hit.pdb_id);
     try {
-      const t = await api.fetchTemplate(hit.pdb_id);
+      // modelli AlphaFold: pdb_id è già l'id della libreria (AF-<ACC>-F<n>)
+      const t = hit.predicted ? await api.fetchAlphaFold(hit.pdb_id) : await api.fetchTemplate(hit.pdb_id);
       toast.push(t.cached ? `${hit.pdb_id} era già in libreria` : `${hit.pdb_id} scaricato in libreria`);
       reloadLibrary();
     } catch (e) {
@@ -123,15 +135,31 @@ export default function Search() {
 
   return (
     <div className="page">
-      <PageHead title="Ricerca template" lead="Cerca strutture sperimentali omologhe alla sequenza bersaglio. RCSB è immediato; NCBI BLAST è più sensibile per omologie lontane ma richiede alcuni minuti; BLAST+ e MMseqs2 locali funzionano senza internet sul database pdbaa." />
+      <PageHead title="Ricerca template" lead="Cerca strutture sperimentali omologhe alla sequenza bersaglio. RCSB è immediato; NCBI BLAST è più sensibile per omologie lontane ma richiede alcuni minuti; BLAST+ e MMseqs2 locali funzionano senza internet sul database pdbaa. AlphaFold DB offre modelli predetti per le proteine senza strutture sperimentali omologhe." />
       <div className="split">
         <div className="stack">
           <Card title="Query">
             <div className="stack">
-              <SequencePicker value={query} onChange={(v) => setQuery({ name: v.name, sequence: v.sequence })} />
+              <SequencePicker
+                value={query}
+                onChange={(v) => {
+                  setQuery({ name: v.name, sequence: v.sequence });
+                  if (v.id) setUniprot(sequenceAccession(projectSeqs?.find((s) => s.id === v.id)));
+                }}
+              />
               <Field label="Motore">
-                <Segmented value={engine} onChange={setEngine} options={[{ value: "rcsb", label: "RCSB (rapido)" }, { value: "ncbi", label: "NCBI BLAST" }, { value: "local", label: "BLAST+ locale" }, { value: "mmseqs", label: "MMseqs2 locale" }]} />
+                <Segmented value={engine} onChange={setEngine} options={[{ value: "rcsb", label: "RCSB (rapido)" }, { value: "ncbi", label: "NCBI BLAST" }, { value: "local", label: "BLAST+ locale" }, { value: "mmseqs", label: "MMseqs2 locale" }, { value: "alphafold", label: "AlphaFold DB" }]} />
               </Field>
+              {engine === "alphafold" && (
+                <Field
+                  label="Accessione UniProt (facoltativa)"
+                  hint={uniprotInvalid
+                    ? <span style={{ color: "var(--err)" }}>Accessione non valida: formato UniProtKB, es. P69905 (le isoforme non sono supportate).</span>
+                    : "Con l'accessione si usano direttamente i suoi modelli AlphaFold. Senza, NCBI BLAST su Swiss-Prot trova le proteine più simili (1–5 min) e se ne prendono i modelli. L'accessione va a EBI; senza accessione la sequenza va a NCBI."}
+                >
+                  <input className="input" style={{ textTransform: "uppercase" }} placeholder="es. P69905" maxLength={20} value={uniprot} onChange={(e) => setUniprot(e.target.value)} />
+                </Field>
+              )}
               <div className="grid grid-2">
                 <Field label="E-value massimo">
                   <select className="input" value={evalue} onChange={(e) => setEvalue(Number(e.target.value))}>
@@ -145,7 +173,7 @@ export default function Search() {
                 </Field>
               </div>
               <RecomputeOption checked={recompute} onChange={setRecompute} />
-              <button className="btn btn-primary" disabled={!query.sequence.trim()} onClick={submit}>
+              <button className="btn btn-primary" disabled={!query.sequence.trim() || uniprotInvalid} onClick={submit}>
                 <Icon name="search" /> Avvia ricerca
               </button>
             </div>
@@ -195,6 +223,12 @@ export default function Search() {
                               <b>{h.template_id}</b>{" "}
                               {h.template_id === result.best && <Badge tone="ok" title="Massimo identità × copertura">consigliato</Badge>}
                               {inLibrary.has(h.pdb_id) && <Badge tone="accent">in libreria</Badge>}
+                              {h.predicted && (
+                                <div className="row" style={{ gap: 4, marginTop: 3 }}>
+                                  <Badge tone="warn" title="Modello di AlphaFold DB: non è una struttura sperimentale">modello predetto</Badge>
+                                  <Badge tone={plddtTone(h.plddt)} title="Confidenza media della predizione (0–100)">{plddtLabel(h.plddt)}</Badge>
+                                </div>
+                              )}
                             </td>
                             <td className="small" style={{ maxWidth: 320 }}>
                               <div className="ellipsis">{h.title || h.description}</div>
@@ -236,6 +270,13 @@ export default function Search() {
               <p className="tiny muted" style={{ marginTop: 8 }}>
                 Identità &lt; 25% o copertura &lt; 40%: zona crepuscolare, modello a basso affidabilità. L'E-value della ricerca RCSB è stimato con la statistica di Karlin-Altschul.
               </p>
+              {result.engine === "alphafold" && (
+                <p className="tiny muted">
+                  Modelli predetti da AlphaFold DB {result.uniprot ? `per l'accessione ${result.uniprot}` : "delle proteine Swiss-Prot più simili (NCBI BLAST)"}, non strutture sperimentali.
+                  Identità e copertura vengono dal riallineamento locale (Smith-Waterman, BLOSUM62) sulla sequenza del modello; l'E-value è quello di BLAST o, con l'accessione, del solo confronto a coppie.
+                  In modellazione i residui con pLDDT &lt; 70 (confidenza bassa, spesso regioni disordinate) vengono tolti dal template (opzione).
+                </p>
+              )}
             </Card>
           )}
         </div>

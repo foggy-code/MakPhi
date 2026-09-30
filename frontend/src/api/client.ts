@@ -162,6 +162,8 @@ export const api = {
   // template
   templates: () => get<TemplateItem[]>("/api/templates"),
   fetchTemplate: (pdb_id: string, format = "pdb") => post<TemplateItem & { cached: boolean }>("/api/templates/fetch", { pdb_id, format }),
+  /** modello di AlphaFold DB per accessione UniProt (o id AF-<ACC>-F<n>): l'accessione va a EBI */
+  fetchAlphaFold: (accession: string) => post<TemplateItem & { cached: boolean }>("/api/templates/alphafold", { accession }),
   uploadTemplate: (file: File, templateId?: string) => {
     const form = new FormData();
     form.append("file", file);
@@ -193,7 +195,7 @@ export const api = {
   archiveUrl: (id: string) => `/api/jobs/${id}/archive`,
 
   // calcoli
-  search: (body: { project_id?: string; query: { name: string; sequence: string }; engine: string; evalue: number; max_hits: number; taxid?: string; use_cache?: boolean }) =>
+  search: (body: { project_id?: string; query: { name: string; sequence: string }; engine: string; evalue: number; max_hits: number; taxid?: string; use_cache?: boolean; uniprot?: string }) =>
     post<JobSummary>("/api/search", body),
   align: (body: Record<string, unknown>) => post<JobSummary>("/api/align", body),
   align2d: (body: { project_id?: string; target: { name: string; sequence: string }; templates: TemplateRef[] }) =>

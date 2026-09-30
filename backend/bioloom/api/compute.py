@@ -38,11 +38,13 @@ class StructureSource(BaseModel):
 class SearchIn(BaseModel):
     project_id: Optional[str] = None
     query: SeqIn
-    engine: Literal["rcsb", "ncbi", "local", "mmseqs"] = "rcsb"
+    engine: Literal["rcsb", "ncbi", "local", "mmseqs", "alphafold"] = "rcsb"
     evalue: float = Field(10.0, gt=0, le=1000)
     max_hits: int = Field(50, ge=1, le=500)
     taxid: str = ""
     use_cache: bool = Field(True, description="False = ricalcola ignorando la cache dei calcoli (e la aggiorna)")
+    uniprot: str = Field("", max_length=20, description="Solo motore alphafold: accessione UniProt della sequenza; "
+                                                         "vuota = proteine più simili da NCBI BLAST su Swiss-Prot")
 
 
 class AlignIn(BaseModel):
@@ -110,7 +112,7 @@ class PipelineIn(BaseModel):
     records: list[SeqIn] = []
     template_mode: Literal["auto", "fixed"] = "auto"
     templates: list[TemplateRef] = []
-    engine: Literal["rcsb", "ncbi", "local", "mmseqs"] = "rcsb"
+    engine: Literal["rcsb", "ncbi", "local", "mmseqs", "alphafold"] = "rcsb"
     evalue: float = Field(1e-3, gt=0, le=100)
     twilight: dict = {"filter": False, "identity": 25.0, "coverage": 40.0}
     options: dict = {"models": 3, "refinement": "fast"}
@@ -130,8 +132,16 @@ def _project(core: Core, project_id: Optional[str]) -> Optional[str]:
 
 @router.post("/search")
 def submit_search(body: SearchIn, core: Core = Depends(get_core)) -> dict:
-    title = f"Ricerca template ({body.engine.upper()}) · {body.query.name}"
-    return core.jobs.submit("search", body.model_dump(), project_id=_project(core, body.project_id), title=title)
+    params = body.model_dump()
+    if body.engine == "alphafold" and body.uniprot.strip():
+        from ..engines import remote
+
+        params["uniprot"] = remote.validate_uniprot_accession(body.uniprot)  # errore subito, prima della coda
+    else:
+        params["uniprot"] = ""
+    label = "AlphaFold DB" if body.engine == "alphafold" else body.engine.upper()
+    title = f"Ricerca template ({label}) · {body.query.name}"
+    return core.jobs.submit("search", params, project_id=_project(core, body.project_id), title=title)
 
 
 @router.post("/align")

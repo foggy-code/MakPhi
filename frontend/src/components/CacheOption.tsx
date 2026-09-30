@@ -14,7 +14,7 @@ export function RecomputeOption({ checked, onChange, label = "Ricalcola ignorand
       className="check"
       title={off
         ? "La cache dei calcoli è disattivata nelle Impostazioni (Spazio e file temporanei): ogni calcolo viene rifatto."
-        : "Rifà il calcolo anche se ne esiste uno identico in cache, e sostituisce il risultato salvato. Le ricerche online (RCSB, NCBI) in cache valgono 7 giorni."}
+        : "Rifà il calcolo anche se ne esiste uno identico in cache, e sostituisce il risultato salvato. Le ricerche online (RCSB, NCBI, AlphaFold DB) in cache valgono 7 giorni."}
     >
       <input type="checkbox" checked={checked || off} disabled={off} onChange={(e) => onChange(e.target.checked)} />
       {label}

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { JobSummary, ModelResult, ParsedFile, Sequence, StructureSource, TemplateAnalysis, TemplateItem, TemplateRef, UploadedStructure } from "../api/types";
+import { isAlphaFoldId, plddtLabel, plddtTone } from "../lib/alphafold";
 import { useProject, useToast } from "../lib/context";
 import { useAsync } from "../lib/hooks";
 import { FileButton, SequenceFileButton } from "./FileLoad";
 import { Icon } from "./Icon";
-import { DropZone, Segmented } from "./ui";
+import { Badge, DropZone, Segmented } from "./ui";
 
 /** Sequenza bersaglio: da progetto, incollata (FASTA o testo) oppure da file in qualunque formato comune. */
 export function SequencePicker({ value, onChange, label = "Sequenza bersaglio" }: {
@@ -104,7 +105,8 @@ export function TemplatePicker({ value, onChange, max = 10 }: { value: TemplateR
   const [status, setStatus] = useState<Record<string, "loading" | "fetching" | "ok" | "error">>({});
   const valueRef = useRef(value);
   valueRef.current = value;
-  // Analizza i template scelti; i codici PDB assenti dalla libreria vengono scaricati da RCSB.
+  // Analizza i template scelti; i codici PDB assenti dalla libreria vengono scaricati da RCSB, gli id
+  // AF-<ACC>-F<n> (risultati del motore AlphaFold) da AlphaFold DB.
   useEffect(() => {
     value.forEach((t) => {
       if (status[t.id]) return;
@@ -112,9 +114,12 @@ export function TemplatePicker({ value, onChange, max = 10 }: { value: TemplateR
       api
         .template(t.id)
         .catch((err: ApiError) => {
-          if (err.status === 404 && /^[0-9][A-Za-z0-9]{3}$/.test(t.id)) {
+          const fetcher = err.status !== 404 ? null
+            : /^[0-9][A-Za-z0-9]{3}$/.test(t.id) ? api.fetchTemplate
+            : isAlphaFoldId(t.id) ? api.fetchAlphaFold : null;
+          if (fetcher) {
             setStatus((s) => ({ ...s, [t.id]: "fetching" }));
-            return api.fetchTemplate(t.id).then(() => {
+            return fetcher(t.id).then(() => {
               reload();
               return api.template(t.id);
             });
@@ -177,8 +182,14 @@ export function TemplatePicker({ value, onChange, max = 10 }: { value: TemplateR
           <div key={t.id} className="card flat" style={{ padding: "10px 12px" }}>
             <div className="row">
               <b>{t.id}</b>
-              {status[t.id] === "fetching" && <span className="badge badge-info"><span className="spinner" style={{ width: 10, height: 10 }} /> download da RCSB…</span>}
+              {status[t.id] === "fetching" && <span className="badge badge-info"><span className="spinner" style={{ width: 10, height: 10 }} /> download da {isAlphaFoldId(t.id) ? "AlphaFold DB" : "RCSB"}…</span>}
               {status[t.id] === "error" && <span className="badge badge-err">non disponibile</span>}
+              {a?.meta.predicted && (
+                <>
+                  <Badge tone="warn" title="Modello predetto da AlphaFold, non struttura sperimentale">AlphaFold</Badge>
+                  <Badge tone={plddtTone(a.meta.plddt_mean)}>{plddtLabel(a.meta.plddt_mean)}</Badge>
+                </>
+              )}
               <span className="small muted ellipsis" style={{ maxWidth: 260 }}>{a?.header.title}</span>
               <button className="btn btn-ghost btn-icon right" onClick={() => onChange(value.filter((v) => v.id !== t.id))} aria-label="Rimuovi">
                 <Icon name="x" size={14} />
