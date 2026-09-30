@@ -34,6 +34,7 @@ const PATHS: Record<string, string> = {
   flask: "M9 3h6M10 3v6L4 19a1.5 1.5 0 0 0 1.3 2h13.4a1.5 1.5 0 0 0 1.3-2L14 9V3M7 15h10",
   grid: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z",
   folder: "M3 6h6l2 2h10v11H3z",
+  compare: "M4 8h14M14 4l4 4-4 4M20 16H6M10 12l-4 4 4 4",
 };
 
 export function Icon({ name, size = 16, className }: { name: keyof typeof PATHS | string; size?: number; className?: string }) {

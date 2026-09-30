@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { AlignResult, Sequence, StructureSource, SystemInfo } from "../api/types";
 import { AlignmentView } from "../components/AlignmentView";
@@ -9,8 +9,9 @@ import { SequenceFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { SequencePicker, StructurePicker } from "../components/Pickers";
-import { Viewer3D } from "../components/Viewer3D";
+import { StructuralComparison } from "../components/StructuralComparison";
 import { Alert, Card, Empty, Field, PageHead, Segmented, Stat, Tabs } from "../components/ui";
+import { compareLink, jobSources } from "../lib/compare";
 import { useProject, useToast } from "../lib/context";
 import { recordsToFasta } from "../lib/files";
 import { downloadText, fmtNum } from "../lib/format";
@@ -19,7 +20,7 @@ import { useAsync, useJob } from "../lib/hooks";
 type Mode = "pairwise" | "multiple" | "structural";
 const MATRICES = ["BLOSUM62", "BLOSUM45", "BLOSUM80", "PAM250", "PAM30", "GONNET1992"];
 
-function Results({ jobId, result }: { jobId: string; result: AlignResult }) {
+function Results({ jobId, result, params }: { jobId: string; result: AlignResult; params?: Record<string, unknown> }) {
   const { projectId } = useProject();
   const toast = useToast();
   const exportAs = async (format: "fasta" | "clustal" | "pir") => {
@@ -41,16 +42,18 @@ function Results({ jobId, result }: { jobId: string; result: AlignResult }) {
     }
   };
   const s = result.stats;
+  const sources = result.mode === "structural" ? jobSources(params) : null;
   return (
     <div className="stack">
-      {result.cached && <div className="row"><CachedBadge result={result} /></div>}
-      {result.mode === "structural" ? (
-        <div className="grid grid-4">
-          <Stat label="TM-score" value={fmtNum(result.tm_score, 3)} note={(result.tm_score ?? 0) > 0.5 ? "stesso fold (> 0,5)" : "fold diverso (< 0,5)"} />
-          <Stat label="RMSD" value={<>{fmtNum(result.rmsd, 2)}<small> Å</small></>} note={`su ${result.aligned_length} Cα allineati`} />
-          <Stat label="Coppie vicine" value={result.close_pairs ?? "—"} note="Cα entro 5 Å" />
-          <Stat label="Identità" value={s ? `${fmtNum(s.identity)}%` : "—"} note={result.lengths ? `lunghezze ${result.lengths.join(" / ")}` : undefined} />
+      {(result.cached || sources) && (
+        <div className="row">
+          {result.cached && <CachedBadge result={result} />}
+          {sources && <Link className="btn btn-sm right" to={compareLink(sources[0], sources[1], jobId)}><Icon name="compare" size={14} /> Apri in Confronto</Link>}
         </div>
+      )}
+      {result.mode === "structural" ? (
+        // metriche, nota, viewer colorato per distanza, grafico e tabella per residuo
+        <StructuralComparison jobId={jobId} result={result} />
       ) : s ? (
         <div className="grid grid-4">
           <Stat label="Identità" value={`${fmtNum(s.identity)}%`} note={`${s.identities} residui identici`} />
@@ -59,12 +62,7 @@ function Results({ jobId, result }: { jobId: string; result: AlignResult }) {
           <Stat label="Punteggio" value={fmtNum(result.score, 1)} note={`lunghezza ${s.length}`} />
         </div>
       ) : null}
-      {result.note && <Alert tone="info">{result.note}</Alert>}
-      {result.mode === "structural" && result.superposed_file && (
-        <Card title="Sovrapposizione 3D" sub={`${result.ids[0]} (catena A) e ${result.ids[1]} (catena B)`}>
-          <Viewer3D url={api.jobFileUrl(jobId, result.superposed_file)} scheme="chain" />
-        </Card>
-      )}
+      {result.note && result.mode !== "structural" && <Alert tone="info">{result.note}</Alert>}
       <Card
         title="Allineamento"
         sub={result.method}
@@ -225,7 +223,7 @@ export default function Alignment() {
         </Card>
         <div className="stack">
           {jobId ? <JobPanel summary={summary} log={log} onCancel={cancel} /> : <Card><Empty icon="align" title="Configura e avvia un allineamento" /></Card>}
-          {job?.status === "completed" && job.result && <Results jobId={job.id} result={job.result} />}
+          {job?.status === "completed" && job.result && <Results key={job.id} jobId={job.id} result={job.result} params={job.params} />}
         </div>
       </div>
     </div>

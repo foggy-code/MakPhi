@@ -16,16 +16,23 @@ export interface ResidueValue extends ResidueRef {
   value: number | string | null;
   /** dettaglio per il tooltip (es. i metodi che segnalano il residuo) */
   note?: string;
+  /** colore fisso al posto di quello della scala (es. la struttura di riferimento nel confronto) */
+  color?: string;
 }
 
 export interface ResidueColoring {
-  key: ColorBy;
+  /** opzione "Colora per" della pagina Qualità, oppure del confronto strutturale (lib/compare.ts) */
+  key: ColorBy | "distance" | "lddt";
   /** titolo della legenda */
   title: string;
   values: ResidueValue[];
   scale: ColorScale;
   /** testo di un valore (etichette e tooltip) */
   describe: (value: number | string | null) => string;
+  /** colore dei residui non elencati, per catena (altrimenti il grigio "senza valore") */
+  chainColors?: Record<string, string>;
+  /** campioni aggiunti alla legenda (es. "A (riferimento)") */
+  legendExtra?: { color: string; label: string }[];
 }
 
 /** Chiave di un residuo: catena + numero con eventuale codice di inserzione ("A:52A"). */
@@ -230,13 +237,13 @@ export function residueColoring(report: QualityReport, by: ColorBy, consensus?: 
 /** Colore di ogni residuo (chiave `residueKey`). */
 export function coloringMap(coloring: ResidueColoring): Map<string, string> {
   const out = new Map<string, string>();
-  coloring.values.forEach((v) => out.set(residueKey(v.chain, v.resnum), colorFor(coloring.scale, v.value)));
+  coloring.values.forEach((v) => out.set(residueKey(v.chain, v.resnum), v.color ?? colorFor(coloring.scale, v.value)));
   return out;
 }
 
-/** Ci sono residui senza valore (in grigio)? Serve alla legenda. */
+/** Ci sono residui senza valore (in grigio)? Serve alla legenda. Un residuo con colore fisso non conta. */
 export function hasMissing(coloring: ResidueColoring): boolean {
-  return coloring.values.some((v) => v.value === null || v.value === undefined);
+  return coloring.values.some((v) => !v.color && (v.value === null || v.value === undefined));
 }
 
 /** Testo del valore di un residuo per il tooltip ("—" se il residuo non è nell'elenco). */

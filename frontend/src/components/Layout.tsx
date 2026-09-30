@@ -19,6 +19,7 @@ const NAV: { section: string; items: { to: string; label: string; icon: string }
       { to: "/pir", label: "Editor PIR", icon: "file" },
       { to: "/modeling", label: "Modellazione", icon: "cube" },
       { to: "/quality", label: "Qualità", icon: "shield" },
+      { to: "/compare", label: "Confronto", icon: "compare" },
     ],
   },
   {

@@ -503,8 +503,39 @@ export interface AlignResult extends CacheInfo {
   aligned_length?: number;
   close_pairs?: number;
   lengths?: number[];
+  /** PDB per il viewer: catena A = struttura A (riferimento), catena B = struttura B sovrapposta */
   superposed_file?: string;
   note?: string;
+  // confronto per residuo (strutturale; assente nei risultati precedenti o se la mappatura non è ricostruibile)
+  /** coppie allineate nell'ordine di A, con distanza dei Cα dopo la sovrapposizione del TM-score e lDDT del residuo di A */
+  pairs?: StructuralPair[];
+  /** GDT per soglia (0,5, 1, 2, 4, 8 Å): Cα di A entro la soglia, in percentuale dei residui di A */
+  gdt?: GdtCutoff[];
+  gdt_ts?: number;
+  gdt_ha?: number;
+  /** lDDT sui Cα (0–1), riferimento A, raggio 15 Å */
+  lddt?: number | null;
+  lddt_distances?: number;
+  /** sovrapposizione che porta B su A: x' = R·x + t */
+  transform?: { rotation: number[][]; translation: number[] };
+}
+
+export interface StructuralPair {
+  chain_a: string;
+  resnum_a: string;
+  aa_a: string;
+  chain_b: string;
+  resnum_b: string;
+  aa_b: string;
+  /** Å */
+  distance: number;
+  lddt: number | null;
+}
+
+export interface GdtCutoff {
+  cutoff: number;
+  count: number;
+  percent: number;
 }
 
 export interface PreparedTemplate {

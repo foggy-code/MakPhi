@@ -112,6 +112,22 @@ sequenze e altre opzioni di modellazione salta così tutte le ricerche.
   **Confidenza** colora le colonne per identità locale rispetto al bersaglio e segnala la zona crepuscolare
   (sotto il 25%) e i residui non coperti dal template.
 
+## Confronto strutturale
+
+La pagina **Confronto** (e la modalità Strutturale di Allineamenti) sovrappone la struttura B alla struttura A, il
+riferimento (per esempio il template o una struttura sperimentale), con US-align/TM-align o con il motore integrato.
+
+- **Metriche:** TM-score normalizzato su A e su B, RMSD, RMSD delle coppie entro 5 Å, **GDT-TS** e **GDT-HA**
+  (percentuale dei Cα di A entro 1–8 Å e 0,5–4 Å) e **lDDT** sui Cα, che non usa sovrapposizioni.
+- **Per residuo:** nel 3D la struttura B è colorata per distanza dal residuo corrispondente (da 0 a 5 Å e oltre) o per
+  lDDT, A resta in grigio chiaro; il grafico mostra distanza e lDDT lungo la sequenza e la tabella elenca ogni coppia.
+  Un clic su grafico, tabella o tratto che devia evidenzia la coppia nel 3D, un clic nel 3D la seleziona.
+- **Da dove si apre:** Modellazione (menu **Confronta…** di ogni modello: con il template usato o con un altro modello
+  dello stesso job), Qualità (**Confronta con …**) e Allineamenti (**Apri in Confronto**). Le due strutture arrivano
+  già scelte e il link resta stabile.
+- I risultati strutturali calcolati dalle versioni precedenti restano nella cache ma non si riusano: il primo confronto
+  li ricalcola con i dati per residuo.
+
 ## Modelli AlphaFold DB come template
 
 Per le proteine senza una struttura sperimentale omologa si può usare un modello predetto di
@@ -140,7 +156,7 @@ sperimentale**, con il pLDDT medio (confidenza della predizione, 0–100).
 |---|---|
 | Modellazione | MODELLER 10.8 (AutoModel, loop, allineamenti `align2d`/`salign`) |
 | Ricerca template | RCSB, NCBI BLAST e modelli predetti di AlphaFold DB (online); BLAST+ e MMseqs2 sul database locale pdbaa |
-| Allineamenti | Clustal Omega, MAFFT, MUSCLE, TM-align, US-align, più motori integrati |
+| Allineamenti | Clustal Omega, MAFFT, MUSCLE, TM-align, US-align, più motori integrati; confronto strutturale con GDT-TS/GDT-HA, lDDT e deviazione per residuo |
 | Qualità | Ramachandran, clashscore, DSSP (mkdssp), SASA, profilo DOPE, **PROCHECK**, **ProSA II**, **QMEAN locale** (UniClust30) o SWISS-MODEL, voto A–D, consenso tra i metodi, qualità per residuo nel 3D (anche pLDDT di AlphaFold) |
 | Automazione | pipeline batch da multi-FASTA, riprendibili dopo un annullamento, un errore o un riavvio ("Riprendi" o "Riprova solo i falliti": le sequenze già modellate non si rifanno) e, se completate con sequenze fallite, "Riprova i falliti"; avanzamento, log e tabella dei risultati aggiornati in tempo reale, con la stima del tempo residuo ("circa 3 min rimanenti"); verifica dell'installazione (Impostazioni → Strumenti) |
 

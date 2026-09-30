@@ -212,14 +212,18 @@ def _restore_files(workdir: Path, files: dict[str, str]) -> None:
 # ------------------------------------------------------------------------------------------ uso dai motori
 def run_cached(ctx: Any, operation: str, descriptor: dict, compute: Callable[[], dict], *,
                use_cache: bool = True, ttl: Optional[float] = None,
-               keep: Optional[Callable[[dict], bool]] = None) -> dict:
+               keep: Optional[Callable[[dict], bool]] = None,
+               accept: Optional[Callable[[dict], bool]] = None) -> dict:
     """Esegue `compute()` passando dalla cache.
 
     - `use_cache=True`: se c'è una voce valida restituisce il suo risultato con `cached=True` e `cached_at`
       (data ISO del calcolo), dopo aver ricreato i file del calcolo nella cartella di lavoro;
     - `use_cache=False`: ricalcola sempre e sostituisce la voce;
     - dopo un calcolo riuscito, se il job non è stato annullato e `keep(result)` è vero (risultato completo),
-      la voce viene scritta. Un errore di lettura o scrittura della cache non fa mai fallire il calcolo.
+      la voce viene scritta. Un errore di lettura o scrittura della cache non fa mai fallire il calcolo;
+    - `accept(result)`, facoltativo, si applica alla lettura: una voce il cui risultato non lo soddisfa (per
+      esempio scritta da una versione che non calcolava ancora campi oggi richiesti) è un mancato riscontro e
+      viene sostituita dal nuovo calcolo.
     """
     if not enabled(ctx):
         return compute()
@@ -230,6 +234,9 @@ def run_cached(ctx: Any, operation: str, descriptor: dict, compute: Callable[[],
     workdir = Path(ctx.workdir)
     if use_cache:
         entry = lookup(operation, key, ttl)
+        if entry is not None and accept is not None and not accept(entry["result"]):
+            ctx.log("Risultato in cache incompleto (versione precedente): nuovo calcolo.")
+            entry = None
         if entry is not None:
             try:
                 _restore_files(workdir, entry["files"])

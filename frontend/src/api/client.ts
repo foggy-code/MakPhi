@@ -207,6 +207,9 @@ export const api = {
   search: (body: { project_id?: string; query: { name: string; sequence: string }; engine: string; evalue: number; max_hits: number; taxid?: string; use_cache?: boolean; uniprot?: string }) =>
     post<JobSummary>("/api/search", body),
   align: (body: Record<string, unknown>) => post<JobSummary>("/api/align", body),
+  /** allineamento strutturale di B su A (riferimento) con il confronto per residuo; catena vuota = prima catena */
+  structuralAlign: (body: { project_id?: string; structures: [StructureSource, StructureSource]; tool?: string; use_cache?: boolean }) =>
+    post<JobSummary>("/api/align", { ...body, mode: "structural" }),
   align2d: (body: { project_id?: string; target: { name: string; sequence: string }; templates: TemplateRef[] }) =>
     post<JobSummary>("/api/align2d", body),
   model: (body: { project_id?: string; target?: { name: string; sequence: string } | null; alignment?: string | null; templates: TemplateRef[]; options: Record<string, unknown>; quality: string; extended_quality?: boolean }) =>

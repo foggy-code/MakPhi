@@ -96,7 +96,7 @@ data/
 | Pacchetto | Contenuto |
 |---|---|
 | `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi), `eta` (stima del tempo residuo), `events` (notifiche in-process dei cambiamenti dei job) |
-| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file) |
+| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file) |
 | `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB), `remote` (client HTTP), `tools` (rilevamento strumenti, preambolo di licenza) |
 | `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job) |
 | `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases` oltre a sistema, progetti, calcoli, job) |
@@ -437,7 +437,80 @@ Il voto A–D non cambia: `consensus` è un campo in più del rapporto di qualit
 - **Pairwise**: Biopython `PairwiseAligner` (NW/SW, BLOSUM/PAM/GONNET, NUC.4.4), gap terminali gratuiti nel globale.
 - **Multiplo**: Clustal Omega → MAFFT → MUSCLE se installati, altrimenti *center-star* integrato; matrice di identità.
 - **Strutturale**: US-align/TM-align se installati, altrimenti sovrapposizione di Kabsch con ricerca del
-  TM-score massimo (algoritmo del programma TM-score) su un allineamento di sequenza; PDB sovrapposto per il viewer.
+  TM-score massimo (algoritmo del programma TM-score) su un allineamento di sequenza; PDB sovrapposto per il viewer e
+  confronto per residuo (vedi sotto).
+
+### Confronto strutturale (`domain/comparison.py`, `engines/align.structural`)
+
+B si sovrappone su A, che è il **riferimento**: GDT e lDDT si misurano sui residui di A. La corrispondenza tra i
+residui è quella dell'allineamento ed è fissata; nessuna metrica la cambia.
+
+**Due percorsi, stessi campi.**
+
+- **Integrato:** allineamento di sequenza (Needleman-Wunsch, BLOSUM62) delle catene, poi `tm_score_search` normalizzato
+  su A (quella su B entra solo nel TM-score su B e fra le sovrapposizioni provate dal GDT).
+- **TM-align / US-align:** ogni struttura va in un file con la sola catena da allineare (quella indicata o la prima
+  con Cα, come nel percorso integrato): i programmi leggono la prima catena, e così la mappatura si ricostruisce dagli
+  stessi file che leggono. I residui sono quelli che Biopython legge da quei file (solo ATOM con Cα, prima altloc,
+  codici di inserzione distinti). Le righe dell'allineamento (mobile, segni, bersaglio) devono avere, senza gap, le
+  stesse lettere (`X` vale per ogni residuo non standard, tradotto in modo diverso dai due): altrimenti il risultato ha
+  una nota, nessun confronto per residuo e non entra in cache. Una colonna con due residui è una coppia solo se segnata
+  `:` (< 5 Å) o `.`: lo spazio indica residui nella stessa colonna oltre la distanza di taglio del programma, non
+  allineati (verificato con un tratto spostato di 12 Å: 69 coppie, come "Aligned length"). Le coordinate di B vengono
+  dalla matrice di `-m` (formato di TM-align, righe da 1, e di US-align, righe da 0: X = t + U·x); senza matrice
+  (versioni vecchie) si ricalcola la sovrapposizione del TM-score sulle stesse coppie, con una nota. Con la matrice
+  BioLoom riottiene il TM-score stampato dal programma (test).
+- **PDB per il viewer:** in entrambi i percorsi lo costruisce BioLoom con la sovrapposizione del TM-score: catena A = A,
+  catena B = B sovrapposta, numerazione originale. Prima, con US-align il file conteneva solo B e con TM-align le catene
+  erano invertite rispetto al percorso integrato.
+
+**Metriche.**
+
+| Campo | Definizione | Fonte |
+|---|---|---|
+| `pairs[]` | per coppia: catena, numero e lettera in A e in B, distanza dei Cα (Å) dopo la sovrapposizione del TM-score, lDDT del residuo di A | |
+| `tm_score`, `tm_score_b` | normalizzato su A e su B | Zhang & Skolnick, Proteins 57:702, 2004 |
+| `rmsd` | tutte le coppie dopo la loro sovrapposizione di Kabsch, come lo riportano TM-align e US-align (prima, nell'integrato, sulla sovrapposizione del TM-score) | |
+| `rmsd_close`, `close_pairs` | coppie a meno di 5 Å nella sovrapposizione del TM-score (le `:` di TM-align) | Zhang & Skolnick, Nucleic Acids Res 33:2302, 2005 |
+| `gdt[]`, `gdt_ts`, `gdt_ha` | Pd = % dei Cα di A (su tutti i residui di A) entro d Å, estremo compreso; TS = media di P1, P2, P4, P8; HA = media di P0,5, P1, P2, P4 | Zemla, Nucleic Acids Res 31:3370, 2003 (LGA); Read & Chavali, Proteins 69 S8:27, 2007 |
+| `lddt`, `lddt_distances` | Cα, raggio di inclusione 15 Å su A, conservata se \|d_B − d_A\| < 0,5, 1, 2, 4 Å; media delle quattro frazioni | Mariani et al., Bioinformatics 29:2722, 2013 |
+| `transform` | rotazione e traslazione che portano B su A (x' = R·x + t) | |
+
+- **GDT: ricerca per soglia.** Il GDT di LGA massimizza separatamente ogni Pd su sovrapposizioni diverse. BioLoom fa
+  lo stesso con sottoinsiemi iterativi: semi = frammenti contigui delle coppie di lunghezza L, L/2, L/4… fino a 4 (passo
+  di mezzo frammento, come `tm_score_search`; al massimo 48 frammenti per lunghezza, un limite che conta solo oltre i
+  ~100 residui) più la sovrapposizione del TM-score; da ogni
+  seme Kabsch sulle coppie entro d e di nuovo le coppie entro d, fino a convergenza (massimo 20 passi; un insieme già
+  esplorato per quella soglia ferma il ciclo). Ogni sovrapposizione provata conta per tutte le soglie. È un'euristica
+  come quella di LGA: il valore è un **limite inferiore** del massimo vero e mai inferiore al valore sulla
+  sovrapposizione del TM-score. Esempio (test): con il tratto 31–37 di 1UBQ spostato di 6 Å, a 4 Å la sovrapposizione
+  del TM-score tiene 69 Cα, la ricerca ne trova 75; il massimo vero è 76 (traslazione a metà), quindi il GDT-TS è
+  sottostimato di 0,3 punti. In un caso a due gruppi rigidi la ricerca trova l'ottimo (15 su 15 contro 10).
+- **lDDT:** non dipende dalla sovrapposizione. Una distanza che coinvolge un residuo di A senza corrispondente in B conta
+  come non conservata (come gli atomi mancanti del lDDT originale), quindi il lDDT globale penalizza anche la
+  copertura. Globale = tutte le distanze insieme (non la media dei residui). Il controllo stereochimico e le simmetrie
+  delle catene laterali del lDDT a tutti gli atomi non si applicano ai Cα.
+- **Coppie diverse fra i percorsi:** l'integrato allinea per sequenza e tiene anche coppie lontane (tratto a 12 Å: 76
+  coppie, lDDT 0,870), TM-align le lascia fuori (69 coppie, lDDT 0,855). Con la stessa corrispondenza i due percorsi
+  danno gli stessi valori, a parte le due ricerche euristiche del TM-score (tratto a 3 Å: 0,9557 contro 0,9553, distanze
+  diverse di circa 0,1 Å).
+- **Costo** (5000 coppie, catena sintetica): ricerca del TM-score 9 s, GDT 7 s, lDDT 2,4 s (a blocchi di 128 righe della
+  matrice delle distanze, niente matrice 5000 × 5000 intera); 1UBQ: meno di 0,1 s.
+
+**Valori di riferimento** (test in `test_comparison.py`, uguali con l'integrato, TM-align e US-align salvo dove indicato):
+
+| B rispetto ad A = 1UBQ | TM-score su A (su B) | RMSD | GDT-TS | GDT-HA | lDDT |
+|---|---|---|---|---|---|
+| 1UBQ, copia ruotata e traslata; catena B contro catena A di `ubq_dimer.pdb` | 1,000 | 0,00 | 100 | 100 | 1,000 |
+| tratto 31–37 spostato di 6 Å verso l'esterno | 0,927 | 1,74 (entro 5 Å: 0,00 su 69) | 95,07 | 92,76 | 0,878 (tratto 0,20–0,28, fuori ≥ 0,83) |
+| un TRP 35A inserito in B | 1,000 (0,987) | 0,00 | 100 | 100 | 1,000 |
+| Cα del residuo 20 tolto in B | 0,987 (1,000) | 0,00 | 98,68 | 98,68 | 0,977 |
+
+**Cache.** Il descrittore strutturale ha `version: 2` (`STRUCTURAL_VERSION`): le voci scritte prima, senza confronto
+per residuo, hanno un'altra chiave e non si leggono più (le toglie la pulizia a 30 giorni). In più `run_cached(accept=)`
+scarta alla lettura una voce che non ha tutti i campi del confronto (`_complete`), e `keep` non scrive in cache un
+risultato senza coppie (mappatura non ricostruita). I job completati prima restano leggibili: l'interfaccia mostra le
+metriche che hanno e chiede di rilanciare per il confronto per residuo.
 
 ### Ricerca di template
 
@@ -561,7 +634,7 @@ ricerche. Il pairwise è istantaneo e non passa dalla cache.
   |---|---|---|
   | ricerca | sequenza (maiuscole, senza spazi), motore, E-value, risultati massimi, taxid (solo NCBI), accessione UniProt (solo AlphaFold DB) | BLAST+ e MMseqs2: dimensione e data di tutti i file del database (`pdbaa.*`, `pdbaa_h*`), eseguibile (percorso, dimensione, data), uso dell'indice veloce MMseqs2 |
   | multiplo | nomi e sequenze nell'ordine dato, tipo (proteina/acido nucleico), programma effettivo (`auto` risolto) | eseguibile di Clustal Omega/MAFFT/MUSCLE |
-  | strutturale | SHA-256 del contenuto e formato dei due file, catene, programma effettivo | eseguibile di TM-align/US-align |
+  | strutturale | SHA-256 del contenuto e formato dei due file, catene, programma effettivo, versione del risultato (2: con il confronto per residuo) | eseguibile di TM-align/US-align |
 
   Il nome delle strutture non entra nella chiave (un file caricato di nuovo ha un prefisso casuale): gli `ids`
   del risultato si riapplicano dopo la lettura.
@@ -575,7 +648,8 @@ ricerche. Il pairwise è istantaneo e non passa dalla cache.
   risultato (`superposed_pdb`) e il job lo riscrive come `superposed.pdb`. Oltre 20 MB di file, o con file non
   testuali, il risultato non entra in cache.
 - **Cosa non entra:** calcoli falliti, job annullati, risultati parziali (ricerca locale senza i metadati RCSB,
-  output di TM-align non riconosciuto).
+  output di TM-align non riconosciuto o senza la mappatura dei residui). Con `accept` una voce trovata ma incompleta
+  (risultato strutturale senza il confronto per residuo) è un mancato riscontro e il nuovo calcolo la sostituisce.
 - **Lettura tollerante:** un file assente, corrotto, di un altro formato, con chiave diversa o scaduto è un
   mancato riscontro, mai un errore. Anche un errore di scrittura (disco pieno) non fa fallire il calcolo. I percorsi
   dei file da ricreare passano da `safe_join` e non possono uscire dalla cartella di lavoro.
@@ -629,6 +703,26 @@ Il client API (`api/client.ts`) e i tipi (`api/types.ts`) sono l'unico punto di 
   - **Evidenze:** gap del template, zona crepuscolare sotto il 25% (soglia della pipeline; Rost 1999) e residui del
     bersaglio non coperti. Una traccia riassuntiva sopra l'allineamento elenca le regioni in numerazione del
     bersaglio.
+
+**Confronto strutturale (`pages/Compare.tsx`, `components/StructuralComparison.tsx`, `lib/compare.ts`):**
+
+- **Un solo componente** per la pagina Confronto e la modalità Strutturale di Allineamenti: usa il job `align`
+  strutturale esistente (`api.structuralAlign`), nessun tipo di job nuovo.
+- **Colorazione:** `comparisonColoring` colora i residui di B della catena B del PDB sovrapposto per distanza (scala
+  continua blu → giallo → rosso tra 0 e 5 Å, saturata oltre: 5 Å è la soglia delle coppie vicine di TM-align) o per
+  lDDT (stessa scala rovesciata su 0–1); i residui di A hanno lo stesso valore nel passaggio del mouse ma il colore fisso
+  del riferimento (grigio chiaro, `ResidueValue.color`). Nessun colore chiaro nella scala, per non confonderlo con A. Per
+  i residui senza coppia vale il colore della catena (`ResidueColoring.chainColors`: A grigio chiaro, B grigio "senza
+  valore"), con i campioni in legenda (`legendExtra`).
+- **Selezione:** clic su grafico, tabella o tratto che devia (almeno 3 coppie consecutive oltre 1, 2 o 4 Å, le soglie
+  del GDT, senza salti della numerazione di A) evidenzia i due residui e centra la vista; clic nel 3D seleziona la
+  coppia (`pairIndexOf`, su catena A o B). Il grafico interrompe la linea dove A ha residui senza coppia.
+- **Link stabili:** `?a=template:1UBQ&ca=A&b=job:<id>:<file>&cb=&job=` (`encodeSource`/`decodeSource`, catena a parte):
+  «Confronta…» nella tabella dei modelli di Modellazione (`compareTargets`: template usati e altri modelli del job; il
+  modello è B), «Confronta con» nella pagina Qualità (i template del job del modello, o un riferimento a scelta) e «Apri
+  in Confronto» negli Allineamenti. Il link precompila, il confronto parte con «Confronta».
+- **Risultati precedenti** (senza `pairs`): metriche che hanno, viewer con le catene e un avviso per rilanciare.
+
 Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni risultato ha un link stabile.
 
 | Pagina | Funzione |
@@ -637,10 +731,11 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 | Sequenze | import FASTA/UniProt, proprietà ProtParam, predizione GOR, annotazioni UniProt/InterPro/PDB |
 | Ricerca template | RCSB/NCBI/locale/AlphaFold DB (accessione UniProt facoltativa, precompilata dalle sequenze UniProt), tabella ordinabile, allineamento dell'hit, download, "modella con"; badge "modello predetto" e pLDDT; nota "dalla cache (data)" e ricalcolo ignorando la cache |
 | Libreria template | download RCSB e "Da AlphaFold DB (UniProt)", upload PDB/mmCIF, catene, residui mancanti, ligandi, DSSP, 3D; badge "AlphaFold", pLDDT medio e fasce di confidenza |
-| Allineamenti | pairwise, multiplo, strutturale; esportazione FASTA/Clustal/PIR; salvataggio nel progetto; cache per multiplo e strutturale |
+| Allineamenti | pairwise, multiplo, strutturale (con il confronto per residuo e «Apri in Confronto»); esportazione FASTA/Clustal/PIR; salvataggio nel progetto; cache per multiplo e strutturale |
 | Editor PIR | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
-| Modellazione | input automatico o da PIR, parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); modelli, 3D, PyMOL, archivio |
-| Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi |
+| Modellazione | input automatico o da PIR, parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); modelli, 3D, PyMOL, archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job |
+| Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; «Confronta con» il template del modello o un'altra struttura |
+| Confronto | `/compare?a=&ca=&b=&cb=&job=`: B sovrapposta ad A (riferimento), metriche (TM-score su A e su B, RMSD, RMSD entro 5 Å, GDT-TS, GDT-HA, lDDT, lunghezza allineata), 3D con B colorata per distanza (0 → ≥ 5 Å) o lDDT e A in grigio chiaro, grafico di distanza e lDDT per posizione, tratti che deviano, tabella per coppia; clic ovunque → coppia evidenziata nel 3D |
 | Pipeline batch | multi-FASTA → modelli validati, filtro zona crepuscolare, tabella paginata, CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
 | Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione |
 | Impostazioni | schede Generale (esecuzione, QMEAN, email), Licenze (MODELLER, ProSA, PROCHECK), Database (pdbaa, MMseqs2, UniClust30), Strumenti (verifica dell'installazione), Spazio e file temporanei (con la cache dei calcoli) |
@@ -674,7 +769,7 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 
 ## Test
 
-- **`backend/tests` (pytest), circa 310 test,** eseguiti sia nativamente sia nel container:
+- **`backend/tests` (pytest), circa 340 test,** eseguiti sia nativamente sia nel container:
   - dominio, job manager, API, generazione script, MODELLER end-to-end;
   - ripresa dei job e delle pipeline (`test_jobs.py`, `test_pipeline_resume.py`): solo gli elementi non
     conclusi, riavvio simulato, ambito "solo i falliti", pipeline completate con falliti, file vecchi eliminati,
@@ -711,6 +806,14 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - cache dei calcoli (`test_compute_cache.py`): riscontri senza rieseguire i motori (simulati), invalidazione per
     parametri, sequenza, timbro del database o dello strumento, scadenza, file corrotti, job falliti e annullati,
     riuso nella pipeline e scritture concorrenti;
+  - confronto strutturale (`test_comparison.py`, integrato e TM-align/US-align veri dell'immagine): lDDT calcolato a
+    mano (tre Cα, residuo senza corrispondente, raggio e soglie esclusi), invarianza al moto rigido, GDT massimizzato
+    per soglia (due gruppi rigidi), 1UBQ contro sé stessa e contro una copia ruotata e traslata (TM 1, GDT 100, lDDT 1,
+    matrice e PDB sovrapposto con A e B al loro posto), tratto 31–37 spostato di 6 Å (distanze e lDDT bassi solo lì,
+    valori di riferimento), catena A contro B di `ubq_dimer.pdb`, residuo inserito (35A) e Cα mancante (lDDT uguale
+    alla formula ricavata a parte), accordo fra i percorsi, colonne non allineate di TM-align (tratto a 12 Å), uscite
+    anomale simulate (residui che non corrispondono, matrice mancante), lettura delle due forme della matrice e
+    invalidazione delle voci di cache precedenti;
   - tempo residuo e flussi SSE (`test_live.py`): formule dell'ETA (arrotondamento, soglie, mai negativa), pipeline con
     durate note e dopo una ripresa, job con progresso; notifiche fra thread; righe intere del log; flusso di un job
     con TestClient (stato, log contiguo, fine, offset, 404, ripresa), limite dei flussi, flusso dell'elenco (job,
@@ -737,7 +840,11 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - scale di colore e legende (`colorscale.test.ts`, fasce con limite escluso o compreso), conversione del rapporto
     nei valori per residuo, pLDDT compreso con le fasce del backend (`residueColoring.test.ts`), residui
     problematici e struttura del rapporto mostrato (`qualityReport.test.ts`), confidenza degli allineamenti
-    (`alignConfidence.test.ts`).
+    (`alignConfidence.test.ts`);
+  - confronto strutturale (`compare.test.ts`): sorgenti nei link (andata e ritorno, valori non validi), destinazioni
+    di «Confronta…» dai modelli, scala delle distanze saturata a 5 Å, colore fisso di A e colore per catena, coppia di
+    un residuo scelto nel 3D, interruzioni del grafico (salti e codici di inserzione), tratti che deviano, ordinamento e
+    filtro della tabella, lettura del TM-score.
   - AlphaFold (`alphafold.test.ts`): accessioni e id `AF-…`, accessione precompilata che segue la sequenza,
     intestazioni `sp|`/`tr|` della pipeline, fasce di pLDDT, quando mostrare la soglia, riepilogo del ritaglio
     (anche con i frammenti isolati).

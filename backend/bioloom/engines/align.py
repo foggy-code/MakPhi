@@ -14,7 +14,7 @@ import numpy as np
 from ..core import cache
 from ..core.errors import AppError, ToolUnavailable
 from ..core.jobs import JobContext, default_env
-from ..domain import geometry, sequences, structure
+from ..domain import comparison, geometry, sequences, structure
 from ..domain.sequences import SeqRecord
 from . import tools
 
@@ -187,11 +187,41 @@ def _run_cli_msa(ctx: JobContext, tool: str, exe: str, records: list[SeqRecord],
 
 
 # ------------------------------------------------------------------------------------------ strutturale
+# Versione del risultato strutturale nella chiave della cache: la 2 aggiunge il confronto per residuo (coppie con
+# distanza e lDDT, GDT, lDDT globale, RMSD entro 5 Å, matrice). Le voci scritte prima hanno un'altra chiave e non si
+# leggono più; `_complete` scarta comunque, anche alla lettura, un risultato senza quei campi.
+STRUCTURAL_VERSION = 2
+COMPARISON_FIELDS = ("pairs", "gdt_ts", "gdt_ha", "lddt", "transform")
+
+
+def _complete(result: dict) -> bool:
+    """Risultato strutturale da mettere (o riprendere) in cache: allineamento, TM-score e confronto per residuo."""
+    return (bool(result.get("aligned")) and result.get("tm_score") is not None
+            and all(result.get(k) is not None for k in COMPARISON_FIELDS) and bool(result.get("pairs")))
+
+
+def structural_descriptor(path_a: Path, chain_a: Optional[str], path_b: Path, chain_b: Optional[str], tool: str,
+                          exe: Optional[str]) -> dict:
+    """Richiesta strutturale per la chiave della cache (`tool` = programma effettivo, `auto` già risolto).
+
+    Conta il contenuto dei file, non il nome: una struttura caricata di nuovo (nome con prefisso casuale) dà lo
+    stesso risultato. I nomi finiscono solo in `ids` e si riapplicano dopo la lettura.
+    """
+    return {
+        "structures": [{"sha256": cache.content_hash(path), "format": Path(path).suffix.lower(), "chain": chain or ""}
+                       for path, chain in ((path_a, chain_a), (path_b, chain_b))],
+        "tool": tool, "tool_stamp": cache.file_stamp(exe), "version": STRUCTURAL_VERSION,
+    }
+
+
 def structural(path_a: Path, chain_a: Optional[str], path_b: Path, chain_b: Optional[str], ctx: JobContext,
                tool: str = "auto", names: tuple[str, str] = ("A", "B"), use_cache: bool = True) -> dict:
-    """Sovrappone B su A. TM-align/US-align se installati, altrimenti Kabsch + TM-score integrati.
+    """Sovrappone B su A (riferimento). TM-align/US-align se installati, altrimenti Kabsch + TM-score integrati.
 
-    In cache vanno anche il testo del PDB sovrapposto (`superposed_pdb`, che il job salva come
+    Con entrambi i percorsi il risultato ha anche il confronto per residuo (`domain/comparison`): tabella delle
+    coppie allineate con la distanza dei Cα e il lDDT, GDT-TS/GDT-HA, lDDT globale, RMSD entro 5 Å e la
+    sovrapposizione (`transform`, da applicare a B). In cache vanno anche il testo del PDB sovrapposto
+    (`superposed_pdb`, catena A = struttura A, catena B = struttura B sovrapposta, che il job salva come
     superposed.pdb) e i file scritti da TM-align/US-align: un risultato dalla cache ricrea gli stessi file.
     """
     chosen = tool
@@ -202,22 +232,17 @@ def structural(path_a: Path, chain_a: Optional[str], path_b: Path, chain_b: Opti
         exe = tools.find(chosen)
         if not exe:
             raise ToolUnavailable(f"{tools.TOOLS[chosen]['label']} non è installato.")
-    # Conta il contenuto dei file, non il nome: una struttura caricata di nuovo (nome con prefisso casuale)
-    # dà lo stesso risultato. I nomi finiscono solo in `ids` e si riapplicano sotto.
-    descriptor = {
-        "structures": [{"sha256": cache.content_hash(path), "format": Path(path).suffix.lower(), "chain": chain or ""}
-                       for path, chain in ((path_a, chain_a), (path_b, chain_b))],
-        "tool": chosen, "tool_stamp": cache.file_stamp(exe),
-    }
+    descriptor = structural_descriptor(path_a, chain_a, path_b, chain_b, chosen, exe)
 
     def run() -> dict:
         if chosen != "builtin":
             return _run_tmalign(ctx, chosen, exe, path_a, chain_a, path_b, chain_b, names)
         return _builtin_structural(path_a, chain_a, path_b, chain_b, ctx, names)
 
-    # un output di TM-align non riconosciuto (niente allineamento o TM-score) non entra in cache
-    result = cache.run_cached(ctx, "align_structural", descriptor, run, use_cache=use_cache,
-                              keep=lambda r: bool(r.get("aligned")) and r.get("tm_score") is not None)
+    # un output di TM-align non riconosciuto (niente allineamento o TM-score) o senza il confronto per residuo
+    # (mappatura dei residui non ricostruita) non entra in cache
+    result = cache.run_cached(ctx, "align_structural", descriptor, run, use_cache=use_cache, keep=_complete,
+                              accept=_complete)
     result["ids"] = list(names)
     return result
 
@@ -234,6 +259,33 @@ def _chain_ca(path: Path, chain: Optional[str], label: str):
     return st, trace
 
 
+def _alignment_pairs(row_a: str, row_b: str, markers: Optional[str] = None) -> list[tuple[int, int]]:
+    """Coppie (indice in A, indice in B) di un allineamento a due righe; gli indici contano i soli residui.
+
+    Con `markers` (la riga di TM-align/US-align fra le due sequenze) una colonna con due residui è una coppia solo se
+    segnata ":" (distanza < 5 Å) o "." (altra coppia allineata): lo spazio indica due residui nella stessa colonna
+    ma non allineati, oltre la distanza di taglio del programma.
+    """
+    marks = (markers or "").ljust(len(row_a)) if markers is not None else None
+    pairs = []
+    ia = ib = 0
+    for k, (x, y) in enumerate(zip(row_a, row_b)):
+        if x != "-" and y != "-" and (marks is None or marks[k] in ":."):
+            pairs.append((ia, ib))
+        if x != "-":
+            ia += 1
+        if y != "-":
+            ib += 1
+    return pairs
+
+
+def _superposed_pdb(st_a, chain_a: str, st_b, chain_b: str, rot: np.ndarray, trans: np.ndarray) -> str:
+    """PDB per il viewer: catena A = struttura A, catena B = struttura B sovrapposta con (rot, trans)."""
+    for atom in st_b.get_atoms():
+        atom.set_coord(geometry.apply(np.array([atom.coord]), rot, trans)[0])
+    return _combined_pdb(st_a, chain_a, st_b, chain_b)
+
+
 def _builtin_structural(path_a, chain_a, path_b, chain_b, ctx, names) -> dict:
     ctx.progress(0.1, "Lettura delle strutture")
     st_a, ca_a = _chain_ca(path_a, chain_a, names[0])
@@ -243,15 +295,7 @@ def _builtin_structural(path_a, chain_a, path_b, chain_b, ctx, names) -> dict:
     ctx.progress(0.3, "Allineamento di sequenza delle catene")
     aln = pairwise(SeqRecord(names[0], seq_a), SeqRecord(names[1], seq_b), gap_open=10, gap_extend=0.5)
     al_a, al_b = aln["aligned"]
-    idx_a = idx_b = 0
-    pairs = []
-    for x, y in zip(al_a, al_b):
-        if x != "-" and y != "-":
-            pairs.append((idx_a, idx_b))
-        if x != "-":
-            idx_a += 1
-        if y != "-":
-            idx_b += 1
+    pairs = _alignment_pairs(al_a, al_b)
     if len(pairs) < 5:
         raise AppError("Troppe poche posizioni allineate per una sovrapposizione affidabile.")
     target = np.array([ca_a[i]["coord"] for i, _ in pairs])
@@ -260,15 +304,17 @@ def _builtin_structural(path_a, chain_a, path_b, chain_b, ctx, names) -> dict:
     res = geometry.tm_score_search(mobile, target, norm_length=len(ca_a))
     res_b = geometry.tm_score_search(mobile, target, norm_length=len(ca_b))
     rot, trans = res["rotation"], res["translation"]
-    for atom in st_b.get_atoms():
-        atom.set_coord(geometry.apply(np.array([atom.coord]), rot, trans)[0])
-    superposed = _combined_pdb(st_a, chain_a or ca_a[0]["chain"], st_b, chain_b or ca_b[0]["chain"])
+    ctx.progress(0.7, "Confronto per residuo (distanze, GDT, lDDT)")
+    # distanze sulla sovrapposizione del TM-score normalizzato su A; il GDT prova anche quella normalizzata su B
+    comp = comparison.compare(ca_a, ca_b, pairs, rot, trans, transforms=[(res_b["rotation"], res_b["translation"])])
+    superposed = _superposed_pdb(st_a, ca_a[0]["chain"], st_b, ca_b[0]["chain"], rot, trans)
     return {
         "method": "Sovrapposizione Kabsch + TM-score su allineamento di sequenza (integrato BioLoom)",
         "ids": list(names), "aligned": [al_a, al_b],
-        "tm_score": res["tm_score"], "tm_score_b": res_b["tm_score"], "rmsd": res["rmsd"],
-        "rmsd_close": res["rmsd_close"], "aligned_length": len(pairs), "close_pairs": res["n_close"],
-        "lengths": [len(ca_a), len(ca_b)], "stats": aln["stats"],
+        # RMSD di tutte le coppie dopo la loro sovrapposizione di Kabsch, come lo riportano TM-align e US-align
+        "tm_score": res["tm_score"], "tm_score_b": res_b["tm_score"], "rmsd": comparison.kabsch_rmsd(mobile, target),
+        "aligned_length": len(pairs), "lengths": [len(ca_a), len(ca_b)], "stats": aln["stats"],
+        **comp,
         "superposed_pdb": superposed,
         "note": "Allineamento dipendente dalla sequenza: per proteine con bassa identità usare TM-align/US-align.",
     }
@@ -286,16 +332,47 @@ def _combined_pdb(st_a, chain_a: str, st_b, chain_b: str) -> str:
     return "\n".join(out) + "\n"
 
 
+_MATRIX_ROW = re.compile(r"^\s*([0-3])" + r"\s+(-?\d+(?:\.\d*)?(?:[eE][-+]?\d+)?)" * 4 + r"\s*$")
+
+
+def _read_matrix(path: Path) -> Optional[tuple[np.ndarray, np.ndarray]]:
+    """Matrice di `-m` di TM-align/US-align (righe «m t u1 u2 u3», m da 0 o da 1): X = t + U·x porta B su A."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    rows = [m.groups()[1:] for m in (_MATRIX_ROW.match(line) for line in text.splitlines()) if m]
+    if len(rows) != 3:
+        return None
+    trans = np.array([float(r[0]) for r in rows])
+    rot = np.array([[float(x) for x in r[1:]] for r in rows])
+    if not np.all(np.isfinite(rot)) or abs(abs(np.linalg.det(rot)) - 1.0) > 1e-3:
+        return None
+    return rot, trans
+
+
+def _same_residues(row: str, trace: list[dict]) -> bool:
+    """La riga dell'allineamento (senza gap) descrive i residui letti da Biopython? "X" vale per qualunque lettera:
+    TM-align e Biopython traducono in modo diverso i residui non standard."""
+    letters = row.replace("-", "")
+    return len(letters) == len(trace) and all(x == t["aa"] or "X" in (x, t["aa"]) for x, t in zip(letters, trace))
+
+
 def _run_tmalign(ctx, tool, exe, path_a, chain_a, path_b, chain_b, names) -> dict:
-    ctx.progress(0.2, f"Esecuzione di {tools.TOOLS[tool]['label']}")
-    files = []
-    for path, chain, label in ((path_b, chain_b, "mobile"), (path_a, chain_a, "target")):
-        st = structure.load_structure(path, label)
-        dest = ctx.path(f"{label}.pdb")
-        structure.write_pdb(st, dest, chains=[chain] if chain else None)
-        files.append(dest)
+    label = tools.TOOLS[tool]["label"]
+    ctx.progress(0.2, f"Esecuzione di {label}")
+    # Un file per struttura con la sola catena da allineare (quella indicata o la prima con Cα, come il percorso
+    # integrato): TM-align e US-align leggono la prima catena, e la mappatura si ricostruisce dagli stessi file.
+    written = {}
+    for path, chain, role, name in ((path_b, chain_b, "mobile", names[1]), (path_a, chain_a, "target", names[0])):
+        st, trace = _chain_ca(path, chain, name)
+        dest = ctx.path(f"{role}.pdb")
+        structure.write_pdb(st, dest, chains=[trace[0]["chain"]])
+        written[role] = dest
     prefix = ctx.path("superposed")
-    result = ctx.run([exe, str(files[0]), str(files[1]), "-o", str(prefix)], env=default_env())
+    matrix = ctx.path("matrix.txt")
+    result = ctx.run([exe, str(written["mobile"]), str(written["target"]), "-o", str(prefix), "-m", str(matrix)],
+                     env=default_env())
     if result.returncode != 0:
         raise AppError(f"{tool} è terminato con errore (codice {result.returncode}).")
     out = result.output
@@ -303,24 +380,52 @@ def _run_tmalign(ctx, tool, exe, path_a, chain_a, path_b, chain_b, names) -> dic
     rmsd = re.search(r"RMSD=\s*([0-9.]+)", out)
     alen = re.search(r"Aligned length=\s*([0-9]+)", out)
     lines = out.splitlines()
-    aligned = []
+    rows: Optional[tuple[str, str, str]] = None  # (mobile, segni, target) come li stampa il programma
     for i, line in enumerate(lines):
         if "denotes" in line and i + 3 < len(lines):
-            aligned = [lines[i + 3].strip(), lines[i + 1].strip()]  # (target, mobile) come nel resto della v4
+            rows = (lines[i + 1].strip(), lines[i + 2].rstrip("\r\n"), lines[i + 3].strip())
             break
-    superposed = None
-    for suffix in ("_all_atm", ".pdb", "_atm", ""):
-        cand = Path(str(prefix) + suffix)
-        if cand.exists() and cand.stat().st_size:
-            superposed = cand.read_text(encoding="utf-8", errors="replace")
-            break
-    return {
-        "method": tools.TOOLS[tool]["label"], "ids": list(names), "aligned": aligned,
+    aligned = [rows[2], rows[0]] if rows else []  # (target, mobile) come nel resto della v4
+    res = {
+        "method": label, "ids": list(names), "aligned": aligned,
         # TM-align stampa prima il TM-score normalizzato sulla catena 1 (mobile) e poi sulla 2 (target).
         "tm_score": tms[1] if len(tms) > 1 else (tms[0] if tms else None),
         "tm_score_b": tms[0] if tms else None,
         "rmsd": float(rmsd.group(1)) if rmsd else None,
         "aligned_length": int(alen.group(1)) if alen else None,
         "stats": sequences.alignment_stats(*aligned) if len(aligned) == 2 and len(aligned[0]) == len(aligned[1]) else None,
-        "superposed_pdb": superposed,
+        "superposed_pdb": None,
     }
+    if not rows or len(rows[0]) != len(rows[2]):
+        res["note"] = f"Uscita di {label} non riconosciuta: confronto per residuo non disponibile."
+        return res
+    ctx.progress(0.7, "Confronto per residuo (distanze, GDT, lDDT)")
+    st_a, ca_a = _chain_ca(written["target"], None, names[0])
+    st_b, ca_b = _chain_ca(written["mobile"], None, names[1])
+    res["lengths"] = [len(ca_a), len(ca_b)]
+    transform = _read_matrix(matrix)
+    if not (_same_residues(rows[2], ca_a) and _same_residues(rows[0], ca_b)):
+        res["note"] = (f"I residui dell'allineamento di {label} non corrispondono a quelli letti dai file: confronto "
+                       "per residuo non disponibile.")
+        if transform is not None:  # la sovrapposizione del programma vale comunque per il viewer
+            res["superposed_pdb"] = _superposed_pdb(st_a, ca_a[0]["chain"], st_b, ca_b[0]["chain"], *transform)
+        return res
+    # segni fra le due righe: colonne della riga di mezzo, senza togliere gli spazi iniziali
+    pairs = _alignment_pairs(rows[2], rows[0], rows[1])
+    notes = []
+    if transform is None:
+        target = np.array([ca_a[i]["coord"] for i, _ in pairs]).reshape(-1, 3)
+        mobile = np.array([ca_b[j]["coord"] for _, j in pairs]).reshape(-1, 3)
+        fit = geometry.tm_score_search(mobile, target, norm_length=len(ca_a))
+        transform = (fit["rotation"], fit["translation"])
+        notes.append(f"Matrice di rotazione di {label} non disponibile: distanze sulla sovrapposizione del TM-score "
+                     "ricalcolata da BioLoom sulle stesse coppie.")
+    comp = comparison.compare(ca_a, ca_b, pairs, *transform)
+    if res["aligned_length"] is not None and res["aligned_length"] != len(pairs):
+        notes.append(f"{label} riporta {res['aligned_length']} coppie allineate, l'allineamento ne mostra "
+                     f"{len(pairs)}: il confronto per residuo usa quelle dell'allineamento.")
+    res.update(comp)
+    res["superposed_pdb"] = _superposed_pdb(st_a, ca_a[0]["chain"], st_b, ca_b[0]["chain"], *transform)
+    if notes:
+        res["note"] = " ".join(notes)
+    return res

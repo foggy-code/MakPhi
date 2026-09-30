@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { DocumentItem, JobSummary, LoopResult, ModelEntry, ModelResult, Sequence, StructureSource, SystemInfo, TemplateItem, TemplateRef } from "../api/types";
+import type { DocumentItem, JobSummary, LoopResult, ModelEntry, ModelResult, PreparedTemplate, Sequence, StructureSource, SystemInfo, TemplateItem, TemplateRef } from "../api/types";
 import { AlignmentView } from "../components/AlignmentView";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
@@ -12,6 +12,7 @@ import { Alert, Badge, Card, Empty, Field, Grade, Modal, PageHead, Segmented, St
 import { pirReference } from "../lib/alignConfidence";
 import { PlddtOption } from "../components/PlddtOption";
 import { hasPredictedTemplate, PLDDT_DEFAULT, removedRanges, trimSummary } from "../lib/alphafold";
+import { compareTargets } from "../lib/compare";
 import { useProject, useToast } from "../lib/context";
 import { fileStem, formatRestraints, parseRestraints, type RestraintRow } from "../lib/files";
 import { downloadText, fmtNum, relTime } from "../lib/format";
@@ -27,7 +28,21 @@ const REFINEMENT = [
 
 type Restraint = RestraintRow;
 
-function ModelsTable({ jobId, models, selected, onSelect }: { jobId: string; models: ModelEntry[]; selected: string; onSelect: (f: string) => void }) {
+/** «Confronta…»: il modello (B) contro un template usato o un altro modello dello stesso job (A, riferimento). */
+function CompareSelect({ jobId, model, models, templates }: { jobId: string; model: ModelEntry; models: ModelEntry[]; templates?: PreparedTemplate[] }) {
+  const navigate = useNavigate();
+  const targets = compareTargets(jobId, model.file, models, templates);
+  if (model.failure || !targets.length) return null;
+  return (
+    <select className="input" style={{ width: 118, minHeight: 28, padding: "2px 6px", display: "inline-block" }} value="" title="Confronto strutturale del modello (GDT, lDDT, deviazione per residuo)"
+      onChange={(e) => { const t = targets[Number(e.target.value)]; if (t) navigate(t.href); }}>
+      <option value="">Confronta…</option>
+      {targets.map((t, i) => <option key={t.href} value={i}>con {t.label}</option>)}
+    </select>
+  );
+}
+
+function ModelsTable({ jobId, models, selected, onSelect, templates }: { jobId: string; models: ModelEntry[]; selected: string; onSelect: (f: string) => void; templates?: PreparedTemplate[] }) {
   const navigate = useNavigate();
   return (
     <div className="table-wrap">
@@ -60,7 +75,8 @@ function ModelsTable({ jobId, models, selected, onSelect }: { jobId: string; mod
                   <Icon name="shield" size={13} />
                 </button>{" "}
                 <a className="btn btn-sm" href={api.jobFileUrl(jobId, m.file, true)} title="Scarica PDB"><Icon name="download" size={13} /></a>{" "}
-                <a className="btn btn-sm" href={api.pymolUrl(jobId, m.file)} title="Sessione PyMOL (.pml)">PyMOL</a>
+                <a className="btn btn-sm" href={api.pymolUrl(jobId, m.file)} title="Sessione PyMOL (.pml)">PyMOL</a>{" "}
+                <CompareSelect jobId={jobId} model={m} models={models} templates={templates} />
               </td>
             </tr>
           ))}
@@ -156,7 +172,7 @@ function Results({ jobId, result, kind }: { jobId: string; result: ModelResult |
           </>
         }
       >
-        <ModelsTable jobId={jobId} models={result.models} selected={selected} onSelect={setSelected} />
+        <ModelsTable jobId={jobId} models={result.models} selected={selected} onSelect={setSelected} templates={full?.templates} />
       </Card>
       <Card title={`Struttura 3D · ${selected}`}>
         <Viewer3D url={api.jobFileUrl(jobId, selected)} />
