@@ -16,6 +16,7 @@ from ..services.pipeline import PipelineService
 from ..services.projects import ProjectService
 from ..services.selftest import SelfTestService
 from ..services.templates import TemplateLibrary
+from . import cache
 from .db import Database
 from .errors import Conflict
 from .jobs import ACTIVE, JobManager
@@ -59,6 +60,7 @@ def build_core(paths: Paths) -> Core:
     licenses = LicenseService(paths.licenses, settings.get)
     licenses.apply()
     remote.configure(paths.cache)
+    cache.configure(paths.compute_cache)
     search.configure(paths.local_cache)
     db = Database(paths.db)
     jobs = JobManager(db, paths.jobs, settings.get().effective_workers(), settings.get,

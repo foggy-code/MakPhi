@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from bioloom.app import create_app
 from bioloom.config import Paths
+from bioloom.core import cache as cache_module
 from bioloom.core import jobs as jobs_module
 from bioloom.engines import tools
 
@@ -26,6 +27,16 @@ def _restore_subprocess_env():
     yield
     jobs_module._extra_env.clear()
     jobs_module._extra_env.update(saved)
+
+
+@pytest.fixture(autouse=True)
+def _reset_compute_cache():
+    """La cartella della cache dei calcoli configurata da un test (build_core) non vale per i successivi."""
+    saved = cache_module.root()
+    yield
+    cache_module.configure(saved)
+
+
 HUMAN_UB = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"
 YEAST_UB = "MQIFVKTLTGKTITLEVESSDTIDNVKSKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"
 

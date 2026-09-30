@@ -67,6 +67,13 @@ export function fmtDate(iso: string | null | undefined): string {
   return d.toLocaleString("it-IT", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
+/** Nota "dalla cache (data)" per un risultato riusato dalla cache dei calcoli; null se calcolato ora. */
+export function cachedLabel(result: { cached?: boolean; cached_at?: string | null } | null | undefined): string | null {
+  if (!result?.cached) return null;
+  const when = result.cached_at ? new Date(result.cached_at) : null;
+  return when && !Number.isNaN(when.getTime()) ? `dalla cache (${fmtDate(result.cached_at)})` : "dalla cache";
+}
+
 export function fmtDuration(start: string | null, end: string | null): string {
   if (!start) return "—";
   const s = new Date(start).getTime();

@@ -83,6 +83,20 @@ Ogni campo che riceve dati accetta anche un file:
 | Chiave MODELLER | file con la chiave, email di registrazione o `config.py` | Licenze |
 | Licenza ProSA | file `LicenseDB` | Licenze |
 
+## Risultati riusati (cache dei calcoli)
+
+Ricerche di template e allineamenti multipli e strutturali già calcolati con gli stessi dati e parametri non
+vengono rifatti. Il risultato riporta la nota **dalla cache (data)**. Rilanciare una pipeline con le stesse
+sequenze e altre opzioni di modellazione salta così tutte le ricerche.
+
+- **Validità:** le ricerche su RCSB e NCBI valgono 7 giorni, perché il PDB si aggiorna ogni settimana. Le altre
+  valgono finché non cambiano il database locale (pdbaa, MMseqs2), il programma usato o il contenuto delle
+  strutture.
+- **Ricalcolo:** in Ricerca, Allineamenti e Pipeline l'opzione **Ricalcola ignorando la cache** rifà il calcolo e
+  aggiorna il risultato salvato.
+- **Disattivazione e spazio:** da Impostazioni → Spazio e file temporanei, che mostra anche lo spazio occupato. La
+  cache sta in `data/cache/compute` e si pulisce da sola dopo 30 giorni.
+
 ## Cosa contiene
 
 | Area | Strumenti |

@@ -79,7 +79,8 @@ class ComputeService:
         rec = _record(p.get("query", {}), default="query")
         result = search.search(ctx, rec.sequence, engine=p.get("engine", "rcsb"),
                                evalue=float(p.get("evalue", 10.0)), max_hits=int(p.get("max_hits", 50)),
-                               databases_dir=self.databases_dir, taxid=str(p.get("taxid", "")).strip())
+                               databases_dir=self.databases_dir, taxid=str(p.get("taxid", "")).strip(),
+                               use_cache=bool(p.get("use_cache", True)))
         best = search.best_template(result["hits"])
         ctx.log(f"{len(result['hits'])} template trovati")
         return {**result, "query": rec.to_dict(), "best": best["template_id"] if best else None}
@@ -87,6 +88,7 @@ class ComputeService:
     # ------------------------------------------------------------------------------ allineamenti
     def handle_align(self, ctx: JobContext, p: dict) -> dict:
         mode = p.get("mode", "pairwise")
+        use_cache = bool(p.get("use_cache", True))  # il pairwise è istantaneo: niente cache
         if mode == "structural":
             structs = p.get("structures") or []
             if len(structs) != 2:
@@ -95,7 +97,9 @@ class ComputeService:
             res = align.structural(path_a, structs[0].get("chain"), path_b, structs[1].get("chain"), ctx,
                                    tool=p.get("tool", "auto"),
                                    names=(f"{label_a}{structs[0].get('chain') or ''}",
-                                          f"{label_b}{structs[1].get('chain') or ''}"))
+                                          f"{label_b}{structs[1].get('chain') or ''}"),
+                                   use_cache=use_cache)
+            # anche da un risultato in cache: il PDB sovrapposto è nel risultato e si riscrive identico
             if res.get("superposed_pdb"):
                 atomic_write_text(ctx.path("superposed.pdb"), res["superposed_pdb"])
                 res["superposed_file"] = "superposed.pdb"
@@ -117,7 +121,7 @@ class ComputeService:
             elif mode == "multiple":
                 if len(records) > 200:
                     raise AppError("Massimo 200 sequenze per l'allineamento multiplo.")
-                res = align.multiple(records, ctx, tool=p.get("tool", "auto"), kind=kind)
+                res = align.multiple(records, ctx, tool=p.get("tool", "auto"), kind=kind, use_cache=use_cache)
             else:
                 raise AppError(f"Modalità di allineamento sconosciuta: {mode}")
         if res.get("aligned"):

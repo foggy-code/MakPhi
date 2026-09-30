@@ -127,6 +127,7 @@ class SettingsUpdate(BaseModel):
     default_search_engine: str | None = None
     keep_intermediates: bool | None = None
     uploads_retention_days: int | None = None
+    compute_cache: bool | None = None
 
 
 @router.get("/settings")

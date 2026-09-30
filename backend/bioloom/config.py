@@ -66,6 +66,11 @@ class Paths:
         return self.data / "cache"
 
     @property
+    def compute_cache(self) -> Path:
+        """Risultati di ricerche e allineamenti (core/cache.py), dentro `cache`: stessa pulizia automatica."""
+        return self.cache / "compute"
+
+    @property
     def databases(self) -> Path:
         return self.data / "databases"
 
@@ -114,6 +119,8 @@ class UserSettings(BaseModel):
     default_search_engine: Literal["rcsb", "ncbi", "local", "mmseqs"] = "rcsb"
     keep_intermediates: bool = Field(False, description="Conserva i file intermedi di MODELLER nei risultati")
     uploads_retention_days: int = Field(30, ge=0, le=3650, description="Giorni di conservazione degli upload; 0 = sempre")
+    compute_cache: bool = Field(True, description="Riusa i risultati già calcolati di ricerche di template e "
+                                                  "allineamenti multipli e strutturali (cache dei calcoli)")
 
     @field_validator("contact_email")
     @classmethod
@@ -131,11 +138,18 @@ class UserSettings(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _migrate(cls, data):
-        """Impostazioni della 4.1.0: la modalità "auto" (locale, altrimenti SWISS-MODEL se consentito)
-        diventa "local" con il fallback su SWISS-MODEL attivo se l'invio era consentito."""
+        """Impostazioni delle versioni precedenti.
+
+        - 4.1.0: la modalità "auto" (locale, altrimenti SWISS-MODEL se consentito) diventa "local" con il
+          fallback su SWISS-MODEL attivo se l'invio era consentito.
+        - Cache dei calcoli: le impostazioni precedenti non hanno `compute_cache` e prendono il predefinito
+          (acceso); un valore nullo (file modificato a mano) fa lo stesso invece di azzerare tutte le impostazioni.
+        """
         if isinstance(data, dict) and data.get("qmean_mode") == "auto":
             data = {**data, "qmean_mode": "local"}
             data.setdefault("qmean_fallback_remote", bool(data.get("qmean_remote")))
+        if isinstance(data, dict) and "compute_cache" in data and data["compute_cache"] is None:
+            data = {k: v for k, v in data.items() if k != "compute_cache"}
         return data
 
     def remote_qmean_allowed(self) -> bool:

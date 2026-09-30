@@ -84,7 +84,9 @@ class SelfTestService:
         if search.local_database(self.databases_dir) is None:
             raise ToolUnavailable("programma presente, database pdbaa assente (Impostazioni → Database).")
         sub = ctx.sub("blast", workdir)
-        res = search.search(sub, YEAST, engine="local", evalue=1e-5, max_hits=5, databases_dir=self.databases_dir)
+        # la verifica deve eseguire davvero lo strumento: niente risultati dalla cache dei calcoli
+        res = search.search(sub, YEAST, engine="local", evalue=1e-5, max_hits=5, databases_dir=self.databases_dir,
+                            use_cache=False)
         best = search.best_template(res["hits"])
         return f"{len(res['hits'])} template, migliore {best['template_id'] if best else '-'}"
 
@@ -94,7 +96,8 @@ class SelfTestService:
         if search.mmseqs_database(self.databases_dir) is None:
             raise ToolUnavailable("programma presente, indice MMseqs2 non ancora preparato.")
         sub = ctx.sub("mmseqs", workdir)
-        res = search.search(sub, YEAST, engine="mmseqs", evalue=1e-5, max_hits=5, databases_dir=self.databases_dir)
+        res = search.search(sub, YEAST, engine="mmseqs", evalue=1e-5, max_hits=5, databases_dir=self.databases_dir,
+                            use_cache=False)
         best = search.best_template(res["hits"])
         return f"{len(res['hits'])} template, migliore {best['template_id'] if best else '-'}"
 
@@ -104,7 +107,7 @@ class SelfTestService:
             raise ToolUnavailable(f"{tools.TOOLS[tool]['label']} non installato.")
         sub = ctx.sub(tool, ctx.workdir / tool)
         res = align.multiple([SeqRecord("ubq", UBQ), SeqRecord("yeast", YEAST), SeqRecord("nedd8", NEDD8)],
-                             sub, tool=tool)
+                             sub, tool=tool, use_cache=False)
         return f"3 sequenze allineate in {len(res['aligned'][0])} colonne"
 
     @staticmethod
@@ -112,7 +115,7 @@ class SelfTestService:
         if not tools.find(tool):
             raise ToolUnavailable(f"{tools.TOOLS[tool]['label']} non installato.")
         sub = ctx.sub(tool, ctx.workdir / tool)
-        res = align.structural(ASSET, "A", ASSET, "A", sub, tool=tool, names=("1UBQ", "1UBQ"))
+        res = align.structural(ASSET, "A", ASSET, "A", sub, tool=tool, names=("1UBQ", "1UBQ"), use_cache=False)
         return f"1UBQ su se stessa: TM-score {res.get('tm_score')}, RMSD {res.get('rmsd')}"
 
     @staticmethod
