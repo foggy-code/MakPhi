@@ -260,3 +260,5 @@ Le prime cinque tappe danno il beneficio più visibile con il rischio più basso
 | Fase | Stato | Note |
 |---|---|---|
 | F0 | fatto | CI (`.github/workflows/ci.yml`), `scripts/test.sh` + `docker/test/Dockerfile`, ruff configurato, strutture sintetiche `ubq_dimer.pdb` e `ubq_zn.pdb` |
+| F1.1 | fatto | `core/cache.py`: ricerca, allineamento multiplo e strutturale; chiave con timbro di database/strumenti/file; TTL 7 giorni per RCSB/NCBI; `use_cache` e interruttore globale `compute_cache` |
+| F2.1 | fatto | `JobManager.requeue` atomico, `PipelineService.resume` (ambiti "incomplete"/"failed"), anche da pipeline completate con elementi falliti. Nessuno stato `interrupted`: un riavvio lascia `failed` e la ripresa vale per `failed`, `cancelled` e (solo pipeline) `completed`. Un elemento diventa `completed` solo dopo il salvataggio dei file |
