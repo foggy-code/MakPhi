@@ -59,7 +59,13 @@ def test_end_to_end_modeling(client_with_ubq):
     assert best["dope"] < -6000 and best["quality"]["grade"] in ("A", "B")
     report = c.get(f"/api/jobs/{job['id']}/quality/{best['file']}").json()
     assert report["dope"]["profile"] and report["residues"][0]["dope"] is not None
-    pml = c.get(f"/api/jobs/{job['id']}/pymol/{best['file']}").text
+    # consenso del modello: GA341 di MODELLER già nel rapporto salvato, e la rotta lo ricalcola uguale
+    methods = {m["key"]: m for m in report["consensus"]["methods"]}
+    assert {"grade", "zdope", "ga341"} <= set(methods) and methods["ga341"]["raw"] == pytest.approx(best["ga341"])
+    assert report["structure"]["bfactor_kind"] == "bfactor"
+    again = c.get(f"/api/jobs/{job['id']}/consensus/{best['file']}").json()
+    assert again["score"] == report["consensus"]["score"] and again["inputs"]["modeller"]["ga341"] == best["ga341"]
+    pml =c.get(f"/api/jobs/{job['id']}/pymol/{best['file']}").text
     assert "cmd.read_pdbstr" in pml
     pdb = c.get(f"/api/jobs/{job['id']}/files/{best['file']}").text
     assert "REMARK 999 BIOLOOM" in pdb

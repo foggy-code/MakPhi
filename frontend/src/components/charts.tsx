@@ -1,5 +1,7 @@
 import { useMemo, useState, type MouseEvent as RMouseEvent, type ReactNode } from "react";
-import type { QualityReport, RamaRect, ResidueRow } from "../api/types";
+import type { ConsensusRegion, ConsensusResult, QualityReport, RamaRect, ResidueRow } from "../api/types";
+import { colorFor } from "../lib/colorscale";
+import { CONSENSUS_SCALE, describeResidue, type ResidueColoring } from "../lib/residueColoring";
 
 // ---------------------------------------------------------------------------------- tooltip
 function useTooltip() {
@@ -114,23 +116,40 @@ export function SSStrip({ ss3 }: { ss3: string }) {
   );
 }
 
-type Metric = "dope" | "bfactor" | "rsa";
+type Metric = "dope" | "bfactor" | "rsa" | "plddt";
 const METRIC_INFO: Record<Metric, { label: string; unit: string; hint: string }> = {
-  dope: { label: "Energia DOPE per residuo", unit: "", hint: "Valori più alti (meno negativi) indicano regioni potenzialmente mal modellate." },
+  dope: { label: "Energia DOPE per residuo", unit: "", hint: "Media mobile calcolata da MODELLER (finestra 15): valori più alti (meno negativi) indicano regioni potenzialmente mal modellate." },
   bfactor: { label: "B-factor medio per residuo", unit: "Å²", hint: "Nei modelli MODELLER il B-factor non ha significato sperimentale." },
   rsa: { label: "Accessibilità relativa al solvente", unit: "", hint: "RSA < 0,2 = residuo sepolto." },
+  plddt: { label: "pLDDT per residuo (AlphaFold)", unit: "", hint: "Confidenza di AlphaFold nella colonna B-factor: > 90 molto alta, 70–90 alta, 50–70 bassa, < 50 molto bassa." },
 };
 
-export function ResidueProfile({ residues, metric, height = 200, onSelect }: { residues: ResidueRow[]; metric: Metric; height?: number; onSelect?: (r: ResidueRow) => void }) {
+interface ProfileProps {
+  residues: ResidueRow[];
+  metric?: Metric;
+  /** serie personalizzata (stesso ordine dei residui): sostituisce la metrica */
+  values?: (number | null)[];
+  label?: string;
+  hint?: string;
+  height?: number;
+  /** residuo selezionato (linea verticale) */
+  selected?: { chain: string; resnum: string } | null;
+  /** linea orizzontale di riferimento (es. soglia) */
+  threshold?: { value: number; label: string } | null;
+  onSelect?: (r: ResidueRow) => void;
+}
+
+export function ResidueProfile({ residues, metric = "dope", values: custom, label, hint, height = 200, selected, threshold, onSelect }: ProfileProps) {
   const tip = useTooltip();
   const [hover, setHover] = useState<number | null>(null);
-  const values = residues.map((r) => r[metric]);
+  const values = custom ?? residues.map((r) => (metric === "plddt" ? r.bfactor : r[metric]));
   const valid = values.filter((v): v is number => v !== null && v !== undefined);
   const W = 900;
   const pad = { l: 44, r: 10, t: 16, b: 24 };
   const n = residues.length;
-  const min = valid.length ? Math.min(...valid) : 0;
-  const max = valid.length ? Math.max(...valid) : 1;
+  const lim = threshold ? [...valid, threshold.value] : valid;
+  const min = lim.length ? Math.min(...lim) : 0;
+  const max = lim.length ? Math.max(...lim) : 1;
   const span = max - min || 1;
   const x = (i: number) => pad.l + (n <= 1 ? 0 : (i / (n - 1)) * (W - pad.l - pad.r));
   const y = (v: number) => pad.t + (1 - (v - min) / span) * (height - pad.t - pad.b);
@@ -147,10 +166,11 @@ export function ResidueProfile({ residues, metric, height = 200, onSelect }: { r
     });
     return d;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [residues, metric, min, max]);
+  }, [residues, metric, custom, min, max]);
   if (!valid.length) return <p className="muted small">Dato non disponibile per questa struttura.</p>;
   const ticks = 6;
-  const info = METRIC_INFO[metric];
+  const info = { ...METRIC_INFO[metric], ...(label ? { label, unit: "" } : {}), ...(hint !== undefined ? { hint } : {}) };
+  const selIndex = selected ? residues.findIndex((r) => r.chain === selected.chain && r.resnum === selected.resnum) : -1;
   return (
     <div className="stack-sm">
       <div className="row small">
@@ -172,11 +192,11 @@ export function ResidueProfile({ residues, metric, height = 200, onSelect }: { r
           if (i >= 0 && i < n) {
             setHover(i);
             const r = residues[i];
-            const v = r[metric];
+            const v = values[i];
             tip.show(e, (
               <>
                 <b>{r.resname} {r.chain}{r.resnum}</b>
-                <div>{info.label.split(" ")[0]}: {v === null ? "—" : v.toFixed(3)} {info.unit}</div>
+                <div>{info.label.split(" ")[0]}: {v === null || v === undefined ? "—" : v.toFixed(3)} {info.unit}</div>
                 <div className="muted">DSSP {r.ss} · Rama {r.rama ?? "—"}</div>
               </>
             ));
@@ -197,9 +217,144 @@ export function ResidueProfile({ residues, metric, height = 200, onSelect }: { r
           const i = Math.round((k / Math.max(1, Math.min(10, n) - 1)) * (n - 1));
           return <text key={k} x={x(i)} y={height - 6} textAnchor="middle">{residues[i]?.resnum}</text>;
         })}
+        {threshold && (
+          <g>
+            <line x1={pad.l} x2={W - pad.r} y1={y(threshold.value)} y2={y(threshold.value)} stroke="var(--warn)" strokeDasharray="5 4" />
+            <text x={W - pad.r} y={y(threshold.value) - 3} textAnchor="end" style={{ fill: "var(--warn)" }}>{threshold.label}</text>
+          </g>
+        )}
         <path d={path} fill="none" stroke="var(--accent)" strokeWidth={1.6} />
+        {selIndex >= 0 && <line x1={x(selIndex)} x2={x(selIndex)} y1={pad.t} y2={height - pad.b} stroke="var(--warn)" strokeWidth={2} />}
         {hover !== null && <line x1={x(hover)} x2={x(hover)} y1={pad.t} y2={height - pad.b} stroke="var(--text-2)" strokeDasharray="3 3" />}
       </svg>
+      {tip.node}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------------- striscia colorata per residuo
+export function ResidueStrip({ residues, coloring, selected, onSelect }: { residues: ResidueRow[]; coloring: ResidueColoring; selected?: { chain: string; resnum: string } | null; onSelect?: (r: ResidueRow) => void }) {
+  const tip = useTooltip();
+  const byKey = useMemo(() => new Map(coloring.values.map((v) => [`${v.chain}:${v.resnum}`, v])), [coloring]);
+  return (
+    <div>
+      <div className="res-strip" onMouseLeave={tip.hide}>
+        {residues.map((r) => {
+          const v = byKey.get(`${r.chain}:${r.resnum}`);
+          const sel = !!selected && selected.chain === r.chain && selected.resnum === r.resnum;
+          return (
+            <div
+              key={`${r.chain}${r.resnum}`}
+              className={sel ? "sel" : undefined}
+              style={{ background: colorFor(coloring.scale, v?.value ?? null) }}
+              onMouseMove={(e) => tip.show(e, <><b>{r.resname} {r.chain}{r.resnum}</b><div>{describeResidue(coloring, r)}</div></>)}
+              onClick={() => onSelect?.(r)}
+            />
+          );
+        })}
+      </div>
+      {tip.node}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------------- consenso per residuo
+const SIGNAL_COLOR: Record<string, string> = { rama: "#ef4444", clash: "#f59e0b", dope: "#a78bfa", qmean: "#38bdf8", prosa: "#34d399" };
+
+/** Segnalazioni dei metodi sovrapposte sullo stesso asse dei residui, numero di metodi e regioni problematiche. */
+export function ConsensusTracks({ residues, consensus, selected, onSelect, onRegion }: {
+  residues: ResidueRow[];
+  consensus: ConsensusResult;
+  selected?: { chain: string; resnum: string } | null;
+  onSelect?: (r: ResidueRow) => void;
+  onRegion?: (region: ConsensusRegion) => void;
+}) {
+  const tip = useTooltip();
+  const per = consensus.per_residue;
+  const n = residues.length;
+  if (!n || per.flags.length !== n) return <p className="muted small">Consenso per residuo non disponibile per questa struttura.</p>;
+  const W = 640;
+  const label = 118;
+  const rowH = 16;
+  const barsH = 44;
+  const signals = per.signals;
+  const top = 4;
+  const barsTop = top + signals.length * (rowH + 3) + 6;
+  const regionsTop = barsTop + barsH + 4;
+  const H = regionsTop + 12 + 16;
+  const cw = (W - label - 10) / n;
+  const x = (i: number) => label + i * cw;
+  const maxCount = Math.max(3, ...per.counts);
+  const selIndex = selected ? residues.findIndex((r) => r.chain === selected.chain && r.resnum === selected.resnum) : -1;
+  const pickAt = (e: RMouseEvent<SVGSVGElement>) => {
+    const box = e.currentTarget.getBoundingClientRect();
+    const i = Math.floor((((e.clientX - box.left) / box.width) * W - label) / cw);
+    return i >= 0 && i < n ? i : null;
+  };
+  return (
+    <div>
+      <svg
+        className="chart"
+        viewBox={`0 0 ${W} ${H}`}
+        onMouseMove={(e) => {
+          const i = pickAt(e);
+          if (i === null) return tip.hide();
+          const r = residues[i];
+          tip.show(e, (
+            <>
+              <b>{r.resname} {r.chain}{r.resnum}</b>
+              <div>{per.flags[i].length ? per.flags[i].map((k) => signals.find((s) => s.key === k)?.label ?? k).join(", ") : "nessuna segnalazione"}</div>
+            </>
+          ));
+        }}
+        onMouseLeave={tip.hide}
+        onClick={(e) => {
+          const i = pickAt(e);
+          if (i !== null) onSelect?.(residues[i]);
+        }}
+        style={{ cursor: onSelect ? "pointer" : "default" }}
+      >
+        {signals.map((s, k) => {
+          const yy = top + k * (rowH + 3);
+          return (
+            <g key={s.key}>
+              <text x={label - 8} y={yy + rowH - 3} textAnchor="end">{s.label} ({s.flagged})</text>
+              <rect x={label} y={yy} width={W - label - 10} height={rowH} fill="var(--panel-3)" rx={2} />
+              {per.flags.map((f, i) => (f.includes(s.key) ? <rect key={i} x={x(i)} y={yy} width={Math.max(1, cw)} height={rowH} fill={SIGNAL_COLOR[s.key]} /> : null))}
+            </g>
+          );
+        })}
+        <text x={label - 8} y={barsTop + barsH / 2 + 3} textAnchor="end">metodi</text>
+        <line className="grid-line" x1={label} x2={W - 10} y1={barsTop + barsH - (2 / maxCount) * barsH} y2={barsTop + barsH - (2 / maxCount) * barsH} />
+        {per.counts.map((c, i) => (c ? <rect key={i} x={x(i)} y={barsTop + barsH - (c / maxCount) * barsH} width={Math.max(1, cw)} height={(c / maxCount) * barsH} fill={colorFor(CONSENSUS_SCALE, c)} /> : null))}
+        {consensus.regions.map((r, k) => (
+          <rect
+            key={k}
+            x={x(r.start_index)}
+            y={regionsTop}
+            width={Math.max(2, x(r.end_index + 1) - x(r.start_index))}
+            height={10}
+            rx={3}
+            fill="var(--err)"
+            opacity={0.85}
+            onClick={(e) => {
+              e.stopPropagation();
+              onRegion?.(r);
+            }}
+          >
+            <title>{r.text}</title>
+          </rect>
+        ))}
+        <text x={label - 8} y={regionsTop + 9} textAnchor="end">regioni</text>
+        {selIndex >= 0 && <line x1={x(selIndex) + cw / 2} x2={x(selIndex) + cw / 2} y1={top} y2={regionsTop + 10} stroke="var(--text)" strokeWidth={1.5} strokeDasharray="3 2" />}
+        {Array.from({ length: Math.min(10, n) }, (_, k) => {
+          const i = Math.round((k / Math.max(1, Math.min(10, n) - 1)) * (n - 1));
+          return <text key={k} x={x(i) + cw / 2} y={H - 3} textAnchor="middle">{residues[i]?.resnum}</text>;
+        })}
+      </svg>
+      <div className="legend">
+        {signals.map((s) => <span key={s.key} title={s.rule}><i style={{ background: SIGNAL_COLOR[s.key] }} />{s.label}: {s.rule}</span>)}
+      </div>
       {tip.node}
     </div>
   );

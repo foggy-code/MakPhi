@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import shutil
 from dataclasses import asdict
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional
 
-from ..core.errors import AppError
+from ..core.errors import AppError, Conflict, NotFound
 from ..core.jobs import JobCancelled, JobContext, JobManager
 from ..core.storage import atomic_write_json, atomic_write_text, read_json, safe_join
-from ..domain import sequences
+from ..domain import consensus, sequences
 from ..domain.sequences import SeqRecord
 from ..engines import align, modeller, qmean_local, quality, remote, search
 from ..engines.modeller import TemplateSpec
-from .templates import TemplateLibrary
+from .templates import TemplateLibrary, normalize_id
 
 MAX_SEQUENCE = 5000
 
@@ -240,6 +240,8 @@ class ComputeService:
             report = quality.analyze(workdir / m["file"], sub, with_dope=True,
                                      dope_workdir=workdir / f"qa_{Path(m['file']).stem}",
                                      with_procheck=extended_quality, with_prosa=extended_quality)
+            # il consenso del modello include GA341 (e zDOPE, se il DOPE non è stato calcolato) di MODELLER
+            report["consensus"] = consensus.compute(report, modeller=m)
             atomic_write_json(workdir / f"{m['file']}.quality.json", report)
             m["quality"] = quality.summary_metrics(report)
             quality.inject_remarks(workdir / m["file"], [
@@ -365,6 +367,112 @@ class ComputeService:
                     raise AppError(f"QMEAN locale: {reason.rstrip('.')}. Fallback su SWISS-MODEL non riuscito: "
                                    f"{remote_exc.message}", code=remote_exc.code) from remote_exc
         return {"source": p.get("source"), "label": label, **result}
+
+    # ------------------------------------------------------------------------------ consenso
+    def consensus(self, job_id: str, model: Optional[str] = None, qmean_job: Optional[str] = None) -> dict:
+        """Consenso di qualità ricalcolato con i risultati che l'analisi da sola non ha.
+
+        * con `model`: rapporto `<model>.quality.json` di un job model, loop o pipeline;
+        * senza `model`: il job è un'analisi di qualità e il rapporto è il suo risultato.
+
+        Se la struttura è un modello salvato da un job, GA341 e zDOPE vengono dai risultati di MODELLER
+        (`models.json` accanto al modello). `qmean_job` aggiunge QMEAN (Z-score globale e punteggi locali) di un
+        job qmean completato sulla stessa struttura: una sorgente diversa è un errore, non un'esclusione
+        silenziosa, perché i punteggi di un'altra struttura renderebbero il consenso fuorviante.
+        """
+        job = self.jobs.get(job_id)
+        if model:
+            try:
+                report = read_json(self.jobs.file_path(job_id, f"{model}.quality.json"))
+            except NotFound:
+                report = None
+            if not isinstance(report, dict):
+                raise NotFound("Rapporto di qualità non disponibile per questo modello.")
+            source = {"type": "job", "job_id": job_id, "file": model}
+        else:
+            if job["kind"] != "quality":
+                raise AppError("Per questo job indica il file del modello di cui calcolare il consenso.",
+                               code="consensus_model_required")
+            if job["status"] != "completed" or not isinstance(job.get("result"), dict):
+                raise Conflict("L'analisi di qualità non è completata: il consenso non è ancora disponibile.")
+            report = job["result"]
+            source = (job.get("params") or {}).get("source")
+            source = source if isinstance(source, dict) else {}
+        modeller_metrics = self._modeller_metrics(source) if source.get("type") == "job" else None
+        qmean = self._qmean_result(qmean_job, source) if qmean_job else None
+        result = consensus.compute(report, qmean=qmean, modeller=modeller_metrics)
+        result["inputs"] = {
+            "source": source, "modeller": modeller_metrics,
+            "qmean": None if qmean is None else {"job_id": qmean_job, "source": qmean.get("source"),
+                                                 "method": qmean.get("method")},
+        }
+        return result
+
+    def _modeller_metrics(self, source: dict) -> Optional[dict]:
+        """GA341 e zDOPE di MODELLER per un modello salvato da un job (None se non è un modello MODELLER)."""
+        job_id = str(source.get("job_id") or "")
+        rel = PurePosixPath(str(source.get("file") or "").replace("\\", "/"))
+        if not job_id or not rel.name:
+            return None
+        entries: list = []
+        try:
+            data = read_json(self.jobs.file_path(job_id, (rel.parent / "models.json").as_posix()))
+        except AppError:
+            data = None
+        if isinstance(data, dict):
+            entries = list(data.get("models") or []) + list(data.get("loop_models") or [])
+        if not entries:  # models.json assente: il risultato del job (model, loop) elenca gli stessi valori
+            try:
+                result = self.jobs.get(job_id).get("result")
+            except AppError:
+                result = None
+            entries = list(result.get("models") or []) if isinstance(result, dict) else []
+        for entry in entries:
+            if isinstance(entry, dict) and PurePosixPath(str(entry.get("file") or "")).name == rel.name:
+                return {"ga341": entry.get("ga341"), "zdope": entry.get("zdope")}
+        return None
+
+    def _qmean_result(self, qmean_job: str, source: dict) -> dict:
+        job = self.jobs.get(qmean_job)
+        if job["kind"] != "qmean":
+            raise AppError(f"Il job {qmean_job} non è un calcolo QMEAN.", code="qmean_job_invalid")
+        if job["status"] != "completed" or not isinstance(job.get("result"), dict):
+            raise Conflict("Il calcolo QMEAN non è completato: il consenso non può ancora includerlo.")
+        # nel risultato "source" è il servizio (local/swissmodel): la struttura sta nei parametri del job
+        q_source = (job.get("params") or {}).get("source")
+        if not isinstance(q_source, dict) or source_key(q_source) != source_key(source):
+            raise AppError(f"Il calcolo QMEAN riguarda un'altra struttura ({describe_source(q_source)}, non "
+                           f"{describe_source(source)}): i suoi punteggi non valgono per questo modello.",
+                           code="qmean_source_mismatch")
+        return job["result"]
+
+
+def source_key(source: Optional[dict]) -> tuple:
+    """Identità di una sorgente di struttura, indipendente dalla forma in cui è scritta (maiuscole, "./")."""
+    source = source if isinstance(source, dict) else {}
+    kind = source.get("type")
+    if kind == "template":
+        try:
+            return ("template", normalize_id(str(source.get("id") or "")))
+        except AppError:
+            return ("template", "")
+    if kind == "job":
+        return ("job", str(source.get("job_id") or ""),
+                PurePosixPath(str(source.get("file") or "").replace("\\", "/")).as_posix())
+    if kind == "upload":
+        return ("upload", PurePosixPath(str(source.get("file") or "")).name)
+    return ("?",)
+
+
+def describe_source(source: Optional[dict]) -> str:
+    source = source if isinstance(source, dict) else {}
+    if source.get("type") == "template":
+        return f"template {source.get('id')}"
+    if source.get("type") == "job":
+        return f"{source.get('file')} del job {source.get('job_id')}"
+    if source.get("type") == "upload":
+        return f"file caricato {source.get('file')}"
+    return "sorgente sconosciuta"
 
 
 def load_quality_report(jobs: JobManager, job_id: str, model_file: str) -> Optional[dict]:

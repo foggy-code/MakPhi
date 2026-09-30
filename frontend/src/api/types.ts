@@ -530,6 +530,8 @@ export interface QualityReport {
     residues: number;
     heavy_atoms: number;
     chains_detail: ChainSummary[];
+    /** "plddt" = modello AlphaFold: la colonna B-factor contiene il pLDDT (0–100); assente nei rapporti precedenti */
+    bfactor_kind?: BfactorKind;
   };
   grade: { score: number; grade: string; penalties: { ramachandran: number; clashes: number; dope: number } };
   ramachandran: {
@@ -576,6 +578,70 @@ export interface QualityReport {
   prosa?: ProsaResult | null;
   residues: ResidueRow[];
   warnings: string[];
+  /** consenso tra i metodi (assente nei rapporti precedenti: si chiede alla rotta del consenso) */
+  consensus?: ConsensusResult;
+}
+
+export type BfactorKind = "plddt" | "bfactor";
+
+// ---------------------------------------------------------------------------------- consenso (domain/consensus.py)
+export type ConsensusMethodKey = "grade" | "zdope" | "ga341" | "qmean" | "prosa" | "procheck";
+export type ConsensusSignalKey = "rama" | "clash" | "dope" | "qmean" | "prosa";
+export type ConsensusBand = "buona" | "intermedia" | "scarsa";
+
+export interface ConsensusMethod {
+  key: ConsensusMethodKey;
+  label: string;
+  raw: number;
+  /** valore sulla scala comune 0–100 */
+  normalized: number;
+  weight: number;
+  band: ConsensusBand;
+  measures: string;
+  source: string;
+  /** punti della scala lineare a tratti: [valore grezzo, punteggio] */
+  points: [number, number][];
+}
+
+export interface ConsensusRegion {
+  chain: string;
+  start: string;
+  end: string;
+  /** indici (inclusi) in QualityReport.residues */
+  start_index: number;
+  end_index: number;
+  length: number;
+  flagged: number;
+  methods: ConsensusSignalKey[];
+  text: string;
+}
+
+export interface ConsensusResult {
+  version: number;
+  score: number | null;
+  band: ConsensusBand | null;
+  methods_used: number;
+  methods_total: number;
+  methods: ConsensusMethod[];
+  missing: { key: ConsensusMethodKey; label: string; reason: string }[];
+  discordances: { good: ConsensusMethodKey; poor: ConsensusMethodKey; text: string }[];
+  per_residue: {
+    signals: { key: ConsensusSignalKey; label: string; rule: string; flagged: number }[];
+    /** per ogni residuo (ordine di QualityReport.residues) i metodi che lo segnalano */
+    flags: ConsensusSignalKey[][];
+    counts: number[];
+    values: Partial<Record<"dope" | "qmean" | "prosa", (number | null)[]>>;
+    dope_threshold: number | null;
+  };
+  regions: ConsensusRegion[];
+  thresholds: Record<string, number>;
+  warnings: string[];
+  /** solo dalla rotta del consenso */
+  inputs?: {
+    source: StructureSource;
+    modeller: { ga341: number | null; zdope: number | null } | null;
+    qmean: { job_id: string; source: string | null; method: string | null } | null;
+  };
 }
 
 export interface ProcheckResult {

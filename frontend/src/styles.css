@@ -283,6 +283,24 @@ table.table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .viewer3d { position: relative; width: 100%; height: 420px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); background: #0b1120; }
 .viewer3d .overlay { position: absolute; left: 10px; bottom: 10px; display: flex; gap: 6px; flex-wrap: wrap; z-index: 2; }
 .viewer3d .overlay .btn { background: rgba(15, 23, 42, 0.82); border-color: rgba(148, 163, 184, 0.35); color: #e2e8f0; }
+.viewer3d .legend3d, .viewer3d .hover3d {
+  position: absolute; z-index: 2; background: rgba(15, 23, 42, 0.82); border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 8px; color: #e2e8f0; font-size: 11.5px; padding: 6px 9px; pointer-events: none;
+}
+.viewer3d .legend3d { right: 10px; top: 10px; width: 210px; display: grid; gap: 4px; }
+.viewer3d .legend3d .bar { height: 10px; border-radius: 3px; }
+.viewer3d .legend3d .ticks { position: relative; height: 14px; }
+.viewer3d .legend3d .ticks span { position: absolute; top: 1px; white-space: nowrap; color: #cbd5e1; font-size: 10.5px; }
+.viewer3d .legend3d .sw i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.viewer3d .hover3d { left: 10px; top: 10px; max-width: 60%; }
+.res-strip { display: flex; height: 14px; border-radius: 3px; overflow: hidden; cursor: pointer; }
+.res-strip > div { flex: 1; min-width: 0; }
+.res-strip > div.sel { outline: 2px solid var(--text); outline-offset: -2px; }
+.aln-seq span.aln-gap { background: rgba(248, 113, 113, 0.18); color: var(--muted); }
+.aln-seq span.aln-uncovered { box-shadow: inset 0 -2px 0 var(--err); }
+.aln-seq span.aln-twilight { box-shadow: inset 0 -2px 0 var(--warn); }
+.aln-track { display: flex; height: 12px; border-radius: 3px; overflow: hidden; margin: 0 0 2px; }
+.aln-track > div { flex: 1; min-width: 0; }
 
 .chart { width: 100%; display: block; }
 .chart text { fill: var(--muted); font-size: 10.5px; font-family: var(--font); }
