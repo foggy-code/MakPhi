@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
-from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
+from typing import Optional
 
+from fastapi import APIRouter, Depends
+from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel, Field
+
+from ..core.container import Core
 from ..core.errors import AppError
-from ..domain import secondary, sequences
+from ..domain import disorder, secondary, sequences
 from ..engines import remote
+from ..services.coverage import MAX_RANGES, MAX_TEMPLATES, CoverageService
+from .deps import get_core
 
 router = APIRouter(prefix="/api", tags=["Sequenze e banche dati"])
+
+# Testo massimo accettato per una sequenza o un PIR (spazi e intestazioni compresi): la lunghezza vera si controlla
+# sui residui (disorder.MAX_LENGTH); questo limite ferma solo i corpi enormi prima di ogni elaborazione.
+MAX_TEXT = 200_000
 
 
 class SequenceText(BaseModel):
@@ -34,6 +43,47 @@ def analyze_sequence(body: SequenceText) -> dict:
         out["properties"] = sequences.sequence_properties(seq)
         out["secondary_prediction"] = secondary.predict_gor(seq)
     return out
+
+
+class DisorderIn(BaseModel):
+    sequence: str = Field(..., max_length=MAX_TEXT)
+
+
+@router.post("/bio/disorder")
+def predict_disorder(body: DisorderIn) -> dict:
+    """Disordine per residuo (FoldIndex), regioni disordinate lunghe e regioni a bassa complessità (SEG) dalla sola
+    sequenza proteica (al massimo 5000 residui). Nessun servizio remoto."""
+    return disorder.predict(body.sequence)
+
+
+class TemplateIn(BaseModel):
+    id: str = Field(..., max_length=80)
+    chains: list[str] = Field(default_factory=list, max_length=26)
+
+
+class RangeIn(BaseModel):
+    label: str = Field("", max_length=80)
+    start: int
+    end: int
+
+
+class CoverageIn(BaseModel):
+    sequence: str = Field("", max_length=MAX_TEXT)
+    accession: Optional[str] = Field(None, max_length=20)
+    templates: list[TemplateIn] = Field(default_factory=list, max_length=MAX_TEMPLATES)
+    alignment: Optional[str] = Field(None, max_length=2_000_000)
+    ranges: list[RangeIn] = Field(default_factory=list, max_length=MAX_RANGES)
+    plddt_min: Optional[float] = Field(None, ge=0, le=100)
+
+
+@router.post("/bio/coverage")
+def coverage_check(body: CoverageIn, core: Core = Depends(get_core)) -> dict:
+    """Avvisi prima di modellare: regioni disordinate lunghe fuori dalla copertura dei template, domini (InterPro, solo
+    con l'accessione UniProt) non coperti o coperti in parte, con un suggerimento. La copertura viene dai template della
+    libreria (`templates`, insieme), da un PIR (`alignment`) o da intervalli del bersaglio (`ranges`, uno per uno)."""
+    return CoverageService(core.library).check(
+        sequence=body.sequence, accession=body.accession, templates=[t.model_dump() for t in body.templates],
+        alignment=body.alignment, ranges=[r.model_dump() for r in body.ranges], plddt_min=body.plddt_min)
 
 
 @router.post("/sequences/parse-fasta")

@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { JobSummary, SearchEngine, SearchHit, SearchResult, Sequence, Settings } from "../api/types";
 import { CachedBadge, RecomputeOption } from "../components/CacheOption";
+import { CoverageAlerts, useCoverageCheck } from "../components/CoverageAlerts";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { SequencePicker } from "../components/Pickers";
@@ -11,6 +12,7 @@ import {
   autoAccessionFor, type AutoAccession, followAccession, isUniProtAccession, normalizeAccession, plddtLabel, plddtTone,
 } from "../lib/alphafold";
 import { useProject, useToast } from "../lib/context";
+import { assessmentMap, coverageBadge, hitRanges, targetAccession } from "../lib/disorder";
 import { fmtEvalue, fmtNum, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
 
@@ -121,6 +123,15 @@ export default function Search() {
     });
   }, [result, filter, sort]);
   const inLibrary = new Set(library?.map((t) => t.id) ?? []);
+  // Disordine e domini del bersaglio rispetto al tratto allineato da ogni hit, prima di modellare (F5.5)
+  const coverageRequest = useMemo(() => {
+    if (!result?.hits.length) return null;
+    const accession = result.uniprot && isUniProtAccession(result.uniprot) ? normalizeAccession(result.uniprot) : targetAccession(result.query, projectSeqs);
+    return { sequence: result.query.sequence, accession: accession || null, ranges: hitRanges(result.hits.slice(0, 500)) };
+  }, [result, projectSeqs]);
+  const coverage = useCoverageCheck(coverageRequest, 0);
+  const assessments = useMemo(() => assessmentMap(coverage.check), [coverage.check]);
+  const bestAssessment = result?.best ? assessments.get(result.best) : undefined;
 
   const addToLibrary = async (hit: SearchHit) => {
     setFetching(hit.pdb_id);
@@ -218,6 +229,14 @@ export default function Search() {
               {result.engine === "alphafold" && !!result.notes?.length && result.hits.length > 0 && (
                 <div className="stack-sm" style={{ marginBottom: 8 }}>{result.notes.map((n, i) => <Alert key={i} tone="warn">{n}</Alert>)}</div>
               )}
+              {result.best && result.hits.length > 0 && (
+                <details className="small" style={{ marginBottom: 8 }} open={!!coverageBadge(bestAssessment)}>
+                  <summary>Disordine e domini del bersaglio con il template consigliato {result.best}{coverageBadge(bestAssessment) ? `: ${coverageBadge(bestAssessment)!.label}` : ""}</summary>
+                  <div style={{ marginTop: 6 }}>
+                    <CoverageAlerts check={coverage.check} assessment={bestAssessment} loading={coverage.loading} error={coverage.error} />
+                  </div>
+                </details>
+              )}
               {!hits.length ? (
                 result.hits.length ? <Empty icon="search" title="Nessun template corrisponde al filtro" />
                   : result.engine === "alphafold" ? (
@@ -242,13 +261,16 @@ export default function Search() {
                       </tr>
                     </thead>
                     <tbody>
-                      {hits.map((h) => (
+                      {hits.map((h) => {
+                        const badge = coverageBadge(assessments.get(h.template_id));
+                        return (
                         <Fragment key={h.template_id}>
                           <tr className="clickable" onClick={() => setExpanded(expanded === h.template_id ? null : h.template_id)}>
                             <td className="nowrap">
                               <b>{h.template_id}</b>{" "}
                               {h.template_id === result.best && <Badge tone="ok" title="Massimo identità × copertura">consigliato</Badge>}
                               {inLibrary.has(h.pdb_id) && <Badge tone="accent">in libreria</Badge>}
+                              {badge && <div style={{ marginTop: 3 }}><Badge tone={badge.tone} title={badge.title}>{badge.label}</Badge></div>}
                               {h.predicted && (
                                 <div className="row" style={{ gap: 4, marginTop: 3 }}>
                                   <Badge tone="warn" title="Modello di AlphaFold DB: non è una struttura sperimentale">modello predetto</Badge>
@@ -284,11 +306,17 @@ export default function Search() {
                           </tr>
                           {expanded === h.template_id && (
                             <tr>
-                              <td colSpan={7} style={{ background: "var(--panel-2)" }}><HitAlignment hit={h} /></td>
+                              <td colSpan={7} style={{ background: "var(--panel-2)" }}>
+                                <div className="stack-sm">
+                                  <HitAlignment hit={h} />
+                                  <CoverageAlerts check={coverage.check} assessment={assessments.get(h.template_id)} loading={coverage.loading} error={coverage.error} />
+                                </div>
+                              </td>
                             </tr>
                           )}
                         </Fragment>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

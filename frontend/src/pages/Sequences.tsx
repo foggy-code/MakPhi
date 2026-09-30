@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { InterProDomain, Sequence, SequenceAnalysis, UniProtEntry, UniProtHit } from "../api/types";
+import type { CoverageCheck, InterProDomain, Sequence, SequenceAnalysis, UniProtEntry, UniProtHit } from "../api/types";
 import { FeatureMap, SSStrip, StackBar, type Track } from "../components/charts";
 import { SequenceFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
 import { Alert, Badge, Card, Confirm, CopyButton, Empty, PageHead, Spinner, Stat, Tabs } from "../components/ui";
+import { sequenceAccession } from "../lib/alphafold";
 import { useProject, useToast } from "../lib/context";
+import { disorderSummary, featureTracks, lowComplexitySummary } from "../lib/disorder";
 import { fmtInt, fmtNum, relTime, wrapSequence } from "../lib/format";
 import { recordsToFasta } from "../lib/files";
 import { useAsync } from "../lib/hooks";
@@ -46,8 +48,13 @@ function SequenceDetail({ seq }: { seq: Sequence }) {
   const accession = (seq.meta?.accession as string) || "";
   const { data: entry } = useAsync<UniProtEntry | null>(() => (accession ? api.uniprot(accession) : Promise.resolve(null)), [accession]);
   const { data: domains } = useAsync<InterProDomain[] | null>(() => (accession ? api.uniprotDomains(accession).catch(() => []) : Promise.resolve(null)), [accession]);
+  // disordine, bassa complessità e domini riportati sulla sequenza (F5.5); domini solo con l'accessione UniProt
+  const protein = analysis?.kind === "protein";
+  const { data: features, error: featuresError } = useAsync<CoverageCheck | null>(
+    () => (protein ? api.coverage({ sequence: seq.sequence, accession: sequenceAccession(seq) || null }) : Promise.resolve(null)), [seq.id, protein]);
   const p = analysis?.properties;
   const pred = analysis?.secondary_prediction;
+  const dis = features?.disorder;
   return (
     <div className="stack">
       <Card
@@ -75,6 +82,27 @@ function SequenceDetail({ seq }: { seq: Sequence }) {
           <Stat label="GRAVY" value={fmtNum(p.gravy, 3)} note={p.gravy > 0 ? "idrofobica" : "idrofilica"} />
           <Stat label="Indice di instabilità" value={fmtNum(p.instability_index, 1)} note={p.instability_index > 40 ? "instabile in vitro (> 40)" : "stabile (≤ 40)"} />
         </div>
+      )}
+      {featuresError && <Alert tone="warn">Disordine e domini non disponibili: {featuresError.message}</Alert>}
+      {dis && features && (
+        <Card title="Disordine, bassa complessità e domini" sub={`${dis.method} · ${dis.low_complexity.method} · ${features.domains_info?.available ? `domini ${features.domains_info.source}` : "domini non noti"}`}>
+          <div className="stack-sm">
+            <FeatureMap length={dis.length} tracks={featureTracks({ disorder: dis, domains: features.domains_info?.available ? features.domains : null, gor: pred?.segments })} />
+            <p className="small text-2">{disorderSummary(dis)} {lowComplexitySummary(dis)}</p>
+            <p className="tiny muted">
+              Le regioni disordinate lunghe e i domini non coperti dal template saranno poco affidabili nel modello: Modellazione e Ricerca lo segnalano prima di lanciare.
+              {features.domains_info?.note ? ` ${features.domains_info.note}` : ""}
+            </p>
+            <details className="tiny muted">
+              <summary>Metodi e limiti</summary>
+              <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                <li>FoldIndex = {dis.scale.formula}, finestra di {dis.params.window} residui; sotto 0 probabilmente disordinato. Regioni di almeno {dis.params.min_region} residui, con al più {dis.params.max_gap} residui sopra 0 tollerati.</li>
+                <li>SEG: finestra {dis.low_complexity.params.window}, K1 {fmtNum(dis.low_complexity.params.k1, 1)} e K2 {fmtNum(dis.low_complexity.params.k2, 1)} bit.</li>
+                {dis.limits.map((l) => <li key={l}>{l}</li>)}
+              </ul>
+            </details>
+          </div>
+        </Card>
       )}
       {pred && (
         <Card title="Struttura secondaria predetta" sub={pred.method}>

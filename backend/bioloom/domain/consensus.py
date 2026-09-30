@@ -13,6 +13,11 @@ entra nel conto.
 3. **Consenso per residuo.** Per ogni residuo, i metodi che lo segnalano (`SIGNALS`); le regioni problematiche
    sono tratti di almeno 3 residui segnalati da almeno 2 metodi, con un residuo non segnalato tollerato tra due
    segnalati.
+4. **Disordine predetto** (F5.5, `disorder_signal`): le regioni disordinate lunghe predette dalla sequenza della
+   struttura (FoldIndex, `domain/disorder`) sono residui "attesi poco affidabili". È un segnale informativo: non
+   entra nel punteggio globale, né tra i metodi che segnalano un residuo, né nel conteggio delle regioni
+   problematiche; spiega quelle che vi cadono dentro (`expected`), come la coda disordinata di una proteina
+   costruita da MODELLER senza template.
 
 Il voto A–D (`domain/grading`) non cambia: il consenso è un campo in più del rapporto.
 """
@@ -24,9 +29,11 @@ import statistics
 from dataclasses import dataclass
 from typing import Optional
 
+from . import disorder as disorder_mod
 from . import perresidue
 
-VERSION = 1
+# 2: campo `disorder` e regioni problematiche con `expected`/`disorder_overlap` (F5.5)
+VERSION = 2
 
 GOOD = 70.0  # fascia buona: normalizzato ≥ 70
 POOR = 40.0  # fascia scarsa: normalizzato < 40
@@ -109,6 +116,13 @@ SIGNAL_LABEL = {k: label for k, label, _rule in SIGNALS}
 REGION_MIN_METHODS = 2
 REGION_MIN_RESIDUES = 3  # residui segnalati (il residuo tollerato non conta)
 REGION_MAX_GAP = 1  # residui non segnalati tollerati tra due segnalati
+# Disordine predetto: segnale informativo, fuori dal punteggio e dai metodi (domain/disorder, F5.5)
+DISORDER_LABEL = "Disordine predetto"
+DISORDER_RULE = (f"regione di almeno {disorder_mod.MIN_REGION} residui con FoldIndex < 0 (finestra di "
+                 f"{disorder_mod.FOLDINDEX_WINDOW} residui) predetta dalla sequenza: attesa poco affidabile; "
+                 "informativo, non entra nel punteggio")
+# Una regione problematica "cade" in una regione disordinata se almeno metà dei suoi residui è disordinata predetta
+DISORDER_OVERLAP = 0.5
 
 
 # ---------------------------------------------------------------------------------------------- scale
@@ -285,6 +299,66 @@ def _consecutive(a: dict, b: dict) -> bool:
     return na is None or nb is None or 0 <= nb - na <= 1
 
 
+# ---------------------------------------------------------------------------------------------- disordine predetto
+def disorder_signal(residues: list[dict]) -> Optional[dict]:
+    """Regioni disordinate lunghe predette dalla sequenza della struttura, allineate a `residues` (F5.5).
+
+    FoldIndex (`domain/disorder`) si calcola per catena sulle lettere dei residui presenti nel file, nell'ordine del
+    rapporto: per un modello di MODELLER è la sequenza intera del bersaglio; in una struttura sperimentale con residui
+    mancanti la finestra scorre sui soli residui presenti (approssimazione). None senza residui.
+    """
+    n = len(residues)
+    if not n:
+        return None
+    scores: list[Optional[float]] = [None] * n
+    flags = [False] * n
+    blocks: list[list[int]] = []  # tratti contigui della stessa catena
+    for i, r in enumerate(residues):
+        if blocks and residues[blocks[-1][-1]].get("chain") == r.get("chain"):
+            blocks[-1].append(i)
+        else:
+            blocks.append([i])
+    regions = []
+    for block in blocks:
+        seq = "".join((str(residues[i].get("aa") or "X")[:1]).upper() for i in block)
+        values, mask = disorder_mod.residue_mask(seq)
+        for k, i in enumerate(block):
+            scores[i] = None if values[k] is None else round(values[k], 4)
+            flags[i] = mask[k]
+        for a, b in disorder_mod.ranges(mask):
+            i0, i1 = block[a], block[b]
+            chain = residues[i0].get("chain")
+            first, last = residues[i0].get("resnum"), residues[i1].get("resnum")
+            span = first if first == last else f"{first}-{last}"
+            regions.append({"chain": chain, "start": first, "end": last, "start_index": i0, "end_index": i1,
+                            "length": b - a + 1, "text": f"{span} (catena {chain})"})
+    flagged = sum(flags)
+    if regions:
+        text = (f"{DISORDER_LABEL} dalla sequenza ({disorder_mod.METHOD}) in {_join([r['text'] for r in regions])}: "
+                f"{flagged} residui ({_num(100 * flagged / n, 0)}%), attesi poco affidabili. È un segnale informativo: "
+                "non abbassa il punteggio e non conta tra i metodi.")
+    else:
+        text = (f"Nessuna regione disordinata lunga predetta dalla sequenza ({disorder_mod.METHOD}, almeno "
+                f"{disorder_mod.MIN_REGION} residui con FoldIndex < 0).")
+    return {"key": "disorder", "label": DISORDER_LABEL, "rule": DISORDER_RULE, "method": disorder_mod.METHOD,
+            "informative": True, "scores": scores, "flags": flags, "flagged": flagged,
+            "fraction": round(flagged / n, 4), "regions": regions, "text": text,
+            "limits": list(disorder_mod.LIMITS)}
+
+
+def annotate_regions(regions: list[dict], disorder: Optional[dict]) -> None:
+    """Segna le regioni problematiche che cadono in una regione disordinata predetta (almeno metà dei residui):
+    `disorder_overlap` (residui in comune), `expected` e la spiegazione nel testo."""
+    flags = (disorder or {}).get("flags") or []
+    for region in regions:
+        span = range(region["start_index"], region["end_index"] + 1)
+        overlap = sum(1 for i in span if i < len(flags) and flags[i])
+        region["disorder_overlap"] = overlap
+        region["expected"] = bool(overlap) and overlap >= DISORDER_OVERLAP * region["length"]
+        if region["expected"]:
+            region["text"] += ", in una regione disordinata predetta (attesa poco affidabile)"
+
+
 # ---------------------------------------------------------------------------------------------- rapporto
 def compute(report: dict, *, qmean: Optional[dict] = None, modeller: Optional[dict] = None) -> dict:
     """Consenso di un rapporto di `engines/quality.analyze`, più QMEAN e i risultati di MODELLER se disponibili.
@@ -311,6 +385,9 @@ def compute(report: dict, *, qmean: Optional[dict] = None, modeller: Optional[di
     warnings += [w for w in (q_warn, p_warn) if w]
     per_residue = residue_flags(residues, qmean_local=q_local, prosa_w10=p_w10)
     regions = problem_regions(residues, per_residue["flags"])
+    # disordine predetto: spiega le regioni problematiche, non cambia punteggio, segnali né regioni
+    disorder = disorder_signal(residues)
+    annotate_regions(regions, disorder)
     if result["methods_used"] == 1:
         warnings.append("Un solo metodo disponibile: il consenso coincide con quel metodo.")
     return {
@@ -319,9 +396,12 @@ def compute(report: dict, *, qmean: Optional[dict] = None, modeller: Optional[di
         "discordances": discordances(result["methods"]),
         "per_residue": per_residue,
         "regions": regions,
+        "disorder": disorder,
         "thresholds": {"good": GOOD, "poor": POOR, "qmean_local": QMEAN_LOCAL_THRESHOLD,
                        "prosa_window": PROSA_THRESHOLD, "dope_window": DOPE_WINDOW,
                        "dope_sd_factor": DOPE_SD_FACTOR, "region_min_methods": REGION_MIN_METHODS,
-                       "region_min_residues": REGION_MIN_RESIDUES, "region_max_gap": REGION_MAX_GAP},
+                       "region_min_residues": REGION_MIN_RESIDUES, "region_max_gap": REGION_MAX_GAP,
+                       "disorder_threshold": disorder_mod.THRESHOLD, "disorder_window": disorder_mod.FOLDINDEX_WINDOW,
+                       "disorder_min_region": disorder_mod.MIN_REGION, "disorder_overlap": DISORDER_OVERLAP},
         "warnings": warnings,
     }

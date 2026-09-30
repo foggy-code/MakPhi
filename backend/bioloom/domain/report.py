@@ -27,6 +27,7 @@ from typing import Any, Iterable, Optional
 
 from ..core.errors import AppError
 from . import consensus as consensus_mod
+from . import disorder as disorder_mod
 from . import plddt, ramachandran, sequences
 
 # ---------------------------------------------------------------------------------------------- immagine 3D
@@ -387,9 +388,10 @@ def _x_axis(residues: list[dict], x, top: float, bottom: float) -> list[str]:
 def profile_svg(residues: list[dict], values: list[Optional[float]], *, title: str,
                 threshold: Optional[float] = None, threshold_label: str = "", flag_above: bool = True,
                 y_range: Optional[tuple[float, float]] = None, guides: Iterable[tuple[float, str]] = (),
-                digits: int = 2) -> str:
+                digits: int = 2, mark: bool = True, shade: Iterable[tuple[int, int, str]] = ()) -> str:
     """Profilo per residuo (linea interrotta tra catene e numerazioni non consecutive), con soglia tratteggiata e i
-    residui oltre la soglia (sopra se `flag_above`, altrimenti sotto) segnati in rosso. '' se mancano i valori."""
+    residui oltre la soglia (sopra se `flag_above`, altrimenti sotto) segnati in rosso (`mark`). `shade`: tratti
+    (indice iniziale, finale, descrizione) evidenziati sullo sfondo. '' se mancano i valori."""
     n = len(residues)
     vals = [float(v) if _isnum(v) else None for v in values[:n]] + [None] * max(0, n - len(values))
     numeric = [v for v in vals if v is not None]
@@ -414,6 +416,10 @@ def profile_svg(residues: list[dict], values: list[Optional[float]], *, title: s
     out = [_svg_open(width, height, title),
            f'<text x="{pl}" y="14" font-size="11" font-weight="bold" fill="#1f2933">{_e(title)}</text>',
            f'<rect x="{pl}" y="{pt}" width="{pw}" height="{ph}" fill="#f7f9fb" stroke="#9aa5b1"/>']
+    for a, b, label in shade:
+        x0, x1 = max(pl, x(a - 0.5)), min(pl + pw, x(b + 0.5))
+        out.append(f'<rect class="shade" x="{_f(x0)}" y="{pt}" width="{_f(max(1.0, x1 - x0))}" height="{ph}" '
+                   f'fill="#fbe3e1"><title>{_e(label)}</title></rect>')
     for value, label in guides:
         out.append(f'<line x1="{pl}" x2="{pl + pw}" y1="{_f(y(value))}" y2="{_f(y(value))}" stroke="#c4cdd5"/>')
         out.append(f'<text x="{pl + pw - 2}" y="{_f(y(value) - 2)}" text-anchor="end" fill="#7b8794">'
@@ -438,12 +444,26 @@ def profile_svg(residues: list[dict], values: list[Optional[float]], *, title: s
             out.append(f'<text x="{pl + pw - 2}" y="{_f(ty - 3)}" text-anchor="end" fill="#c62828">'
                        f'{_e(threshold_label)}</text>')
         for i, v in enumerate(vals):
-            if v is not None and (v > threshold if flag_above else v < threshold):
+            if mark and v is not None and (v > threshold if flag_above else v < threshold):
                 out.append(f'<circle class="flag" cx="{_f(x(i))}" cy="{_f(y(v))}" r="2.2" fill="#c62828">'
                            f'<title>{_e(_residue_label(residues[i]))}: {_num(v, digits)}</title></circle>')
     out.extend(_x_axis(residues, x, pt, pt + ph))
     out.append("</svg>")
     return "".join(out)
+
+
+DISORDER_TITLE = "Disordine predetto (FoldIndex, finestra di 51 residui)"
+
+
+def disorder_svg(residues: list[dict], scores: list[Optional[float]], flags: list[bool]) -> str:
+    """Profilo di FoldIndex del consenso (F5.5): soglia 0 (sotto: probabilmente disordinato) e, sullo sfondo, le
+    regioni disordinate lunghe. I singoli residui sotto 0 non si segnano: conta la regione di almeno 30 residui."""
+    shade = []
+    for a, b in disorder_mod.ranges(flags[:len(residues)]):
+        first, last = residues[a].get("resnum"), residues[b].get("resnum")
+        shade.append((a, b, f"regione disordinata predetta {first}-{last} (catena {residues[a].get('chain')})"))
+    return profile_svg(residues, scores, title=DISORDER_TITLE, threshold=0.0, threshold_label="0 (sotto: disordine)",
+                       flag_above=False, mark=False, shade=shade, digits=2)
 
 
 def ss_strip_svg(residues: list[dict]) -> str:
@@ -566,6 +586,15 @@ REFERENCES = {
     "tien": "Tien M.Z., Meyer A.G., Sydykova D.K., Spielman S.J., Wilke C.O. (2013) Maximum allowed solvent "
             "accessibilites of residues in proteins. PLoS ONE 8:e80635.",
     "rost": "Rost B. (1999) Twilight zone of protein sequence alignments. Protein Eng. 12:85–94.",
+    "foldindex": "Prilusky J., Felder C.E., Zeev-Ben-Mordehai T., Rydberg E.H., Man O., Beckmann J.S., Silman I., "
+                 "Sussman J.L. (2005) FoldIndex: a simple tool to predict whether a given protein sequence is "
+                 "intrinsically unfolded. Bioinformatics 21:3435–3438.",
+    "uversky": "Uversky V.N., Gillespie J.R., Fink A.L. (2000) Why are 'natively unfolded' proteins unstructured "
+               "under physiologic conditions? Proteins 41:415–427.",
+    "kyte": "Kyte J., Doolittle R.F. (1982) A simple method for displaying the hydropathic character of a protein. "
+            "J. Mol. Biol. 157:105–132.",
+    "ward": "Ward J.J., Sodhi J.S., McGuffin L.J., Buxton B.F., Jones D.T. (2004) Prediction and functional analysis "
+            "of native disorder in proteins from the three kingdoms of life. J. Mol. Biol. 337:635–645.",
 }
 
 LEGEND = {
@@ -616,6 +645,13 @@ LEGEND = {
               "predizione, non una struttura sperimentale."),
     "ss": ("Struttura secondaria", "assegnazione DSSP (Kabsch & Sander 1983) ridotta a 3 stati: elica (H, G, I), "
            "filamento β (E, B), coil (T, S e il resto)."),
+    "disorder": ("Disordine predetto", "FoldIndex (Prilusky et al. 2005) dalla sola sequenza della struttura: "
+                 "2,785·⟨H⟩ − |⟨R⟩| − 1,151 su una finestra di 51 residui, con ⟨H⟩ idropatia media di Kyte-Doolittle "
+                 "su 0–1 e ⟨R⟩ carica netta media (confine carica-idropatia di Uversky et al. 2000); sotto 0 "
+                 "probabilmente disordinato. Regioni di almeno 30 residui (Ward et al. 2004), con al più 3 residui sopra "
+                 "0 tollerati: attese poco affidabili nel modello. Segnale informativo, fuori dal punteggio di "
+                 "consenso. Metodo semplice, molto meno accurato dei predittori moderni (IUPred2A, deep learning): non "
+                 "vede il disordine con composizione da proteina ripiegata né il contesto (partner, cofattori)."),
     "sasa": ("SASA relativa", "superficie accessibile al solvente (Shrake & Rupley 1973 o mkdssp) divisa per l'area "
              "massima del residuo (Tien et al. 2013); sepolto sotto il 20%."),
 }
@@ -1082,6 +1118,11 @@ def _consensus_block(doc: _Doc, cons: Optional[dict]) -> None:
                           f"{_e(r.get('length'))}</li>" for r in regions), "</ul>")
     else:
         doc.add('<p class="small muted">Nessun tratto di almeno 3 residui segnalato da almeno 2 metodi.</p>')
+    dis = cons.get("disorder") if isinstance(cons.get("disorder"), dict) else {}
+    if dis.get("regions"):  # segnale informativo (F5.5): spiega le regioni problematiche, non penalizza
+        doc.add(_note(_e(dis.get("text")), "warn"))
+        doc.explain("disorder")
+        doc.cite("foldindex", "uversky", "kyte", "ward")
     signals = ((cons.get("per_residue") or {}).get("signals")) or []
     if signals:
         doc.add(_table([("Segnale per residuo", False), ("Regola", False), ("Residui segnalati", True)],
@@ -1159,12 +1200,22 @@ def _profiles_block(doc: _Doc, quality: dict, cons: Optional[dict]) -> None:
                                 y_range=(0.0, 100.0), digits=0, guides=((90.0, "90"), (70.0, "70"), (50.0, "50"))))
         doc.explain("plddt")
         doc.cite("alphafold", "afdb", "lddt")
+    dis = (cons or {}).get("disorder") if isinstance((cons or {}).get("disorder"), dict) else {}
+    scores = dis.get("scores") or []
+    disorder_fig = ""
+    if len(scores) == len(residues) and sum(1 for v in scores if _isnum(v)) >= 2:  # accanto ai profili (F5.5)
+        disorder_fig = disorder_svg(residues, scores, dis.get("flags") or [])
+        figs.append(disorder_fig)
+        doc.explain("disorder")
+        doc.cite("foldindex", "uversky", "kyte", "ward")
     figs = [f for f in figs if f]
     doc.add('<h3 id="profili">Profili per residuo</h3>')
     if figs:
         doc.add(*(f"<figure>{f}</figure>" for f in figs))
         doc.add('<p class="small muted">Linea rossa tratteggiata: soglia; punti rossi: residui oltre la soglia. La linea '
-                "si interrompe tra catene e dove la numerazione salta.</p>")
+                "si interrompe tra catene e dove la numerazione salta."
+                + (" Disordine predetto: sfondo rosa = regione disordinata lunga predetta dalla sequenza (attesa poco "
+                   "affidabile nel modello)." if disorder_fig else "") + "</p>")
     else:
         doc.add('<p class="small muted">Nessun profilo per residuo disponibile (DOPE non calcolato).</p>')
 

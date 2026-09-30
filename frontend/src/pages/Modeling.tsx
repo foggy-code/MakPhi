@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { DocumentItem, JobSummary, LoopResult, ModelEntry, ModelResult, PreparedTemplate, Sequence, StructureSource, SystemInfo, TemplateItem, TemplateRef } from "../api/types";
 import { AlignmentView } from "../components/AlignmentView";
+import { CoverageAlerts, useCoverageCheck } from "../components/CoverageAlerts";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { TextFileButton } from "../components/FileLoad";
@@ -15,6 +16,7 @@ import { PlddtOption } from "../components/PlddtOption";
 import { hasPredictedTemplate, PLDDT_DEFAULT, removedRanges, trimSummary } from "../lib/alphafold";
 import { compareTargets } from "../lib/compare";
 import { useProject, useToast } from "../lib/context";
+import { modelingCoverageRequest, targetAccession } from "../lib/disorder";
 import { fileStem, formatRestraints, parseRestraints, type RestraintRow } from "../lib/files";
 import { downloadText, fmtNum, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
@@ -233,6 +235,23 @@ export default function Modeling() {
   const { data: docs, reload: reloadDocs } = useAsync<DocumentItem[]>(() => (projectId ? api.documents(projectId) : Promise.resolve([])), [projectId]);
   const { data: recent } = useAsync<JobSummary[]>(() => api.jobs({ project_id: projectId ?? undefined, kind: "model", limit: 8 }), [projectId, jobId]);
   const { job, summary, log, cancel } = useJob<ModelResult | LoopResult>(jobId, { withLog: true });
+  // Disordine e domini prima di lanciare (F5.5): accessione dalla sequenza del progetto o dall'intestazione sp|ACC|…
+  const { data: projectSeqs } = useAsync<Sequence[]>(() => (projectId ? api.sequences(projectId) : Promise.resolve([])), [projectId]);
+  const [pirText, setPirText] = useState<string | null>(null);
+  useEffect(() => {
+    setPirText(null);
+    if (mode !== "pir" || !docId || !projectId) return;
+    let current = true;
+    api.document(projectId, docId).then((d) => current && setPirText(d.content ?? "")).catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [mode, docId, projectId]);
+  const coverageRequest = useMemo(() => modelingCoverageRequest({
+    mode, target, templates, pirText, accession: targetAccession(target, projectSeqs),
+    plddtMin: predictedChosen && plddtTrim ? plddtMin : null,
+  }), [mode, target, templates, pirText, projectSeqs, predictedChosen, plddtTrim, plddtMin]);
+  const coverage = useCoverageCheck(coverageRequest);
 
   // Parametri in arrivo da altre pagine (sequenza, template, documento PIR).
   useEffect(() => {
@@ -359,6 +378,12 @@ export default function Modeling() {
                 <span className="small text-2" style={{ fontWeight: 550 }}>Template {mode === "pir" && "(stessi del PIR, nello stesso ordine)"}</span>
                 <TemplatePicker value={templates} onChange={setTemplates} />
               </div>
+              {coverageRequest && (
+                <div className="stack-sm">
+                  <span className="small text-2" style={{ fontWeight: 550 }}>Disordine e domini del bersaglio</span>
+                  <CoverageAlerts check={coverage.check} assessment={coverage.check?.combined} loading={coverage.loading} error={coverage.error} />
+                </div>
+              )}
             </div>
           </Card>
           <Card title="Parametri">

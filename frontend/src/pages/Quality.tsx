@@ -319,6 +319,8 @@ function ConsensusPanel({ report, consensus, error, selected, onSelect, onRegion
               ))}
             </div>
           ) : <p className="small muted">Nessun tratto di almeno 3 residui segnalato da almeno 2 metodi.</p>}
+          {/* disordine predetto dalla sequenza (F5.5): spiega le regioni, non entra nel punteggio */}
+          {!!c.disorder?.regions.length && <Alert tone="info">{c.disorder.text}</Alert>}
           <ConsensusTracks residues={report.residues} consensus={c} selected={selected} onSelect={onSelect} onRegion={onRegion} />
         </div>
         {c.warnings.map((w, k) => <p key={k} className="tiny muted">{w}</p>)}
