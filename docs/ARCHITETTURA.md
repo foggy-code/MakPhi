@@ -95,7 +95,7 @@ data/
 
 | Pacchetto | Contenuto |
 |---|---|
-| `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi), `eta` (stima del tempo residuo), `events` (notifiche in-process dei cambiamenti dei job) |
+| `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi), `eta` (stima del tempo residuo), `events` (notifiche in-process dei cambiamenti dei job), `parallel` (passi indipendenti di un calcolo su un pool locale di thread, vedi [Prestazioni](#prestazioni)) |
 | `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file) |
 | `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB), `remote` (client HTTP), `tools` (rilevamento strumenti, preambolo di licenza) |
 | `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job) |
@@ -265,8 +265,11 @@ indicare un altro interprete (`BIOLOOM_MODELLER_PYTHON`). Flusso di un job `mode
 3. **AutoModel / DOPELoopModel** con raffinamento (`very_fast`/`fast`/`normal`/`thorough`), vincoli di
    struttura secondaria e di distanza, regioni di loop, seme casuale. I risultati (`molpdf`, DOPE, GA341,
    zDOPE) sono scritti in `models.json` direttamente da `a.outputs`.
-4. **Selezione e qualità**: modello migliore = DOPE minimo; analisi completa sul migliore (o su tutti), con
-   righe `REMARK 999 BIOLOOM` di tracciabilità nel PDB.
+4. **Selezione e qualità**: modello migliore = DOPE minimo; analisi completa sul migliore (o su tutti, fino a 3
+   modelli insieme), con righe `REMARK 999 BIOLOOM` di tracciabilità nel PDB.
+
+Nella pipeline un template usato da più elementi si prepara una volta per esecuzione e gli altri ne ricevono una copia
+(vedi [Prestazioni](#prestazioni)).
 
 ### Validazione di qualità (`engines/quality.py`)
 
@@ -281,6 +284,30 @@ indicare un altro interprete (`BIOLOOM_MODELLER_PYTHON`). Flusso di un job `mode
 | PROCHECK | `procheck.scr` (csh + Fortran compilato nell'immagine): Ramachandran a 4 regioni, G-factor, parametri di legame; grafici PostScript tra i file del job |
 | ProSA II | z-score combinato, di coppia e di superficie; profilo di energia per residuo (finestra 1 e 10) |
 | QMEAN | su richiesta. **Locale**: worker nel container `qmean` (HHblits su UniClust30/UniRef30 di qualunque versione; QMEANDisCo se c'è la QMTL), un calcolo alla volta, annullabile. **Remoto**: SWISS-MODEL, con email e consenso esplicito. Modalità `local` / `remote`, più **fallback facoltativo** dal locale a SWISS-MODEL (impostazione o scelta del singolo calcolo) |
+
+**Esecuzione dei passi** (`quality.analyze`, `core/parallel.Steps`). La struttura si legge una volta; poi partono insieme
+i sottoprocessi (DOPE di MODELLER, mkdssp, PROCHECK, ProSA) e i calcoli Python (Ramachandran, clash, SASA; il DSSP
+integrato se mkdssp manca), su un pool di thread del singolo calcolo. QMEAN resta un job a parte (memoria).
+
+- **Stesso rapporto della versione seriale:** gli esiti si leggono e gli avvisi si aggiungono nell'ordine di prima
+  (Ramachandran, clash, struttura secondaria, SASA, DOPE, PROCHECK, ProSA), qualunque sia l'ordine in cui i passi
+  finiscono; `analyze(parallel=False)` esegue gli stessi passi uno dopo l'altro e i test confrontano i due rapporti.
+  I passi leggono lo stesso modello di Biopython senza modificarlo: la SASA e la lettura dell'uscita di mkdssp (che
+  registra i risultati sui residui e sceglie le varianti dei residui disordinati) lavorano su una copia.
+- **Processi:** tutti da `JobContext.run` (budget di CPU del JobManager, annullamento, timeout), ognuno con un contesto
+  figlio: le righe di log di un passo hanno il suo prefisso (`[DOPE] …`, `[PROCHECK] …`) e cartelle proprie (`dope/` o
+  la cartella del modello, `procheck/`, `prosa/`, temporanea per mkdssp). mkdssp non è più lanciato da Biopython: lo
+  stesso comando (`mkdssp --output-format=dssp`, dalla versione 4) scrive su file e Biopython legge l'uscita
+  (`DSSP(..., file_type="DSSP")`); la versione di mkdssp si chiede una volta per eseguibile.
+- **Errori e annullamento:** un passo che fallisce dà lo stesso avviso di prima e gli altri continuano; un errore
+  inatteso fa fallire l'analisi come prima. All'annullamento il JobManager termina i processi, i passi in coda non
+  partono e l'analisi aspetta la fine di quelli in corso prima di uscire.
+- **Log:** a fine analisi una riga con la durata dei passi, per esempio "Analisi di qualità in 1.14 s (passi in
+  parallelo: lettura 0.01, Ramachandran 0.20, clash 0.20, mkdssp 0.25, SASA 0.16, DOPE 1.10, PROCHECK 0.36, ProSA
+  0.10 s)". Con i passi insieme ognuno dura un po' di più (GIL, core condivisi): conta il totale.
+- **Più modelli** (qualità "Su tutti i modelli"): `run_modeling` ne analizza fino a 3 insieme (non oltre i job
+  paralleli delle Impostazioni), ognuno con il proprio contesto; metriche, rapporti e REMARK restano nell'ordine dei
+  modelli, e il primo modello fallito in quell'ordine fa fallire il job come prima.
 
 ### QMEAN locale con qualunque versione di UniClust30 (`docker/qmean/uniclust.py`)
 
@@ -591,6 +618,125 @@ ricerche. Il pairwise è istantaneo e non passa dalla cache.
   (`search_cached_at`, badge "cache" nella tabella) e il risultato del job conta le ricerche riusate
   (`search_cache_hits`).
 
+### Prestazioni
+
+Profilazione dei job con MODELLER reale (F1.2, F1.3) e ottimizzazioni applicate solo dove la misura dava un guadagno.
+Lo strumento è `tests/perf_timing.py`, fuori dalla suite: `scripts/test.sh backend tests/perf_timing.py -s`.
+
+- **Cosa misura:** `test_profile` avvolge con monkeypatch le funzioni dei passi (nessuna modifica al codice misurato)
+  e misura il tempo reale del job dall'avvio alla chiusura dell'esecuzione (`JobManager._execute`); i tempi dei
+  singoli modelli vengono dai marcatori `@@BIOLOOM` di `model.py`. `test_paired` alterna due varianti nello stesso
+  processo (A B A B …), così il carico della macchina pesa allo stesso modo su entrambe. `test_profile_modeller_startup`
+  misura il costo fisso di un processo MODELLER.
+- **Condizioni:**
+  - container di test `bioloom-test:4.1.0` (MODELLER 10.8, mkdssp 4.2.2, PROCHECK; ProSA senza licenza, quindi si
+    ferma subito con l'avviso);
+  - Docker Desktop su Windows 11, 4 CPU logiche (Intel i3-1115G4: 2 core con hyper-threading) e 5,7 GB per Docker;
+  - template 1UBQ (catena A) e bersaglio ubiquitina di lievito (76 residui, 96 % di identità), ricerca simulata
+    (un hit 1UBQ), raffinamento `fast`;
+  - "prima" = codice a0e410b, "dopo" = questa versione, lanciati alternati per scenario (due giri da 3 esecuzioni
+    ciascuno). Si riporta la mediana, in secondi; il minimo differisce di meno di 0,5 s. Un primo giro con altri
+    container di test attivi sulla stessa macchina dava tempi fino a +40 % su tutti i passi, per entrambe le versioni:
+    per questo gli scenari sono alternati e i confronti fini sono accoppiati nello stesso processo.
+
+**Scomposizione di un job model** (5 modelli, qualità sul migliore con PROCHECK e ProSA, come nella pagina
+Modellazione):
+
+| Passo | Prima | Dopo |
+|---|---|---|
+| Preparazione del template | 0,02 | 0,02 |
+| Script di allineamento (`align.py`, align2d) | 0,33 | 0,34 |
+| Costruzione: avvio di MODELLER e lettura | 0,24 | 0,26 |
+| Costruzione: restrizioni e modello 1 | 2,75 | 2,76 |
+| Costruzione: ognuno dei 4 modelli successivi | 2,29 | 2,29 |
+| **Costruzione dei modelli (`model.py`)** | **12,23** | **12,14** |
+| Analisi: lettura della struttura | 0,00 | 0,01 |
+| Analisi: Ramachandran | 0,01 | 0,24 ¹ |
+| Analisi: clash | 0,01 | 0,20 ¹ |
+| Analisi: mkdssp (prima con `mkdssp --version` a ogni analisi) | 0,17 | 0,30 ¹ |
+| Analisi: SASA (Shrake-Rupley) | 0,11 | 0,27 ¹ |
+| Analisi: DOPE di MODELLER | 0,98 | 1,20 ¹ |
+| Analisi: PROCHECK | 0,22 | 0,41 ¹ |
+| Analisi: ProSA (senza licenza) | 0,01 | 0,12 ¹ |
+| Analisi: consenso | 0,00 | 0,00 |
+| **Analisi di qualità (tempo reale)** | **1,50** | **1,22** |
+| Iniezione dei REMARK, rapporto JSON, salvataggio (scratch → dati) | 0,01 | 0,01 |
+| **Job intero** | **14,18** | **13,89** |
+
+¹ In parallelo: durata del passo mentre gira insieme agli altri (GIL per i calcoli Python, core condivisi). Conta il
+tempo reale dell'analisi, che scende verso quello del passo più lungo (il DOPE).
+
+**Scenari** (tempo reale del job):
+
+| Scenario | Prima | Dopo | Differenza |
+|---|---|---|---|
+| Job model, 5 modelli, qualità sul migliore con PROCHECK e ProSA | 14,18 | 13,89 | −2 % (analisi 1,50 → 1,22) |
+| Job model, 5 modelli, qualità su tutti con PROCHECK e ProSA | 20,05 | 17,11 | −15 % (fase di qualità ² 7,64 → 4,54) |
+| Elemento di pipeline, 3 modelli, qualità senza PROCHECK e ProSA (come la pagina Pipeline) | 9,30 | 9,13 | −2 % (analisi 1,40 → 1,23) |
+| Job di qualità su 1UBQ (DOPE, PROCHECK, ProSA) | 1,48 | 1,25 | −16 % |
+| Pipeline di 4 sequenze, stesso template mmCIF di 4560 residui (60 catene), 1 modello `very_fast`, senza qualità, 2 in parallelo | 9,38 | 5,64 | −40 % (preparazione, somma sugli elementi: 9,37 → 2,07) |
+
+² Tempo del job dopo template, allineamento e costruzione dei modelli: analisi, REMARK e salvataggio.
+
+**Confronti accoppiati** (`test_paired`, stesso processo, varianti alternate):
+
+| Confronto | Varianti (mediana; minimo) |
+|---|---|
+| Analisi di 1UBQ, 5 coppie | in serie come prima 1,50 (1,41); in parallelo 1,17 (1,12) |
+| Analisi di un modello di MODELLER, 5 coppie | in serie 1,54 (1,38); in parallelo 1,19 (1,13) |
+| Qualità su tutti i 5 modelli, fase di qualità, 3 terne | 1 modello alla volta 6,07; 2 insieme 4,90; 3 insieme 4,26 |
+| Pipeline di 4 sequenze sul template grande, 3 coppie | senza cache dei template 9,00; con cache 5,53 |
+
+**Avvio di MODELLER** (costo fisso di ogni processo): interprete e preambolo della licenza 0,03 s; `import modeller`
+ed `Environ()` 0,21 s; più le librerie di DOPE 0,28 s; DOPE completa di 1UBQ 0,95 s.
+
+**Cosa si è applicato:**
+
+1. **Passi dell'analisi in parallelo** (`quality.analyze`, vedi [Validazione di qualità](#validazione-di-qualità-enginesqualitypy)):
+   −0,3 s per analisi (−22 % nei confronti accoppiati). Il limite è il DOPE, circa 1 s, di cui 0,28 s di avvio.
+2. **Modelli in parallelo con la qualità "Su tutti i modelli"**: 3 insieme (`QUALITY_MODELS_PARALLEL`), perché su 4
+   CPU logiche 3 batte 2 (4,26 contro 4,90 s) e oltre non ci sono modelli abbastanza lunghi da sovrapporre. Non si va
+   oltre i job paralleli delle Impostazioni.
+3. **mkdssp da `ctx.run`**: lo stesso comando di Biopython, con un processo in meno a ogni analisi (la versione si
+   chiede una volta), sotto il budget di CPU, annullabile e con timeout. Prima Biopython lo lanciava da sé, fuori da
+   ogni controllo del JobManager.
+4. **Template preparati riusati nella pipeline** (`services/compute.PreparedTemplates`): `prepare_template` legge
+   tutta la struttura anche per una catena. Per 1UBQ costa 0,02 s, e il guadagno è nullo; per un mmCIF di 4560 residui
+   circa 1 s, 2 s con due elementi in parallelo (GIL). Con la cache un solo elemento prepara, gli altri copiano il
+   file.
+   - **Chiave:** id del template; file della libreria (percorso, dimensione, data di modifica in ns); catene;
+     ligandi; soglia del ritaglio pLDDT (None senza ritaglio).
+   - **Vita e spazio:** la cache vive un'esecuzione, in `.tmp/templates` dello scratch, e si svuota a fine pipeline.
+   - **Concorrenza ed errori:** un lock per chiave con attesa annullabile; le preparazioni fallite non si conservano.
+   - **Tracce:** il log segna "(preparazione riusata da un elemento precedente)" e un riepilogo finale; il risultato ha
+     `templates_prepared` e `templates_reused`.
+
+**Valutato e non applicato:**
+
+- **Più sequenze in un unico processo MODELLER** (proposta iniziale della F1.2): escluso, per tenere separati errori e
+  log di ogni elemento. Il guadagno massimo sarebbe l'avvio dei processi (0,21–0,28 s su 9 s per elemento).
+- **Costruzione dei modelli su più processi:** è il passo che pesa di più (86 % del job model, 81 % dell'elemento di
+  pipeline). Resta seriale per tre motivi:
+  - **Riproducibilità:** `automodel` non reimposta il generatore casuale per modello. Lo stato passa dal modello k al
+    k+1, quindi, a parità di seme, dividere i modelli fra processi darebbe modelli diversi da quelli di prima, e
+    dipendenti dalla suddivisione.
+  - **Pipeline:** gli elementi girano già in parallelo.
+  - **Budget di CPU:** dal JobManager (F1.4).
+  - **Possibile evoluzione:** una proposta futura potrà usare semi dichiarati per modello, registrati nel risultato.
+- **(c) Riletture della struttura:** l'analisi legge ogni modello una volta sola. Le altre letture misurate sono
+  trascurabili: la struttura in analisi (0,00–0,01 s), il template 1UBQ (0,01 s), il consenso calcolato due volte
+  (0,00 s). Nessun guadagno misurabile.
+- **(d) DOPE di più modelli in un solo script:** servirebbe solo alla qualità "Su tutti i modelli"; con "Solo sul
+  modello migliore" e nella pipeline il DOPE è uno.
+  - **Guadagno:** l'avvio pesa 0,28 s su 0,95 s, quindi un solo script risparmierebbe al massimo 4 × 0,28 ≈ 1,1 s di
+    CPU. Con 2 core fisici sono circa 0,5 s di tempo reale sulla fase di qualità da 4,26 s (stima, non misurata).
+  - **Costo:** il DOPE dei 5 modelli diventerebbe seriale in un solo processo (≈ 0,3 + 5 × 0,65 ≈ 3,6 s), mentre ora
+    si divide su 3 corsie. Un modello illeggibile fermerebbe il DOPE di tutti.
+  - **Esito:** guadagno piccolo e incerto, non vale la perdita dell'isolamento per modello.
+- **Un pool o un limite di CPU proprio:** i pool di `core/parallel.Steps` appartengono al singolo calcolo e servono
+  solo ad aspettare più passi insieme. Ogni processo passa da `JobContext.run`, quindi il budget di CPU condiviso del
+  JobManager (F1.4) governa anche i passi paralleli, senza un secondo limitatore.
+
 ## Frontend (`frontend/`)
 
 React 19 + TypeScript + Vite, nessuna libreria UI esterna: componenti propri (`components/ui.tsx`), grafici SVG
@@ -674,7 +820,7 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 
 ## Test
 
-- **`backend/tests` (pytest), circa 310 test,** eseguiti sia nativamente sia nel container:
+- **`backend/tests` (pytest), circa 330 test,** eseguiti sia nativamente sia nel container:
   - dominio, job manager, API, generazione script, MODELLER end-to-end;
   - ripresa dei job e delle pipeline (`test_jobs.py`, `test_pipeline_resume.py`): solo gli elementi non
     conclusi, riavvio simulato, ambito "solo i falliti", pipeline completate con falliti, file vecchi eliminati,
@@ -719,6 +865,15 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     chiusura dopo `end`, posto liberato alla disconnessione del client, arresto non bloccato dai flussi aperti.
     I test aspettano le condizioni, non tempi fissi: un flusso in attesa di notifiche (`ChangeFeed.waiting`) ha
     già inviato tutto ciò che era stato pubblicato prima;
+  - analisi in parallelo e template preparati (`test_parallel_quality.py`): `Steps` (ordine dei risultati diverso da
+    quello di conclusione, modalità seriale, passo fallito isolato, annullamento durante l'attesa con passi in coda che
+    non partono); rapporto in parallelo identico a quello seriale su 1UBQ (favorite 95,9 %, clashscore 1,66, zDOPE
+    −2,73, PROCHECK core 95,5 %), `ubq_dimer.pdb`, `ubq_zn.pdb` e un modello di MODELLER; avvisi dei passi falliti
+    uguali, nello stesso ordine, e passo lento non bloccato; annullamento con tre processi veri da 60 s tutti terminati
+    in pochi secondi e nessun thread rimasto; mkdssp solo da `ctx.run` con la stessa assegnazione del percorso di
+    Biopython; prefissi dei passi nel log; qualità "all" con 3 modelli insieme uguale a quella seriale; cache dei
+    template (copia per elemento, chiave con template, catene, ligandi e soglia pLDDT, file sostituito, errori non
+    conservati, elementi concorrenti, attesa annullabile) e pipeline di 4 sequenze con una sola preparazione;
   - verifica dell'installazione.
 
   `pytest -m network` prova i servizi reali. Oltre a 1UBQ, `tests/data` contiene strutture sintetiche generate
@@ -741,6 +896,8 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - AlphaFold (`alphafold.test.ts`): accessioni e id `AF-…`, accessione precompilata che segue la sequenza,
     intestazioni `sp|`/`tr|` della pipeline, fasce di pLDDT, quando mostrare la soglia, riepilogo del ritaglio
     (anche con i frammenti isolati).
+- **Profilazione:** `scripts/test.sh backend tests/perf_timing.py -s` (fuori dalla suite, vedi
+  [Prestazioni](#prestazioni)).
 - **Esecuzione:** `scripts/test.sh` (ruff, pytest nell'immagine con MODELLER reale, typecheck e vitest). La CI
   (`.github/workflows/ci.yml`) esegue gli stessi controlli: test rapidi senza strumenti esterni, frontend, e
   immagine completa con i test al suo interno.

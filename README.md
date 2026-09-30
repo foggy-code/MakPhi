@@ -141,8 +141,8 @@ sperimentale**, con il pLDDT medio (confidenza della predizione, 0–100).
 | Modellazione | MODELLER 10.8 (AutoModel, loop, allineamenti `align2d`/`salign`) |
 | Ricerca template | RCSB, NCBI BLAST e modelli predetti di AlphaFold DB (online); BLAST+ e MMseqs2 sul database locale pdbaa |
 | Allineamenti | Clustal Omega, MAFFT, MUSCLE, TM-align, US-align, più motori integrati |
-| Qualità | Ramachandran, clashscore, DSSP (mkdssp), SASA, profilo DOPE, **PROCHECK**, **ProSA II**, **QMEAN locale** (UniClust30) o SWISS-MODEL, voto A–D, consenso tra i metodi, qualità per residuo nel 3D (anche pLDDT di AlphaFold) |
-| Automazione | pipeline batch da multi-FASTA, riprendibili dopo un annullamento, un errore o un riavvio ("Riprendi" o "Riprova solo i falliti": le sequenze già modellate non si rifanno) e, se completate con sequenze fallite, "Riprova i falliti"; avanzamento, log e tabella dei risultati aggiornati in tempo reale, con la stima del tempo residuo ("circa 3 min rimanenti"); verifica dell'installazione (Impostazioni → Strumenti) |
+| Qualità | Ramachandran, clashscore, DSSP (mkdssp), SASA, profilo DOPE, **PROCHECK**, **ProSA II**, **QMEAN locale** (UniClust30) o SWISS-MODEL, voto A–D, consenso tra i metodi, qualità per residuo nel 3D (anche pLDDT di AlphaFold); i passi indipendenti girano in parallelo e con l'analisi "Su tutti i modelli" si analizzano più modelli insieme |
+| Automazione | pipeline batch da multi-FASTA, riprendibili dopo un annullamento, un errore o un riavvio ("Riprendi" o "Riprova solo i falliti": le sequenze già modellate non si rifanno) e, se completate con sequenze fallite, "Riprova i falliti"; avanzamento, log e tabella dei risultati aggiornati in tempo reale, con la stima del tempo residuo ("circa 3 min rimanenti"); un template usato da più sequenze si prepara una volta sola per pipeline; verifica dell'installazione (Impostazioni → Strumenti) |
 
 ## Dove stanno i dati
 
@@ -222,5 +222,10 @@ docker compose -f launcher/compose.yml build
 `scripts/test.sh` costruisce `bioloom-test:<versione>` sopra l'immagine locale (con pytest e ruff) e monta il
 repository. La chiave di MODELLER viene da `MODELLER_KEY` oppure da `data/licenses/modeller.key`; da un worktree
 indica la cartella dati con `BIOLOOM_DATA_PATH`. La stessa verifica gira in CI (`.github/workflows/ci.yml`).
+
+Profilazione dei tempi con MODELLER reale (job model, elemento di pipeline, analisi di qualità, avvio di MODELLER;
+non fa parte della suite): `scripts/test.sh backend tests/perf_timing.py -s`. Le misure e le condizioni sono in
+[Architettura → Prestazioni](docs/ARCHITETTURA.md#prestazioni). Ogni analisi di qualità scrive nel log del job la
+durata dei suoi passi ("Analisi di qualità in 1.14 s (passi in parallelo: …)").
 
 `bioloom.py` avvia il server senza Docker, utile solo per lo sviluppo.

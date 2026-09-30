@@ -72,7 +72,7 @@ class SelfTestService:
         if not tools.find("dssp"):
             raise ToolUnavailable("mkdssp non installato (si usa il DSSP integrato).")
         st = structure.load_structure(ASSET, "1UBQ")
-        rows = quality._dssp_external(structure.first_model(st), st)
+        rows = quality._dssp_external(structure.first_model(st), st, ctx)  # processo da ctx.run, annullabile
         if not rows:
             raise AppError("mkdssp non ha prodotto l'assegnazione.")
         helix = sum(1 for r in rows if r["ss3"] == "H")

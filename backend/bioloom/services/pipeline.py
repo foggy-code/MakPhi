@@ -34,7 +34,7 @@ from ..core.storage import remove_tree, safe_join
 from ..domain import sequences
 from ..domain.sequences import SeqRecord
 from ..engines import search
-from .compute import ComputeService
+from .compute import ComputeService, PreparedTemplates
 
 TERMINAL_ITEM = {"completed", "failed", "cancelled", "filtered"}
 # Elementi che una ripresa rielabora, per ambito: "incomplete" = tutto ciò che non è completato o filtrato
@@ -230,6 +230,8 @@ class PipelineService:
             f"SELECT COUNT(*) FROM pipeline_items WHERE job_id=? AND status IN ({','.join('?' * len(PROCESSED_ITEM))})",
             (ctx.job_id, *PROCESSED_ITEM)))
         parallel = effective_parallel(p, ctx.settings.effective_workers())
+        # template preparati una volta per esecuzione e riusati dagli elementi con lo stesso template (F1.2)
+        prepared = PreparedTemplates(ctx.tmp_dir / "templates")
         done_lock = threading.Lock()
         done = {"n": already}
         ctx.log(f"Pipeline di {_seqs(total)}, {parallel} in parallelo")
@@ -245,7 +247,7 @@ class PipelineService:
 
         def work(item: dict) -> None:
             try:
-                self._process_item(ctx, p, item)
+                self._process_item(ctx, p, item, prepared)
             except JobCancelled:
                 self._update(ctx.job_id, item["idx"], status="cancelled", stage="Annullato",
                              finished_at=now_iso())
@@ -253,8 +255,11 @@ class PipelineService:
                 finished_one()
 
         ctx.progress(already / max(total, 1), f"{already} di {total} sequenze elaborate")
-        with ThreadPoolExecutor(max_workers=parallel, thread_name_prefix=f"pipeline-{ctx.job_id[:6]}") as pool:
-            list(pool.map(work, items))
+        try:
+            with ThreadPoolExecutor(max_workers=parallel, thread_name_prefix=f"pipeline-{ctx.job_id[:6]}") as pool:
+                list(pool.map(work, items))
+        finally:
+            remove_tree(prepared.root)  # anche senza scratch (cartella del job) non restano copie
         ctx.check()
         counts = {row["status"]: row["n"] for row in self.db.query(
             "SELECT status, COUNT(*) AS n FROM pipeline_items WHERE job_id=? GROUP BY status", (ctx.job_id,))}
@@ -264,6 +269,9 @@ class PipelineService:
         if cache_hits:
             ctx.log(f"{cache_hits} " + ("ricerca di template riusata" if cache_hits == 1 else
                                         "ricerche di template riusate") + " dalla cache dei calcoli")
+        if prepared.reused:
+            ctx.log(f"Template preparati: {prepared.prepared}, riusati da altri elementi {prepared.reused} "
+                    f"{'volta' if prepared.reused == 1 else 'volte'}")
         # Una ripresa "solo i falliti" lascia com'erano gli annullati: la pipeline non si dichiara completata
         # (quelle sequenze non sono mai state elaborate) ma resta annullata e riprendibile per quegli elementi.
         left = sum(n for status, n in counts.items() if status not in PROCESSED_ITEM)
@@ -271,7 +279,8 @@ class PipelineService:
             one = left == 1
             raise JobCancelled(f"{'Resta' if one else 'Restano'} {_seqs(left)} da elaborare "
                                f"({'annullata' if one else 'annullate'} in precedenza): usa «Riprendi» per completarle.")
-        return {"total": total, "counts": counts, "search_cache_hits": cache_hits}
+        return {"total": total, "counts": counts, "search_cache_hits": cache_hits,
+                "templates_prepared": prepared.prepared, "templates_reused": prepared.reused}
 
     def _update(self, job_id: str, idx: int, **fields) -> None:
         if "metrics" in fields:
@@ -280,7 +289,8 @@ class PipelineService:
         self.db.execute(f"UPDATE pipeline_items SET {sets} WHERE job_id=? AND idx=?", (*fields.values(), job_id, idx))
         self.jobs.events.publish(job_id, ITEM, idx)
 
-    def _process_item(self, ctx: JobContext, p: dict, item: dict) -> None:
+    def _process_item(self, ctx: JobContext, p: dict, item: dict,
+                      prepared: Optional[PreparedTemplates] = None) -> None:
         job_id, idx, name = ctx.job_id, item["idx"], item["name"]
         ctx.check()
         self._update(job_id, idx, status="running", stage="Avvio", started_at=now_iso())
@@ -292,7 +302,7 @@ class PipelineService:
         sub = ctx.sub(name, ctx.workdir / "items" / f"{idx:04d}_{name}", on_progress=on_progress)
         final: Optional[dict] = None
         try:
-            final = self._run_item(ctx, sub, p, item)
+            final = self._run_item(ctx, sub, p, item, prepared)
         finally:
             # salvataggio progressivo: i file dell'elemento passano subito dallo scratch ai risultati
             try:
@@ -308,7 +318,8 @@ class PipelineService:
         if final:
             self._update(job_id, idx, **final)
 
-    def _run_item(self, ctx: JobContext, sub: JobContext, p: dict, item: dict) -> Optional[dict]:
+    def _run_item(self, ctx: JobContext, sub: JobContext, p: dict, item: dict,
+                  prepared: Optional[PreparedTemplates] = None) -> Optional[dict]:
         """Elabora un elemento. None se è fallito (esito già registrato); altrimenti i campi da scrivere dopo
         il salvataggio dei file: lo stato 'completed' con modello e metriche, oppure {} per un elemento
         filtrato (esito già registrato: senza modello, i suoi file non sono essenziali)."""
@@ -360,7 +371,8 @@ class PipelineService:
             res = self.compute.run_modeling(sub, target=SeqRecord(name, item["sequence"]), templates_raw=templates,
                                             alignment=None, options_raw=p.get("options") or {},
                                             quality_mode=quality_mode,
-                                            extended_quality=bool(p.get("extended_quality", False)))
+                                            extended_quality=bool(p.get("extended_quality", False)),
+                                            template_cache=prepared)
             best_model = next(m for m in res["models"] if m["best"])
             q = best_model.get("quality") or {}
             rel = (sub.workdir / best_model["file"]).relative_to(ctx.workdir).as_posix()

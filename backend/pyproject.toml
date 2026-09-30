@@ -34,6 +34,9 @@ markers = [
     "network: test che richiedono accesso a servizi remoti",
 ]
 addopts = "-m 'not network'"
+# come il filtro permanente di domain/structure.py, che pytest scarta a fine raccolta (catch_warnings): con più
+# letture in parallelo il catch_warnings di load_structure, non sicuro fra thread, lascerebbe passare l'avviso
+filterwarnings = ["ignore::Bio.PDB.PDBExceptions.PDBConstructionWarning"]
 
 [tool.ruff]
 line-length = 120

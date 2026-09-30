@@ -121,7 +121,8 @@ def test_resume_after_cancel_processes_only_unfinished_items(pipe):
     done = wait_job(client, job_id)
     assert done["status"] == "completed", done
     assert fake.calls == ["c", "d", "e"]  # gli elementi già conclusi non si rifanno
-    assert done["result"] == {"total": 5, "counts": {"completed": 5}, "search_cache_hits": 0}
+    assert done["result"] == {"total": 5, "counts": {"completed": 5}, "search_cache_hits": 0,
+                              "templates_prepared": 0, "templates_reused": 0}  # MODELLER finto: nessun template
     assert done["progress"] == 1 and done["error"] is None
     assert done["resumable"] is False and done["resumable_items"] == {"total": 5, "incomplete": 0, "failed": 0}
     # il file del tentativo interrotto è sparito, il nuovo modello c'è, gli altri elementi sono intatti

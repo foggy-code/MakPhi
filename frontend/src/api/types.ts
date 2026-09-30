@@ -807,6 +807,9 @@ export interface PipelineResult {
   counts: Record<string, number>;
   /** elementi la cui ricerca del template viene dalla cache dei calcoli */
   search_cache_hits?: number;
+  /** template preparati per MODELLER in questa esecuzione e preparazioni riusate da altri elementi (F1.2) */
+  templates_prepared?: number;
+  templates_reused?: number;
 }
 
 export interface PipelinePage {
