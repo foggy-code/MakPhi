@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { TemplateAnalysis, TemplateItem } from "../api/types";
+import { AssembliesCard } from "../components/AssembliesCard";
 import { SSStrip } from "../components/charts";
 import { Icon } from "../components/Icon";
 import { Viewer3D } from "../components/Viewer3D";
@@ -42,7 +43,7 @@ function PredictedNote({ meta }: { meta: TemplateItem }) {
   );
 }
 
-function TemplateDetail({ id, onDeleted }: { id: string; onDeleted: () => void }) {
+function TemplateDetail({ id, onDeleted, onAdded }: { id: string; onDeleted: () => void; onAdded: (id: string) => void }) {
   const navigate = useNavigate();
   const toast = useToast();
   const { data: a, error, loading } = useAsync<TemplateAnalysis>(() => api.template(id), [id]);
@@ -63,6 +64,7 @@ function TemplateDetail({ id, onDeleted }: { id: string; onDeleted: () => void }
           <>
             <button className="btn btn-sm" onClick={() => navigate(`/quality?template=${a.id}`)}><Icon name="shield" size={14} /> Qualità</button>
             <button className="btn btn-sm btn-primary" onClick={() => navigate(`/modeling?t=${a.id}:${a.chains[0]?.chain ?? "A"}`)}><Icon name="cube" size={14} /> Usa come template</button>
+            {a.chains.length > 1 && <button className="btn btn-sm" title="Modalità Complesso: una sequenza del bersaglio per ogni catena" onClick={() => navigate(`/modeling?cmplx=${encodeURIComponent(a.id)}`)}><Icon name="layers" size={14} /> Complesso</button>}
             <a className="btn btn-sm btn-ghost" href={api.templateFileUrl(a.id)} download={`${a.id}.${a.format}`}><Icon name="download" size={14} /></a>
             <button className="btn btn-sm btn-danger" onClick={() => setConfirm(true)}><Icon name="trash" size={14} /></button>
           </>
@@ -102,6 +104,7 @@ function TemplateDetail({ id, onDeleted }: { id: string; onDeleted: () => void }
           Le interruzioni (distanza C–N &gt; 2 Å) e i residui mancanti diventano gap nell'allineamento: MODELLER li ricostruisce come loop.
         </p>
       </Card>
+      {!predicted && <AssembliesCard meta={a.meta} onImported={onAdded} />}
       {(ligands.length > 0 || additives.length > 0) && (
         <Card title="Ligandi ed eteroatomi" sub="Trasferibili nel modello (Modellazione → Trasferisci ligandi, cofattori e metalli)">
           <div className="row">
@@ -221,6 +224,7 @@ export default function Templates() {
                         <td>
                           <b>{t.id}</b> <span className="tiny muted">{t.format.toUpperCase()}</span>
                           {t.predicted && <> <Badge tone="warn" title="Modello predetto da AlphaFold, non struttura sperimentale">AlphaFold</Badge></>}
+                          {t.assembly && <> <Badge tone="info" title={`Assemblaggio biologico ${t.assembly.assembly_id} di ${t.assembly.source_id}`}>assemblaggio</Badge></>}
                           <div className="tiny muted ellipsis" style={{ maxWidth: 230 }}>{t.title || t.source}</div>
                         </td>
                         <td className="num small nowrap">
@@ -237,7 +241,7 @@ export default function Templates() {
             )}
           </Card>
         </div>
-        <div>{selected ? <TemplateDetail key={selected} id={selected} onDeleted={() => { setParams({}); reload(); }} /> : <Card><Empty icon="library" title="Seleziona un template" /></Card>}</div>
+        <div>{selected ? <TemplateDetail key={selected} id={selected} onDeleted={() => { setParams({}); reload(); }} onAdded={(id) => { reload(); setParams({ id }); }} /> : <Card><Empty icon="library" title="Seleziona un template" /></Card>}</div>
       </div>
     </div>
   );

@@ -99,7 +99,7 @@ data/
 | Pacchetto | Contenuto |
 |---|---|
 | `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `dispatch` (coda con priorità di ogni pool), `budget` (budget di CPU condiviso fra i job), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi), `eta` (stima del tempo residuo), `events` (notifiche in-process dei cambiamenti dei job), `parallel` (passi indipendenti di un calcolo su un pool locale di thread, vedi [Prestazioni](#prestazioni)) |
-| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG), `template_rank` (punteggio motivato dei template e selezione dei complementari), `multitemplate` (scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template), `ligands` (classificazione dei gruppi eteroatomici, colonne '.' del PIR, verifica di contatti, scontri e coordinazione dei metalli), `disorder` (disordine FoldIndex, bassa complessità SEG, domini e copertura del bersaglio), `interactions`, `interfaces`, `conservation` (analisi strutturale, vedi [Analisi strutturale](#analisi-strutturale)) |
+| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG), `template_rank` (punteggio motivato dei template e selezione dei complementari), `multitemplate` (scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template), `ligands` (classificazione dei gruppi eteroatomici, colonne '.' del PIR, verifica di contatti, scontri e coordinazione dei metalli), `disorder` (disordine FoldIndex, bassa complessità SEG, domini e copertura del bersaglio), `interactions`, `interfaces`, `conservation` (analisi strutturale, vedi [Analisi strutturale](#analisi-strutturale)), `assembly` (assemblaggi biologici dal mmCIF e dal REMARK 350), `complexes` (bersagli a più catene, simmetria, confronto delle interfacce con il template; vedi [Complessi e omo-oligomeri](#complessi-e-omo-oligomeri-domainassemblypy-domaincomplexespy)) |
 | `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB), `remote` (client HTTP), `tools` (rilevamento strumenti, preambolo di licenza) |
 | `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job), `reports` (dati del report di un modello o di un'analisi), `coverage` (copertura del bersaglio da parte dei template, avvisi su disordine e domini), `analysis` (job dell'analisi strutturale) |
 | `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases`, `analysis` oltre a sistema, progetti, calcoli, job) |
@@ -374,6 +374,10 @@ indicare un altro interprete (`BIOLOOM_MODELLER_PYTHON`). Flusso di un job `mode
    zDOPE) sono scritti in `models.json` direttamente da `a.outputs`.
 4. **Selezione e qualità**: modello migliore = DOPE minimo; analisi completa sul migliore (o su tutti, fino a 3
    modelli insieme), con righe `REMARK 999 BIOLOOM` di tracciabilità nel PDB.
+
+Con un bersaglio a più catene (modalità Complesso o PIR a più catene) l'allineamento è per catena, le catene del modello
+prendono i nomi del template e l'analisi comprende le interfacce: vedi [Complessi e
+omo-oligomeri](#complessi-e-omo-oligomeri-domainassemblypy-domaincomplexespy).
 
 Nella pipeline un template usato da più elementi si prepara una volta per esecuzione e gli altri ne ricevono una copia
 (vedi [Prestazioni](#prestazioni)).
@@ -717,6 +721,7 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
   | Qualità | `<modello>.quality.json` (o risultato del job quality); consenso ricomposto con GA341 e zDOPE del modello (`consensus.compute`), oppure dalla rotta del consenso quando c'è QMEAN |
   | Ligandi e metalli | campo `ligands` del rapporto di qualità; per il modello migliore senza analisi, `ligands.verification` del risultato. Sezione solo se presente: esito, classe, coordinazione con i donatori e le distanze attese, residui entro 4 Å, confronto con il sito del template, motivazione; nei parametri i gruppi trasferiti e da quale template |
   | Analisi strutturale | ponti disolfuro e interfacce (area, residui, interazioni fra le catene, plausibilità con i limiti) del job `analysis` completato più recente sulla stessa struttura (`AnalysisService.latest`: stessa sorgente, `{job, file}` per i modelli, e stessa impronta del file); la sezione "Analisi strutturale" compare solo se ce ne sono (vedi [Analisi strutturale](#analisi-strutturale)) |
+  | Interfacce del complesso | modelli a più catene (F5.3): `complex` del risultato (catene del modello e del template, simmetria) e il confronto delle interfacce del rapporto di qualità del modello (per il migliore senza analisi, quello del risultato): tabella con area (e quella del template), residui conservati, Fnat, iRMS, LRMS, DockQ ed esito, testo motivato per interfaccia e limiti; nei parametri la riga "Simmetria fra catene" (vedi [Complessi e omo-oligomeri](#complessi-e-omo-oligomeri-domainassemblypy-domaincomplexespy)) |
 
   Un modello senza rapporto di qualità ha il report dei soli risultati di MODELLER, con un avviso.
 - **Grafici SVG** (generati dal backend, XML ben formato):
@@ -736,7 +741,8 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
   2013, Ramachandran et al. 1963, Lovell et al. 2003, Word et al. 1999, Kabsch & Sander 1983, Shrake & Rupley 1973,
   Tien et al. 2013, Rost 1999, Prilusky et al. 2005, Uversky et al. 2000, Kyte & Doolittle 1982, Ward et al. 2004;
   con l'analisi strutturale Richardson 1981, Krissinel & Henrick 2007, Janin et al. 2008, Lo Conte et al. 1999,
-  Baker & Hubbard 1984, Barlow & Thornton 1983).
+  Baker & Hubbard 1984, Barlow & Thornton 1983; con le interfacce di un complesso Basu & Wallner 2016, Méndez et al.
+  2003).
 - **Stampa:** `@page` A4 e regole `@media print`: niente indice, intestazioni delle tabelle ripetute, nessuna
   interruzione dentro grafici, blocchi di allineamento, riquadri e righe, allineamento e qualità da una pagina nuova,
   colori conservati (`print-color-adjust: exact`).
@@ -1380,6 +1386,143 @@ Il trasferimento dei gruppi eteroatomici dal template al modello è selettivo e 
   ligandi si usa `.`; il raffinamento dei loop di un modello non legge gli HETATM (MODELLER predefinito), quindi i
   ligandi non passano ai modelli di loop.
 
+### Complessi e omo-oligomeri (`domain/assembly.py`, `domain/complexes.py`)
+
+Modelli con più catene (F5.3): assemblaggio biologico del template, bersaglio a una sequenza per catena, restrizioni di
+simmetria fra catene uguali e confronto delle interfacce del modello con quelle del template. Logica pura in `domain/`,
+nessuna dipendenza nuova (Biopython e numpy).
+
+**Assemblaggi biologici** (`domain/assembly.py`). Il file del PDB contiene l'unità asimmetrica; l'assemblaggio si genera
+con gli operatori dichiarati nel file, qui, invece di scaricare da RCSB l'assemblaggio già generato
+(`<ID>-assembly<N>.cif`): funziona anche senza rete, con i file già in libreria e con quelli caricati, e i nomi delle catene
+seguono una regola nota (quelli di RCSB, "A-2", non sono identificativi PDB di un carattere).
+
+- **Lettura:** mmCIF (`pdbx_struct_assembly`, `pdbx_struct_assembly_gen`, `pdbx_struct_oper_list`) oppure REMARK 350 del
+  PDB (BIOMOLECULE, AUTHOR/SOFTWARE DETERMINED…, APPLY THE FOLLOWING TO CHAINS con le righe AND CHAINS, BIOMT1–3; i numeri
+  BIOMT di gruppi diversi sono operatori diversi). La libreria scarica da RCSB in formato PDB, quindi il REMARK 350 è il caso
+  più comune. Nel mmCIF le catene dei generatori sono `label_asym_id` (proteina, ligandi e acque hanno asym diversi),
+  mentre Biopython raggruppa per `auth_asym_id`: ogni residuo del primo modello riceve il suo `label_asym_id`
+  dall'`atom_site`, e un generatore prende esattamente i residui elencati.
+- **Espressioni degli operatori** (dizionario PDBx): "1", "1,2,5", "1-4", "(1-4)" e il prodotto cartesiano "(1,2)(3,4)",
+  applicato da destra a sinistra (x' = M1·(M3·x + t3) + t1); al massimo 1000 combinazioni per generatore.
+- **Nomi delle catene:** copie nell'ordine dei generatori, degli operatori e delle catene del file; la prima copia di ogni
+  catena dell'autore tiene il nome (se di un carattere), le altre prendono il primo carattere libero di A–Z, a–z, 0–9 non
+  tenuto da una prima copia (catene A e B, due operatori per A: A, C = A·2, B). Ogni catena ha origine, operatore e
+  `identity` (coordinate del file così come sono) nel risultato e nelle righe `REMARK 999 BIOLOOM ASSEMBLY CHAIN`.
+- **Limiti:** 62 catene (identificativi di un carattere) e 99 999 atomi (numerazione del PDB); oltre, l'assemblaggio si
+  elenca con il motivo ma non si importa. Prima posizione alternativa degli atomi, primo modello del file.
+- **Libreria** (`TemplateLibrary.assemblies`, `import_assembly`): `GET /api/templates/{id}/assemblies` (stato oligomerico,
+  catene generate con l'origine, `buildable`, `identity_only`) e `POST /api/templates/{id}/assemblies/{n}` → template
+  `<ID>_ASM<n>` in PDB, con titolo, metodo e risoluzione del file d'origine e `assembly` nei metadati (template d'origine,
+  catene, impronta SHA-256 del file d'origine). Un'importazione già fatta dallo stesso file si riusa (`cached`); se il file
+  d'origine cambia, si rigenera. Importazioni concorrenti dello stesso assemblaggio: un lock per template, una sola
+  costruzione. Un assemblaggio non ha assemblaggi propri; i modelli AlphaFold non ne hanno.
+
+**Bersaglio a più catene** (`complexes.parse_target`, opzione `complex` di `POST /api/model` e `/api/align2d`):
+`{name, chains: [{template_chain, sequence | same_as, name}]}` su un solo template (o assemblaggio), le cui catene
+diventano quelle della corrispondenza, nell'ordine (`TemplateSpec.keep_order`: la copia preparata ha le catene in
+quell'ordine, così i '/' del PIR si corrispondono). Errori chiari (400) prima di accodare il job: una sola catena, catena
+del template ripetuta o non valida, sequenza mancante, `same_as` verso una catena assente o senza sequenza propria, più
+template, limiti.
+
+| Limite | Valore | Motivo |
+|---|---|---|
+| Catene | da 2 a 12 | omo-oligomeri comuni fino ai dodecameri; oltre (capsidi, ferritine a 24 catene) una sequenza per catena non è pratica, e l'analisi delle interfacce cresce con le coppie di catene a contatto (fino a 66) |
+| Residui in tutto | 3000 | tempo di MODELLER per modello misurato in crescita un po' più che lineare con i residui (tabella sotto): con 3000 residui 5 modelli "accurati" (3–5 volte più lenti del "rapido") restano nel timeout predefinito dei job (120 min), con 5000 (il limite di una catena singola) no |
+
+**Allineamento per catena** (`modeller.build_complex_alignment_script`, `complexes.merge_chain_alignments`): `align2d` di
+ogni catena del bersaglio sul segmento FIRST:X–LAST:X della sua catena del template; le righe si uniscono con '/', che
+stanno quindi nelle stesse colonne, e l'intervallo del template va dal primo residuo della prima catena all'ultimo
+dell'ultima. Il log riporta per catena residui allineati e identità. La stessa funzione è l'anteprima della pagina
+(`/api/align2d` con `complex`: `chains` nel risultato).
+
+**PIR a più catene** (`complexes.check_chains`, `sequences.validate_pir`): MODELLER 10.8 tollera i '/' in colonne diverse e
+perfino una voce di template senza '/' su due catene (verificato: il modello si costruisce, con le catene fuse o un residuo
+di una catena allineato all'altra). BioLoom quindi:
+
+- nella modalità Complesso rifiuta (400 `invalid_pir`) '/' in colonne diverse fra template e bersaglio e una voce di
+  template con un numero di tratti diverso dalle catene del suo intervallo; con un PIR dell'utente nella modalità
+  Complesso le catene del bersaglio devono essere le sequenze del complesso;
+- con un PIR qualunque dà gli stessi controlli come avvisi (`validate_pir`: "Separatori di catena ('/') … in colonne
+  diverse da quelle del bersaglio").
+
+Le colonne '.' dei ligandi (`ligands.pir_with_ligands`) restano compatibili: si aggiungono alla fine del tratto di ogni
+catena in tutte le righe, i '/' non si spostano.
+
+**Modello** (`ComputeService._complex_plan`, `modeller.build_model_script`): per ogni bersaglio con più catene (anche da un
+PIR) le catene del modello prendono i nomi del template principale (il primo con una catena di fronte a ogni catena del
+bersaglio e i '/' nelle stesse colonne; altrimenti A, B, C… con un avviso), con i residui numerati da 1 in ogni catena
+(`rename_segments` in `special_patches`; MODELLER di suo numera di seguito, 77–152 per la seconda catena). Un bersaglio a
+catena singola non cambia (catena A, come prima). `REMARK 999 BIOLOOM CHAINS 2 A=A B=B` nei modelli analizzati.
+
+**Simmetria** (opzioni `symmetry`, `symmetry_weight` da 0 escluso a 10, predefinito 1): le catene del bersaglio con la
+stessa sequenza formano un gruppo e ogni catena è vincolata alla prima con `restraints.symmetry.append(Symmetry(s1, s2,
+peso))` sui C-alfa dei residui standard (`only_std_residues().only_atom_types('CA')`), come nell'esempio del manuale di
+MODELLER ("Building a model with symmetry restraints", peso 1,0). La restrizione penalizza le differenze fra le distanze
+interne corrispondenti delle due selezioni (Šali & Blundell 1993): rende uguali le catene, non impone la disposizione, che
+viene dal template. Le selezioni devono avere gli stessi atomi: per questo solo catene identiche (MODELLER altrimenti
+fallisce, "Number of selected atoms … is not the same", verificato). Richiesta senza catene uguali: avviso, nessuna
+restrizione. `REMARK 999 BIOLOOM SYMMETRY CA WEIGHT 1 A,B`.
+
+**Confronto delle interfacce** (`complexes.assess`, in `<modello>.quality.json` → `complex` e, per il modello migliore
+anche senza analisi di qualità, nel risultato `complex.assessment`; `models[].complex` = esito e DockQ minimo):
+
+| Misura | Definizione | Fonte |
+|---|---|---|
+| Interfacce del modello e del template | `domain/interfaces` (ΔSASA > 1 Å², area = metà dell'area sepolta), interfacce del template calcolate una volta per job | Krissinel & Henrick 2007 |
+| Corrispondenza | residuo del template → residuo del modello dalle colonne del PIR usato da MODELLER (lettere del template sulla copia preparata dal residuo iniziale, lettere del bersaglio sui residui del modello); catena del template → catena del modello per maggioranza | |
+| Residui conservati | residui d'interfaccia del template il cui residuo allineato è d'interfaccia nella coppia corrispondente del modello (non allineati contati a parte) | |
+| Fnat | contatti fra residui del template (atomi pesanti entro 5 Å) presenti fra i residui corrispondenti del modello | CAPRI, Méndez et al. 2003 |
+| iRMS | RMSD degli atomi N, CA, C, O dei residui entro 10 Å dall'altra catena nel template, dopo la loro sovrapposizione | Méndez et al. 2003; Basu & Wallner 2016 |
+| LRMS | RMSD dello scheletro della catena più corta dopo la sovrapposizione della più lunga (ricettore) | idem |
+| DockQ | (Fnat + 1/(1 + (iRMS/1,5)²) + 1/(1 + (LRMS/8,5)²)) / 3; ≥ 0,80 alta, ≥ 0,49 media, ≥ 0,23 accettabile, sotto non riprodotta | Basu & Wallner, PLoS ONE 11:e0161879, 2016 |
+
+- **Esito motivato:** classe di DockQ con il testo ("Interfaccia del template riprodotta: DockQ 0,97 (alta; Fnat 1,00, iRMS
+  0,35 Å, LRMS 1,66 Å); residui d'interfaccia del template conservati 75% (6 su 8); area 117 Å² contro 123 Å² del template
+  (95%)"); "non sono più a contatto" se le catene corrispondenti del modello non si toccano; un'interfaccia del modello che
+  il template non ha è "nuova" (contatto creato dalla modellazione, da verificare). Esito del modello = il peggiore.
+- **Limiti** (nel risultato e nel report): il template non è la struttura vera del complesso del bersaglio; DockQ misura la
+  fedeltà all'interfaccia del template, non l'accuratezza. Le coppie si confrontano anche con residui mutati. Un contatto
+  cristallino piccolo resta piccolo: vale la plausibilità dell'area di `domain/interfaces`.
+- **Costo:** due analisi delle interfacce per modello (modello e, una volta, template) più le interazioni; le ricerche dei
+  contatti usano un albero sugli atomi di una catena e una ricerca per atomo dell'altra.
+
+**Valori di riferimento** (test in `test_assembly.py`, `test_complexes.py`):
+
+| Caso | Valore |
+|---|---|
+| mmCIF sintetico (1UBQ, asym A, più due acque asym B nella stessa catena dell'autore) con identità + rotazione C2 | catene A e B; B coincide con la catena B di `ubq_dimer.pdb` entro 0,01 Å; le acque seguono la loro catena; interfaccia 122,9 Å² come il dimero |
+| stesso file, generatore con il solo asym A / espressione "(1,2)(3)" | acque escluse / copie "1×3" e "2×3" con la traslazione applicata per prima |
+| 1UBQ (REMARK 350) | un assemblaggio monomerico, catena A, solo identità |
+| dimero contro sé stesso (catene rinominate, numeri spostati di 100) | 5 contatti entro 5 Å, 8 residui d'interfaccia (S57, D58, N60, Q62 per catena), Fnat 1, iRMS 0, LRMS 0, DockQ 1 |
+| catena B spostata di 3 Å | LRMS 3,00 Å, Fnat 0,80 (4 su 5), iRMS 1,37 Å, DockQ 0,745 → media |
+| catena B allontanata di 30 Å | area 0, Fnat 0, LRMS 30 Å → non riprodotta, "non sono più a contatto" |
+| MODELLER: omodimero dell'ubiquitina di lievito su `ubq_dimer.pdb`, 2 modelli "rapidi", simmetria | catene A e B numerate da 1, RMSD dei C-alfa fra le catene dopo la sovrapposizione 0,03 Å (senza simmetria 0,63 Å), DockQ 0,97 (alta), 75% dei residui d'interfaccia conservati, area 117 contro 123 Å²; job in 14 s con l'analisi del migliore |
+
+**Tempi di MODELLER con più catene** (copie di `ubq_dimer.pdb`, raffinamento "rapido", container di test con altri test
+in esecuzione sulla stessa macchina: valori indicativi):
+
+| Catene | Residui | 1 modello | 2 modelli | Per modello |
+|---|---|---|---|---|
+| 2 | 152 | 7,5 s | 13,9 s | 6,4 s |
+| 4 | 304 | 10,9 s | 18,8 s | 7,9 s |
+| 8 | 608 | 22,3 s | 42,3 s | 20,0 s |
+
+**Interfaccia** (`components/ComplexInput.tsx`, `ComplexResults.tsx`, `AssembliesCard.tsx`, logica in `lib/complex.ts`):
+
+- **Libreria template:** scheda "Assemblaggi biologici" (stato, catene con l'origine, «Importa come template»); per un
+  assemblaggio importato la sua origine e «Modella il complesso»; pulsante «Complesso» per i template a più catene; badge
+  "assemblaggio" nell'elenco.
+- **Modellazione → Complesso** (`?cmplx=<template>` dalla libreria): template (con download da RCSB e importazione degli
+  assemblaggi), una riga per catena (dal progetto, incollata o «stessa di…»; le catene del template con la stessa sequenza
+  partono già come «stessa della catena …»), conteggi e limiti come il backend (`complexRequest`), simmetria con il peso,
+  anteprima dell'allineamento per catena in modalità Confidenza. Gli avvisi di copertura del bersaglio non si calcolano in
+  questa modalità.
+- **Risultati:** riquadro "Complesso" (catene del modello e del template, simmetria, tabella del confronto con DockQ ed
+  esito; clic su una riga = testo dell'esito e interfaccia centrata nel 3D) e 3D colorato per catena con i residui
+  d'interfaccia conservati (verde), solo nel modello (arancione) e persi (rosso). Per un modello diverso dal migliore il
+  confronto viene dal suo rapporto di qualità, se analizzato. Badge "interfacce: …" nella tabella dei modelli.
+
 ### Cache dei calcoli (`core/cache.py`)
 
 Ricerche di template e allineamenti multipli e strutturali non si rifanno se la stessa richiesta è già stata
@@ -1619,10 +1762,10 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 | Panoramica | flusso guidato, esempi, motori disponibili, risorse del computer |
 | Sequenze | import FASTA/UniProt, proprietà ProtParam, predizione GOR, annotazioni UniProt/InterPro/PDB; mappa di disordine (FoldIndex), bassa complessità (SEG), domini InterPro e GOR |
 | Ricerca template | RCSB/NCBI/locale/AlphaFold DB (accessione UniProt facoltativa, precompilata dalle sequenze UniProt), tabella ordinabile (predefinito: punteggio), colonna Punteggio con fascia e motivazioni (suggerimento; per componente nella riga espansa, sopra l'allineamento dell'hit), riquadro dei template consigliati (principale e complementari, esclusi con il motivo) con «Usa i consigliati per la modellazione» (`lib/templateRank.modelingLink`: un `t=ID:CATENA` per template), righe consigliate evidenziate, download, "modella con"; badge "modello predetto" e pLDDT; nota "dalla cache (data)" e ricalcolo ignorando la cache; per ogni hit gli avvisi su regioni disordinate e domini fuori dal tratto allineato |
-| Libreria template | download RCSB e "Da AlphaFold DB (UniProt)", upload PDB/mmCIF, catene, residui mancanti, ligandi classificati (metallo, cofattore noto, additivo, altro ligando, residuo modificato), DSSP, 3D; badge "AlphaFold", pLDDT medio e fasce di confidenza |
+| Libreria template | download RCSB e "Da AlphaFold DB (UniProt)", upload PDB/mmCIF, catene, residui mancanti, ligandi classificati (metallo, cofattore noto, additivo, altro ligando, residuo modificato), DSSP, 3D; badge "AlphaFold", pLDDT medio e fasce di confidenza; assemblaggi biologici (REMARK 350, `pdbx_struct_assembly`) con lo stato oligomerico e «Importa come template» (`<ID>_ASM<n>`), badge "assemblaggio" |
 | Allineamenti | pairwise, multiplo, strutturale (con il confronto per residuo e «Apri in Confronto»); esportazione FASTA/Clustal/PIR; salvataggio nel progetto; cache per multiplo e strutturale |
 | Editor PIR | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
-| Modellazione | input automatico o da PIR, parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); avvisi prima del lancio su regioni disordinate e domini non coperti dai template, con suggerimento; modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job; «Trasferisci ligandi, cofattori e metalli dai template» con la scelta dei gruppi (additivi e ioni del tampone deselezionati per default, `LigandPicker`, che usa le analisi già lette dal selettore dei template anche dopo un download; una lettura non riuscita si mostra con «Riprova», un 404 di un template in download si riprova da sé, e sotto «Avvia modellazione» si dice quale template blocca) e la verifica del modello migliore |
+| Modellazione | input automatico, da PIR o «Complesso» (template o assemblaggio, una sequenza per catena anche «stessa della catena …», simmetria, anteprima dell'allineamento per catena; nei risultati confronto delle interfacce con DockQ e 3D colorato per catena e interfaccia), parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); avvisi prima del lancio su regioni disordinate e domini non coperti dai template, con suggerimento; modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job; «Trasferisci ligandi, cofattori e metalli dai template» con la scelta dei gruppi (additivi e ioni del tampone deselezionati per default, `LigandPicker`, che usa le analisi già lette dal selettore dei template anche dopo un download; una lettura non riuscita si mostra con «Riprova», un 404 di un template in download si riprova da sé, e sotto «Avvia modellazione» si dice quale template blocca) e la verifica del modello migliore |
 | Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche, disordine predetto come segnale informativo), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura; sezione Ligandi e metalli (esiti, coordinazione, confronto con il sito del template): il clic su un gruppo lo mostra nel 3D con i residui coordinanti e le linee di coordinazione (`LigandsPanel`, `lib/ligands.ts`; ioni metallici sempre a sfere); scheda Interazioni (analisi strutturale: legami H, ponti salini, disolfuri, aromatiche, interfacce, conservazione; `?ajob=`) |
 | Confronto | `/compare?a=&ca=&b=&cb=&job=`: B sovrapposta ad A (riferimento), metriche (TM-score su A e su B, RMSD, RMSD entro 5 Å, GDT-TS, GDT-HA, lDDT, lunghezza allineata), 3D con B colorata per distanza (0 → ≥ 5 Å) o lDDT e A in grigio chiaro, grafico di distanza e lDDT per posizione, tratti che deviano, tabella per coppia; clic ovunque → coppia evidenziata nel 3D |
 | Pipeline batch | multi-FASTA → modelli validati, template da ricerca automatica, «Più template complementari» (N da 2 a 5) o fissi (casella «Ligandi» del template solo se la scelta predefinita trasferisce qualcosa dalle catene scelte, con i gruppi esclusi nel suggerimento: `lib/ligands.defaultTransfer`); filtro zona crepuscolare, tabella paginata (template usati elencati, motivazioni nel suggerimento), CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
@@ -1796,6 +1939,20 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     con code e inserzioni nella riga), scelta della riga, catene multiple, allineamenti non validi; prestazioni su 4816
     atomi; job e rotte (allineamento da testo, da sequenze non allineate e da un job; errori; analisi più recente per
     sorgente e impronta; job concorrenti), sezione del report (dimero sì, 1UBQ no, modelli di un job, escape);
+  - complessi e omo-oligomeri (`test_assembly.py`, `test_complexes.py`): espressioni degli operatori (elenchi, intervalli,
+    prodotti, errori, limite delle combinazioni) e prodotti applicati da destra a sinistra; mmCIF sintetico con identità +
+    rotazione C2 → la catena B di `ubq_dimer.pdb` entro 0,01 Å, acque della stessa catena dell'autore incluse o escluse
+    secondo l'asym, prodotti "(1,2)(3)"; REMARK 350 di 1UBQ e con righe AND CHAINS, BIOMT incompleti, nomi delle copie
+    (catene riservate, catene di più caratteri), limite delle 62 catene, PDB generato con intestazione, REMARK e stessa
+    interfaccia; rotte della libreria (elenco, importazione, riuso, rigenerazione con il file cambiato, assemblaggio di un
+    assemblaggio, errori, importazioni concorrenti); bersaglio a più catene (`same_as`, errori della corrispondenza, limiti
+    di 12 catene e 3000 residui compresi), gruppi di simmetria, unione degli allineamenti per catena, coerenza delle catene
+    di un PIR (errore nella modalità Complesso, avviso altrimenti), script con simmetria e nomi delle catene, peso validato,
+    copia preparata nell'ordine del bersaglio, nomi e simmetria del piano del modello; confronto delle interfacce (dimero
+    contro sé stesso con catene rinominate e numeri spostati, moto rigido, catena spostata di 3 Å con DockQ dalla formula,
+    catene non più a contatto, interfaccia nuova, PIR che non corrisponde), sezione del report bilanciata con l'escape;
+    rotte con complessi non validi (nessun job accodato); con MODELLER l'anteprima per catena e l'omodimero dell'ubiquitina
+    di lievito con e senza simmetria (catene, numerazione, RMSD fra le catene, DockQ, REMARK, report) e dallo stesso PIR;
   - verifica dell'installazione.
 
   `pytest -m network` prova i servizi reali. Oltre a 1UBQ, `tests/data` contiene strutture sintetiche generate
@@ -1850,6 +2007,11 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     (una lettera come catena o amminoacido, codici di inserzione, testo libero), residui da evidenziare, scale della
     conservazione e dell'interfaccia (soglia di 1 Å² esclusa), opzioni di colorazione, richiesta dell'allineamento e
     FASTA da un file letto dal server.
+  - complessi (`complex.test.ts`, `ComplexResults.test.tsx`): righe per catena con «stessa della catena …» proposta per le
+    catene uguali, sequenze pulite, richiesta del complesso con gli errori del backend (corrispondenza incompleta, limiti
+    compresi), simmetria solo con catene uguali, allineamento per catena dell'anteprima, colorazione per catena con i
+    residui d'interfaccia conservati, nuovi e persi, residui da centrare, testi degli assemblaggi; markup della tabella del
+    confronto.
 - **Profilazione:** `scripts/test.sh backend tests/perf_timing.py -s` (fuori dalla suite, vedi
   [Prestazioni](#prestazioni)).
 - **Esecuzione:** `scripts/test.sh` (ruff, pytest nell'immagine con MODELLER reale, typecheck e vitest). La CI

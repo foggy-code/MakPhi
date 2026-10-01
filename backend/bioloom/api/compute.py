@@ -62,10 +62,26 @@ class AlignIn(BaseModel):
                                                "cache dei calcoli (e la aggiorna)")
 
 
+class ComplexChainIn(BaseModel):
+    template_chain: str = Field(..., max_length=4, description="Catena del template che modella questa catena")
+    sequence: str = Field("", max_length=20_000)
+    name: str = Field("", max_length=200)
+    same_as: Optional[str] = Field(None, max_length=4, description="Stessa sequenza della catena indicata (del "
+                                                                   "template): omo-oligomeri")
+
+
+class ComplexIn(BaseModel):
+    """Bersaglio a più catene (F5.3): per ogni catena del template la sequenza del bersaglio, nell'ordine."""
+    name: str = Field("complesso", max_length=200)
+    # limiti (2–12 catene, residui totali) con messaggi chiari in domain/complexes.parse_target
+    chains: list[ComplexChainIn] = Field(..., max_length=64)
+
+
 class Align2dIn(BaseModel):
     project_id: Optional[str] = None
-    target: SeqIn
+    target: Optional[SeqIn] = None
     templates: list[TemplateRef]
+    complex: Optional[ComplexIn] = None
 
 
 class ModelIn(BaseModel):
@@ -76,6 +92,7 @@ class ModelIn(BaseModel):
     options: dict = {}
     quality: Literal["best", "all", "none"] = "best"
     extended_quality: bool = False
+    complex: Optional[ComplexIn] = Field(None, description="Modalità Complesso: un template, una sequenza per catena")
 
 
 class LoopIn(BaseModel):
@@ -157,20 +174,37 @@ def submit_align(body: AlignIn, core: Core = Depends(get_core)) -> dict:
     return core.jobs.submit("align", body.model_dump(), project_id=_project(core, body.project_id), title=title)
 
 
+def _complex(body: ModelIn | Align2dIn) -> Optional[str]:
+    """Validazione immediata del complesso (catene, sequenze, limiti, un solo template): etichetta per il titolo del
+    job, es. "ubd (2 catene)"."""
+    if body.complex is None:
+        return None
+    from ..domain import complexes
+    from ..services.compute import complex_templates
+
+    target = complexes.parse_target(body.complex.model_dump())
+    complex_templates(target, [t.model_dump() for t in body.templates])
+    return f"{target['name']} ({len(target['chains'])} catene)"
+
+
 @router.post("/align2d")
 def submit_align2d(body: Align2dIn, core: Core = Depends(get_core)) -> dict:
-    title = f"Allineamento MODELLER · {body.target.name} su {', '.join(t.id for t in body.templates)}"
+    label = _complex(body)
+    if label is None and not (body.target and body.target.sequence):
+        raise AppError("Indica la sequenza bersaglio.")
+    title = f"Allineamento MODELLER · {label or body.target.name} su {', '.join(t.id for t in body.templates)}"
     return core.jobs.submit("align2d", body.model_dump(), project_id=_project(core, body.project_id), title=title)
 
 
 @router.post("/model")
 def submit_model(body: ModelIn, core: Core = Depends(get_core)) -> dict:
-    if not body.alignment and not (body.target and body.target.sequence):
+    label = _complex(body)
+    if label is None and not body.alignment and not (body.target and body.target.sequence):
         raise AppError("Indica una sequenza bersaglio oppure un allineamento PIR.")
     from ..engines import modeller
 
     modeller.parse_options(body.options)  # errori di validazione immediati, prima di accodare il job
-    target = body.target.name if body.target else "PIR"
+    target = label or (body.target.name if body.target else "PIR")
     title = f"Modello {target} · {', '.join(t.id for t in body.templates)}"
     return core.jobs.submit("model", body.model_dump(), project_id=_project(core, body.project_id), title=title)
 

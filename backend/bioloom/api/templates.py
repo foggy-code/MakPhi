@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Path, UploadFile
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
@@ -50,6 +50,19 @@ async def upload_template(file: UploadFile = File(...), template_id: Optional[st
 @router.get("/{template_id}")
 def analyze_template(template_id: str, core: Core = Depends(get_core)) -> dict:
     return {**core.library.analyze(template_id), "meta": core.library.describe(template_id)}
+
+
+@router.get("/{template_id}/assemblies")
+def template_assemblies(template_id: str, core: Core = Depends(get_core)) -> dict:
+    """Assemblaggi biologici del file (REMARK 350 o pdbx_struct_assembly): stato oligomerico e catene generate."""
+    return core.library.assemblies(template_id)
+
+
+@router.post("/{template_id}/assemblies/{assembly_id}")
+def import_assembly(template_id: str, assembly_id: str = Path(..., pattern=r"^[A-Za-z0-9_-]{1,12}$"),
+                    core: Core = Depends(get_core)) -> dict:
+    """Importa un assemblaggio come template `<ID>_ASM<n>` (coordinate generate con gli operatori di simmetria)."""
+    return core.library.import_assembly(template_id, assembly_id)
 
 
 @router.get("/{template_id}/file", response_class=PlainTextResponse)

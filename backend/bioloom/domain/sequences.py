@@ -319,6 +319,14 @@ def validate_pir(text: str) -> dict:
     if len(set(chain_counts.values())) > 1:
         errors.append("Numero di catene ('/') diverso tra le voci: " +
                       ", ".join(f"{k}={v}" for k, v in chain_counts.items()))
+    elif targets and max(chain_counts.values()) > 1 and not errors:
+        # più catene (F5.3): MODELLER tollera i '/' in colonne diverse, ma allora residui di una catena del bersaglio
+        # stanno di fronte a un'altra catena del template
+        breaks = [i for i, c in enumerate(targets[0].sequence) if c == "/"]
+        shifted = [t.code for t in templates if [i for i, c in enumerate(t.sequence) if c == "/"] != breaks]
+        if shifted:
+            warnings.append(f"Separatori di catena ('/') di {', '.join(shifted)} in colonne diverse da quelle del "
+                            "bersaglio: una catena del bersaglio è allineata in parte a un'altra catena del template.")
     if targets and templates and not errors:
         tgt = targets[0].sequence
         for t in templates:

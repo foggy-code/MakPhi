@@ -454,6 +454,8 @@ export interface TemplateItem {
   note?: string;
   /** voce di AlphaFold DB da cui viene il modello (versione, intervallo UniProt coperto...) */
   alphafold?: AlphaFoldInfo | null;
+  /** assemblaggio biologico importato (F5.3): template d'origine e origine di ogni catena */
+  assembly?: TemplateAssemblyMeta | null;
 }
 
 /** Frazione di residui per fascia di pLDDT: ≥ 90, 70–90, 50–70, < 50. */
@@ -889,6 +891,8 @@ export interface ModelEntry {
   quality?: QualitySummary;
   /** ligandi trasferiti: gruppi verificati ed esito peggiore */
   ligands?: { groups: number; status: LigandStatus; counts: Record<LigandStatus, number> } | null;
+  /** modelli a più catene (F5.3): esito peggiore del confronto delle interfacce con il template, DockQ minimo */
+  complex?: ComplexBrief | null;
 }
 
 export interface ModelResult {
@@ -912,6 +916,8 @@ export interface ModelResult {
     }[];
     verification: LigandReport | null;
   };
+  /** bersaglio a più catene (modalità Complesso o PIR a più catene, F5.3) */
+  complex?: ComplexResult;
 }
 
 export interface Align2dResult {
@@ -922,6 +928,8 @@ export interface Align2dResult {
   /** con più template: salign che ha spostato un template senza poter unire gli align2d, orientamento relativo non
    *  vincolato fra template di strutture diverse */
   warnings?: string[];
+  /** modalità Complesso: catene del bersaglio nell'ordine del PIR (una per catena del template) */
+  chains?: { template_chain: string; name: string; length: number; same_as: string | null }[];
 }
 
 export interface LoopResult {
@@ -1015,6 +1023,8 @@ export interface QualityReport {
   consensus?: ConsensusResult;
   /** ligandi, cofattori e metalli: solo se la struttura ha gruppi eteroatomici non d'acqua (il voto non cambia) */
   ligands?: LigandReport;
+  /** modelli a più catene (F5.3): interfacce e confronto con quelle del template */
+  complex?: ComplexAssessment;
 }
 
 export type BfactorKind = "plddt" | "bfactor";
@@ -1414,4 +1424,146 @@ export interface AnalysisRequest {
   source: StructureSource;
   chains?: string[];
   msa?: { job_id?: string; text?: string; row?: string; tool?: "auto" | "builtin" | "clustalo" | "mafft" | "muscle" } | null;
+}
+
+// ---------------------------------------------------------------------------------- complessi (F5.3)
+/** Catena di un assemblaggio biologico: nuovo nome, catena d'origine dell'autore e operatore (es. "2" o "1×61"). */
+export interface AssemblyChain {
+  chain: string;
+  source: string;
+  operator: string;
+  /** l'operatore (o la combinazione) è l'identità: coordinate del file */
+  identity: boolean;
+  protein: boolean;
+}
+
+/** Assemblaggio dichiarato nel file (REMARK 350 del PDB o pdbx_struct_assembly del mmCIF), domain/assembly.py. */
+export interface AssemblySummary {
+  id: string;
+  /** author_defined_assembly | software_defined_assembly */
+  details: string;
+  method: string;
+  /** es. "dimeric", "tetrameric" */
+  oligomeric_details: string;
+  oligomeric_count: number | null;
+  generators: { chains: string[]; operators: string }[];
+  chains: AssemblyChain[];
+  chain_count: number;
+  protein_chains: number;
+  source_chains?: string[];
+  atoms?: number;
+  /** solo l'operatore identità: le coordinate sono quelle del file */
+  identity_only?: boolean;
+  /** false oltre 62 catene o 99 999 atomi (formato PDB) */
+  buildable: boolean;
+  note: string;
+}
+
+export interface AssemblyList {
+  template: string;
+  format: "mmcif" | "pdb";
+  assemblies: AssemblySummary[];
+  note: string;
+}
+
+/** Metadati di un template che è un assemblaggio importato. */
+export interface TemplateAssemblyMeta {
+  source_id: string;
+  assembly_id: string;
+  details: string;
+  method: string;
+  oligomeric_details: string;
+  oligomeric_count: number | null;
+  chains: AssemblyChain[];
+  format: string;
+  source_sha256: string;
+}
+
+/** Catena del bersaglio di un complesso: la sequenza oppure `same_as` = stessa sequenza della catena indicata. */
+export interface ComplexChainRequest {
+  template_chain: string;
+  sequence?: string;
+  name?: string;
+  same_as?: string | null;
+}
+
+/** Bersaglio a più catene (POST /api/model e /api/align2d, campo `complex`): un solo template, catene nell'ordine. */
+export interface ComplexRequest {
+  name: string;
+  chains: ComplexChainRequest[];
+}
+
+/** Esito del confronto di un'interfaccia con il template: classi di DockQ (Basu & Wallner 2016), più "nuova" (assente
+ *  nel template) e "non valutabile". */
+export type InterfaceStatus = "alta" | "media" | "accettabile" | "non riprodotta" | "nuova" | "non valutabile";
+
+export interface InterfaceComparison {
+  /** null per un'interfaccia che il template non ha */
+  template_chains: [string, string] | null;
+  model_chains: string[];
+  status: InterfaceStatus;
+  tone: "ok" | "warn" | "err";
+  area_template: number;
+  area_model: number;
+  /** area del modello / area del template (%) */
+  area_ratio: number | null;
+  template_residues: number;
+  conserved: number;
+  conserved_percent: number | null;
+  unaligned: number;
+  /** residui del modello ("A57") d'interfaccia anche nel template */
+  conserved_residues: string[];
+  /** residui del modello allineati a residui d'interfaccia del template che nel modello non lo sono */
+  lost_residues: string[];
+  fnat: number | null;
+  irms: number | null;
+  lrms: number | null;
+  dockq: number | null;
+  dockq_class: string | null;
+  native_contacts: number;
+  reproduced_contacts: number;
+  receptor: string | null;
+  ligand: string | null;
+  text: string;
+}
+
+/** Interfacce di un modello a più catene e confronto con quelle del template (domain/complexes.assess). */
+export interface ComplexAssessment {
+  version: number;
+  template: string | null;
+  chains: { template: string; model: string }[];
+  /** interfacce del modello, senza l'elenco di tutti i residui */
+  interfaces: Omit<InterfacesResult, "residues">;
+  template_interfaces: Omit<InterfacesResult, "residues"> | null;
+  comparison: InterfaceComparison[];
+  status: InterfaceStatus;
+  tone: "ok" | "warn" | "err";
+  summary: string;
+  notes: string[];
+  limits: string;
+}
+
+export interface ComplexBrief {
+  status: InterfaceStatus;
+  tone: "ok" | "warn" | "err";
+  dockq: number | null;
+  interfaces: number;
+}
+
+export interface ComplexChainInfo {
+  index: number;
+  model_chain: string;
+  template_chain: string | null;
+  length: number;
+  name: string | null;
+  same_as: string | null;
+}
+
+export interface ComplexResult {
+  chains: ComplexChainInfo[];
+  symmetry: { requested: boolean; applied: boolean; groups: string[][]; weight: number; atoms?: string };
+  template: string | null;
+  mode: "complex" | "pir";
+  /** interfacce del modello migliore (anche senza analisi di qualità) */
+  assessment: ComplexAssessment | null;
 }

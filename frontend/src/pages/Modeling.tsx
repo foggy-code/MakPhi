@@ -9,6 +9,8 @@ import { LigandPicker } from "../components/LigandPicker";
 import { LigandTable } from "../components/LigandsPanel";
 import { groupTitle, STATUS_TONE } from "../lib/ligands";
 import { AlignmentView } from "../components/AlignmentView";
+import { ComplexInput } from "../components/ComplexInput";
+import { ComplexResults, type ComplexView } from "../components/ComplexResults";
 import { CoverageAlerts, useCoverageCheck } from "../components/CoverageAlerts";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
@@ -21,6 +23,7 @@ import { pirReference } from "../lib/alignConfidence";
 import { PlddtOption } from "../components/PlddtOption";
 import { hasPredictedTemplate, PLDDT_DEFAULT, removedRanges, trimSummary } from "../lib/alphafold";
 import { compareTargets } from "../lib/compare";
+import { complexRequest, complexTemplateRefs, emptyComplex, STATUS_TONE as COMPLEX_TONE, symmetryOptions, type ComplexState } from "../lib/complex";
 import { useProject, useToast } from "../lib/context";
 import { modelingAccession, modelingCoverageRequest } from "../lib/disorder";
 import { fileStem, formatRestraints, parseRestraints, type RestraintRow } from "../lib/files";
@@ -81,6 +84,7 @@ function ModelsTable({ jobId, models, selected, onSelect, templates, viewer }: {
               <td>
                 {m.quality ? <span className="row" style={{ gap: 6 }}><Grade grade={m.quality.grade} /> <span className="tiny muted">{fmtNum(m.quality.rama_favored)}% fav.</span></span> : <span className="tiny muted">—</span>}
                 {m.ligands && <Badge tone={STATUS_TONE[m.ligands.status]} title="Verifica dei ligandi trasferiti (contatti, scontri, coordinazione)">ligandi: {m.ligands.status}</Badge>}
+                {m.complex && <Badge tone={COMPLEX_TONE[m.complex.status]} title={`Interfacce confrontate con il template${m.complex.dockq != null ? `: DockQ minimo ${fmtNum(m.complex.dockq, 2)}` : ""}`}>interfacce: {m.complex.status}</Badge>}
               </td>
               <td className="nowrap" onClick={(e) => e.stopPropagation()}>
                 <button className="btn btn-sm" disabled={!!m.failure} title="Analisi di qualità completa" onClick={() => navigate(`/quality?job=${jobId}&file=${encodeURIComponent(m.file)}`)}>
@@ -146,6 +150,8 @@ function Results({ jobId, result, kind }: { jobId: string; result: ModelResult |
   const toast = useToast();
   const [selected, setSelected] = useState(result.best_model);
   const [loop, setLoop] = useState(false);
+  // complesso (F5.3): catene e interfacce del modello mostrato colorate nel 3D
+  const [complexView, setComplexView] = useState<ComplexView | null>(null);
   const viewer = useRef<Viewer3DHandle>(null);
   const best = result.models.find((m) => m.best);
   const full = kind === "model" ? (result as ModelResult) : null;
@@ -199,8 +205,9 @@ function Results({ jobId, result, kind }: { jobId: string; result: ModelResult |
           </div>
         </Card>
       )}
+      {full?.complex && <ComplexResults jobId={jobId} complex={full.complex} selected={selected} best={result.best_model} onView={setComplexView} />}
       <Card title={`Struttura 3D · ${selected}`} sub="Il report del modello selezionato include questa vista">
-        <Viewer3D url={api.jobFileUrl(jobId, selected)} handle={viewer} />
+        <Viewer3D url={api.jobFileUrl(jobId, selected)} handle={viewer} coloring={complexView?.coloring ?? null} highlight={complexView?.highlight ?? []} centerKey={complexView?.centerKey} />
       </Card>
       {full && (
         <Card title="Allineamento usato da MODELLER" right={<button className="btn btn-sm" onClick={savePir}><Icon name="save" size={14} /> Salva PIR nel progetto</button>}>
@@ -228,9 +235,13 @@ export default function Modeling() {
   const toast = useToast();
   const [params, setParams] = useSearchParams();
   const jobId = params.get("job");
-  const [mode, setMode] = useState<"auto" | "pir">("auto");
+  const [mode, setMode] = useState<"auto" | "pir" | "complex">("auto");
   const [target, setTarget] = useState({ name: "", sequence: "" });
   const [templates, setTemplates] = useState<TemplateRef[]>([]);
+  // modalità Complesso (F5.3): un template, una sequenza del bersaglio per catena, simmetria
+  const [complexState, setComplexState] = useState<ComplexState>(() => emptyComplex());
+  const complexCheck = complexRequest(complexState);
+  const activeTemplates = mode === "complex" ? complexTemplateRefs(complexState) : templates;
   const [docId, setDocId] = useState("");
   const [nModels, setNModels] = useState(5);
   const [refinement, setRefinement] = useState("fast");
@@ -256,9 +267,9 @@ export default function Modeling() {
   const [loopOpen, setLoopOpen] = useState(false);
   const { data: info } = useAsync<SystemInfo>(() => api.systemInfo(), []);
   // libreria riletta quando cambiano i template scelti: un modello AlphaFold appena scaricato risulta predetto
-  const templateKey = templates.map((t) => t.id).join(",");
+  const templateKey = activeTemplates.map((t) => t.id).join(",");
   const { data: library } = useAsync<TemplateItem[]>(() => api.templates(), [templateKey]);
-  const predictedChosen = hasPredictedTemplate(templates, library);
+  const predictedChosen = hasPredictedTemplate(activeTemplates, library);
   const { data: docs, reload: reloadDocs } = useAsync<DocumentItem[]>(() => (projectId ? api.documents(projectId) : Promise.resolve([])), [projectId]);
   const { data: recent } = useAsync<JobSummary[]>(() => api.jobs({ project_id: projectId ?? undefined, kind: "model", limit: 8 }), [projectId, jobId]);
   const { job, summary, log, cancel } = useJob<ModelResult | LoopResult>(jobId, { withLog: true });
@@ -274,10 +285,11 @@ export default function Modeling() {
       current = false;
     };
   }, [mode, docId, projectId]);
-  const coverageRequest = useMemo(() => modelingCoverageRequest({
+  // nella modalità Complesso gli avvisi di copertura non si calcolano (una sequenza per catena)
+  const coverageRequest = useMemo(() => (mode === "complex" ? null : modelingCoverageRequest({
     mode, target, templates, pirText, accession: modelingAccession({ mode, target, pirText }, projectSeqs),
     plddtMin: predictedChosen && plddtTrim ? plddtMin : null,
-  }), [mode, target, templates, pirText, projectSeqs, predictedChosen, plddtTrim, plddtMin]);
+  })), [mode, target, templates, pirText, projectSeqs, predictedChosen, plddtTrim, plddtMin]);
   const coverage = useCoverageCheck(coverageRequest);
 
   // Parametri in arrivo da altre pagine (sequenza, template, documento PIR).
@@ -286,6 +298,11 @@ export default function Modeling() {
     const seqText = params.get("seqtext");
     const t = params.getAll("t");
     const doc = params.get("doc");
+    const cmplx = params.get("cmplx"); // libreria → «Complesso»: template a più catene o assemblaggio
+    if (cmplx) {
+      setMode("complex");
+      setComplexState(emptyComplex(cmplx));
+    }
     if (seqText) setTarget({ name: params.get("name") || "target", sequence: seqText });
     if (seqId && projectId) api.sequences(projectId).then((l: Sequence[]) => { const s = l.find((x) => x.id === seqId); if (s) setTarget({ name: s.name, sequence: s.sequence }); });
     if (t.length) setTemplates(t.map((x) => { const [id, ch] = x.split(":"); return { id, chains: ch ? ch.split("") : [] }; }));
@@ -311,6 +328,7 @@ export default function Modeling() {
         if (!projectId || !docId) throw new Error("Scegli un documento PIR.");
         alignment = (await api.document(projectId, docId)).content ?? "";
       }
+      if (mode === "complex" && !complexCheck.request) throw new Error(complexCheck.errors[0] ?? "Complesso incompleto.");
       const regions = loopRegions
         .split(/[,;\n]/)
         .map((r) => r.trim())
@@ -331,16 +349,19 @@ export default function Modeling() {
         // ligandi: esattamente i gruppi scelti (un elenco vuoto = nessuno)
         hetatm: ligandsOn,
         ...(ligandsOn ? { ligands: ligandRefs } : {}),
+        // complesso: restrizioni di simmetria solo con catene uguali
+        ...(mode === "complex" ? symmetryOptions(complexState, complexCheck) : {}),
       };
       const j = await api.model({
         project_id: projectId ?? undefined,
         target: mode === "auto" ? { name: target.name || "target", sequence: target.sequence } : null,
         alignment,
         // la scelta dei ligandi è quella del riquadro Parametri, non la casella del singolo template
-        templates: templates.map((t) => ({ id: t.id, chains: t.chains })),
+        templates: activeTemplates.map((t) => ({ id: t.id, chains: t.chains })),
         options,
         quality,
         extended_quality: quality !== "none" && extended,
+        ...(mode === "complex" ? { complex: complexCheck.request } : {}),
       });
       setParams({ job: j.id });
     } catch (e) {
@@ -378,7 +399,8 @@ export default function Modeling() {
 
   const pirDocs = docs?.filter((d) => d.kind === "pir") ?? [];
   const modellerMissing = info && !info.modeller.available;
-  const canSubmit = templates.length > 0 && templates.every((t) => t.chains.length > 0) && (mode === "auto" ? !!target.sequence.trim() : !!docId)
+  const canSubmit = (mode === "complex" ? !!complexCheck.request
+    : templates.length > 0 && templates.every((t) => t.chains.length > 0) && (mode === "auto" ? !!target.sequence.trim() : !!docId))
     && (!ligandsOn || ligandsReady);
 
   return (
@@ -389,8 +411,10 @@ export default function Modeling() {
         <div className="stack">
           <Card title="Input">
             <div className="stack">
-              <Segmented value={mode} onChange={setMode} options={[{ value: "auto", label: "Allineamento automatico" }, { value: "pir", label: "Da documento PIR" }]} />
-              {mode === "auto" ? (
+              <Segmented value={mode} onChange={setMode} options={[{ value: "auto", label: "Allineamento automatico" }, { value: "pir", label: "Da documento PIR" }, { value: "complex", label: "Complesso" }]} />
+              {mode === "complex" ? (
+                <ComplexInput value={complexState} onChange={setComplexState} />
+              ) : mode === "auto" ? (
                 <SequencePicker value={target} onChange={setTarget} />
               ) : (
                 <div className="stack-sm">
@@ -406,10 +430,12 @@ export default function Modeling() {
                   </div>
                 </div>
               )}
-              <div className="stack-sm">
-                <span className="small text-2" style={{ fontWeight: 550 }}>Template {mode === "pir" && "(stessi del PIR, nello stesso ordine)"}</span>
-                <TemplatePicker value={templates} onChange={setTemplates} ligands={false} onAnalysis={(id, a) => setTemplateInfo((prev) => ({ ...prev, [id]: a }))} />
-              </div>
+              {mode !== "complex" && (
+                <div className="stack-sm">
+                  <span className="small text-2" style={{ fontWeight: 550 }}>Template {mode === "pir" && "(stessi del PIR, nello stesso ordine)"}</span>
+                  <TemplatePicker value={templates} onChange={setTemplates} ligands={false} onAnalysis={(id, a) => setTemplateInfo((prev) => ({ ...prev, [id]: a }))} />
+                </div>
+              )}
               {coverageRequest && (
                 <div className="stack-sm">
                   <span className="small text-2" style={{ fontWeight: 550 }}>Disordine e domini del bersaglio</span>
@@ -437,7 +463,7 @@ export default function Modeling() {
                 <Segmented value={refinement} onChange={setRefinement} options={REFINEMENT.map((r) => ({ value: r.value, label: r.label }))} />
               </Field>
               {predictedChosen && <PlddtOption enabled={plddtTrim} threshold={plddtMin} onEnabled={setPlddtTrim} onThreshold={setPlddtMin} />}
-              <LigandPicker templates={templates} known={templateInfo} enabled={ligandsOn} onEnabled={setLigandsOn} selection={ligandSel}
+              <LigandPicker templates={activeTemplates} known={templateInfo} enabled={ligandsOn} onEnabled={setLigandsOn} selection={ligandSel}
                 onSelection={(sel, refs, ready, failed) => { setLigandSel(sel); setLigandRefs(refs); setLigandsReady(ready); setLigandsFailed(failed); }} />
               <button className="btn btn-ghost btn-sm" style={{ justifySelf: "start" }} onClick={() => setAdvanced(!advanced)}>
                 <Icon name="chevron" size={13} /> Opzioni avanzate
@@ -492,8 +518,9 @@ export default function Modeling() {
                 </div>
               )}
               <button className="btn btn-primary" disabled={!canSubmit || !!modellerMissing} onClick={submit}><Icon name="play" size={14} /> Avvia modellazione</button>
-              {templates.some((t) => !t.chains.length) && <span className="tiny" style={{ color: "var(--warn)" }}>Seleziona almeno una catena per ogni template.</span>}
-              {ligandsOn && !ligandsReady && templates.length > 0 && (ligandsFailed.length
+              {mode !== "complex" && templates.some((t) => !t.chains.length) && <span className="tiny" style={{ color: "var(--warn)" }}>Seleziona almeno una catena per ogni template.</span>}
+              {mode === "complex" && !complexCheck.request && complexCheck.errors[0] && <span className="tiny" style={{ color: "var(--warn)" }}>{complexCheck.errors[0]}</span>}
+              {ligandsOn && !ligandsReady && activeTemplates.length > 0 && (ligandsFailed.length
                 ? <span className="tiny" style={{ color: "var(--warn)" }}>Ligandi di {ligandsFailed.join(", ")} non letti: usa «Riprova» nel riquadro dei ligandi oppure togli la spunta.</span>
                 : <span className="tiny muted">Lettura dei ligandi dei template in corso…</span>)}
             </div>
