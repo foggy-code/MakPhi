@@ -79,6 +79,8 @@ PRIORITY = {
     "pockets": 0, "electrostatics": 0,  # fpocket (< 1 s), PDB2PQR + APBS (secondi): services/structure_tools.py
     "model": 1, "loop": 1, "selftest": 1,
     "refine": 1,  # rifinitura con OpenMM (minuti): services/refine.py
+    "mutate": 0,  # mutagenesi: un processo di MODELLER di pochi secondi (services/mutations.py)
+    "alascan": 1,  # scansione di alanina: un processo di MODELLER per residuo (minuti)
     "pipeline": 2, "db_update_pdbaa": 2, "db_build_mmseqs": 2, "db_index_mmseqs": 2, "db_convert_uniclust": 2,
     "db_local_uniclust": 2,
 }

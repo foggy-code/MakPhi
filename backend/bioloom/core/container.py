@@ -16,6 +16,7 @@ from ..services.housekeeping import Housekeeping
 from ..services.labels import LabelService
 from ..services.licenses import LicenseService
 from ..services.live import LiveService
+from ..services.mutations import MutationService
 from ..services.pipeline import PipelineService
 from ..services.projects import ProjectService
 from ..services.refine import RefineService
@@ -98,6 +99,7 @@ def build_core(paths: Paths) -> Core:
     RefineService(jobs, compute).register()  # job "refine" (F9.1)
     repro = ReproducibilityService(jobs, compute, library, paths, settings.get, licenses)
     repro.register()  # job "rerun" (F9.4)
+    MutationService(jobs, compute).register()  # job "mutate" e "alascan" (F9.2)
     pipeline = PipelineService(db, jobs, compute)
     databases = DatabaseService(jobs, paths.databases, paths.local_cache, settings.get)
     SelfTestService(jobs, paths.databases)

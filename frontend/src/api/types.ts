@@ -6,7 +6,7 @@ export type JobKind =
   | "selftest" | "db_update_pdbaa" | "db_build_mmseqs" | "db_index_mmseqs" | "db_convert_uniclust" | "db_local_uniclust"
   | "analysis"
   | "pockets" | "electrostatics" | "refine"
-  | "rerun";
+  | "rerun" | "mutate" | "alascan";
 
 export type SearchEngine = "rcsb" | "ncbi" | "local" | "mmseqs" | "alphafold";
 
@@ -1571,6 +1571,275 @@ export interface RefineResult {
   warnings: string[];
 }
 
+// ---------------------------------------------------------------------------------- mutagenesi e scansione di alanina (F9.2)
+/** Classe qualitativa dell'effetto (domain/mutations.classify): non un ΔΔG. */
+export type MutationClass = "destabilizing" | "uncertain" | "neutral";
+/** Peso di un segnale: forte, moderato, possibile guadagno, informativo. */
+export type MutationSignalLevel = "strong" | "moderate" | "gain" | "info";
+
+export interface MutationSignal {
+  level: MutationSignalLevel;
+  /** codice stabile: proline_helix, dope, energy, buried_apolar_lost, … */
+  code: string;
+  text: string;
+  /** con più siti: il sito del segnale ("A:K48R") */
+  site?: string;
+}
+
+export interface MutationBinding {
+  interface: boolean;
+  /** hot spot d'interfaccia (Bogan & Thorn 1998): probabile, possibile o nessuno */
+  hotspot: "probabile" | "possibile" | null;
+  text: string;
+  interchain_delta_eq: number | null;
+  lost_inter_chain: number;
+}
+
+export interface MutationAssessment {
+  code: MutationClass;
+  label: string;
+  summary: string;
+  reasons: string[];
+  signals: MutationSignal[];
+  /** chiave di ordinamento (100 per segnale forte, 10 per moderato, più i residui equivalenti di ΔDOPE) */
+  score: number;
+  binding: MutationBinding | null;
+}
+
+export interface MutationRef {
+  chain: string;
+  resnum: string;
+  wt: string;
+  mut: string;
+  /** "A:K48R" ("K48R" per la catena senza identificativo) */
+  label: string;
+  wt_name: string;
+  mut_name: string;
+}
+
+export interface MutationInteraction {
+  type: "hbond" | "salt_bridge" | "disulfide" | "aromatic";
+  partner: string;
+  role: string;
+  atom: string | null;
+  inter_chain: boolean;
+  distance: number | null;
+}
+
+/** Indicatori strutturali di un sito (domain/mutations.site_indicators). */
+export interface MutationSite {
+  site: string;
+  label: string;
+  wt: string;
+  mut: string;
+  rsa_wt: number | null;
+  rsa_mut: number | null;
+  core: boolean;
+  buried_wt: { total: number; apolar: number };
+  buried_mut: { total: number; apolar: number };
+  buried_delta: { total: number; apolar: number };
+  /** DSSP a 8 stati del selvatico ottimizzato, con la posizione nel segmento */
+  ss: string;
+  ss_position: number;
+  ss_length: number;
+  rama: { phi: number; psi: number; wt: string; mut: string } | null;
+  blosum62: number;
+  /** solo in α-elica: ΔΔG di propensione (Pace & Scholtz 1998), kcal/mol */
+  helix_propensity: number | null;
+  interactions: { wild_type: number; mutant: number; lost: MutationInteraction[]; gained: MutationInteraction[] };
+  clashes: { wild_type: number; mutant: number; worst: number | null };
+  interface: { delta: number; rsa_complex: number | null; lost_inter_chain: number } | null;
+}
+
+export interface MutationDope {
+  wild_type: number;
+  mutant: number;
+  delta: number;
+  local_wild_type: number | null;
+  local_mutant: number | null;
+  delta_local: number | null;
+  local_residues: number;
+  local_radius: number;
+  /** |DOPE del selvatico| / residui: l'unità dei "residui equivalenti" */
+  per_residue: number | null;
+  delta_eq: number | null;
+  interchain_wild_type: number | null;
+  interchain_mutant: number | null;
+  interchain_delta: number | null;
+  interchain_delta_eq: number | null;
+  /** scarto del DOPE fra i modelli della stessa variante (rumore del protocollo) */
+  spread: { wild_type?: number; mutant?: number };
+}
+
+/** Energia di OpenMM (facoltativa): ΔΔE = (E_mut − E_wt) − (E_rif,mut − E_rif,wt), kJ/mol; non un ΔΔG. */
+export interface MutationEnergy {
+  available: boolean;
+  message?: string;
+  error?: string;
+  wild_type?: number | null;
+  mutant?: number | null;
+  reference_wild_type?: number | null;
+  reference_mutant?: number | null;
+  delta_folded?: number | null;
+  delta_reference?: number | null;
+  ddE?: number | null;
+  ddE_kcal?: number | null;
+  unit?: string;
+  openmm?: string;
+  files?: { wild_type: string; mutant: string };
+  protocol?: string;
+}
+
+export interface MutationProtocol {
+  method: string;
+  radius: number;
+  local_radius: number;
+  models: number;
+  seeds: number[];
+  randomize: number;
+  selection: string;
+  wild_type: string;
+  energy: boolean;
+  core_rsa: number;
+  thresholds: Record<string, number>;
+}
+
+/** Risultato di un job `mutate` (services/mutations.py). */
+export interface MutateResult {
+  version: number;
+  source: StructureSource;
+  label: string;
+  source_sha256: string;
+  mutations: MutationRef[];
+  notation: string;
+  /** modelli (con il loro `<file>.quality.json`) e, con l'energia, i minimizzati */
+  files: { wild_type: string; mutant: string; wild_type_minimized?: string; mutant_minimized?: string };
+  protocol: MutationProtocol;
+  models: { variant: string; role: "wild_type" | "mutant"; seed: number; dope: number; local: number | null; interchain: number | null; chosen: boolean; moved_atoms: number }[];
+  dope: MutationDope;
+  energy: MutationEnergy | null;
+  sites: MutationSite[];
+  assessment: MutationAssessment;
+  quality: { wild_type: QualitySummary; mutant: QualitySummary };
+  comparison: RefineComparisonRow[];
+  rmsd: { outside: number | null; outside_atoms: number; all: number | null; atoms: number };
+  residues: number;
+  warnings: string[];
+  caveat: string;
+}
+
+export interface AlaScanRow {
+  mutation: MutationRef;
+  label: string;
+  site: MutationSite;
+  dope: MutationDope;
+  energy: MutationEnergy | null;
+  assessment: MutationAssessment;
+  files: { wild_type: string; mutant: string };
+}
+
+/** Risultato di un job `alascan`: righe dalla sostituzione più destabilizzante. */
+export interface AlaScanResult {
+  version: number;
+  source: StructureSource;
+  label: string;
+  source_sha256: string;
+  selection: { mode: ScanMode; detail: string; chain?: string | null; pocket_job?: string; pocket?: number };
+  protocol: MutationProtocol;
+  rows: AlaScanRow[];
+  skipped: { chain: string; resnum: string; resname: string; reason: string }[];
+  failed: { label: string; error: string }[];
+  summary: { residues: number; skipped: number; counts: Record<MutationClass, number>; hotspots: number };
+  hotspots: { label: string; level: "probabile" | "possibile"; text: string }[];
+  interface: boolean;
+  residues: number;
+  csv: string;
+  warnings: string[];
+  caveat: string;
+}
+
+export type ScanMode = "residues" | "interface" | "pocket";
+
+export interface ScanSelection {
+  mode: ScanMode;
+  residues?: string;
+  chain?: string | null;
+  pocket_job?: string | null;
+  pocket?: number | null;
+}
+
+/** Corpo di POST /api/mutate. */
+export interface MutateRequest {
+  project_id?: string;
+  source: StructureSource;
+  mutations: string;
+  energy?: boolean;
+  seed?: number;
+}
+
+/** Corpo di POST /api/alascan. */
+export interface AlaScanRequest {
+  project_id?: string;
+  source: StructureSource;
+  selection: ScanSelection;
+  energy?: boolean;
+  seed?: number;
+}
+
+/** Variante di UniProt portata sulla struttura (GET /api/mutations/variants). */
+export interface MappedVariant {
+  type: "naturale" | "mutagenesi";
+  category: "malattia" | "naturale" | "mutagenesi";
+  /** posizione sulla sequenza di UniProt */
+  position: number;
+  original: string;
+  variation: string;
+  description: string;
+  diseases: string[];
+  ids: string[];
+  evidences: number;
+  feature_id: string;
+  chain: string;
+  /** residuo della struttura corrispondente (null se la posizione non c'è) */
+  resnum: string | null;
+  structure_aa: string | null;
+  applicable: boolean;
+  /** notazione pronta ("A:K48R") se applicabile */
+  notation: string | null;
+  reason: string | null;
+  /** con le ripetizioni (es. poliubiquitina): il tratto di UniProt della variante, da 1; null con un solo tratto */
+  segment: number | null;
+}
+
+export interface VariantMapping {
+  accession: string;
+  entry_name: string;
+  label: string;
+  uniprot_length: number;
+  chain: string;
+  identity: number;
+  coverage: number;
+  /** numerazione di UniProt − numerazione della struttura, se costante (un solo tratto) */
+  offset: number | null;
+  /** tratti di UniProt allineati alla catena: più di uno con le ripetizioni */
+  segments: { start: number; end: number; identity: number }[];
+  variants: MappedVariant[];
+  applicable: number;
+  notes: string[];
+  method: string;
+}
+
+export interface MutationHistoryItem {
+  id: string;
+  kind: "mutate" | "alascan";
+  title: string;
+  status: JobStatus;
+  created_at: string;
+  finished_at: string | null;
+  mutations: string | null;
+  energy: boolean;
+}
+
 // ---------------------------------------------------------------------------------- complessi (F5.3)
 /** Catena di un assemblaggio biologico: nuovo nome, catena d'origine dell'autore e operatore (es. "2" o "1×61"). */
 export interface AssemblyChain {
@@ -1716,7 +1985,7 @@ export interface ComplexResult {
 
 // ---------------------------------------------------------------------------------- controlli preventivi (F8a)
 export type PreflightKind = "model" | "loop" | "align2d" | "pipeline" | "quality" | "qmean" | "search" | "analysis"
-  | "rerun";
+  | "rerun" | "mutate" | "alascan";
 /** error = l'avvio fallirebbe (pulsante disattivato); warning = conferma richiesta; info = da sapere */
 export type PreflightLevel = "error" | "warning" | "info";
 

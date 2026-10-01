@@ -26,11 +26,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional
 
 from ..core.errors import AppError
-from ..domain import complexes, disorder, plddt, report, sequences, structure
+from ..domain import complexes, disorder, mutations, plddt, report, sequences, structure
 from ..domain import preflight as rules
 from ..domain import reproducibility as repro
 from ..engines import modeller, qmean_local, remote, search, tools
+from ..engines import refine as refine_engine
 from .analysis import AnalysisService
+from .mutations import MutationService
 from .compute import MAX_SEQUENCE, _apply_ligand_options, _record, _template_specs, complex_templates
 from .coverage import CoverageService
 from .pipeline import effective_parallel
@@ -41,6 +43,7 @@ if TYPE_CHECKING:
 
 KINDS = ("model", "loop", "align2d", "pipeline", "quality", "qmean", "search", "analysis",
          "rerun")  # rerun: riesecuzione da pacchetto (F9.4)
+KINDS += ("mutate", "alascan")  # mutagenesi e scansione di alanina (F9.2)
 
 
 def disk_free(path: Path) -> Optional[int]:
@@ -508,3 +511,66 @@ class PreflightService:
                 timeout_seconds=self.settings.job_timeout_minutes * 60)
         self._disk(out, facts["data_bytes"], facts["scratch_bytes"])
         self._queue(out)
+
+    # ------------------------------------------------------------------------------ mutagenesi (F9.2)
+    def _mutation_context(self, out: dict, p: dict, sites: list[tuple[str, str]]) -> Optional[int]:
+        """Residui della struttura, ligandi e interruzioni vicino ai siti (come gli avvisi del job)."""
+        service = MutationService(self.core.jobs, self.core.compute)
+        _path, _label, model, _n = service._structure(p.get("source") or {})
+        _text, info = mutations.modeller_input(model)
+        near = set(mutations.neighbourhood(model, sites, mutations.RADIUS))
+        breaks = [f"{mutations.chain_name(b['chain'])}{b['after']}/{b['before']}" for b in info["breaks"]
+                  if (b["chain"], b["after"]) in near or (b["chain"], b["before"]) in near]
+        out["checks"] += rules.mutation_context_checks(
+            mutations.neighbourhood_hetero(model, sites, mutations.LOCAL_RADIUS), breaks)
+        return info["residues_count"]
+
+    def _sites_context(self, out: dict, p: dict, muts: list) -> Optional[int]:
+        """Contesto dei siti validati (nessuno: None); un fatto illeggibile è un'informazione, come gli altri."""
+        if not muts:
+            return None
+        holder: dict = {}
+        self._guard(out, "contesto dei residui", lambda: holder.update(
+            residues=self._mutation_context(out, p, [(m.chain, m.resnum) for m in muts])))
+        return holder.get("residues")
+
+    def _mutation_common(self, out: dict, p: dict, process: Optional[float]) -> None:
+        energy = bool(p.get("energy"))
+        self._modeller(out, purpose="la mutagenesi")
+        out["checks"] += rules.mutation_energy_checks(energy, refine_engine.missing() if energy else None)
+        if out["estimate"] is not None:
+            out["checks"] += rules.runtime_checks(out["estimate"], what="Il calcolo", process_seconds=process,
+                                                  timeout_seconds=self.settings.job_timeout_minutes * 60)
+        self._queue(out)
+
+    def _mutate(self, p: dict, context: dict, out: dict) -> None:
+        try:
+            muts = MutationService(self.core.jobs, self.core.compute).validate_mutate(p)
+        except AppError as exc:
+            out["checks"].append(rules.invalid(exc.code, exc.message))
+            muts = []
+        energy = bool(p.get("energy"))
+        residues = self._sites_context(out, p, muts)
+        process = None
+        if residues:
+            out["estimate"] = rules.mutation_estimate(residues, energy=energy, mutations=len(muts))
+            process = rules.mutation_site_seconds(residues) - rules.T_MUTATION_INDICATORS_RESIDUE * residues
+            self._disk(out, *rules.mutation_bytes(residues, energy=energy))
+        self._mutation_common(out, p, process)
+
+    def _alascan(self, p: dict, context: dict, out: dict) -> None:
+        muts: list = []
+        try:
+            muts, skipped, _selection = MutationService(self.core.jobs, self.core.compute).validate_scan(p)
+            out["checks"] += rules.scan_skipped_checks(skipped)
+        except AppError as exc:
+            out["checks"].append(rules.invalid(exc.code, exc.message))
+        energy = bool(p.get("energy"))
+        residues = self._sites_context(out, p, muts)
+        process = None
+        if residues:
+            out["estimate"] = rules.scan_estimate(residues, len(muts), energy=energy,
+                                                  lanes=self.settings.effective_workers())
+            process = rules.mutation_site_seconds(residues) - rules.T_MUTATION_INDICATORS_RESIDUE * residues
+            self._disk(out, *rules.mutation_bytes(residues, sites=len(muts), energy=energy, quality=False))
+        self._mutation_common(out, p, process)

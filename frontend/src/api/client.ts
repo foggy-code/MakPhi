@@ -49,6 +49,10 @@ import type {
   SearchGroupType,
   SearchResponse,
   TagCount,
+  MutateRequest,
+  AlaScanRequest,
+  VariantMapping,
+  MutationHistoryItem,
 } from "./types";
 import { filenameFromDisposition, reportFallbackName } from "../lib/report";
 
@@ -387,6 +391,22 @@ export const api = {
     return request<JobSummary>("POST", "/api/jobs/rerun", form, true);
   },
   discardPackage: (packageId: string) => del<{ deleted: string }>(`/api/jobs/rerun/${enc(packageId)}`),
+  // mutagenesi in silico e scansione di alanina (F9.2): job; risultati in api.job
+  mutate: (body: MutateRequest) => post<JobSummary>("/api/mutate", body),
+  alascan: (body: AlaScanRequest) => post<JobSummary>("/api/alascan", body),
+  /** varianti di UniProt dell'accessione mappate sulla numerazione della struttura (cache 7 giorni nel server) */
+  uniprotVariants: (accession: string, source: StructureSource, chain?: string | null) => {
+    const params = new URLSearchParams({ accession, type: source.type });
+    for (const key of ["id", "job_id", "file"] as const) if (source[key]) params.set(key, String(source[key]));
+    if (chain) params.set("chain", chain);
+    return get<VariantMapping>(`/api/mutations/variants?${params}`);
+  },
+  /** job di mutagenesi e scansione di alanina sulla stessa struttura, dal più recente */
+  mutationHistory: (source: StructureSource) => {
+    const params = new URLSearchParams({ type: source.type });
+    for (const key of ["id", "job_id", "file"] as const) if (source[key]) params.set(key, String(source[key]));
+    return get<MutationHistoryItem[]>(`/api/mutations/history?${params}`);
+  },
 };
 
 export type { Align2dResult, AlignResult };

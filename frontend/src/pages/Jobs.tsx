@@ -33,6 +33,8 @@ const OPEN_IN: Record<JobKind, (id: string) => string> = {
   electrostatics: (id) => `/quality?ejob=${id}`,
   refine: (id) => `/modeling?job=${id}`,
   rerun: (id) => `/rerun?job=${id}`,
+  mutate: (id) => `/modeling?job=${id}`,
+  alascan: (id) => `/modeling?job=${id}`,
 };
 
 function Detail({ id, labels, onDeleted, onChanged, onLabels }: { id: string; labels?: ItemLabels; onDeleted: () => void; onChanged: () => void; onLabels: (l: EntityLabels) => void }) {

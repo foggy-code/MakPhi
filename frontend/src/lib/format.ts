@@ -33,6 +33,8 @@ export const KIND_LABEL: Record<JobKind, string> = {
   electrostatics: "Elettrostatica (APBS)",
   refine: "Rifinitura energetica",
   rerun: "Riesecuzione da pacchetto",
+  mutate: "Mutagenesi",
+  alascan: "Scansione di alanina",
 };
 
 export const ACTIVE_STATUSES: JobStatus[] = ["queued", "running", "cancelling"];

@@ -14,6 +14,9 @@ rotta del consenso (`ComputeService.consensus`), che controlla che QMEAN riguard
   parametri di MODELLER, la rifinitura: protocollo e parametri di OpenMM, atomi aggiunti da PDBFixer, energia prima e
   dopo con le componenti, RMSD della catena principale e confronto prima/dopo delle metriche di qualità (dal risultato
   del job); la qualità è il rapporto del modello rifinito.
+* **mutate / alascan (F9.2):** il file è il mutante o il selvatico riottimizzato (`files` del risultato), con la sezione
+  "Mutagenesi in silico" (classe, motivazioni, DOPE ed energia, confronto, protocollo) e la qualità del modello; la
+  scansione di alanina ha il report senza modello (`/report`), con la tabella e gli hot spot.
 * **analisi strutturale (F7):** in ogni report, i ponti disolfuro e le interfacce dell'analisi `analysis` completata
   più recente sulla stessa struttura (stessa sorgente e stessa impronta del file), se ce ne sono.
 """
@@ -80,10 +83,14 @@ class ReportService:
         per un'analisi di qualità. `image_png`: byte già verificati da `report.decode_png`."""
         job = self.jobs.get(job_id)
         kind = job["kind"]
-        if not model:
+        if not model and kind == "alascan":  # scansione di alanina (F9.2): tabella della struttura scandita
+            data, stem = self._alascan_data(job)
+        elif not model:
             if kind != "quality":
                 raise AppError("Indica il file del modello di cui generare il report.", code="report_model_required")
             data, stem = self._quality_data(job, qmean_job)
+        elif kind == "mutate":  # mutagenesi (F9.2): mutante o selvatico riottimizzato
+            data, stem = self._mutate_data(job, _rel(model), qmean_job)
         elif kind in ("model", "loop"):
             data, stem = self._model_data(job, _rel(model), qmean_job)
         elif kind == "pipeline":
@@ -94,9 +101,9 @@ class ReportService:
             raise AppError("Il report di un'analisi di qualità riguarda la struttura analizzata: non indicare un file.",
                            code="report_unsupported")
         else:
-            raise AppError(f"Il report è disponibile per i modelli dei job di modellazione, loop, pipeline e "
-                           f"rifinitura e per le analisi di qualità, non per i job di tipo '{kind}'.",
-                           code="report_unsupported")
+            raise AppError(f"Il report è disponibile per i modelli dei job di modellazione, loop, pipeline, "
+                           f"rifinitura e mutagenesi, per le analisi di qualità e le scansioni di alanina, non per i job "
+                           f"di tipo '{kind}'.", code="report_unsupported")
         data["image_png"] = image_png
         data["analysis"] = self._analysis(job, _rel(model) if model else None)
         return report.render(data), report.safe_filename(stem)
@@ -443,6 +450,62 @@ class ReportService:
             "warnings": [str(w) for w in res.get("warnings") or []],
         })
         return data, f"report_{PurePosixPath(rel).stem}"
+
+    # ------------------------------------------------------------------------------ job mutate e alascan (F9.2)
+    MUTATION_FIELDS = ("notation", "mutations", "assessment", "sites", "dope", "energy", "comparison", "rmsd",
+                       "protocol", "caveat", "files")
+
+    def _mutate_data(self, job: dict, rel: str, qmean_job: Optional[str]) -> tuple[dict, str]:
+        """Mutante o selvatico riottimizzato di un job `mutate`: sezione "Mutagenesi in silico" e la qualità del
+        modello (il suo `<file>.quality.json`)."""
+        res = self._completed(job)
+        files = res.get("files") if isinstance(res.get("files"), dict) else {}
+        if rel not in (files.get("mutant"), files.get("wild_type")):
+            raise NotFound(f"{rel} non è un modello del job {job['id']} ({files.get('mutant')}, "
+                           f"{files.get('wild_type')}).")
+        path = self.jobs.file_path(job["id"], rel)
+        quality = load_quality_report(self.jobs, job["id"], rel)
+        cons, qmean = self._quality(job["id"], rel, quality, None, qmean_job)
+        tools = self._tools(_head(path), quality, qmean)
+        if not any(name == "MODELLER" for name, _v in tools):
+            tools.insert(1, ("MODELLER", "(mutate_model)"))
+        energy = res.get("energy") if isinstance(res.get("energy"), dict) else {}
+        if energy.get("openmm"):
+            tools.insert(2, ("OpenMM", str(energy["openmm"])))
+        seq, chains = self._structure_sequence(path, quality)
+        label = res.get("label") or describe_source(res.get("source"))
+        role = "mutante " + str(res.get("notation") or "") if rel == files.get("mutant") else \
+            "selvatico riottimizzato con lo stesso protocollo"
+        data = self._base(job, "mutate")
+        data.update({
+            "model": rel, "quality": quality, "consensus": cons, "tools": tools,
+            "target": {"name": f"{label} ({role.strip()})", "sequence": seq, "chains": chains},
+            "source": describe_source(res.get("source")),
+            "mutation": {k: res.get(k) for k in self.MUTATION_FIELDS},
+            "warnings": [str(w) for w in res.get("warnings") or []],
+        })
+        return data, f"report_{PurePosixPath(rel).stem}"
+
+    def _alascan_data(self, job: dict) -> tuple[dict, str]:
+        """Scansione di alanina: tabella, esclusi e hot spot della struttura scandita (nessun modello analizzato)."""
+        res = self._completed(job)
+        source = res.get("source") if isinstance(res.get("source"), dict) else {}
+        try:
+            path, _label = self.compute.resolve_structure(source)
+        except AppError:  # struttura eliminata dopo la scansione: la tabella basta
+            path = None
+        label = str(res.get("label") or "struttura")
+        seq, chains = self._structure_sequence(path or Path(label), None) if path else ("", [])
+        data = self._base(job, "alascan")
+        data.update({
+            "tools": [("BioLoom", __version__), ("MODELLER", "(mutate_model)")]
+            + ([("OpenMM", "")] if (res.get("protocol") or {}).get("energy") else []),
+            "target": {"name": label, "sequence": seq, "chains": chains}, "source": describe_source(source),
+            "scan": {k: res.get(k) for k in ("rows", "skipped", "summary", "hotspots", "selection", "protocol",
+                                             "caveat", "interface")},
+            "warnings": [str(w) for w in res.get("warnings") or []],
+        })
+        return data, f"report_alascan_{PurePosixPath(label).stem}"
 
     # ------------------------------------------------------------------------------ job quality
     def _quality_data(self, job: dict, qmean_job: Optional[str]) -> tuple[dict, str]:

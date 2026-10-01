@@ -633,6 +633,111 @@ def queue_checks(active: int, workers: int) -> list[dict]:
                   "aspetterà in coda (ricerche, allineamenti e analisi brevi hanno la precedenza).")]
 
 
+# ---------------------------------------------------------------------------------------------- mutagenesi (F9.2)
+# Tempi misurati sullo stesso portatile (container di sviluppo, 4 CPU logiche), 1UBQ (76 residui) e dimero sintetico
+# (152): un modello di mutante (costruzione, ottimizzazione e DOPE) 1,2 s con 76 residui e 1,55 s con 152, quindi
+# 0,85 + 0,0046 s per residuo; avvio dello script 1 s; indicatori strutturali (SASA, interazioni, DSSP di due modelli)
+# 0,01 s per residuo. Job `mutate` su 1UBQ: 10–15 s senza energia (misurati 9,7–14,9), 80 s con l'energia di OpenMM
+# (quattro minimizzazioni, due alla volta: 8 + 0,8 s per residuo, misurata solo su 1UBQ).
+T_MUTANT_MODEL = 0.85
+T_MUTANT_MODEL_RESIDUE = 0.0046
+T_MUTATE_STARTUP = 1.0
+T_MUTATION_INDICATORS_RESIDUE = 0.01
+T_MUTATION_ENERGY = 8.0
+T_MUTATION_ENERGY_RESIDUE = 0.8
+SCAN_LANE_SLOWDOWN = 0.25
+# Spazio: due modelli PDB (880 byte per residuo, come i modelli di MODELLER), due rapporti di qualità senza PROCHECK
+# (circa 2000 byte per residuo), con l'energia quattro PDB in più fra minimizzati e copie (3500 byte per residuo);
+# nello scratch i 6 modelli dei semi finché non si sceglie il migliore.
+MUTATION_BASE_BYTES = 100 * 1024
+MUTATION_BYTES_PER_RESIDUE = 2 * RESULT_BYTES_PER_RESIDUE_MODEL + 2 * 2000
+MUTATION_ENERGY_BYTES_PER_RESIDUE = 3500
+MUTATION_SCRATCH_BYTES_PER_RESIDUE = 6 * RESULT_BYTES_PER_RESIDUE_MODEL
+MUTATION_BASIS = ("Stima dai tempi misurati su un portatile a 4 CPU logiche (1UBQ e un suo dimero sintetico), lineare nei "
+                  "residui: su un altro computer, in emulazione x86 o con altri calcoli in corso può variare di un "
+                  "fattore 2; l'energia di OpenMM è misurata solo su 1UBQ.")
+
+
+def mutation_site_seconds(residues: int, *, energy: bool = False, models: int = 3) -> float:
+    """Tempo di una variante (selvatico + mutante, `models` modelli ciascuno) con gli indicatori ed eventualmente
+    l'energia: un sito della scansione, o il cuore di un job `mutate`."""
+    n = max(1, int(residues))
+    build = T_MUTATE_STARTUP + 2 * models * (T_MUTANT_MODEL + T_MUTANT_MODEL_RESIDUE * n)
+    out = build + T_MUTATION_INDICATORS_RESIDUE * n
+    if energy:
+        out += T_MUTATION_ENERGY + T_MUTATION_ENERGY_RESIDUE * n
+    return out
+
+
+def mutation_estimate(residues: int, *, energy: bool, mutations: int) -> dict:
+    """Job `mutate`: una variante, più l'analisi di qualità di selvatico e mutante (in parallelo)."""
+    scale = max(1, int(residues)) / REFERENCE_RESIDUES
+    seconds = mutation_site_seconds(residues, energy=energy) + 1.5 * T_QUALITY_BASIC * scale
+    detail = (f"{residues} residui, {mutations} {'sostituzione' if mutations == 1 else 'sostituzioni'}, 3 modelli per "
+              "selvatico e mutante" + (", energia con OpenMM" if energy else ""))
+    return estimate(seconds, detail=detail, basis=MUTATION_BASIS)
+
+
+def scan_estimate(residues: int, sites: int, *, energy: bool, lanes: int) -> dict:
+    """Job `alascan`: un sito per processo, `lanes` siti insieme (job paralleli delle Impostazioni). Con più siti
+    insieme ogni sito rallenta (processori condivisi, indicatori in Python): + `SCAN_LANE_SLOWDOWN` per ogni sito in
+    più dello stesso turno, misurato con 3 alla volta su 4 CPU logiche (1UBQ: 14,7 s per un turno contro 9 s di un sito
+    da solo; dimero: 15,8 contro 11,8)."""
+    lanes = max(1, min(int(lanes), max(1, int(sites))))
+    slowdown = 1.0 + SCAN_LANE_SLOWDOWN * (lanes - 1)
+    seconds = math.ceil(max(1, int(sites)) / lanes) * mutation_site_seconds(residues, energy=energy) * slowdown
+    detail = (f"{sites} {'residuo' if sites == 1 else 'residui'} in alanina su {residues}, {lanes} alla volta"
+              + (", energia con OpenMM" if energy else ""))
+    return estimate(seconds, detail=detail, basis=MUTATION_BASIS)
+
+
+def mutation_bytes(residues: int, *, sites: int = 1, energy: bool = False, quality: bool = True) -> tuple[int, int]:
+    """(risultati, scratch) di un job `mutate` (sites = 1) o `alascan` (senza analisi di qualità), in byte."""
+    n = max(1, int(residues))
+    per_site = n * (2 * RESULT_BYTES_PER_RESIDUE_MODEL + (MUTATION_ENERGY_BYTES_PER_RESIDUE if energy else 0))
+    results = MUTATION_BASE_BYTES + max(1, int(sites)) * per_site + (n * 2 * 2000 if quality else 0)
+    return results, results + n * MUTATION_SCRATCH_BYTES_PER_RESIDUE * max(1, int(sites))
+
+
+def mutation_energy_checks(requested: bool, missing: Optional[str]) -> list[dict]:
+    """Energia di OpenMM chiesta: senza OpenMM o PDBFixer il job prosegue senza (avviso); altrimenti un'informazione su
+    che cosa misura."""
+    if not requested:
+        return []
+    if missing:
+        return [check("warning", "mutation_energy_unavailable",
+                      f"{missing} L'energia non verrà calcolata: la stima userà il DOPE e gli indicatori strutturali.",
+                      "Togli l'opzione, oppure usa l'immagine Docker aggiornata di BioLoom.")]
+    return [check("info", "mutation_energy",
+                  "Energia con OpenMM: selvatico, mutante e tripeptidi di riferimento minimizzati con le restrizioni della "
+                  "rifinitura (quattro processi). È un'energia, non un ΔΔG: serve come indicatore in più.")]
+
+
+def mutation_context_checks(ligands_near: list[str], breaks_near: list[str]) -> list[dict]:
+    """Gruppi eteroatomici o interruzioni della catena vicino ai residui da mutare: il protocollo non li considera."""
+    out = []
+    if ligands_near:
+        out.append(check("warning", "mutation_ligand_near",
+                         f"Vicino ai residui da mutare c'è {', '.join(ligands_near[:6])}: MODELLER lavora sulla sola "
+                         "proteina, quindi la stima non tiene conto del ligando, del metallo o del cofattore.",
+                         "Interpreta con cautela l'effetto su un sito di legame o di coordinazione."))
+    if breaks_near:
+        out.append(check("info", "mutation_break_near",
+                         f"Interruzione della catena vicino ai residui da mutare ({', '.join(breaks_near[:6])}): i due "
+                         "tratti restano separati e nessun residuo mancante viene ricostruito."))
+    return out
+
+
+def scan_skipped_checks(skipped: list[dict]) -> list[dict]:
+    """Residui esclusi dalla scansione (glicina, prolina, alanina, non standard)."""
+    if not skipped:
+        return []
+    names = ", ".join(f"{s.get('resname')} {s.get('chain', '').strip() or '_'}{s.get('resnum')}" for s in skipped[:8])
+    return [check("info", "scan_skipped",
+                  f"{len(skipped)} {'residuo escluso' if len(skipped) == 1 else 'residui esclusi'} dalla scansione "
+                  f"(glicina, prolina, già alanina o non standard): {names}" + ("…" if len(skipped) > 8 else "") + ".")]
+
+
 IDENTICAL_MODELS = ("Con il raffinamento rapidissimo (a.very_fast() di MODELLER) le coordinate iniziali non vengono "
                     "perturbate: i {n} modelli sono identici e la scelta per DOPE non serve.")
 

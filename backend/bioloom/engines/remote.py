@@ -189,6 +189,65 @@ def uniprot_entry(accession: str) -> dict:
     return entry
 
 
+# Varianti di una voce UniProtKB (F9.2): le feature "Natural variant" e "Mutagenesis" sono già nella risposta di
+# `uniprot_entry` ({acc}.json), ma lì se ne tengono solo tipo e posizione; qui la stessa richiesta con la sua cache
+# (namespace proprio: le voci di `uniprot_entry` già in cache non cambiano formato). Si tengono le sole sostituzioni
+# di un residuo (le delezioni e le sostituzioni di più residui non sono mutazioni puntuali).
+VARIANT_TYPES = {"Natural variant": "naturale", "Mutagenesis": "mutagenesi"}
+UNIPROT_VARIANTS_VERSION = 1
+
+
+def parse_uniprot_variants(data: dict, accession: str = "") -> dict:
+    """Varianti puntuali di una voce UniProtKB in JSON: [{type, category (malattia, naturale, mutagenesi), position,
+    original, variation, description, ids (dbSNP…), evidences, feature_id}], con sequenza e malattie della voce."""
+    diseases = {}
+    for c in data.get("comments") or []:
+        if c.get("commentType") == "DISEASE":
+            dis = c.get("disease") or {}
+            if dis.get("acronym"):
+                diseases[str(dis["acronym"])] = str(dis.get("diseaseId") or dis["acronym"])
+    out = []
+    for f in data.get("features") or []:
+        kind = VARIANT_TYPES.get(f.get("type", ""))
+        loc = f.get("location") or {}
+        start, end = (loc.get("start") or {}).get("value"), (loc.get("end") or {}).get("value")
+        alt = f.get("alternativeSequence") or {}
+        original = str(alt.get("originalSequence") or "")
+        variations = [str(v) for v in alt.get("alternativeSequences") or []]
+        if kind is None or start is None or start != end or len(original) != 1:
+            continue
+        description = str(f.get("description") or "")
+        # "in CMH1; …": la variante è associata alla malattia con quella sigla (commenti DISEASE della voce)
+        words = set(re.findall(r"[A-Za-z0-9-]+", description.split(";")[0])) if description.startswith("in ") else set()
+        linked = sorted(diseases[w] for w in words if w in diseases)
+        category = "mutagenesi" if kind == "mutagenesi" else "malattia" if linked else "naturale"
+        ids = [f"{x.get('database')}:{x.get('id')}" for x in f.get("featureCrossReferences") or [] if x.get("id")]
+        for variation in variations:
+            if len(variation) != 1:
+                continue
+            out.append({"type": kind, "category": category, "position": int(start), "original": original.upper(),
+                        "variation": variation.upper(), "description": description, "diseases": linked, "ids": ids,
+                        "evidences": len(f.get("evidences") or []), "feature_id": f.get("featureId") or ""})
+    out.sort(key=lambda v: (v["position"], v["variation"]))
+    seq = data.get("sequence") or {}
+    return {"accession": data.get("primaryAccession", accession), "entry_name": data.get("uniProtkbId", ""),
+            "sequence": seq.get("value", ""), "variants": out, "diseases": diseases,
+            "version": UNIPROT_VARIANTS_VERSION}
+
+
+def uniprot_variants(accession: str) -> dict:
+    """Varianti puntuali naturali e di mutagenesi di una voce UniProtKB (cache 7 giorni, come `uniprot_entry`)."""
+    acc = validate_uniprot_accession(accession)
+    key = f"v{UNIPROT_VARIANTS_VERSION}:{acc}"
+    cached = _cache_get("uniprot_variants", key, 7 * 86400)
+    if isinstance(cached, dict):
+        return cached
+    data = _request("GET", f"{UNIPROT}/{acc}.json", "UniProt", headers={"Accept": "application/json"}).json()
+    parsed = parse_uniprot_variants(data, acc)
+    _cache_put("uniprot_variants", key, parsed)
+    return parsed
+
+
 def uniprot_search(query: str, size: int = 15) -> list[dict]:
     q = (query or "").strip()
     if len(q) < 2:
