@@ -35,6 +35,7 @@ const OPEN_IN: Record<JobKind, (id: string) => string> = {
   rerun: (id) => `/rerun?job=${id}`,
   mutate: (id) => `/modeling?job=${id}`,
   alascan: (id) => `/modeling?job=${id}`,
+  predict: (id) => `/quality?prjob=${id}`,
 };
 
 function Detail({ id, labels, onDeleted, onChanged, onLabels }: { id: string; labels?: ItemLabels; onDeleted: () => void; onChanged: () => void; onLabels: (l: EntityLabels) => void }) {

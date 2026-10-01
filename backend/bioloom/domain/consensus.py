@@ -18,6 +18,12 @@ entra nel conto.
    entra nel punteggio globale, né tra i metodi che segnalano un residuo, né nel conteggio delle regioni
    problematiche; spiega quelle che vi cadono dentro (`expected`), come la coda disordinata di una proteina
    costruita da MODELLER senza template.
+5. **Accordo con una predizione esterna** (F9.3, `predictor_method`, `predictor_signal`): solo se l'utente ha eseguito
+   il confronto con ESMFold o AlphaFold DB (job `predict`, `domain/prediction.assess`). Entra nel punteggio come metodo
+   informativo con peso dichiarato e basso (`PREDICTOR_WEIGHT`): misura l'accordo con un'altra predizione, non con la
+   realtà. Per residuo è informativo come il disordine: non conta fra i metodi delle regioni problematiche, ma segna
+   (`predictor_overlap`) quelle in cui il modello diverge da una predizione sicura. Senza confronto il risultato è
+   identico a prima (nessun metodo in più, nemmeno fra i mancanti).
 
 Il voto A–D (`domain/grading`) non cambia: il consenso è un campo in più del rapporto.
 """
@@ -31,8 +37,10 @@ from typing import Optional
 
 from . import disorder as disorder_mod
 from . import perresidue
+from . import prediction as prediction_mod
 
-# 2: campo `disorder` e regioni problematiche con `expected`/`disorder_overlap` (F5.5)
+# 2: campo `disorder` e regioni problematiche con `expected`/`disorder_overlap` (F5.5). Il campo `predictor` (F9.3)
+# c'è solo con un confronto e non cambia la versione: senza confronto il risultato è lo stesso della versione 2.
 VERSION = 2
 
 GOOD = 70.0  # fascia buona: normalizzato ≥ 70
@@ -95,6 +103,25 @@ MISSING_REASON = {
     "procheck": "PROCHECK non eseguito",
 }
 
+# Accordo con una predizione esterna (F9.3): lDDT-Cα del modello rispetto alla predizione, sui soli residui dove la
+# predizione è confidente (pLDDT ≥ 70; dove il predittore è incerto il disaccordo non dice nulla sul modello). Scala con
+# le fasce del pLDDT, che è un lDDT-Cα predetto su 0–100 (Jumper et al. 2021; Tunyasuvunakool et al. 2021): 0,7 →
+# 70 (confidente = fascia buona), 0,5 → 40 (molto bassa = fascia scarsa). Peso 0,25, il più basso: la predizione non è
+# una misura e può sbagliare dove il modello per omologia, con un template sperimentale vicino, ha ragione.
+PREDICTOR_POINTS = ((0.0, 0.0), (0.5, 40.0), (0.7, 70.0), (1.0, 100.0))
+PREDICTOR_WEIGHT = 0.25
+PREDICTOR_REASON = (f"predizione sicura (pLDDT ≥ {prediction_mod.PLDDT_CONFIDENT:g}) su meno di "
+                    f"{prediction_mod.MIN_CONFIDENT_RESIDUES} residui: l'accordo non è informativo")
+
+
+def predictor_method(label: str) -> Method:
+    """Metodo "accordo con la predizione" del consenso, con il nome del predittore (ESMFold, AlphaFold DB)."""
+    return Method("predictor", f"Accordo con {label}", PREDICTOR_POINTS, PREDICTOR_WEIGHT, "external",
+                  f"l'accordo con una predizione indipendente ({label}): lDDT-Cα dove la predizione è sicura",
+                  "Mariani et al. 2013 (lDDT); fasce del pLDDT di AlphaFold DB (Tunyasuvunakool et al. 2021), che è "
+                  "un lDDT-Cα predetto: 0,7 confidente, sotto 0,5 molto basso; peso basso scelto da BioLoom (una "
+                  "predizione non è una misura sperimentale)")
+
 # Segnali per residuo: (chiave, etichetta, regola).
 QMEAN_LOCAL_THRESHOLD = 0.6  # SWISS-MODEL: residui con punteggio locale sotto 0,6 di bassa qualità attesa
 PROSA_THRESHOLD = 0.0  # ProSA: "valori positivi corrispondono a parti problematiche" (Wiederstein & Sippl 2007)
@@ -150,13 +177,17 @@ def _join(items: list[str]) -> str:
 
 
 # ---------------------------------------------------------------------------------------------- globale
-def global_score(values: dict[str, Optional[float]]) -> dict:
-    """Media pesata dei punteggi normalizzati dei metodi disponibili (valori None o assenti esclusi)."""
+def global_score(values: dict[str, Optional[float]], extra: tuple[Method, ...] = (),
+                 reasons: Optional[dict[str, str]] = None) -> dict:
+    """Media pesata dei punteggi normalizzati dei metodi disponibili (valori None o assenti esclusi).
+
+    `extra`: metodi che valgono solo per questo rapporto (l'accordo con una predizione, F9.3), dopo quelli di
+    `METHODS`; `reasons`: motivo dell'assenza dei metodi di `extra` senza valore."""
     methods, missing = [], []
-    for key, m in METHODS.items():
+    for key, m in [*METHODS.items(), *((x.key, x) for x in extra)]:
         raw = values.get(key)
         if raw is None or not isinstance(raw, (int, float)):
-            missing.append({"key": key, "label": m.label, "reason": MISSING_REASON[key]})
+            missing.append({"key": key, "label": m.label, "reason": (reasons or {}).get(key) or MISSING_REASON[key]})
             continue
         norm = round(piecewise(float(raw), m.points), 1)
         methods.append({"key": key, "label": m.label, "raw": round(float(raw), 4), "normalized": norm,
@@ -165,7 +196,7 @@ def global_score(values: dict[str, Optional[float]]) -> dict:
     total_weight = sum(m["weight"] for m in methods)
     score = round(sum(m["normalized"] * m["weight"] for m in methods) / total_weight, 1) if total_weight else None
     return {"score": score, "band": band(score) if score is not None else None, "methods_used": len(methods),
-            "methods_total": len(METHODS), "methods": methods, "missing": missing}
+            "methods_total": len(METHODS) + len(extra), "methods": methods, "missing": missing}
 
 
 _HINTS = {
@@ -183,17 +214,32 @@ _HINTS = {
     ("energy", "energy"): "i potenziali statistici non concordano: conferma con le regioni segnalate per residuo.",
     ("geometry", "geometry"): "i criteri stereochimici non concordano: controlla i residui fuori dalle regioni "
                               "favorite di Ramachandran.",
+    # accordo con una predizione esterna (F9.3)
+    ("external", "geometry"): "la predizione indipendente conferma il ripiegamento; i difetti sono locali "
+                              "(stereochimica, contatti): rifinitura o loop.",
+    ("external", "energy"): "la predizione indipendente conferma il ripiegamento, ma l'energia indica un impaccamento "
+                            "poco nativo: controlla catene laterali e regioni segnalate.",
+    ("external", "fold"): "la predizione indipendente conferma il ripiegamento (GA341 dipende anche dall'identità con "
+                          "il template).",
+    ("geometry", "external"): "la stereochimica è regolare ma il modello diverge dalla predizione dove questa è sicura: "
+                              "possibile errore di allineamento o di template, che la geometria locale non vede.",
+    ("energy", "external"): "l'energia è buona ma il modello diverge dalla predizione dove questa è sicura: controlla "
+                            "allineamento e template nelle regioni divergenti.",
+    ("fold", "external"): "GA341 giudica affidabile il ripiegamento, ma il modello diverge dalla predizione dove questa "
+                          "è sicura: GA341 dipende anche dall'identità con il template.",
 }
 
 
-def discordances(methods: list[dict]) -> list[dict]:
-    """Coppie di metodi in fasce opposte (uno buono, l'altro scarso), con una frase esplicativa."""
+def discordances(methods: list[dict], catalog: Optional[dict[str, Method]] = None) -> list[dict]:
+    """Coppie di metodi in fasce opposte (uno buono, l'altro scarso), con una frase esplicativa. `catalog`: i metodi
+    (predefinito `METHODS`; con l'accordo con una predizione anche quel metodo)."""
+    catalog = catalog or METHODS
     out = []
     good = [m for m in methods if m["band"] == "buona"]
     poor = [m for m in methods if m["band"] == "scarsa"]
     for g in good:
         for p in poor:
-            mg, mp = METHODS[g["key"]], METHODS[p["key"]]
+            mg, mp = catalog[g["key"]], catalog[p["key"]]
             hint = _HINTS.get((mg.scope, mp.scope), "")
             text = (f"{mg.label} giudica il modello buono ({_num(g['raw'], mg.digits)} → {_num(g['normalized'], 0)}/100), "
                     f"{mp.label} scarso ({_num(p['raw'], mp.digits)} → {_num(p['normalized'], 0)}/100). "
@@ -359,12 +405,64 @@ def annotate_regions(regions: list[dict], disorder: Optional[dict]) -> None:
             region["text"] += ", in una regione disordinata predetta (attesa poco affidabile)"
 
 
+# ---------------------------------------------------------------------------------------------- predizione esterna
+def predictor_signal(residues: list[dict], assessment: dict) -> dict:
+    """Confronto con una predizione (F9.3, `domain/prediction.assess`) allineato a `residues`: lDDT del residuo
+    rispetto alla predizione, pLDDT della predizione, residui che divergono dove la predizione è sicura (`flags`),
+    regioni divergenti con gli indici del rapporto. Informativo: non entra fra i metodi delle regioni problematiche.
+
+    I residui si abbinano per (catena, numero): il confronto riguarda una catena, gli altri restano senza valore."""
+    n = len(residues)
+    index = {(str(r.get("chain")), str(r.get("resnum"))): i for i, r in enumerate(residues)}
+    lddt: list[Optional[float]] = [None] * n
+    plddt_values: list[Optional[float]] = [None] * n
+    flags = [False] * n
+    for row in assessment.get("residues") or []:
+        i = index.get((str(row.get("chain")), str(row.get("resnum"))))
+        if i is None:
+            continue
+        lddt[i], plddt_values[i] = row.get("lddt"), row.get("plddt")
+        flags[i] = bool(row.get("divergent") and row.get("confident"))
+    regions = []
+    for r in assessment.get("regions") or []:
+        chain = str(r.get("chain"))
+        start, end = index.get((chain, str(r.get("start")))), index.get((chain, str(r.get("end"))))
+        if start is None or end is None:
+            continue
+        regions.append({**{k: r.get(k) for k in ("chain", "start", "end", "length", "lddt_mean", "plddt_mean",
+                                                 "confidence", "text", "tone")},
+                        "start_index": start, "end_index": end})
+    label = assessment.get("label") or "predizione"
+    return {"key": "predictor", "label": f"Accordo con {label}", "predictor": assessment.get("predictor"),
+            "job_id": assessment.get("job_id"), "informative": True, "status": assessment.get("status"),
+            "tone": assessment.get("tone"), "text": assessment.get("summary"),
+            "rule": (f"lDDT-Cα del residuo rispetto alla predizione sotto {prediction_mod.LDDT_DIVERGENT:g} dove la "
+                     f"predizione è sicura (pLDDT ≥ {prediction_mod.PLDDT_CONFIDENT:g}); informativo, non conta fra i "
+                     "metodi delle regioni problematiche"),
+            "lddt": lddt, "plddt": plddt_values, "flags": flags, "flagged": sum(flags), "regions": regions,
+            "tm_score": assessment.get("tm_score"), "lddt_confident": assessment.get("lddt_confident")}
+
+
+def annotate_predictor(regions: list[dict], signal: dict) -> None:
+    """Segna le regioni problematiche in cui il modello diverge da una predizione sicura (`predictor_overlap`)."""
+    flags = signal.get("flags") or []
+    label = str(signal.get("label") or "").replace("Accordo con ", "") or "la predizione"
+    for region in regions:
+        overlap = sum(1 for i in range(region["start_index"], region["end_index"] + 1) if i < len(flags) and flags[i])
+        region["predictor_overlap"] = overlap
+        if overlap:
+            region["text"] += f"; il modello vi diverge anche da {label}, sicura lì"
+
+
 # ---------------------------------------------------------------------------------------------- rapporto
-def compute(report: dict, *, qmean: Optional[dict] = None, modeller: Optional[dict] = None) -> dict:
+def compute(report: dict, *, qmean: Optional[dict] = None, modeller: Optional[dict] = None,
+            predictor: Optional[dict] = None) -> dict:
     """Consenso di un rapporto di `engines/quality.analyze`, più QMEAN e i risultati di MODELLER se disponibili.
 
     `qmean`: risultato di un job qmean (`qmean4_z`, `local`); `modeller`: voce di models.json (`ga341`,
-    `zdope`). Lo zDOPE del rapporto (calcolato sulla struttura) prevale su quello di MODELLER.
+    `zdope`). Lo zDOPE del rapporto (calcolato sulla struttura) prevale su quello di MODELLER. `predictor`: esito
+    del confronto con una predizione esterna (`domain/prediction.assess`, F9.3), solo se l'utente lo ha eseguito;
+    senza, il risultato non cambia.
     """
     residues = report.get("residues") or []
     dope = report.get("dope") or {}
@@ -378,7 +476,13 @@ def compute(report: dict, *, qmean: Optional[dict] = None, modeller: Optional[di
         "prosa": (report.get("prosa") or {}).get("zscore"),
         "procheck": procheck.get("core"),
     }
-    result = global_score(values)
+    extra: tuple[Method, ...] = ()
+    if predictor is not None:  # F9.3: solo con un confronto eseguito dall'utente
+        extra = (predictor_method(str(predictor.get("label") or "predizione")),)
+        # confronto non conclusivo (predizione sicura su troppo pochi residui): metodo fra i mancanti, con il motivo
+        conclusive = predictor.get("status") != "non conclusivo"
+        values["predictor"] = predictor.get("lddt_confident") if conclusive else None
+    result = global_score(values, extra, {"predictor": PREDICTOR_REASON})
     warnings = []
     q_local, q_warn = perresidue.qmean_local(residues, (qmean or {}).get("local"))
     p_w10, p_warn = perresidue.prosa_window(residues, (report.get("prosa") or {}).get("profile"))
@@ -388,12 +492,15 @@ def compute(report: dict, *, qmean: Optional[dict] = None, modeller: Optional[di
     # disordine predetto: spiega le regioni problematiche, non cambia punteggio, segnali né regioni
     disorder = disorder_signal(residues)
     annotate_regions(regions, disorder)
+    signal = predictor_signal(residues, predictor) if predictor is not None else None
+    if signal is not None:
+        annotate_predictor(regions, signal)
     if result["methods_used"] == 1:
         warnings.append("Un solo metodo disponibile: il consenso coincide con quel metodo.")
-    return {
+    out = {
         "version": VERSION,
         **result,
-        "discordances": discordances(result["methods"]),
+        "discordances": discordances(result["methods"], {**METHODS, **{m.key: m for m in extra}}),
         "per_residue": per_residue,
         "regions": regions,
         "disorder": disorder,
@@ -405,3 +512,6 @@ def compute(report: dict, *, qmean: Optional[dict] = None, modeller: Optional[di
                        "disorder_min_region": disorder_mod.MIN_REGION, "disorder_overlap": DISORDER_OVERLAP},
         "warnings": warnings,
     }
+    if signal is not None:
+        out["predictor"] = signal
+    return out

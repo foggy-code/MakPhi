@@ -261,6 +261,28 @@ qualunque struttura nel riquadro dei loop):
   calcolo è un job (`/modeling?job=`). Protocollo, soglie e fonti in
   [Architettura](docs/ARCHITETTURA.md#mutagenesi-in-silico-e-scansione-di-alanina-f92).
 
+## Confronto con una predizione (ESMFold)
+
+Un controllo di plausibilità del modello per omologia con una predizione indipendente della stessa sequenza
+(**Confronta con una predizione (ESMFold)** nella pagina Qualità e sotto il modello scelto in Modellazione):
+
+- **ESMFold** (servizio pubblico di ESM Atlas, fino a 400 residui) oppure, con l'accessione UniProt, il modello di
+  **AlphaFold DB**. La predizione si salva tra i file del job e la pagina Qualità la apre con il pLDDT (confidenza della
+  predizione; il servizio ESMFold lo scrive su 0–1 e BioLoom lo riporta su 0–100).
+- **Esito motivato:** TM-score (da 0,5 stesso ripiegamento), lDDT per residuo e regioni in cui il modello diverge dalla
+  predizione, incrociate con la confidenza della predizione e con le regioni problematiche del consenso: «le due
+  strutture concordano», «divergono in 40-52, dove la predizione è sicura: controlla l'allineamento», oppure «divergono
+  in 70-76, dove anche la predizione è incerta». Sotto, il confronto per residuo (3D sovrapposto, distanze, lDDT).
+- **Consenso e report:** a confronto eseguito, l'accordo con la predizione entra nel consenso di qualità con un peso
+  basso (0,25) e il report HTML ha la sezione del confronto; senza confronto nulla cambia.
+- **Privacy:** con ESMFold la **sequenza** (mai le coordinate) lascia il computer, solo con il tuo consenso: lo chiede il
+  pulsante la prima volta, e si revoca in Impostazioni → Generale (dove si può indicare anche un altro servizio ESMFold).
+  Con AlphaFold DB va a EBI solo l'accessione. Una predizione già ottenuta resta in cache su questo computer per 30
+  giorni.
+
+Una predizione non è una struttura sperimentale: con un template sperimentale vicino il modello per omologia è di solito
+più affidabile. Dettagli in [Architettura](docs/ARCHITETTURA.md#confronto-con-un-predittore-esterno-f93).
+
 ## Report del modello
 
 Il pulsante **Report** (tabella dei modelli in Modellazione, pagina Qualità, righe della pipeline e la sua finestra
@@ -323,7 +345,8 @@ sperimentale**, con il pLDDT medio (confidenza della predizione, 0–100).
   Il numero di residui tolti è nel log e nei risultati.
 - **Riconoscimento:** un file è un modello AlphaFold (pLDDT nella colonna B-factor) con l'intestazione di AlphaFold
   DB o il nome `AF-<accessione>-F<n>`, mai per i soli valori: una struttura sperimentale risolta a partire da un
-  modello AlphaFold resta sperimentale. Libreria, modellazione e pagina Qualità usano la stessa regola.
+  modello AlphaFold resta sperimentale. Libreria, modellazione e pagina Qualità usano la stessa regola, che riconosce
+  anche le predizioni di ESMFold (intestazione «ESMFOLD … PREDICTION», come le salva il confronto con una predizione).
 - **Privacy:** a EBI va solo l'accessione; senza accessione la sequenza va a NCBI, come per il motore NCBI BLAST.
 
 ## Ligandi, cofattori e metalli
@@ -419,6 +442,7 @@ sperimentale**, con il pLDDT medio (confidenza della predizione, 0–100).
 | Analisi strutturale | legami idrogeno, ponti salini, ponti disolfuro, interazioni aromatiche, interfacce fra catene (superficie sepolta, plausibilità), conservazione da un allineamento multiplo mappata sulla struttura; tasche con **fpocket** (druggability), potenziale elettrostatico con **PDB2PQR** (PROPKA) e **APBS** |
 | Rifinitura | **OpenMM** e **PDBFixer**: minimizzazione con restrizioni sulla catena principale e dinamica breve facoltativa, confronto prima/dopo |
 | Mutagenesi | mutazioni puntuali e multiple con MODELLER (protocollo mutate_model), varianti di UniProt mappate sulla struttura, scansione di alanina con gli hot spot d'interfaccia, stima qualitativa dell'effetto (DOPE, indicatori strutturali, energia con OpenMM facoltativa) |
+| Controllo di plausibilità | confronto del modello con una predizione di **ESMFold** (servizio esterno, con il consenso) o di AlphaFold DB: TM-score, lDDT per residuo, regioni divergenti incrociate con il pLDDT e con il consenso |
 | Automazione | pipeline batch da multi-FASTA, riprendibili dopo un annullamento, un errore o un riavvio ("Riprendi" o "Riprova solo i falliti": le sequenze già modellate non si rifanno) e, se completate con sequenze fallite, "Riprova i falliti"; avanzamento, log e tabella dei risultati aggiornati in tempo reale, con la stima del tempo residuo ("circa 3 min rimanenti"); un template usato da più sequenze si prepara una volta sola per pipeline; verifica dell'installazione (Impostazioni → Strumenti) |
 | Riproducibilità | pacchetto ZIP di un job (versioni, parametri, semi, checksum, input, risultati, script) e riesecuzione con il confronto dei risultati, dall'interfaccia o con `python bioloom.py rerun` |
 

@@ -1,7 +1,7 @@
 """Grandezze per residuo che vengono da fuori del rapporto di qualità: pLDDT, QMEAN locale, profilo ProSA.
 
-Logica pura: dice se la colonna B-factor contiene la confidenza pLDDT di AlphaFold (con il riconoscimento unico di
-`plddt.is_alphafold_model`) e riporta sui residui
+Logica pura: dice se la colonna B-factor contiene la confidenza pLDDT di AlphaFold o di ESMFold (con il riconoscimento
+unico di `plddt.predictor`) e riporta sui residui
 del rapporto (`report["residues"]`, nell'ordine del file) i punteggi locali di QMEAN e l'energia ProSA.
 """
 
@@ -14,14 +14,15 @@ from . import plddt
 
 
 def bfactor_kind(name: str, header_text: str, values: Iterable[float]) -> str:
-    """"plddt" se la colonna B-factor contiene la confidenza pLDDT di AlphaFold, altrimenti "bfactor".
+    """"plddt" se la colonna B-factor contiene la confidenza pLDDT di un predittore, altrimenti "bfactor".
 
     AlphaFold scrive il pLDDT per residuo, 0–100, nella colonna del B-factor (Jumper et al. 2021; Varadi et al.
-    2022, AlphaFold DB). Il riconoscimento è `plddt.is_alphafold_model`, lo stesso della libreria dei template e del
-    ritaglio per pLDDT: segni certi di AlphaFold DB nell'intestazione, oppure nome `AF-<ACC>-F<n>` senza un'altra
-    origine dichiarata (EXPDTA, `_exptl.method`, MODELLER), e valori in 0–100 non tutti nulli.
+    2022, AlphaFold DB); ESMFold lo stesso, atomo per atomo (Lin et al. 2023). Il riconoscimento è
+    `plddt.is_predicted_model`, lo stesso della libreria dei template e del ritaglio per pLDDT: segni certi di
+    AlphaFold DB o di ESMFold nell'intestazione, oppure nome `AF-<ACC>-F<n>` senza un'altra origine dichiarata
+    (EXPDTA, `_exptl.method`, MODELLER), e valori in 0–100 non tutti nulli.
     """
-    return "plddt" if plddt.is_alphafold_model(name, header_text, values) else "bfactor"
+    return "plddt" if plddt.is_predicted_model(name, header_text, values) else "bfactor"
 
 
 def _by_chain(residues: list[dict]) -> dict[str, list[int]]:

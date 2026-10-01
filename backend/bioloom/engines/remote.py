@@ -1,4 +1,4 @@
-"""Client dei servizi remoti: UniProt, InterPro, RCSB PDB, NCBI BLAST, AlphaFold DB, SWISS-MODEL QMEAN."""
+"""Client dei servizi remoti: UniProt, InterPro, RCSB PDB, NCBI BLAST, AlphaFold DB, SWISS-MODEL QMEAN, ESMFold."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ import httpx
 from .. import __version__
 from ..core.errors import AppError, NotFound, RemoteServiceError
 from ..core.storage import atomic_write_json, read_json
+from ..domain import prediction
 
 USER_AGENT = f"BioLoom/{__version__} (structural bioinformatics desktop suite)"
 UNIPROT = "https://rest.uniprot.org/uniprotkb"
@@ -27,6 +28,8 @@ NCBI_BLAST = "https://blast.ncbi.nlm.nih.gov/Blast.cgi"
 SWISSMODEL_QMEAN = "https://swissmodel.expasy.org/qmean/submit/"
 ALPHAFOLD = "https://alphafold.ebi.ac.uk"
 ALPHAFOLD_API = f"{ALPHAFOLD}/api/prediction"
+# ESMFold (F9.3), API pubblica di ESM Atlas: POST con la sequenza nel corpo, risposta PDB (impostazione esmfold_url)
+ESMFOLD_URL = "https://api.esmatlas.com/foldSequence/v1/pdb/"
 
 _ACCESSION = re.compile(r"^[A-Za-z0-9_]{3,20}$")
 _PDB_ID = re.compile(r"^[0-9][A-Za-z0-9]{3}$")
@@ -794,6 +797,125 @@ def alphafold_download(entry: dict, *, check: Optional[Callable[[], None]] = Non
         return text, fmt
     raise NotFound(f"AlphaFold DB: file del modello {entry_id} non trovato (né PDB né mmCIF).",
                    code="alphafold_not_found")
+
+
+# ------------------------------------------------------------------------------------------ ESMFold (F9.3)
+# Comportamento del servizio pubblico verificato a mano il 1° ottobre 2026 (mai nei test, che lo simulano):
+# - POST del testo della sequenza → 200, `chemical/x-pdb`: HEADER, TITLE "ESMFOLD V1 PREDICTION FOR INPUT",
+#   riferimento e licenza in REMARK 1, ATOM numerati da 1 sulla catena A, senza TER né END; pLDDT su 0–1 in ogni atomo
+#   (ubiquitina umana, 76 residui: 1,0 s; un'altra sequenza di 50 residui: 19 s, il servizio ha una coda);
+# - oltre 400 residui → 413 "Sequence is longer than 400." (JSON) senza calcolo;
+# - lettere non standard (X, B, Z) → 200, ma i residui mancano dal file: per questo si rifiutano prima dell'invio.
+ESMFOLD_MAX_LENGTH = 400
+# Sotto i 10 residui non c'è un ripiegamento da confrontare (come il minimo della ricerca su RCSB)
+ESMFOLD_MIN_LENGTH = 10
+ESMFOLD_ALPHABET = frozenset("ACDEFGHIKLMNPQRSTVWY")
+# Predizioni in cache per sequenza e indirizzo del servizio: 30 giorni, come la pulizia della cache remota
+ESMFOLD_TTL = 30 * 86400
+# Una predizione di 400 residui in coda al servizio può richiedere minuti
+ESMFOLD_TIMEOUT = httpx.Timeout(300.0, connect=15.0)
+# Risposta più grande di così: non è una predizione di al più 400 residui (circa 660 byte per residuo, 0,3 MB a 400
+# residui), qualunque servizio sia configurato; come il limite di 20 MB per voce delle cache
+ESMFOLD_MAX_BYTES = 20 * 1024 * 1024
+_HTTP_URL = re.compile(r"^https?://[A-Za-z0-9.-]+(?::\d{1,5})?(?:/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?$")
+
+
+def validate_esmfold_url(url: str) -> str:
+    """Indirizzo del servizio ESMFold (impostazione `esmfold_url`): http o https, senza credenziali, query né spazi;
+    vuoto = il servizio pubblico di ESM Atlas."""
+    clean = (url or "").strip()
+    if not clean:
+        return ESMFOLD_URL
+    if len(clean) > 300 or not _HTTP_URL.match(clean):
+        raise AppError(f"Indirizzo del servizio ESMFold non valido: '{clean[:80]}' (atteso un URL http o https, es. "
+                       f"{ESMFOLD_URL}).", code="invalid_esmfold_url")
+    return clean
+
+
+def esmfold_sequence(sequence: str, max_length: int = ESMFOLD_MAX_LENGTH) -> str:
+    """Sequenza da inviare a ESMFold: maiuscola, senza spazi né '*' finale, solo i 20 amminoacidi standard e al più
+    `max_length` residui. Gli errori si danno prima di qualunque richiesta."""
+    seq = re.sub(r"\s+", "", sequence or "").upper().rstrip("*")
+    if not seq:
+        raise AppError("Sequenza vuota: niente da inviare a ESMFold.", code="empty_sequence")
+    bad = sorted({c for c in seq if c not in ESMFOLD_ALPHABET})
+    if bad:
+        where = ", ".join(str(i + 1) for i, c in enumerate(seq) if c not in ESMFOLD_ALPHABET)
+        raise AppError(f"ESMFold accetta solo i 20 amminoacidi standard: la sequenza contiene {', '.join(bad)} "
+                       f"(posizioni {where[:80]}). Il servizio salterebbe quei residui senza avvisare.",
+                       code="invalid_sequence")
+    if len(seq) > max_length:
+        raise AppError(f"Sequenza troppo lunga per ESMFold: {len(seq)} residui, il servizio ne accetta al più "
+                       f"{max_length}. Confronta un dominio alla volta oppure usa il modello di AlphaFold DB "
+                       "(con l'accessione UniProt).", code="sequence_too_long")
+    if len(seq) < ESMFOLD_MIN_LENGTH:
+        raise AppError(f"Sequenza troppo corta per una predizione utile: {len(seq)} residui (minimo "
+                       f"{ESMFOLD_MIN_LENGTH}).", code="sequence_too_short")
+    return seq
+
+
+def esmfold_cached(sequence: str, url: str = ESMFOLD_URL) -> Optional[dict]:
+    """Predizione già in cache per la sequenza e il servizio (senza richieste), oppure None."""
+    try:
+        key = f"{validate_esmfold_url(url)}\n{esmfold_sequence(sequence)}"
+    except AppError:
+        return None
+    cached = _cache_get("esmfold", key, ESMFOLD_TTL)
+    return cached if isinstance(cached, dict) and cached.get("pdb") and cached.get("info") else None
+
+
+def esmfold_predict(sequence: str, *, url: str = ESMFOLD_URL, name: str = "", use_cache: bool = True,
+                    check: Optional[Callable[[], None]] = None, log: Optional[Callable[[str], None]] = None) -> dict:
+    """Predizione di ESMFold per una sequenza: {pdb (pLDDT su 0–100, intestazione riconoscibile), info (scala
+    originale, residui, pLDDT), url, sequence, cached}.
+
+    Lunghezza e alfabeto si controllano prima dell'invio (`esmfold_sequence`); i nuovi tentativi valgono per i 5xx e
+    gli errori di rete. Errori in italiano: servizio non raggiungibile o dismesso (`esmfold_unavailable`), sequenza
+    rifiutata (`sequence_too_long` con il 413 del servizio, `esmfold_rejected`), risposta che non è una predizione
+    della sequenza inviata (`esmfold_invalid_response`).
+    """
+    seq = esmfold_sequence(sequence)
+    service = validate_esmfold_url(url)
+    key = f"{service}\n{seq}"
+    if use_cache:
+        cached = esmfold_cached(seq, service)
+        if cached is not None:
+            return {**cached, "cached": True}
+    host = httpx.URL(service).host
+    try:
+        resp = _request_retry("POST", service, "ESMFold", attempts=3, wait=5.0, check=check, log=log,
+                              content=seq.encode("ascii"), timeout=ESMFOLD_TIMEOUT,
+                              headers={"Content-Type": "text/plain", "Accept": "chemical/x-pdb, text/plain, */*"})
+    except NotFound:
+        raise RemoteServiceError(f"Il servizio ESMFold non risponde all'indirizzo {service} (404): potrebbe essere "
+                                 "stato dismesso, oppure l'indirizzo in Impostazioni → Generale è sbagliato.",
+                                 code="esmfold_unavailable")
+    except RemoteServiceError as exc:
+        status = getattr(exc, "upstream_status", None)
+        detail = str(exc.details or "")[:200]
+        if status == 413:
+            raise AppError(f"Il servizio ESMFold ha rifiutato la sequenza perché troppo lunga ({len(seq)} residui): "
+                           f"{detail or 'limite del servizio superato'}.", code="sequence_too_long")
+        if status is not None and status < 500:
+            raise RemoteServiceError(f"Il servizio ESMFold ha rifiutato la richiesta (errore {status})"
+                                     + (f": {detail}" if detail else ".")
+                                     + (" Troppe richieste: riprova fra qualche minuto." if status == 429 else ""),
+                                     code="esmfold_rejected")
+        raise RemoteServiceError(f"{exc.message} Controlla la connessione a internet e l'indirizzo del servizio in "
+                                 "Impostazioni → Generale; la predizione si può ripetere più tardi.",
+                                 code="esmfold_unavailable")
+    if len(resp.content) > ESMFOLD_MAX_BYTES:
+        raise RemoteServiceError(f"ESMFold ha inviato una risposta non valida: {len(resp.content) // 1024 ** 2} MB per "
+                                 f"{len(seq)} residui.", code="esmfold_invalid_response")
+    try:
+        pdb, info = prediction.normalize_pdb(resp.text, seq, predictor="esmfold", name=name, service=host or "")
+    except ValueError as exc:
+        raise RemoteServiceError(f"ESMFold ha inviato una risposta non valida: {exc}.",
+                                 code="esmfold_invalid_response", details=resp.text[:300])
+    out = {"pdb": pdb, "info": info, "url": service, "sequence": seq,
+           "received": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    _cache_put("esmfold", key, out)
+    return {**out, "cached": False}
 
 
 # ------------------------------------------------------------------------------------------ SWISS-MODEL QMEAN

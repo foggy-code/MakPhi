@@ -293,7 +293,7 @@ class PreflightContext(BaseModel):
 
 class PreflightIn(BaseModel):
     kind: Literal["model", "loop", "align2d", "pipeline", "quality", "qmean", "search", "analysis",
-                  "rerun", "mutate", "alascan"]  # rerun: riesecuzione di un pacchetto (F9.4); mutate, alascan: mutagenesi (F9.2)
+                  "rerun", "mutate", "alascan", "predict"]  # rerun (F9.4), mutate e alascan (F9.2), predict (F9.3)
     params: dict = Field(default_factory=dict, description="Lo stesso corpo della rotta di avvio del calcolo")
     context: PreflightContext = Field(default_factory=PreflightContext)
 
@@ -301,11 +301,12 @@ class PreflightIn(BaseModel):
 def _preflight_bodies() -> dict:
     from .analysis import AnalysisIn  # api/analysis importa questo modulo
     from .mutations import AlaScanIn, MutateIn  # mutagenesi (F9.2), stesso motivo
+    from .predict import PredictIn  # come api/analysis (F9.3)
     from .reproducibility import RerunIn
 
     return {"model": ModelIn, "loop": LoopIn, "align2d": Align2dIn, "pipeline": PipelineIn, "quality": QualityIn,
             "qmean": QmeanIn, "search": SearchIn, "analysis": AnalysisIn, "rerun": RerunIn, "mutate": MutateIn,
-            "alascan": AlaScanIn}
+            "alascan": AlaScanIn, "predict": PredictIn}
 
 
 @router.post("/compute/preflight")

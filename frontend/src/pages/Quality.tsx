@@ -14,6 +14,8 @@ import { ReportButton } from "../components/ReportButton";
 import { AnalysisJobCard, StructuralAnalysisPanel } from "../components/StructuralAnalysis";
 import { ElectrostaticsPanel, PocketsPanel, ToolJobCard } from "../components/StructureTools";
 import { MutagenesisPanel } from "../components/Mutagenesis";
+import { PredictionJobCard, PredictionPanel } from "../components/Predictor";
+import { consensusPredictorNote } from "../lib/predict";
 import { Viewer3D, type Viewer3DHandle } from "../components/Viewer3D";
 import { Alert, Badge, BarCell, Card, DropZone, Empty, Grade, PageHead, Stat, Tabs } from "../components/ui";
 import { compareLink } from "../lib/compare";
@@ -341,6 +343,8 @@ function ConsensusPanel({ report, consensus, error, selected, onSelect, onRegion
           ) : <p className="small muted">Nessun tratto di almeno 3 residui segnalato da almeno 2 metodi.</p>}
           {/* disordine predetto dalla sequenza (F5.5): spiega le regioni, non entra nel punteggio */}
           {!!c.disorder?.regions.length && <Alert tone="info">{c.disorder.text}</Alert>}
+          {/* accordo con una predizione esterna (F9.3), solo con il confronto eseguito */}
+          {consensusPredictorNote(c) && <Alert tone={consensusPredictorNote(c)!.tone}>{consensusPredictorNote(c)!.text}</Alert>}
           <ConsensusTracks residues={report.residues} consensus={c} selected={selected} onSelect={onSelect} onRegion={onRegion} />
         </div>
         {c.warnings.map((w, k) => <p key={k} className="tiny muted">{w}</p>)}
@@ -375,6 +379,8 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
   const [centerKey, setCenterKey] = useState(0);
   const [colorBy, setColorBy] = useState<ColorBy>("ss");
   const [qmeanJob, setQmeanJob] = useState<string | null>(null);
+  // confronto con una predizione esterna (F9.3) completato sulla stessa struttura: il consenso lo include
+  const [predictJob, setPredictJob] = useState<string | null>(null);
   const [consensus, setConsensus] = useState<ConsensusResult | null>(report.consensus ?? null);
   const [consensusError, setConsensusError] = useState<string | null>(null);
   // ligando scelto nella sezione "Ligandi e metalli": evidenziato nel 3D con le linee di coordinazione
@@ -397,7 +403,7 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
   useEffect(() => {
     if (!consensusRef) return;
     let stop = false;
-    api.consensus(consensusRef.job, consensusRef.model, qmeanJob)
+    api.consensus(consensusRef.job, consensusRef.model, qmeanJob, predictJob)
       .then((c) => {
         if (stop) return;
         setConsensus(c);
@@ -407,7 +413,7 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
     return () => {
       stop = true;
     };
-  }, [consensusRef?.job, consensusRef?.model, qmeanJob]);
+  }, [consensusRef?.job, consensusRef?.model, qmeanJob, predictJob]);
 
   const options = useMemo(() => colorOptions(report, consensus), [report, consensus]);
   // un'opzione non (ancora) disponibile, es. QMEAN in attesa del consenso, ripiega sulla struttura secondaria
@@ -475,12 +481,12 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
               Punteggio {fmtNum(g.score, 1)}/100 — penalità: Ramachandran {g.penalties.ramachandran}, clash {g.penalties.clashes}, DOPE {g.penalties.dope}
               {consensus?.score != null && <> · consenso {fmtNum(consensus.score, 0)}/100 ({consensus.band}, {consensus.methods_used} metodi)</>}
             </div>
-            {plddt && <div style={{ marginTop: 6 }}><Badge tone="info" title="Riconosciuto come nella libreria dei template: intestazione di AlphaFold DB (TITLE «ALPHAFOLD … PREDICTION» senza EXPDTA, oppure ModelCIF senza _exptl.method) o nome AF-<accessione>-F<n> senza un altro metodo dichiarato, e valori tra 0 e 100">Modello AlphaFold: la colonna B-factor contiene il pLDDT</Badge></div>}
+            {plddt && <div style={{ marginTop: 6 }}><Badge tone="info" title="Riconosciuto come nella libreria dei template: intestazione di AlphaFold DB (TITLE «ALPHAFOLD … PREDICTION» senza EXPDTA, oppure ModelCIF senza _exptl.method) o di ESMFold (TITLE «ESMFOLD … PREDICTION» senza EXPDTA), o nome AF-<accessione>-F<n> senza un altro metodo dichiarato, e valori tra 0 e 100">{report.structure.predictor === "esmfold" ? "Predizione ESMFold" : "Modello AlphaFold"}: la colonna B-factor contiene il pLDDT</Badge></div>}
             {source && <div style={{ marginTop: 8 }}><CompareLinks source={source} /></div>}
             {consensusRef && (
               <div className="row tiny muted" style={{ marginTop: 8, gap: 8 }}>
-                <ReportButton jobId={consensusRef.job} model={consensusRef.model} qmeanJob={qmeanJob} viewer={viewer} />
-                <span>{tab === "3d" ? "Include la vista 3D corrente" : "Apri la scheda 3D per includere la vista nel report"}{qmeanJob ? " e il QMEAN calcolato qui" : ""}.</span>
+                <ReportButton jobId={consensusRef.job} model={consensusRef.model} qmeanJob={qmeanJob} predictJob={predictJob} viewer={viewer} />
+                <span>{tab === "3d" ? "Include la vista 3D corrente" : "Apri la scheda 3D per includere la vista nel report"}{qmeanJob ? " e il QMEAN calcolato qui" : ""}{predictJob ? " e il confronto con la predizione" : ""}.</span>
               </div>
             )}
           </div>
@@ -496,6 +502,11 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
       </div>
       <ExternalValidation report={report} />
       <ConsensusPanel report={report} consensus={consensus} error={consensusError} selected={selected} onSelect={pick} onRegion={pickRegion} />
+      {/* controllo di plausibilità con una predizione esterna (F9.3): il consenso lo include a confronto completato */}
+      {(source ?? report.source) && (
+        <PredictionPanel source={(source ?? report.source)!} label={report.structure.title || report.label || report.structure.file}
+          residues={report.structure.chains_detail?.[0]?.residues ?? null} onResult={setPredictJob} />
+      )}
       {report.ligands && <LigandsPanel report={report.ligands} selected={ligand} onSelect={pickLigand} />}
       <Card title="Struttura secondaria" sub={report.secondary_structure.method}>
         <StackBar parts={[
@@ -658,6 +669,7 @@ export default function Quality() {
   const ajob = params.get("ajob"); // analisi strutturale da un link (F7)
   const pjob = params.get("pjob"); // tasche da un link (F7b)
   const ejob = params.get("ejob"); // elettrostatica da un link (F7b)
+  const prjob = params.get("prjob"); // confronto con una predizione da un link (F9.3)
   const [source, setSource] = useState<StructureSource | null>(null);
   const [dope, setDope] = useState(true);
   const [extended, setExtended] = useState(true);
@@ -729,7 +741,8 @@ export default function Quality() {
           {ajob && !qjob && !report && <AnalysisJobCard jobId={ajob} />}
           {pjob && !qjob && !report && <ToolJobCard kind="pockets" jobId={pjob} />}
           {ejob && !qjob && !report && <ToolJobCard kind="electrostatics" jobId={ejob} />}
-          {!qjob && !report && !ajob && !pjob && !ejob && (
+          {prjob && !qjob && !report && <PredictionJobCard jobId={prjob} />}
+          {!qjob && !report && !ajob && !pjob && !ejob && !prjob && (
             <Card>
               {modelJob ? (
                 <Empty icon="shield" title="Analisi non ancora calcolata per questo modello">

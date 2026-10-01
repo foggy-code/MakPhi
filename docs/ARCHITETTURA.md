@@ -24,6 +24,7 @@ Container "bioloom" (Ubuntu 24.04, Python 3.12, utente = proprietario di /data)
                      │    └─ sottoprocessi: MODELLER 10.8, mkdssp, BLAST+, MMseqs2, Clustal Omega, MAFFT, MUSCLE,
                      │                      TM-align, US-align, PROCHECK, ProSA II, fpocket, PDB2PQR, APBS, OpenMM
                      └─ servizi remoti: RCSB · UniProt · InterPro · NCBI QBlast · AlphaFold DB (EBI) · SWISS-MODEL (opt-in)
+                                        · ESMFold (ESM Atlas, opt-in)
   /data     ◀─ bind mount  cartella data/ (chiavetta, cartella o server): viaggia con BioLoom
   /scratch  ◀─ volume      lavoro dei job e file temporanei (veloce, svuotato a ogni avvio)
   /cache    ◀─ volume      indici ricostruibili di questo computer (MMseqs2)
@@ -101,10 +102,10 @@ data/
 | Pacchetto | Contenuto |
 |---|---|
 | `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo, migrazioni versionate), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `dispatch` (coda con priorità di ogni pool), `budget` (budget di CPU condiviso fra i job), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi), `eta` (stima del tempo residuo), `events` (notifiche in-process dei cambiamenti dei job), `parallel` (passi indipendenti di un calcolo su un pool locale di thread, vedi [Prestazioni](#prestazioni)) |
-| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG), `template_rank` (punteggio motivato dei template e selezione dei complementari), `multitemplate` (scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template), `ligands` (classificazione dei gruppi eteroatomici, colonne '.' del PIR, verifica di contatti, scontri e coordinazione dei metalli), `disorder` (disordine FoldIndex, bassa complessità SEG, domini e copertura del bersaglio), `interactions`, `interfaces`, `conservation` (analisi strutturale, vedi [Analisi strutturale](#analisi-strutturale)), `pockets` (uscita di fpocket), `electrostatics` (PQR, griglia e input di APBS, mappe OpenDX, potenziale di superficie), `refinement` (protocollo della rifinitura, copia pulita, confronto prima/dopo; vedi [Tasche, elettrostatica e rifinitura energetica](#tasche-elettrostatica-e-rifinitura-energetica-f7b-f91)), assembly` (assemblaggi biologici dal mmCIF e dal REMARK 350), `complexes` (bersagli a più catene, simmetria, confronto delle interfacce con il template; vedi [Complessi e omo-oligomeri](#complessi-e-omo-oligomeri-domainassemblypy-domaincomplexespy)), `preflight` (regole dei controlli preventivi, vedi [Controlli preventivi](#controlli-preventivi-domainpreflightpy-servicespreflightpy)), `labels` (normalizzazione delle etichette), `textsearch` (parole, corrispondenza e pertinenza della ricerca globale, escape per FTS5 e LIKE), `reproducibility` (controlli dell'archivio caricato, impronta del manifest, oscuramento dei segreti, confronto con le tolleranze; vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione-f94)) |
-| `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB), `remote` (client HTTP), `tools` (rilevamento strumenti e librerie Python di calcolo, preambolo di licenza), `pockets` (fpocket), `electrostatics` (PDB2PQR + APBS), `refine` e `refine_worker` (OpenMM e PDBFixer in un processo separato), `versions` (versioni degli strumenti per i pacchetti di riproducibilità) |
-| `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job), `reports` (dati del report di un modello o di un'analisi), `coverage` (copertura del bersaglio da parte dei template, avvisi su disordine e domini), `analysis` (job dell'analisi strutturale), `structure_tools` (job `pockets` ed `electrostatics`), `refine` (job `refine`), `preflight` (fatti per i controlli preventivi), `labels` (etichette e preferiti), `globalsearch` (ricerca globale; vedi [Etichette, preferiti e ricerca globale](#etichette-preferiti-e-ricerca-globale-f8b)), `reproducibility` (pacchetti dei job e job `rerun`) |
-| `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases`, `analysis`, `structure_tools`, `labels`, `reproducibility` oltre a sistema, progetti, calcoli — compresi i controlli preventivi — e job) |
+| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG), `template_rank` (punteggio motivato dei template e selezione dei complementari), `multitemplate` (scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template), `ligands` (classificazione dei gruppi eteroatomici, colonne '.' del PIR, verifica di contatti, scontri e coordinazione dei metalli), `disorder` (disordine FoldIndex, bassa complessità SEG, domini e copertura del bersaglio), `interactions`, `interfaces`, `conservation` (analisi strutturale, vedi [Analisi strutturale](#analisi-strutturale)), `pockets` (uscita di fpocket), `electrostatics` (PQR, griglia e input di APBS, mappe OpenDX, potenziale di superficie), `refinement` (protocollo della rifinitura, copia pulita, confronto prima/dopo; vedi [Tasche, elettrostatica e rifinitura energetica](#tasche-elettrostatica-e-rifinitura-energetica-f7b-f91)), assembly` (assemblaggi biologici dal mmCIF e dal REMARK 350), `prediction` (file di un predittore esterno e plausibilità di un modello rispetto alla predizione, vedi [Confronto con un predittore esterno](#confronto-con-un-predittore-esterno-f93)), `complexes` (bersagli a più catene, simmetria, confronto delle interfacce con il template; vedi [Complessi e omo-oligomeri](#complessi-e-omo-oligomeri-domainassemblypy-domaincomplexespy)), `preflight` (regole dei controlli preventivi, vedi [Controlli preventivi](#controlli-preventivi-domainpreflightpy-servicespreflightpy)), `labels` (normalizzazione delle etichette), `textsearch` (parole, corrispondenza e pertinenza della ricerca globale, escape per FTS5 e LIKE), `reproducibility` (controlli dell'archivio caricato, impronta del manifest, oscuramento dei segreti, confronto con le tolleranze; vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione-f94)) |
+| `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB), `remote` (client HTTP, anche ESMFold), `tools` (rilevamento strumenti e librerie Python di calcolo, preambolo di licenza), `pockets` (fpocket), `electrostatics` (PDB2PQR + APBS), `refine` e `refine_worker` (OpenMM e PDBFixer in un processo separato), `versions` (versioni degli strumenti per i pacchetti di riproducibilità) |
+| `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job), `reports` (dati del report di un modello o di un'analisi), `coverage` (copertura del bersaglio da parte dei template, avvisi su disordine e domini), `analysis` (job dell'analisi strutturale), `structure_tools` (job `pockets` ed `electrostatics`), `refine` (job `refine`), `predict` (job `predict`: predizione esterna e confronto con il modello), `preflight` (fatti per i controlli preventivi), `labels` (etichette e preferiti), `globalsearch` (ricerca globale; vedi [Etichette, preferiti e ricerca globale](#etichette-preferiti-e-ricerca-globale-f8b)), `reproducibility` (pacchetti dei job e job `rerun`) |
+| `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases`, `analysis`, `structure_tools`, `labels`, `reproducibility`, `predict` oltre a sistema, progetti, calcoli — compresi i controlli preventivi — e job) |
 
 Fuori dai pacchetti: `cli.py`, i comandi da riga di comando oltre al server (`python bioloom.py rerun`).
 
@@ -115,7 +116,7 @@ di UniProt), `engines/mutate` (script di MODELLER, energia con OpenMM), `service
 ### Job
 
 Tutti i calcoli (`search`, `align`, `align2d`, `model`, `loop`, `quality`, `qmean`, `analysis`, `pockets`,
-`electrostatics`, `refine`, `mutate`, `alascan`, `pipeline`, `rerun`) passano dal `JobManager`:
+`electrostatics`, `refine`, `mutate`, `alascan`, `predict`, `pipeline`, `rerun`) passano dal `JobManager`:
 
 - stato `queued → running → completed | failed | cancelled` (più `cancelling`) salvato su SQLite;
 - coda con priorità per tipo di job e budget di CPU condiviso dai processi esterni di tutti i job (vedi [Coda con
@@ -274,7 +275,7 @@ con 8. I worker prendono sempre il primo job avviabile in quest'ordine (`core/jo
 
 | Priorità | Tipi di job | Perché |
 |---|---|---|
-| 0 | `search`, `align`, `align2d`, `quality`, `qmean`, `analysis`, `pockets`, `electrostatics`, `mutate` (e `compare`) | interattivi brevi: l'utente aspetta davanti allo schermo |
+| 0 | `search`, `align`, `align2d`, `quality`, `qmean`, `analysis`, `pockets`, `electrostatics`, `mutate`, `predict` (e `compare`) | interattivi brevi: l'utente aspetta davanti allo schermo |
 | 1 | `model`, `loop`, `selftest`, `refine`, `alascan` e i tipi non elencati | minuti |
 | 2 | `pipeline`, `db_update_pdbaa`, `db_build_mmseqs`, `db_index_mmseqs`, `db_convert_uniclust`, `db_local_uniclust` | lavori lunghi in blocco |
 
@@ -540,6 +541,7 @@ Il voto A–D non cambia: `consensus` è un campo in più del rapporto di qualit
   | QMEAN4 Z-score | −8 → 0, −4 → 40, −2 → 70, 0 → 100 | 1,5 | Benkert et al. 2011; SWISS-MODEL: −4 o meno bassa qualità, vicino a 0 ottimo |
   | ProSA z-score | 2 → 0, −2 → 40, −6 → 70, −8 → 100 | 1 | Sippl 1993; Wiederstein & Sippl 2007: positivo o vicino a zero = errore (−0,60 "troppo alto"), −8,29 nativo; −6 scelta BioLoom |
   | PROCHECK core | 50 → 0, 70 → 40, 90 → 70, 100 → 100 | 0,75 | Laskowski et al. 1993: oltre il 90% atteso a 2 Å o meglio; 70% scelta BioLoom |
+  | Accordo con una predizione (F9.3, solo con il confronto) | lDDT-Cα sui residui a predizione sicura: 0 → 0, 0,5 → 40, 0,7 → 70, 1 → 100 | 0,25 | Mariani et al. 2013; fasce del pLDDT (lDDT-Cα predetto) di Tunyasuvunakool et al. 2021; vedi [Confronto con un predittore esterno](#confronto-con-un-predittore-esterno-f93) |
 
   Pesi: QMEAN combina quattro potenziali ed è già riferito a strutture sperimentali di pari dimensione; GA341 valuta
   solo il ripiegamento e, contenendo l'identità con il template, satura vicino a 1 per quasi tutti i modelli per
@@ -582,10 +584,10 @@ Il voto A–D non cambia: `consensus` è un campo in più del rapporto di qualit
   consenso fuorviante. Un job che non è QMEAN dà 400 `qmean_job_invalid`, un QMEAN non completato 409. I rapporti
   delle versioni precedenti, senza consenso, funzionano: la rotta lo calcola.
 - **pLDDT (`perresidue.bfactor_kind`):** `report.structure.bfactor_kind = "plddt"` se il file è un modello
-  AlphaFold secondo `plddt.is_alphafold_model`, l'unico criterio di BioLoom, lo stesso della libreria dei template
-  e della copia preparata per MODELLER (vedi [Modelli AlphaFold DB](#modelli-alphafold-db)): segni certi di AlphaFold
-  DB nell'intestazione, oppure il nome `AF-<ACC>-F<n>` senza un'altra origine dichiarata, e valori in 0–100 non tutti
-  nulli.
+  predetto secondo `plddt.predictor` (nome storico `is_alphafold_model`), l'unico criterio di BioLoom, lo stesso della
+  libreria dei template e della copia preparata per MODELLER (vedi [Modelli AlphaFold DB](#modelli-alphafold-db)):
+  segni certi di AlphaFold DB o di ESMFold nell'intestazione, oppure il nome `AF-<ACC>-F<n>` senza un'altra origine
+  dichiarata, e valori in 0–100 non tutti nulli; `report.structure.predictor` dice quale (`alphafold`, `esmfold`).
 
   I B-factor cristallografici stanno spesso in 0–100 (1UBQ: massimo 42,75): per questo la sola scala non basta.
   Una menzione di AlphaFold altrove nell'intestazione non conta: molte strutture sperimentali sono risolte per
@@ -607,6 +609,15 @@ Il voto A–D non cambia: `consensus` è un campo in più del rapporto di qualit
 - **Disordine predetto** (F5.5, vedi [sotto](#disordine-bassa-complessità-e-domini-domaindisorderpy-servicescoveragepy)): il
   consenso ha un campo `disorder` (versione 2) e le regioni problematiche che vi cadono dentro hanno `expected`. Non cambia
   punteggio, segnali, conteggi né regioni.
+- **Accordo con una predizione esterna** (F9.3, vedi [Confronto con un predittore esterno](#confronto-con-un-predittore-esterno-f93)):
+  solo con `predict_job` nelle rotte del consenso (o nel report). Il metodo `predictor` entra nel punteggio con peso 0,25
+  (fra i mancanti, con il motivo, se il confronto non è conclusivo); il campo `predictor` ha lDDT e pLDDT per residuo, i
+  residui che divergono dove la predizione è sicura (`flags`) e le regioni divergenti con gli indici del rapporto; le
+  regioni problematiche in cui il modello diverge anche da una predizione sicura hanno `predictor_overlap` e lo dicono nel
+  testo. È informativo per residuo: non conta fra i metodi delle regioni. Le discordanze con gli altri metodi hanno frasi
+  proprie (ambito `external`: «la stereochimica è regolare ma il modello diverge dalla predizione dove questa è sicura…»).
+  Senza confronto il risultato è identico a prima (test): stessi metodi (6), stessi mancanti, nessun campo in più,
+  versione 2 invariata.
 
 ### Disordine, bassa complessità e domini (`domain/disorder.py`, `services/coverage.py`)
 
@@ -710,7 +721,7 @@ spazio, servizio QMEAN, job attivi) li raccoglie `services/preflight.PreflightSe
 
 **Rotta** `POST /api/compute/preflight` con `{kind, params, context}`:
 
-- `kind`: `model`, `loop`, `align2d`, `pipeline`, `quality`, `qmean`, `search`, `analysis`, `mutate`, `alascan`, `rerun` (riesecuzione di un
+- `kind`: `model`, `loop`, `align2d`, `pipeline`, `quality`, `qmean`, `search`, `analysis`, `mutate`, `alascan`, `predict` (F9.3), `rerun` (riesecuzione di un
   pacchetto caricato, `params` = `{package_id}`: vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione-f94));
 - `params`: lo stesso corpo della rotta di avvio, validato con lo stesso modello Pydantic (`ModelIn`, `PipelineIn`, …):
   un campo non valido è un esito `error` (`validation_error`), come il 422 dell'avvio, non un 422 dei controlli;
@@ -764,6 +775,8 @@ message, suggestion}` più `group: "coverage"` per gli avvisi di copertura e `te
 | `ncbi_many_searches` / `ncbi_parallel` | warning / info | pipeline con oltre 50 ricerche NCBI (motore NCBI, o AlphaFold DB senza accessione) / più ricerche NCBI insieme | linee guida di NCBI per l'interfaccia URL di BLAST: oltre 50 ricerche di sera o nel fine settimana, una richiesta ogni 10 s |
 | `pipeline_too_long` / `pipeline_alphafold`, `pipeline_disorder` | warning / info | sequenze oltre 5000 residui; sequenze con e senza accessione; sequenze con regioni disordinate lunghe (FoldIndex, fino a 500 000 residui in tutto) | |
 | `rerun_not_reproducible`, `rerun_unsupported`, `package_*`, `rerun_tool_unavailable` / `rerun_version_bioloom`, `rerun_version_image`, `rerun_version_tool`, `rerun_version_library`, `rerun_tool_missing`, `rerun_platform` / `rerun_remote_input`, `package_note` | error / warning / info | riesecuzione (`kind: "rerun"`): calcolo che dipende da servizi remoti o non rieseguibile, pacchetto non valido o scaduto, parametri che la rotta di avvio rifiuterebbe, strumento obbligatorio assente / versioni diverse da quelle del pacchetto / input remoti con la data e note del pacchetto; più licenza MODELLER, PROCHECK e ProSA, durata del calcolo originale, spazio e coda come gli altri calcoli | versioni diverse: avvisi, mai errori (F9.4) |
+| `esmfold_remote_disabled` / `sequence_too_long`, `invalid_sequence`, `accession_required`, `invalid_chain`, `predict_input_required` | error | predizione (F9.3): ESMFold senza il consenso all'invio; la stessa validazione della rotta `POST /api/predict` (sequenza oltre 400 residui o con lettere non standard, accessione mancante per AlphaFold DB, catena assente) | il consenso è un esito a sé, con il suggerimento |
+| `remote_esmfold`, `esmfold_cached`, `remote_alphafold`, `alphafold_in_library`, `predict_no_compare` | info | la sequenza andrà al servizio (rete); predizione già in cache (nessuna richiesta); a EBI va solo l'accessione, o il modello è già in libreria; nessuna struttura da confrontare | nessuna richiesta remota dai controlli: la cache si legge dal disco |
 | `queue_busy`, `single_model`, `identical_models`, `invalid_accession`, `check_skipped` | info | job attivi ≥ job in parallelo; un solo modello; più modelli con il raffinamento rapidissimo (`a.very_fast()` non perturba le coordinate iniziali: modelli identici, anche fra gli avvisi del risultato); accessione non valida (niente domini); controllo non eseguito | misura in [Prestazioni](#misure-per-i-controlli-preventivi) |
 | `invalid_mutation`, `invalid_scan` | error | notazione, catena, residuo originale o scelta dei residui rifiutati dalla rotta di avvio (stesso messaggio); oltre 50 residui (20 con l'energia) | mutagenesi (F9.2) |
 | `mutation_energy_unavailable` / `mutation_energy` | warning / info | energia chiesta senza OpenMM o PDBFixer (il job prosegue senza) / che cosa misura | |
@@ -799,7 +812,8 @@ PIR (`report.alignment_identity`).
 - **Modellazione:** il riquadro sta sopra «Avvia modellazione» e sostituisce la verifica di copertura del riquadro Input
   (una richiesta invece di due); il corpo della richiesta è lo stesso dell'avvio (`useMemo`). **Pipeline:** sopra «Avvia
   pipeline». **Procedura guidata:** prima della ricerca (`search`), dell'allineamento (`align2d`) e della modellazione
-  (`model`, con `search_job`).
+  (`model`, con `search_job`). **Confronto con una predizione** (F9.3): nella finestra di avvio, dopo il consenso
+  all'invio (`predict`).
 
 ### Procedura guidata (`pages/Wizard.tsx`, `lib/wizard.ts`)
 
@@ -842,8 +856,9 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
     `mutate` (sezione "Mutagenesi in silico" e la qualità del modello) e `GET /api/jobs/{id}/report` per un job `alascan`
     (sezione "Scansione di alanina", niente qualità);
   - le varianti `POST`, con corpo `{"image_png_base64"}`, incorporano la vista 3D;
-  - `qmean_job=` aggiunge QMEAN con gli stessi controlli della rotta del consenso; `download=false` restituisce il
-    file `inline` invece che `attachment`.
+  - `qmean_job=` aggiunge QMEAN con gli stessi controlli della rotta del consenso; `predict_job=` (F9.3) sceglie il
+    confronto con una predizione da includere (senza, il più recente sulla stessa struttura); `download=false`
+    restituisce il file `inline` invece che `attachment`.
 
   Nome del file: `report_<modello>.html` o `report_qualita_<struttura>.html`, solo `[A-Za-z0-9_.-]`.
 - **Errori:** modello non tra quelli riusciti del job, file che non è un modello (per `refine`: non è il modello
@@ -867,6 +882,7 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
   | Analisi strutturale | ponti disolfuro e interfacce (area, residui, interazioni fra le catene, plausibilità con i limiti) del job `analysis` completato più recente sulla stessa struttura (`AnalysisService.latest`: stessa sorgente, `{job, file}` per i modelli, e stessa impronta del file); la sezione "Analisi strutturale" compare solo se ce ne sono (vedi [Analisi strutturale](#analisi-strutturale)) |
   | Mutagenesi | job `mutate` e `alascan` (F9.2): dal risultato del job; classe con le motivazioni pesate e l'avvertenza, siti (struttura secondaria, RSA, BLOSUM62, superficie apolare sepolta, interazioni perse, interfaccia), DOPE totale, locale e fra le catene, energia di OpenMM con i riferimenti, metriche del selvatico riottimizzato e del mutante, protocollo e fonti; per la scansione la tabella ordinata, gli esclusi e gli hot spot. Sezioni bilanciate (`doc.section`/`doc.end`) |
   | Interfacce del complesso | modelli a più catene (F5.3): `complex` del risultato (catene del modello e del template, simmetria) e il confronto delle interfacce del rapporto di qualità del modello (per il migliore senza analisi, quello del risultato): tabella con area (e quella del template), residui conservati, Fnat, iRMS, LRMS, DockQ ed esito, testo motivato per interfaccia e limiti; nei parametri la riga "Simmetria fra catene" (vedi [Complessi e omo-oligomeri](#complessi-e-omo-oligomeri-domainassemblypy-domaincomplexespy)) |
+  | Confronto con una predizione | F9.3: il job `predict` indicato (`predict_job=`, con i controlli della rotta del consenso: un'altra struttura è un 400) oppure il confronto completato più recente sulla stessa struttura (stessa sorgente e impronta; uno che non vale più per il rapporto si tralascia). Sezione "Confronto con una predizione (ESMFold)" bilanciata con l'esito, TM-score, lDDT, GDT-TS, pLDDT, regioni divergenti con la confidenza e le regioni del consenso, note e limiti; consenso con l'accordo con la predizione (vedi [Confronto con un predittore esterno](#confronto-con-un-predittore-esterno-f93)). Senza confronto il report non cambia |
 
   Un modello senza rapporto di qualità ha il report dei soli risultati di MODELLER, con un avviso.
 - **Grafici SVG** (generati dal backend, XML ben formato):
@@ -887,7 +903,7 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
   Tien et al. 2013, Rost 1999, Prilusky et al. 2005, Uversky et al. 2000, Kyte & Doolittle 1982, Ward et al. 2004;
   con l'analisi strutturale Richardson 1981, Krissinel & Henrick 2007, Janin et al. 2008, Lo Conte et al. 1999,
   Baker & Hubbard 1984, Barlow & Thornton 1983; con le interfacce di un complesso Basu & Wallner 2016, Méndez et al.
-  2003).
+  2003; con il confronto con una predizione Lin et al. 2023, Zhang & Skolnick 2004, Xu & Zhang 2010).
 - **Stampa:** `@page` A4 e regole `@media print`: niente indice, intestazioni delle tabelle ripetute, nessuna
   interruzione dentro grafici, blocchi di allineamento, riquadri e righe, allineamento e qualità da una pagina nuova,
   colori conservati (`print-color-adjust: exact`).
@@ -1461,6 +1477,135 @@ calibrata; i predittori dedicati sbagliano il segno di una parte delle mutazioni
 l'incertezza della struttura; il protocollo non considera ligandi, metalli, acqua né movimenti della catena principale
 oltre il residuo mutato.
 
+### Confronto con un predittore esterno (F9.3)
+
+Controllo di plausibilità di un modello per omologia con una predizione indipendente della stessa sequenza: ESMFold
+(servizio ESM Atlas) oppure, con un'accessione UniProt, il modello di AlphaFold DB già supportato (F5.1). Logica pura in
+`domain/prediction.py`; client in `engines/remote.py`; job `predict` in `services/predict.py`; rotte in `api/predict.py`.
+Nessuna dipendenza nuova, nessuna colonna né tabella SQLite nuova; due impostazioni nuove (`esmfold_remote`,
+`esmfold_url`).
+
+**Client ESMFold** (`remote.esmfold_predict`):
+
+| Aspetto | Scelta | Verifica |
+|---|---|---|
+| Richiesta | `POST` all'indirizzo dell'impostazione `esmfold_url` (vuoto = `https://api.esmatlas.com/foldSequence/v1/pdb/`) con la sequenza come testo nel corpo | a mano il 1° ottobre 2026: 200, `chemical/x-pdb` |
+| Risposta | PDB con HEADER, TITLE «ESMFOLD V1 PREDICTION FOR INPUT», riferimento e licenza (REMARK 1), ATOM numerati da 1 sulla catena A, senza TER né END | ubiquitina umana (76 residui): 601 atomi in 1,0 s; un'altra sequenza di 50 residui: 19 s (il servizio ha una coda) |
+| pLDDT | per atomo nella colonna B-factor, su **0–1** (Cα dell'ubiquitina da 0,45 a 0,96): un file con un massimo non oltre 1 si moltiplica per 100 (`prediction.plddt_scale`), uno già su 0–100 (libreria di ESMFold, altri servizi) resta com'è; valori negativi, oltre 100 o tutti nulli sono una risposta non valida | |
+| Lunghezza | al più 400 residui, controllata prima dell'invio (`sequence_too_long`); almeno 10 | oltre 400 il servizio risponde 413 «Sequence is longer than 400.» (stesso codice, se il limite del servizio cambiasse) |
+| Alfabeto | solo i 20 amminoacidi standard, prima dell'invio (`invalid_sequence`, con le posizioni) | con X, B, Z il servizio risponde 200 ma salta quei residui (50 inviati, 47 nel file) |
+| Verifica della risposta | coordinate presenti, lettere dei Cα uguali alla sequenza inviata e nello stesso ordine, al più 20 MB | |
+| Errori | 404 → `esmfold_unavailable` («potrebbe essere stato dismesso, oppure l'indirizzo è sbagliato»); 413 → `sequence_too_long`; altri 4xx (429 con «troppe richieste») → `esmfold_rejected`; rete, tempo scaduto (300 s) e 5xx dopo 3 tentativi (pause di 5 e 10 s, annullabili) → `esmfold_unavailable`; risposta non valida → `esmfold_invalid_response` | test con il servizio simulato |
+| Cache | `data/cache/esmfold`, chiave = indirizzo + sequenza, 30 giorni (come la pulizia della cache remota); nessuna voce per una risposta non valida; scritture atomiche, anche con più job insieme | |
+| File salvato | intestazione del servizio conservata (oppure un TITLE «ESMFOLD PREDICTION, … SAVED BY BIOLOOM»), `REMARK 999 BIOLOOM PREDICTOR ESMFOLD <servizio>` e `… PLDDT SCALE 0-1 X100 TO 0-100`, pLDDT su 0–100, END | |
+
+Se il servizio pubblico venisse dismesso, l'indirizzo si cambia nelle Impostazioni (un servizio compatibile: POST della
+sequenza, risposta PDB); il limite di 400 residui resta.
+
+**Consenso all'invio.** La sequenza (mai le coordinate) lascia il computer: impostazione `esmfold_remote`, spenta per
+default. Le impostazioni precedenti non l'hanno e la prendono spenta; un valore che non è un vero booleano (file
+modificato a mano) torna spento senza azzerare le altre impostazioni, e un indirizzo non valido torna vuoto. Il consenso
+si controlla nella rotta (403 `esmfold_disabled`: nessun job, nessuna richiesta), nei controlli preventivi
+(`esmfold_remote_disabled`) e di nuovo nell'handler (un job accodato dopo una revoca fallisce senza inviare). Con
+AlphaFold DB non serve: va solo l'accessione.
+
+**Riconoscimento della predizione** (`plddt.predictor`, lo stesso riconoscitore unico dei modelli AlphaFold): TITLE
+«ESMFOLD … PREDICTION» senza EXPDTA e valori su 0–100 → `esmfold`. Il file grezzo del servizio (0–1) non passa per pLDDT
+(fasce e ritaglio lo leggerebbero tutto come «molto basso»); una menzione di ESMFold altrove (REMARK, un TITLE che non
+comincia con ESMFOLD), un EXPDTA (struttura sperimentale, modello MODELLER) o un mmCIF non contano, e non c'è un
+riconoscimento dal nome. 1UBQ, `ubq_dimer.pdb` e `ubq_zn.pdb` restano `bfactor` (test). La predizione salvata si apre in
+Qualità con il pLDDT, si carica in libreria come «Modello predetto (ESMFold)» e, come template, si ritaglia per pLDDT
+conservando il suo TITLE (`modeller._provenance_header`).
+
+**Job `predict`** (priorità 0, pool "io": quasi tutto il tempo è l'attesa del servizio):
+
+1. sequenza: quella indicata, oppure quella della catena del modello (`chain`, predefinita la prima con Cα);
+2. predizione: `prediction_esmfold.pdb`, oppure il modello di AlphaFold DB (dalla libreria, che lo scarica se manca)
+   copiato come `prediction_AF-<ACC>-F<n>.pdb`;
+3. confronto (con il modello, `source`): `align.structural` con il percorso integrato, modello = A (riferimento),
+   predizione = B. La corrispondenza è per sequenza perché è la stessa proteina: restano anche le coppie lontane, che
+   TM-align lascerebbe fuori facendo sparire dal confronto per residuo proprio il tratto che diverge. PDB sovrapposto
+   `superposed.pdb`;
+4. esito (`prediction.assess`) con le regioni problematiche del consenso del modello: rapporto `<modello>.quality.json`
+   oppure l'analisi di qualità più recente della stessa struttura (stessa impronta del file).
+
+Risultato: `predictor`, `label`, `origin` (servizio, cache, scala originale; per AlphaFold DB l'id del modello),
+`prediction_file`, `recognized_as`, `plddt`, `sequence`, `source`, `chain`, `source_sha256`, `comparison` (formato
+dell'allineamento strutturale, `mode: structural`, per StructuralComparison), `plausibility`, `warnings`, `limits`.
+
+**Esito** (`domain/prediction.py`):
+
+| Livello | Regola | Fonte |
+|---|---|---|
+| ripiegamento | TM-score normalizzato sul modello ≥ 0,5 | Xu & Zhang, Bioinformatics 26:889, 2010; due strutture casuali circa 0,17 (Zhang & Skolnick, Proteins 57:702, 2004) |
+| residuo divergente | lDDT-Cα del residuo del modello rispetto alla predizione < 0,5 | Mariani et al. 2013; confine della fascia «molto bassa» del pLDDT, che è un lDDT-Cα predetto (scelta BioLoom) |
+| regione divergente | almeno 3 residui divergenti, uno non divergente tollerato fra due, stessa catena e numerazione contigua | come le regioni problematiche del consenso |
+| predizione sicura | pLDDT medio della regione ≥ 70; incerta da 50 a 70; molto incerta sotto 50 | fasce di AlphaFold DB (Tunyasuvunakool et al. 2021), valide per ESMFold (Lin et al. 2023: stesso lDDT-Cα predetto) |
+| conclusivo | almeno 30 residui (o tutti, per una catena più corta) con pLDDT ≥ 70 | come `plddt.MIN_TRIMMED_RESIDUES`: i più piccoli domini che si ripiegano da soli |
+
+- **non conclusivo** (informazione): la predizione è sicura su troppo pochi residui per dire qualcosa sul ripiegamento;
+- **ripiegamento diverso** (errore): TM-score sotto 0,5 con una predizione sicura: «controlla la scelta del template e
+  l'allineamento»;
+- **divergenze locali** (avviso): almeno una regione divergente dove la predizione è sicura: «Stesso ripiegamento
+  (TM-score 0,93, lDDT 0,88), ma le due strutture divergono in 31-37 (catena A), dove la predizione è sicura (pLDDT medio
+  90): controlla l'allineamento e il template in questa regione.»; le regioni incerte si aggiungono come non informative;
+- **concordano** (ok): «Le due strutture concordano: TM-score 0,93 (stesso ripiegamento), lDDT 0,88; divergono solo in
+  31-37 (catena A), dove anche la predizione è molto incerta (pLDDT medio 40): regione flessibile o poco determinata, il
+  confronto lì non è informativo.»
+
+Una regione divergente che tocca una regione problematica del consenso lo dice («segnalata anche dal consenso (DOPE e
+Ramachandran segnalano 29-33 (catena A))»): due prove indipendenti sullo stesso tratto. Valori di riferimento (test in
+`test_predict.py`, 1UBQ contro la sua copia con il tratto 31–37 spostato di 6 Å verso l'esterno come finta predizione):
+
+| pLDDT della finta predizione | Esito | TM-score | lDDT | Regione divergente | lDDT dove la predizione è sicura |
+|---|---|---|---|---|---|
+| 90 ovunque | divergenze locali | 0,927 | 0,878 | 31–37, lDDT medio 0,24, sicura | 0,872 (76 residui) |
+| 40 sul tratto, 90 altrove | concordano | 0,927 | 0,878 | 31–37, molto incerta | 0,936 (69 residui) |
+| copia identica | concordano | 1,000 | 1,000 | nessuna | 1,000 |
+
+Nel consenso di 1UBQ con il solo voto (98,9) il primo caso aggiunge l'accordo 0,872 → 87,2 con peso 0,25: 96,6 invece
+di 98,9; nel secondo il metodo vale 93,6 e non segnala nulla.
+
+**Limiti** (nel risultato e nell'interfaccia): una predizione non è una misura sperimentale; ESMFold è meno accurato di
+AlphaFold sulle proteine con poche sequenze omologhe (Lin et al. 2023) e può sbagliare anche con pLDDT alto; un template
+sperimentale vicino è di solito più affidabile della predizione; il confronto riguarda una catena (le interfacce di un
+complesso non si valutano) e una sola conformazione (movimenti di dominio e stati legati diversi dal template danno
+divergenze che non sono errori).
+
+**Consenso e report.** Solo se l'utente ha eseguito il confronto: le rotte del consenso accettano `predict_job` (job
+`predict` completato con il confronto, sulla stessa struttura: stessa sorgente e, se c'è, stessa impronta del file;
+altrimenti 400 `predict_source_mismatch` o `predict_job_invalid`, 409 se non completato) e il report del modello include
+il confronto indicato o il più recente (vedi [Consenso](#consenso-tra-i-metodi-e-qualità-per-residuo-domainconsensuspy-domainperresiduepy)
+e [Report del modello](#report-del-modello)).
+
+**Rotte** (`api/predict.py`):
+
+| Rotta | Funzione |
+|---|---|
+| `POST /api/predict` | `{predictor: esmfold \| alphafold, source?, chain?, sequence?, accession?}` → job `predict` («Predizione ESMFold · 1UBQ (confronto)»); errori prima della coda: 403 `esmfold_disabled` (consenso), 400 `predict_input_required`, `invalid_chain`, `sequence_too_long`, `invalid_sequence`, `accession_required`, `invalid_accession`, `invalid_esmfold_url` |
+| `GET /api/predict/latest?type=&id=&job_id=&file=` | come `/api/analysis/latest`: confronto completato più recente sulla stessa struttura e quello in coda o in corso |
+
+Controlli preventivi (`kind: predict`): consenso, stessa validazione della rotta, rete o cache (nessuna richiesta dai
+controlli), tempo (servizio pubblico misurato da 1 a 19 s, con i tentativi fino a 2 minuti; dalla cache meno di un secondo;
+più il confronto, fino a 5 s a 400 residui) e spazio (circa 2,6 KB per residuo più 64 KB) (vedi [Controlli
+preventivi](#controlli-preventivi-domainpreflightpy-servicespreflightpy)).
+
+**Interfaccia** (`components/Predictor.tsx`, logica in `lib/predict.ts`):
+
+- **Qualità** e **Modellazione** (sotto il 3D del modello scelto): riquadro «Confronto con una predizione» con il
+  confronto più recente della struttura (o quello in corso, anche dopo aver ricaricato la pagina) e il pulsante
+  «Confronta con una predizione (ESMFold)». La finestra fa scegliere ESMFold o AlphaFold DB (accessione); con ESMFold e
+  senza consenso spiega prima che cosa lascia il computer e verso dove e chiede «Acconsento e continua» (salva
+  `esmfold_remote`), poi mostra i controlli preventivi e `LaunchButton`.
+- Risultati: esito con il suo tono, TM-score, lDDT (anche dove la predizione è sicura), pLDDT, residui divergenti, regioni
+  con la confidenza, origine (servizio, cache, scala riportata a 0–100), link a Qualità della predizione e a Confronto, PDB
+  della predizione e il componente `StructuralComparison` sul PDB sovrapposto del job.
+- In Qualità il confronto completato entra nel consenso (`predict_job`), con la nota dell'esito e la riga «predizione
+  (info)» nel grafico per residuo, e nel report del pulsante Report. Link stabile `/quality?prjob=<id>` («Apri risultati»
+  nella pagina Job).
+- **Impostazioni → Generale**: riquadro «Predizione di struttura (ESMFold)» con il consenso e l'indirizzo del servizio
+  (vuoto = servizio pubblico; un indirizzo non valido è un 400 `invalid_esmfold_url` della rotta delle impostazioni).
+
 ### Ricerca di template
 
 - **RCSB** (predefinito): Search API (MMseqs2 lato server) → sequenze di catena via GraphQL → riallineamento
@@ -1642,9 +1787,10 @@ riferimento. È sempre segnato come **modello predetto, non struttura sperimenta
   riceve l'annullamento del job (`fetch_alphafold(check=, log=)`): i tentativi verso EBI e le loro pause si fermano,
   e anche l'attesa di un altro elemento di pipeline che sta scaricando lo stesso modello (lock per template preso a
   intervalli di 0,5 s con il controllo dell'annullamento; chi si sveglia dopo l'annullamento non riscarica).
-- **Riconoscimento dei modelli AlphaFold** (`plddt.is_alphafold_model`, unico per libreria, rapporto di qualità e
-  copia preparata del template): i valori della colonna B-factor (tutti gli atomi degli amminoacidi) stanno in 0–100
-  e non sono tutti nulli, e
+- **Riconoscimento dei modelli AlphaFold** (`plddt.predictor`, nome storico `is_alphafold_model`, unico per libreria,
+  rapporto di qualità, copia preparata del template e, dalla F9.3, predizioni di ESMFold: vedi [Confronto con un
+  predittore esterno](#confronto-con-un-predittore-esterno-f93)): i valori della colonna B-factor (tutti gli atomi degli
+  amminoacidi) stanno in 0–100 e non sono tutti nulli, e
   - l'intestazione ha i segni certi di AlphaFold DB (`is_alphafold_text`): TITLE "ALPHAFOLD … PREDICTION" senza
     EXPDTA (sempre presente nelle strutture sperimentali), oppure ModelCIF con `_ma_qa_metric` e il nome AlphaFold
     senza `_exptl.method`;
@@ -2590,13 +2736,13 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 | Libreria template | download RCSB e "Da AlphaFold DB (UniProt)", upload PDB/mmCIF, catene, residui mancanti, ligandi classificati (metallo, cofattore noto, additivo, altro ligando, residuo modificato), DSSP, 3D; badge "AlphaFold", pLDDT medio e fasce di confidenza; assemblaggi biologici (REMARK 350, `pdbx_struct_assembly`) con lo stato oligomerico e «Importa come template» (`<ID>_ASM<n>`), badge "assemblaggio"; stella, etichette e filtro (`?tag=`), preferiti in cima |
 | Allineamenti | pairwise, multiplo, strutturale (con il confronto per residuo e «Apri in Confronto»); esportazione FASTA/Clustal/PIR; salvataggio nel progetto; cache per multiplo e strutturale |
 | Editor PIR | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
-| Modellazione | input automatico, da PIR o «Complesso» (template o assemblaggio, una sequenza per catena anche «stessa della catena …», simmetria, anteprima dell'allineamento per catena; nei risultati confronto delle interfacce con DockQ e 3D colorato per catena e interfaccia), parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); avvisi prima del lancio su regioni disordinate e domini non coperti dai template, con suggerimento; modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job; «Trasferisci ligandi, cofattori e metalli dai template» con la scelta dei gruppi (additivi e ioni del tampone deselezionati per default, `LigandPicker`, che usa le analisi già lette dal selettore dei template anche dopo un download; una lettura non riuscita si mostra con «Riprova», un 404 di un template in download si riprova da sé, e sotto «Avvia modellazione» si dice quale template blocca) e la verifica del modello migliore; «Rifinisci» (OpenMM) per ogni modello e per una struttura qualunque, con i risultati prima/dopo; «Mutagenesi» (mutazioni, varianti di UniProt, scansione di alanina) per ogni modello e per una struttura qualunque, con i risultati del mutante o della scansione |
-| Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche, disordine predetto come segnale informativo), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura; sezione Ligandi e metalli (esiti, coordinazione, confronto con il sito del template): il clic su un gruppo lo mostra nel 3D con i residui coordinanti e le linee di coordinazione (`LigandsPanel`, `lib/ligands.ts`; ioni metallici sempre a sfere); scheda Interazioni (analisi strutturale: legami H, ponti salini, disolfuri, aromatiche, interfacce, conservazione; `?ajob=`); schede Tasche (fpocket, `?pjob=`) ed Elettrostatica (PDB2PQR + APBS, `?ejob=`); scheda Mutagenesi (mutazioni e scansione di alanina della struttura del rapporto, cronologia) |
+| Modellazione | input automatico, da PIR o «Complesso» (template o assemblaggio, una sequenza per catena anche «stessa della catena …», simmetria, anteprima dell'allineamento per catena; nei risultati confronto delle interfacce con DockQ e 3D colorato per catena e interfaccia), parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); avvisi prima del lancio su regioni disordinate e domini non coperti dai template, con suggerimento; modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job; «Trasferisci ligandi, cofattori e metalli dai template» con la scelta dei gruppi (additivi e ioni del tampone deselezionati per default, `LigandPicker`, che usa le analisi già lette dal selettore dei template anche dopo un download; una lettura non riuscita si mostra con «Riprova», un 404 di un template in download si riprova da sé, e sotto «Avvia modellazione» si dice quale template blocca) e la verifica del modello migliore; «Rifinisci» (OpenMM) per ogni modello e per una struttura qualunque, con i risultati prima/dopo; «Mutagenesi» (mutazioni, varianti di UniProt, scansione di alanina) per ogni modello e per una struttura qualunque, con i risultati del mutante o della scansione; «Confronta con una predizione (ESMFold)» per il modello scelto (F9.3) |
+| Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche, disordine predetto come segnale informativo), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura; sezione Ligandi e metalli (esiti, coordinazione, confronto con il sito del template): il clic su un gruppo lo mostra nel 3D con i residui coordinanti e le linee di coordinazione (`LigandsPanel`, `lib/ligands.ts`; ioni metallici sempre a sfere); scheda Interazioni (analisi strutturale: legami H, ponti salini, disolfuri, aromatiche, interfacce, conservazione; `?ajob=`); schede Tasche (fpocket, `?pjob=`) ed Elettrostatica (PDB2PQR + APBS, `?ejob=`); scheda Mutagenesi (mutazioni e scansione di alanina della struttura del rapporto, cronologia); «Confronta con una predizione (ESMFold)» con l'esito motivato e il confronto per residuo, incluso nel consenso e nel report (`?prjob=`, F9.3) |
 | Confronto | `/compare?a=&ca=&b=&cb=&job=`: B sovrapposta ad A (riferimento), metriche (TM-score su A e su B, RMSD, RMSD entro 5 Å, GDT-TS, GDT-HA, lDDT, lunghezza allineata), 3D con B colorata per distanza (0 → ≥ 5 Å) o lDDT e A in grigio chiaro, grafico di distanza e lDDT per posizione, tratti che deviano, tabella per coppia; clic ovunque → coppia evidenziata nel 3D |
 | Pipeline batch | multi-FASTA → modelli validati, template da ricerca automatica, «Più template complementari» (N da 2 a 5) o fissi (casella «Ligandi» del template solo se la scelta predefinita trasferisce qualcosa dalle catene scelte, con i gruppi esclusi nel suggerimento: `lib/ligands.defaultTransfer`); filtro zona crepuscolare, tabella paginata (template usati elencati, motivazioni nel suggerimento), CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
 | Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione e la posizione di quelli in coda ("2° in coda"); stella, etichette e filtro per etichetta o preferiti (`?tag=`); «Pacchetto riproducibile» e «Riesegui da pacchetto» |
 | Riesegui da pacchetto | `/rerun`: caricamento e verifica di un pacchetto, anteprima del manifest con le versioni, controlli preventivi, avvio, rapporto del confronto; `?job=` apre una riesecuzione (vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione-f94)) |
-| Impostazioni | schede Generale (esecuzione, QMEAN, email), Licenze (MODELLER, ProSA, PROCHECK), Database (pdbaa, MMseqs2, UniClust30), Strumenti (verifica dell'installazione), Spazio e file temporanei (con la cache dei calcoli) |
+| Impostazioni | schede Generale (esecuzione, QMEAN, email, consenso e indirizzo di ESMFold), Licenze (MODELLER, ProSA, PROCHECK), Database (pdbaa, MMseqs2, UniClust30), Strumenti (verifica dell'installazione), Spazio e file temporanei (con la cache dei calcoli) |
 | Login | solo in modalità server, quando l'API risponde 401 |
 
 ## Sicurezza e privacy
@@ -2626,6 +2772,14 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   UniProt. I file si scaricano solo da URL `https://alphafold.ebi.ac.uk/files/…`, qualunque URL contenga la risposta.
 - **Disordine e domini:** disordine e bassa complessità si calcolano nel container, senza rete. Per i domini, solo con
   un'accessione UniProt, a UniProt e InterPro (EBI) va l'accessione, mai la sequenza.
+- **ESMFold (F9.3):** il confronto con una predizione invia al servizio ESMFold (predefinito
+  `api.esmatlas.com`, Meta; un altro indirizzo nelle Impostazioni) la **sequenza** di una catena, mai le coordinate, e
+  solo con il consenso esplicito (`esmfold_remote`, spento per default anche per le cartelle dati esistenti): il
+  pulsante lo chiede prima dei controlli e dell'avvio spiegando che cosa parte e verso dove, la rotta lo verifica (403,
+  nessuna richiesta) e l'handler di nuovo all'esecuzione; si revoca in Impostazioni → Generale. La risposta (al più 20
+  MB) si verifica prima di essere salvata come file del job; la predizione resta nella cache remota della cartella dati
+  per 30 giorni. Con AlphaFold DB va a EBI solo l'accessione, come per l'importazione nella libreria. I dati della
+  libreria di ESM Atlas sono distribuiti con licenza CC-BY 4.0 (intestazione del file, conservata).
 - **File caricati:** sequenze e allineamenti (`/api/files/sequences`) vengono solo letti e non salvati. Le
   strutture (`/api/files/structure`) vanno tra gli upload, validate e soggette alla pulizia automatica.
 - **Pacchetti di riproducibilità:** nell'esportazione chiavi di licenza, email, chiave d'accesso e percorsi locali
@@ -2839,6 +2993,24 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     sequenze, progetti (job e sequenze in cascata), job e template (anche cancellati a mano dalla cartella; cartella
     assente non toccata), aggiunte concorrenti (limite rispettato, stessa etichetta una volta), template eliminato
     durante l'aggiunta;
+  - confronto con un predittore esterno (`test_predict.py`, ESMFold e AlphaFold DB simulati con `httpx.MockTransport`
+    nel formato reale del servizio): client (pLDDT su 0–1 riportato a 0–100 e su 0–100 lasciato com'è, TITLE aggiunto se
+    manca, 404/413/400/429/503/tempo scaduto con il codice e i tentativi giusti, nuovo tentativo riuscito, risposte non
+    valide, troppo grandi o di un'altra sequenza, sequenza troppo lunga, con lettere non standard, corta o vuota senza
+    richieste, 400 residui compresi, cache per sequenza e servizio, indirizzi non validi); consenso (impostazioni
+    precedenti e valori strani → spento senza azzerare le altre, rotta delle impostazioni, 403 senza job né richieste,
+    job accodato senza consenso fallito senza invio); validazione prima della coda; riconoscitore unico (ESMFold sì, file
+    grezzo 0–1, EXPDTA, MODELLER, REMARK, altro TITLE e mmCIF no, AlphaFold ancora sì; 1UBQ, `ubq_dimer.pdb`, `ubq_zn.pdb`
+    no; rapporto di qualità, libreria «Modello predetto (ESMFold)» e copia preparata con il ritaglio e il TITLE);
+    plausibilità su 1UBQ con il tratto 31–37 spostato (predizione sicura → divergenze locali, incerta → concordano, copia
+    identica, incrocio con il consenso), ripiegamento diverso, non conclusivo, regioni con tolleranza, confini di catena e
+    di numerazione, scala ed errori del file; consenso identico senza confronto, metodo con peso 0,25 e punteggio dalla
+    formula, residui segnalati agli indici del rapporto, regioni e segnali invariati, metodo fra i mancanti se non
+    conclusivo, discordanza con il voto, regione problematica marcata; priorità e pool; job end-to-end (file
+    riconosciuto dall'analisi di qualità, più recente, cache al secondo job), AlphaFold DB, tre job insieme con una cache
+    valida; rotte del consenso e del report (sezione bilanciata, citazioni, struttura diversa 400, job non predict o senza
+    confronto 400), markup della sezione con l'escape; controlli preventivi (consenso, lunghezza, accessione, cache,
+    tempi, nessuna richiesta remota);
   - ricerca globale (`test_global_search.py`, ogni test con FTS5 e con LIKE): parole e query FTS5/LIKE con escape,
     tabella dei punteggi, organismo dalle intestazioni PDB/mmCIF, ordine per pertinenza (Chinasi 13, «Chinasi di
     lievito» 7, descrizione 1,5), accenti e maiuscole, accessione, gruppi (documento per nome, job per tipo, template per
@@ -2945,6 +3117,11 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     sequenza, preselezione dei consigliati una volta per ricerca, una catena per voce PDB, invalidazione dei passi
     successivi, motore consigliato, opzioni predefinite e spiegazioni, richieste delle rotte, passi raggiungibili, URL
     (andata e ritorno, valori non validi, indietro del browser), bozza non valida, ripresa da un link senza bozza, risultati.
+  - confronto con una predizione (`predict.test.ts`, `Predictor.test.tsx`): consenso chiesto solo per ESMFold e solo se
+    manca (anche con le impostazioni non ancora lette), testo del consenso, indirizzo effettivo del servizio, richiesta e
+    controlli preventivi, limite di 400 residui come il backend, job seguito (scelto, in corso, più recente), esito,
+    metriche e origine, link a Qualità e Confronto (modello come A), nota del consenso; markup dei risultati (esito con il
+    tono, regioni, link, escape, senza confronto).
   - F8b: finestra della virtualizzazione (`virtual.test.ts`: soglia, posizioni con altezza fissa e per indice, righe
     visibili con margine e spaziatori, fondo e scorrimento oltre il fondo, blocchi dell'allineamento, riga selezionata
     portata in vista sotto l'intestazione fissa e nei limiti), scelta del tema (`theme.test.ts`: valori salvati vecchi e

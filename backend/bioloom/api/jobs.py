@@ -137,21 +137,24 @@ def model_quality(job_id: str, model: str, core: Core = Depends(get_core)) -> di
 
 
 QMEAN_JOB_HELP = "Job qmean completato sulla stessa struttura"
+PREDICT_JOB_HELP = "Job predict (confronto con ESMFold o AlphaFold DB) completato sulla stessa struttura (F9.3)"
 
 
 @router.get("/{job_id}/consensus")
 def quality_consensus(job_id: str, qmean_job: Optional[str] = Query(None, max_length=64, description=QMEAN_JOB_HELP),
+                      predict_job: Optional[str] = Query(None, max_length=64, description=PREDICT_JOB_HELP),
                       core: Core = Depends(get_core)) -> dict:
     """Consenso di un'analisi di qualità (job quality), con QMEAN e, per i modelli, GA341/zDOPE di MODELLER."""
-    return core.compute.consensus(job_id, None, qmean_job or None)
+    return core.compute.consensus(job_id, None, qmean_job or None, predict_job or None)
 
 
 @router.get("/{job_id}/consensus/{model:path}")
 def model_consensus(job_id: str, model: str,
                     qmean_job: Optional[str] = Query(None, max_length=64, description=QMEAN_JOB_HELP),
+                    predict_job: Optional[str] = Query(None, max_length=64, description=PREDICT_JOB_HELP),
                     core: Core = Depends(get_core)) -> dict:
     """Consenso di un modello di un job model, loop o pipeline (rapporto `<modello>.quality.json`)."""
-    return core.compute.consensus(job_id, model, qmean_job or None)
+    return core.compute.consensus(job_id, model, qmean_job or None, predict_job or None)
 
 
 class ReportIn(BaseModel):
@@ -166,45 +169,57 @@ REPORT_HEADERS = {"Content-Security-Policy": report.CSP, "X-Content-Type-Options
 DOWNLOAD_HELP = "true = da scaricare (attachment); false = da aprire nel browser (inline)"
 
 
+REPORT_PREDICT_HELP = (PREDICT_JOB_HELP + "; senza, il confronto più recente sulla stessa struttura, se c'è")
+
+
 def _report(core: Core, job_id: str, model: Optional[str], body: Optional[ReportIn], qmean_job: Optional[str],
-            download: bool) -> HTMLResponse:
+            download: bool, predict_job: Optional[str] = None) -> HTMLResponse:
     image = report.decode_png(body.image_png_base64) if body and body.image_png_base64 else None
     text, filename = ReportService(core.jobs, core.compute, core.db).build(job_id, model, qmean_job=qmean_job or None,
-                                                                           image_png=image)
+                                                                           image_png=image,
+                                                                           predict_job=predict_job or None)
     disposition = "attachment" if download else "inline"
     return HTMLResponse(text, headers={**REPORT_HEADERS, "Content-Disposition": f'{disposition}; filename="{filename}"'})
 
 
 @router.get("/{job_id}/report", response_class=HTMLResponse)
 def quality_report(job_id: str, qmean_job: Optional[str] = Query(None, max_length=64, description=QMEAN_JOB_HELP),
-                   download: bool = Query(True, description=DOWNLOAD_HELP), core: Core = Depends(get_core)):
+                   download: bool = Query(True, description=DOWNLOAD_HELP),
+                   predict_job: Optional[str] = Query(None, max_length=64, description=REPORT_PREDICT_HELP),
+                   core: Core = Depends(get_core)):
     """Report HTML autonomo (stampabile in PDF) di un'analisi di qualità: struttura, voto, consenso, grafici."""
-    return _report(core, job_id, None, None, qmean_job, download)
+    return _report(core, job_id, None, None, qmean_job, download, predict_job)
 
 
 @router.post("/{job_id}/report", response_class=HTMLResponse)
 def quality_report_with_image(job_id: str, body: Optional[ReportIn] = None,
                               qmean_job: Optional[str] = Query(None, max_length=64, description=QMEAN_JOB_HELP),
-                              download: bool = Query(True, description=DOWNLOAD_HELP), core: Core = Depends(get_core)):
+                              download: bool = Query(True, description=DOWNLOAD_HELP),
+                              predict_job: Optional[str] = Query(None, max_length=64, description=REPORT_PREDICT_HELP),
+                              core: Core = Depends(get_core)):
     """Come la GET, con l'immagine corrente del viewer 3D (PNG) incorporata nel report."""
-    return _report(core, job_id, None, body, qmean_job, download)
+    return _report(core, job_id, None, body, qmean_job, download, predict_job)
 
 
 @router.get("/{job_id}/report/{model:path}", response_class=HTMLResponse)
 def model_report(job_id: str, model: str,
                  qmean_job: Optional[str] = Query(None, max_length=64, description=QMEAN_JOB_HELP),
-                 download: bool = Query(True, description=DOWNLOAD_HELP), core: Core = Depends(get_core)):
+                 download: bool = Query(True, description=DOWNLOAD_HELP),
+                 predict_job: Optional[str] = Query(None, max_length=64, description=REPORT_PREDICT_HELP),
+                 core: Core = Depends(get_core)):
     """Report HTML autonomo (stampabile in PDF) di un modello di un job model, loop o pipeline: bersaglio,
     template, allineamento, parametri di MODELLER, modelli, qualità del modello, legenda e riferimenti."""
-    return _report(core, job_id, model, None, qmean_job, download)
+    return _report(core, job_id, model, None, qmean_job, download, predict_job)
 
 
 @router.post("/{job_id}/report/{model:path}", response_class=HTMLResponse)
 def model_report_with_image(job_id: str, model: str, body: Optional[ReportIn] = None,
                             qmean_job: Optional[str] = Query(None, max_length=64, description=QMEAN_JOB_HELP),
-                            download: bool = Query(True, description=DOWNLOAD_HELP), core: Core = Depends(get_core)):
+                            download: bool = Query(True, description=DOWNLOAD_HELP),
+                            predict_job: Optional[str] = Query(None, max_length=64, description=REPORT_PREDICT_HELP),
+                            core: Core = Depends(get_core)):
     """Come la GET, con l'immagine corrente del viewer 3D (PNG) incorporata nel report."""
-    return _report(core, job_id, model, body, qmean_job, download)
+    return _report(core, job_id, model, body, qmean_job, download, predict_job)
 
 
 @router.get("/{job_id}/pymol/{model:path}", response_class=PlainTextResponse)

@@ -20,6 +20,7 @@ import { TextFileButton } from "../components/FileLoad";
 import { SequencePicker, StructurePicker, TemplatePicker } from "../components/Pickers";
 import { ReportButton } from "../components/ReportButton";
 import { RefineDialog, RefineResults } from "../components/Refinement";
+import { PredictionPanel } from "../components/Predictor";
 import { Viewer3D, type Viewer3DHandle } from "../components/Viewer3D";
 import { Alert, Badge, Card, Empty, Field, Grade, Modal, PageHead, Segmented, Stat } from "../components/ui";
 import { pirReference } from "../lib/alignConfidence";
@@ -218,6 +219,8 @@ function Results({ jobId, result, kind }: { jobId: string; result: ModelResult |
       <Card title={`Struttura 3D · ${selected}`} sub="Il report del modello selezionato include questa vista">
         <Viewer3D url={api.jobFileUrl(jobId, selected)} handle={viewer} coloring={complexView?.coloring ?? null} highlight={complexView?.highlight ?? []} centerKey={complexView?.centerKey} />
       </Card>
+      {/* controllo di plausibilità del modello selezionato con una predizione esterna (F9.3) */}
+      <PredictionPanel key={selected} source={{ type: "job", job_id: jobId, file: selected }} label={selected} residues={full && !full.complex ? full.target.sequence.length : null} />
       {full && (
         <Card title="Allineamento usato da MODELLER" right={<button className="btn btn-sm" onClick={savePir}><Icon name="save" size={14} /> Salva PIR nel progetto</button>}>
           <div className="stack-sm">

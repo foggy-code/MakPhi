@@ -7,6 +7,7 @@ import { DatabasesPanel, LicensesPanel, StoragePanel, ToolsPanel } from "../comp
 import { Alert, Card, Field, PageHead, Spinner, Tabs } from "../components/ui";
 import { useToast } from "../lib/context";
 import { notifySystemChanged } from "../lib/hooks";
+import { ESMFOLD_MAX_LENGTH, ESMFOLD_PUBLIC_URL } from "../lib/predict";
 
 type Tab = "general" | "licenses" | "databases" | "tools" | "storage";
 const TABS: { value: Tab; label: string }[] = [
@@ -117,6 +118,7 @@ export default function SettingsPage() {
                 </div>
               </Card>
             </div>
+            <div className="stack">
             <Card title="QMEAN e servizi remoti">
               <div className="stack">
                 <Field label="Dove calcolare QMEAN" hint="In locale serve il disco con UniClust30/UniRef30 (qualunque versione; si sceglie in Database).">
@@ -149,6 +151,22 @@ export default function SettingsPage() {
                 </p>
               </div>
             </Card>
+            {/* F9.3: predizione esterna come controllo di plausibilità */}
+            <Card title="Predizione di struttura (ESMFold)">
+              <div className="stack">
+                <label className="check">
+                  <input type="checkbox" checked={form.esmfold_remote} onChange={(e) => set("esmfold_remote", e.target.checked)} />
+                  Consenti l'invio delle sequenze a ESMFold per il confronto con una predizione
+                </label>
+                <Field label="Indirizzo del servizio ESMFold" hint={`Vuoto = API pubblica di ESM Atlas (${ESMFOLD_PUBLIC_URL}). Un altro servizio deve accettare la sequenza in POST e rispondere con un PDB, come quello pubblico.`}>
+                  <input className="input mono" value={form.esmfold_url} maxLength={300} onChange={(e) => set("esmfold_url", e.target.value)} placeholder={ESMFOLD_PUBLIC_URL} />
+                </Field>
+                <p className="tiny muted">
+                  Con il consenso, «Confronta con una predizione» (pagine Qualità e Modellazione) invia al servizio la sola sequenza della catena (al più {ESMFOLD_MAX_LENGTH} residui), mai le coordinate; la predizione resta in cache su questo computer per 30 giorni. Con AlphaFold DB va a EBI solo l'accessione UniProt.
+                </p>
+              </div>
+            </Card>
+            </div>
           </div>
         )}
       </div>

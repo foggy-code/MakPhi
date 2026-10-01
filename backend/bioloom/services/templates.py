@@ -26,6 +26,8 @@ ANALYSIS_VERSION = 3
 SOURCE_ALPHAFOLD = "alphafold"
 PREDICTED_NOTE = "modello predetto, non struttura sperimentale"
 PREDICTED_METHOD = "Modello predetto (AlphaFold)"
+# metodo mostrato per predittore (domain/plddt.predictor); una predizione di ESMFold (F9.3) caricata nella libreria
+PREDICTED_METHODS = {"alphafold": PREDICTED_METHOD, "esmfold": "Modello predetto (ESMFold)"}
 # Campi della voce di AlphaFold DB conservati nei metadati del template
 ALPHAFOLD_META = ("entry_id", "accession", "fragment", "version", "uniprot_start", "uniprot_end", "uniprot_id",
                   "gene", "description", "organism", "tax_id", "created", "tool", "pae_url")
@@ -137,21 +139,21 @@ class TemplateLibrary:
             meta["predicted"] = False
         else:
             meta.update(extra)
-            meta["method"] = meta.get("method") or PREDICTED_METHOD
+            meta["method"] = meta.get("method") or PREDICTED_METHODS.get(extra.get("predictor"), PREDICTED_METHOD)
         atomic_write_json(self._meta_path(tid), meta)
         return meta
 
     def _predicted_meta(self, tid: str, path: Path, *, force: bool = False,
                         alphafold: Optional[dict] = None) -> Optional[dict]:
-        """Campi dei metadati di un modello predetto (AlphaFold), None per ogni altra struttura.
+        """Campi dei metadati di un modello predetto (AlphaFold, ESMFold), None per ogni altra struttura.
 
-        Predetto: scaricato da AlphaFold DB (`force`), oppure riconosciuto da `plddt.is_alphafold_model`, lo stesso
-        criterio del rapporto di qualità (mai dai soli B-factor: servono segni di AlphaFold nell'intestazione o nel
-        nome e nessuna altra origine dichiarata).
+        Predetto: scaricato da AlphaFold DB (`force`), oppure riconosciuto da `plddt.predictor`, lo stesso criterio
+        del rapporto di qualità (mai dai soli B-factor: servono segni di AlphaFold o di ESMFold nell'intestazione, o il
+        nome di AlphaFold DB, e nessuna altra origine dichiarata).
         """
         model = structure.first_model(structure.load_structure(path, tid))
-        if not force and not plddt.is_alphafold_model(path.name, structure.read_text_head(path, 200_000),
-                                                      plddt.atom_values(model)):
+        found = plddt.predictor(path.name, structure.read_text_head(path, 200_000), plddt.atom_values(model))
+        if not force and found is None:
             return None
         summary = plddt.summarize([v for _c, _r, v in plddt.residues(model)])
         info = alphafold or {}
@@ -160,6 +162,7 @@ class TemplateLibrary:
             # pLDDT medio di AlphaFold DB (globalMetricValue) se c'è, altrimenti la media per residuo del file
             "plddt_mean": info.get("plddt") if info.get("plddt") is not None else summary["mean"],
             "plddt_fractions": summary["fractions"],
+            "predictor": "alphafold" if force else found,
         }
         if alphafold is not None:
             out["alphafold"] = {k: alphafold.get(k) for k in ALPHAFOLD_META}
@@ -290,7 +293,7 @@ class TemplateLibrary:
         predicted = self._predicted_meta(tid, path, force=alphafold is not None, alphafold=alphafold)
         if predicted is not None:
             meta.update(predicted)
-            meta["method"] = meta["method"] or PREDICTED_METHOD
+            meta["method"] = meta["method"] or PREDICTED_METHODS.get(predicted.get("predictor"), PREDICTED_METHOD)
             meta["title"] = meta["title"] or (alphafold or {}).get("description", "")
         else:
             meta["predicted"] = False

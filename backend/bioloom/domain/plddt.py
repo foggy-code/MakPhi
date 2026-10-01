@@ -1,7 +1,9 @@
-"""pLDDT dei modelli AlphaFold: lettura dalla colonna B-factor, fasce di confidenza, riconoscimento dei file.
+"""pLDDT dei modelli predetti (AlphaFold, ESMFold): lettura dalla colonna B-factor, fasce di confidenza, riconoscimento.
 
 AlphaFold scrive il pLDDT del residuo (0–100, uguale per tutti i suoi atomi) nella colonna B-factor del PDB e in
-`_atom_site.B_iso_or_equiv` del mmCIF (Jumper et al., Nature 596:583, 2021). Fasce di confidenza di AlphaFold DB
+`_atom_site.B_iso_or_equiv` del mmCIF (Jumper et al., Nature 596:583, 2021). ESMFold (Lin et al., Science 379:1123,
+2023) scrive lo stesso pLDDT (lDDT-Cα predetto) atomo per atomo; il servizio ESM Atlas lo scrive su 0–1 e BioLoom lo
+riporta su 0–100 quando salva la predizione (`domain/prediction.normalize_pdb`). Fasce di confidenza di AlphaFold DB
 (Tunyasuvunakool et al., Nature 596:590, 2021; documentazione di AlphaFold DB), limite inferiore compreso:
 
 | Fascia | pLDDT | Significato |
@@ -16,9 +18,10 @@ non è affidabile e, usato come template, trasferirebbe a MODELLER vincoli su co
 confidenza (spesso regioni disordinate). I residui tolti diventano gap nell'allineamento e MODELLER li costruisce
 senza vincoli dal template. Dopo la soglia si tolgono anche i frammenti isolati (`MIN_FRAGMENT`).
 
-Riconoscimento dei modelli AlphaFold (`is_alphafold_model`): è l'unico criterio di BioLoom, usato dal rapporto di
-qualità (colonna "pLDDT" e colorazione), dalla libreria dei template (modello predetto, ritaglio) e dalla copia del
-template preparata per MODELLER.
+Riconoscimento dei modelli predetti (`predictor`, `is_predicted_model`; `is_alphafold_model` è il nome storico della
+stessa funzione): è l'unico criterio di BioLoom, usato dal rapporto di qualità (colonna "pLDDT" e colorazione), dalla
+libreria dei template (modello predetto, ritaglio), dalla copia del template preparata per MODELLER e dalle
+predizioni salvate dal job `predict` (F9.3).
 """
 
 from __future__ import annotations
@@ -47,6 +50,13 @@ PLDDT_RANGE = (0.0, 100.0)
 
 # TITLE dei PDB di AlphaFold DB: "ALPHAFOLD MONOMER V2.0 PREDICTION FOR <PROTEINA> (<ACC>)"
 _AF_TITLE = re.compile(r"^TITLE\s+(?:\d+\s+)?ALPHAFOLD\b.*\bPREDICTION\b", re.MULTILINE)
+# TITLE dei PDB del servizio ESM Atlas (verificato il 1° ottobre 2026: "TITLE     ESMFOLD V1 PREDICTION FOR INPUT",
+# nessun EXPDTA) e di quelli salvati da BioLoom quando il servizio non lo scrive ("ESMFOLD PREDICTION, …").
+_ESMFOLD_TITLE = re.compile(r"^TITLE\s+(?:\d+\s+)?ESMFOLD\b.*\bPREDICTION\b", re.MULTILINE)
+# Il servizio ESM Atlas scrive il pLDDT su 0–1: un file con un massimo non oltre 1 non è su 0–100 e i suoi valori non
+# si leggono come pLDDT (fasce, ritaglio) finché BioLoom non lo riporta su 0–100 (`domain/prediction.normalize_pdb`).
+UNIT_SCALE_MAX = 1.0
+PREDICTOR_LABELS = {"alphafold": "AlphaFold", "esmfold": "ESMFold"}
 _EXPDTA = re.compile(r"^EXPDTA", re.MULTILINE)
 # Righe che MODELLER scrive nei suoi modelli (oltre a "EXPDTA THEORETICAL MODEL, MODELLER …")
 _MODELLER_REMARK = re.compile(r"^REMARK   6 MODELLER", re.MULTILINE)
@@ -178,6 +188,22 @@ def is_alphafold_text(text: str) -> bool:
     return bool(_AF_TITLE.search(head)) and not _EXPDTA.search(head)
 
 
+def is_esmfold_text(text: str) -> bool:
+    """Il testo (inizio del file) è una predizione di ESMFold? TITLE "ESMFOLD … PREDICTION" senza EXPDTA, come lo
+    scrive il servizio ESM Atlas (e BioLoom quando salva una predizione senza intestazione). ESMFold produce solo PDB:
+    un mmCIF non lo è mai. Come per AlphaFold, una menzione altrove (REMARK, TITLE di una struttura sperimentale con
+    EXPDTA) non conta."""
+    head = text or ""
+    if head.lstrip().startswith("data_") or "_atom_site." in head:
+        return False
+    return bool(_ESMFOLD_TITLE.search(head)) and not _EXPDTA.search(head)
+
+
+def is_predicted_text(text: str) -> bool:
+    """Intestazione con i segni certi di un modello predetto (AlphaFold DB o ESMFold)."""
+    return is_alphafold_text(text) or is_esmfold_text(text)
+
+
 def declares_other_origin(text: str) -> bool:
     """L'intestazione dichiara un'origine diversa da AlphaFold: un metodo sperimentale (EXPDTA del PDB,
     `_exptl.method` del mmCIF, anche in forma di loop) oppure MODELLER ("EXPDTA THEORETICAL MODEL, MODELLER",
@@ -195,24 +221,46 @@ def plausible_values(values: Iterable[float]) -> bool:
     return bool(vals) and any(v != 0 for v in vals) and all(lo <= v <= hi for v in vals)
 
 
-def is_alphafold_model(name: str, head: str, values: Iterable[float]) -> bool:
-    """Il file è un modello di AlphaFold, con il pLDDT nella colonna B-factor? Unico criterio di BioLoom.
+def predictor(name: str, head: str, values: Iterable[float]) -> Optional[str]:
+    """Quale predittore ha scritto il file, con il pLDDT su 0–100 nella colonna B-factor: "alphafold", "esmfold" o
+    None. Unico criterio di BioLoom per i modelli predetti.
 
     1. i valori sono compatibili con il pLDDT (`plausible_values`, su tutti gli atomi degli amminoacidi);
     2. l'intestazione ha i segni certi di AlphaFold DB (`is_alphafold_text`: TITLE "ALPHAFOLD … PREDICTION" senza
-       EXPDTA, oppure ModelCIF con `_ma_qa_metric` senza `_exptl.method`),
-       oppure il nome segue lo schema di AlphaFold DB (`AF_NAME`: file scaricati, caricati con prefisso, id di
-       libreria e loro copie preparate) e l'intestazione non dichiara un'altra origine (`declares_other_origin`).
+       EXPDTA, oppure ModelCIF con `_ma_qa_metric` senza `_exptl.method`) → "alphafold";
+    3. oppure quelli di ESMFold (`is_esmfold_text`: TITLE "ESMFOLD … PREDICTION" senza EXPDTA) e valori su 0–100
+       (massimo oltre 1: il file grezzo di ESM Atlas, su 0–1, non passa per pLDDT finché BioLoom non lo normalizza)
+       → "esmfold";
+    4. oppure il nome segue lo schema di AlphaFold DB (`AF_NAME`: file scaricati, caricati con prefisso, id di
+       libreria e loro copie preparate) e l'intestazione non dichiara un'altra origine (`declares_other_origin`)
+       → "alphafold".
 
     Un B-factor cristallografico può stare in 0–100 (1UBQ: massimo 42,75): per questo la sola scala non basta, e
-    una menzione di AlphaFold altrove nell'intestazione (per esempio il modello di partenza di una sostituzione
-    molecolare) non conta.
+    una menzione di AlphaFold o ESMFold altrove nell'intestazione (per esempio il modello di partenza di una
+    sostituzione molecolare) non conta. Per ESMFold non c'è un riconoscimento dal nome: il servizio non dà un nome
+    al file e uno scelto dall'utente non è un segno certo.
     """
-    if not plausible_values(values):
-        return False
+    vals = list(values)
+    if not plausible_values(vals):
+        return None
     if is_alphafold_text(head):
-        return True
-    return AF_NAME.search(name or "") is not None and not declares_other_origin(head)
+        return "alphafold"
+    if is_esmfold_text(head):
+        return "esmfold" if max(vals) > UNIT_SCALE_MAX else None
+    if AF_NAME.search(name or "") is not None and not declares_other_origin(head):
+        return "alphafold"
+    return None
+
+
+def is_predicted_model(name: str, head: str, values: Iterable[float]) -> bool:
+    """Il file è un modello predetto (AlphaFold o ESMFold) con il pLDDT nella colonna B-factor? (`predictor`)"""
+    return predictor(name, head, values) is not None
+
+
+def is_alphafold_model(name: str, head: str, values: Iterable[float]) -> bool:
+    """Nome storico (F5.1) del riconoscitore unico: vale anche per le predizioni di ESMFold (F9.3), che si
+    ritagliano, si colorano e si segnano come predette allo stesso modo. Vedi `predictor`."""
+    return is_predicted_model(name, head, values)
 
 
 def atom_values(model) -> list[float]:

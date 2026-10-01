@@ -20,11 +20,13 @@ export function saveFile(filename: string, blob: Blob) {
  * Scarica il report HTML autonomo (stampabile in PDF dal browser) di un modello o, senza `model`, di un'analisi
  * di qualità. Se `viewer` mostra la struttura del report, la vista 3D corrente viene incorporata come PNG.
  */
-export function ReportButton({ jobId, model = null, qmeanJob = null, viewer, disabled = false, compact = false }: {
+export function ReportButton({ jobId, model = null, qmeanJob = null, predictJob = null, viewer, disabled = false, compact = false }: {
   jobId: string;
   model?: string | null;
   /** job qmean sulla stessa struttura, da includere (consenso e profilo locale) */
   qmeanJob?: string | null;
+  /** confronto con una predizione sulla stessa struttura (F9.3); senza, il server include il più recente */
+  predictJob?: string | null;
   /** viewer 3D della stessa struttura, se è aperto */
   viewer?: RefObject<Viewer3DHandle | null>;
   disabled?: boolean;
@@ -37,7 +39,7 @@ export function ReportButton({ jobId, model = null, qmeanJob = null, viewer, dis
     setBusy(true);
     try {
       const shot = reportImage(viewer?.current?.pngDataUri() ?? null);
-      const file = await api.report(jobId, model, shot.image ? { image_png_base64: shot.image } : {}, qmeanJob);
+      const file = await api.report(jobId, model, shot.image ? { image_png_base64: shot.image } : {}, qmeanJob, predictJob);
       saveFile(file.filename, file.blob);
       // l'eventuale motivo della vista mancante solo a report salvato: se la richiesta fallisce resta solo l'errore
       const done = reportSavedMessage(shot);

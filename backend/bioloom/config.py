@@ -100,6 +100,12 @@ FRONTEND_DIST = _env_path("BIOLOOM_FRONTEND_DIST", ROOT_DIR / "frontend" / "dist
 MAX_UPLOAD_BYTES = int(os.environ.get("BIOLOOM_MAX_UPLOAD_MB", "50")) * 1024 * 1024
 
 
+def _url_like(value: str) -> bool:
+    """Forma minima di un URL http(s) senza spazi; la verifica completa è in engines/remote.validate_esmfold_url."""
+    return value.lower().startswith(("http://", "https://")) and len(value) > len("https://") and \
+        not any(c.isspace() for c in value)
+
+
 class UserSettings(BaseModel):
     """Impostazioni modificabili dall'interfaccia (salvate in data/settings.json)."""
 
@@ -121,6 +127,19 @@ class UserSettings(BaseModel):
     uploads_retention_days: int = Field(30, ge=0, le=3650, description="Giorni di conservazione degli upload; 0 = sempre")
     compute_cache: bool = Field(True, description="Riusa i risultati già calcolati di ricerche di template e "
                                                   "allineamenti multipli e strutturali (cache dei calcoli)")
+    # ESMFold (F9.3): la sequenza lascia il computer, quindi solo con il consenso esplicito (spento per default)
+    esmfold_remote: bool = Field(False, description="Consente l'invio delle sequenze al servizio ESMFold per la "
+                                                    "predizione di struttura usata come controllo di plausibilità")
+    esmfold_url: str = Field("", max_length=300, description="Indirizzo del servizio ESMFold (POST della sequenza, "
+                                                             "risposta PDB); vuoto = API pubblica di ESM Atlas")
+
+    @field_validator("esmfold_url")
+    @classmethod
+    def _esmfold_url(cls, value: str) -> str:
+        value = value.strip()
+        if value and not _url_like(value):
+            raise ValueError("indirizzo del servizio ESMFold non valido (atteso un URL http o https)")
+        return value
 
     @field_validator("contact_email")
     @classmethod
@@ -144,12 +163,22 @@ class UserSettings(BaseModel):
           fallback su SWISS-MODEL attivo se l'invio era consentito.
         - Cache dei calcoli: le impostazioni precedenti non hanno `compute_cache` e prendono il predefinito
           (acceso); un valore nullo (file modificato a mano) fa lo stesso invece di azzerare tutte le impostazioni.
+        - ESMFold (F9.3): le impostazioni precedenti non hanno `esmfold_remote` né `esmfold_url` e prendono i
+          predefiniti (invio spento, servizio pubblico). Il consenso vale solo come vero booleano: un valore diverso
+          (nullo, testo, numero in un file modificato a mano) torna spento invece di essere interpretato; un indirizzo
+          non valido torna vuoto. Così un file con un valore strano non azzera tutte le impostazioni.
         """
         if isinstance(data, dict) and data.get("qmean_mode") == "auto":
             data = {**data, "qmean_mode": "local"}
             data.setdefault("qmean_fallback_remote", bool(data.get("qmean_remote")))
         if isinstance(data, dict) and "compute_cache" in data and data["compute_cache"] is None:
             data = {k: v for k, v in data.items() if k != "compute_cache"}
+        if isinstance(data, dict) and "esmfold_remote" in data and not isinstance(data["esmfold_remote"], bool):
+            data = {k: v for k, v in data.items() if k != "esmfold_remote"}
+        if isinstance(data, dict) and "esmfold_url" in data:
+            url = data["esmfold_url"]
+            if not isinstance(url, str) or len(url.strip()) > 300 or (url.strip() and not _url_like(url.strip())):
+                data = {k: v for k, v in data.items() if k != "esmfold_url"}
         return data
 
     def remote_qmean_allowed(self) -> bool:

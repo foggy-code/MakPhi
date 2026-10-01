@@ -255,7 +255,8 @@ def _provenance_header(source: Path, model, template_id: str) -> tuple[list[str]
             return [line for line in records if line.startswith("EXPDTA")], False
         method = structure.parse_cif_header(source).get("method") if "_exptl.method" in head else ""
         return ([f"EXPDTA    {method.upper()}"[:80]] if method else []), False
-    if not plddt.is_alphafold_text("\n".join(records)):
+    # una predizione di ESMFold (F9.3) è riconoscibile solo dal suo TITLE, che è già fra i record copiati
+    if not plddt.is_predicted_text("\n".join(records)):
         records.insert(0, f"TITLE     ALPHAFOLD PREDICTION, TEMPLATE {template_id} PREPARED BY BIOLOOM"[:80])
     return records, True
 

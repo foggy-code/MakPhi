@@ -63,7 +63,8 @@ def info(request: Request, refresh: bool = False, core: Core = Depends(get_core)
         "workers": settings.effective_workers(),
         "modeller": tools.detect_modeller(settings.modeller_python, force=refresh),
         "tools": tools.status(),
-        "services": {"qmean_remote": settings.qmean_remote, "contact_email": bool(settings.contact_email)},
+        "services": {"qmean_remote": settings.qmean_remote, "contact_email": bool(settings.contact_email),
+                     "esmfold_remote": settings.esmfold_remote},
         "runtime": {
             "container": IN_CONTAINER,
             "image": os.environ.get("BIOLOOM_IMAGE_VERSION", ""),
@@ -130,6 +131,8 @@ class SettingsUpdate(BaseModel):
     keep_intermediates: bool | None = None
     uploads_retention_days: int | None = None
     compute_cache: bool | None = None
+    esmfold_remote: bool | None = None  # F9.3: consenso all'invio delle sequenze a ESMFold
+    esmfold_url: str | None = None
 
 
 @router.get("/settings")
@@ -140,6 +143,11 @@ def get_settings(core: Core = Depends(get_core)) -> dict:
 @router.put("/settings")
 def update_settings(body: SettingsUpdate, core: Core = Depends(get_core)) -> dict:
     changes = body.model_dump(exclude_none=True)
+    if "esmfold_url" in changes:  # stessa verifica dell'uso (F9.3): un indirizzo sbagliato è un errore, non si ignora
+        from ..engines import remote
+
+        if changes["esmfold_url"].strip():
+            remote.validate_esmfold_url(changes["esmfold_url"])
     try:
         updated = core.settings.update(changes)
     except ValueError as exc:

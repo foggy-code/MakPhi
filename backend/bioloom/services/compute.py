@@ -1011,7 +1011,8 @@ class ComputeService:
         return {"source": p.get("source"), "label": label, **result, "source_sha256": fingerprint}
 
     # ------------------------------------------------------------------------------ consenso
-    def consensus(self, job_id: str, model: Optional[str] = None, qmean_job: Optional[str] = None) -> dict:
+    def consensus(self, job_id: str, model: Optional[str] = None, qmean_job: Optional[str] = None,
+                  predict_job: Optional[str] = None) -> dict:
         """Consenso di qualità ricalcolato con i risultati che l'analisi da sola non ha.
 
         * con `model`: rapporto `<model>.quality.json` di un job model, loop o pipeline;
@@ -1020,7 +1021,8 @@ class ComputeService:
         Se la struttura è un modello salvato da un job, GA341 e zDOPE vengono dai risultati di MODELLER
         (`models.json` accanto al modello). `qmean_job` aggiunge QMEAN (Z-score globale e punteggi locali) di un
         job qmean completato sulla stessa struttura: una sorgente diversa è un errore, non un'esclusione
-        silenziosa, perché i punteggi di un'altra struttura renderebbero il consenso fuorviante.
+        silenziosa, perché i punteggi di un'altra struttura renderebbero il consenso fuorviante. `predict_job`
+        (F9.3) aggiunge allo stesso modo l'accordo con una predizione esterna (job `predict` con il confronto).
         """
         job = self.jobs.get(job_id)
         if model:
@@ -1042,12 +1044,21 @@ class ComputeService:
             source = source if isinstance(source, dict) else {}
         modeller_metrics = self._modeller_metrics(source) if source.get("type") == "job" else None
         qmean = self._qmean_result(qmean_job, source, report.get("source_sha256")) if qmean_job else None
-        result = consensus.compute(report, qmean=qmean, modeller=modeller_metrics)
+        predictor = None
+        if predict_job:  # F9.3: stessi controlli di QMEAN (job completato, stessa struttura)
+            from .predict import PredictService  # services/predict importa questo modulo
+
+            predictor = PredictService(self.jobs, self).plausibility_for(predict_job, source,
+                                                                         report.get("source_sha256"))
+        result = consensus.compute(report, qmean=qmean, modeller=modeller_metrics, predictor=predictor)
         result["inputs"] = {
             "source": source, "modeller": modeller_metrics,
             "qmean": None if qmean is None else {"job_id": qmean_job, "source": qmean.get("source"),
                                                  "method": qmean.get("method")},
         }
+        if predictor is not None:
+            result["inputs"]["predictor"] = {"job_id": predict_job, "predictor": predictor.get("predictor"),
+                                             "label": predictor.get("label"), "status": predictor.get("status")}
         return result
 
     def _modeller_metrics(self, source: dict) -> Optional[dict]:

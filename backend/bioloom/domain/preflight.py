@@ -624,6 +624,76 @@ def pipeline_disorder_checks(disordered: list[str], analysed: int, total: int) -
     return out
 
 
+# ---------------------------------------------------------------------------------------------- predizione (F9.3)
+# Tempi del servizio pubblico di ESMFold misurati a mano il 1° ottobre 2026: 1,0 s per l'ubiquitina (76 residui), 19 s
+# per un'altra sequenza di 50 residui (il servizio ha una coda: conta il carico più della lunghezza). Si aggiungono fino
+# a 3 tentativi con pause di 5 e 10 s sugli errori temporanei, quindi l'intervallo arriva a 2 minuti. AlphaFold DB con
+# l'accessione: pochi secondi (come la ricerca, `SEARCH_SECONDS`). Il confronto con il modello (ricerca del TM-score,
+# GDT e lDDT integrati) richiede meno di 0,1 s su 1UBQ e qualche secondo a 400 residui (Confronto strutturale in
+# ARCHITETTURA.md: 5000 coppie in circa 18 s, lineare nella ricerca).
+PREDICT_SECONDS = {"esmfold": (1.0, 120.0), "alphafold": SEARCH_SECONDS["alphafold"], "cached": (0.1, 1.0)}
+COMPARE_SECONDS = (0.1, 5.0)
+# Byte scritti da un job predict: predizione PDB circa 660 byte per residuo (ESM Atlas, ubiquitina: 50 181 byte per 76
+# residui e 601 atomi), PDB sovrapposto con le due catene circa il doppio, risultato JSON con la tabella delle coppie e
+# i residui del confronto circa 600 byte per residuo; più log e parametri (64 KiB).
+PREDICT_BYTES_PER_RESIDUE = 3 * 660 + 600
+PREDICT_BASE_BYTES = 64 * 1024
+PREDICT_BASIS = ("ESMFold: tempi del servizio pubblico misurati a mano (da 1 a 19 s, con la coda del servizio) più i "
+                 "nuovi tentativi; AlphaFold DB con l'accessione: pochi secondi; confronto integrato: meno di un "
+                 "secondo per 1UBQ.")
+
+
+def predict_checks(*, predictor: str, consent: bool, service: Optional[str], length: int, cached: Optional[str],
+                   compare: bool, accession: Optional[str], in_library: bool = False) -> list[dict]:
+    """Predizione esterna: consenso all'invio (ESMFold: la sequenza lascia il computer), rete e cache, confronto.
+
+    `cached`: data della predizione già in cache per la sequenza e il servizio (nessuna richiesta), altrimenti None."""
+    out = []
+    if predictor == "esmfold":
+        if not consent:
+            out.append(check("error", "esmfold_remote_disabled",
+                             "L'invio delle sequenze a ESMFold non è consentito.",
+                             "Dai il consenso con «Confronta con una predizione» o in Impostazioni → Generale: la "
+                             "sequenza (non le coordinate) lascia il computer e va al servizio ESMFold."))
+        elif cached:
+            out.append(check("info", "esmfold_cached",
+                             f"Predizione di ESMFold già in cache per questa sequenza (ricevuta il {cached[:10]}): "
+                             "nessuna richiesta al servizio."))
+        else:
+            out.append(check("info", "remote_esmfold",
+                             f"La sequenza ({length} residui) va al servizio ESMFold ({service}): serve la "
+                             "connessione a internet; il servizio pubblico ha una coda e può essere lento o non "
+                             "disponibile.",
+                             "Se il servizio non risponde, riprova più tardi o indica un altro indirizzo in "
+                             "Impostazioni → Generale."))
+    elif in_library:
+        out.append(check("info", "alphafold_in_library",
+                         f"Il modello di AlphaFold DB {accession} è già nella libreria: nessuna richiesta a EBI."))
+    else:
+        out.append(check("info", "remote_alphafold",
+                         f"AlphaFold DB: a EBI va solo l'accessione {accession} (serve la connessione); il modello si "
+                         "salva anche nella libreria dei template."))
+    if not compare:
+        out.append(check("info", "predict_no_compare",
+                         "Nessuna struttura da confrontare: il job salva solo la predizione."))
+    return out
+
+
+def predict_estimate(predictor: str, *, cached: bool, compare: bool, length: int) -> dict:
+    """Tempo del job predict: predizione (o cache) più il confronto con il modello."""
+    lo, hi = PREDICT_SECONDS["cached" if cached else predictor]
+    if compare:
+        lo, hi = lo + COMPARE_SECONDS[0], hi + COMPARE_SECONDS[1]
+    what = "dalla cache" if cached else ("servizio ESMFold" if predictor == "esmfold" else "AlphaFold DB")
+    return estimate(math.sqrt(lo * hi), lo, hi, basis=PREDICT_BASIS,
+                    detail=f"{length} residui, {what}" + (", confronto con il modello" if compare else ""))
+
+
+def predict_bytes(length: int) -> int:
+    """Byte scritti da un job predict (risultati; lo scratch contiene gli stessi file)."""
+    return PREDICT_BASE_BYTES + max(1, int(length)) * PREDICT_BYTES_PER_RESIDUE
+
+
 # ---------------------------------------------------------------------------------------------- coda
 def queue_checks(active: int, workers: int) -> list[dict]:
     if active < max(1, workers):
