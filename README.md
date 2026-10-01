@@ -342,6 +342,24 @@ sperimentale**, con il pLDDT medio (confidenza della predizione, 0–100).
 - Anche un PIR a più catene (Editor PIR, modalità «Da documento PIR») produce un modello con le catene del template, le
   interfacce e la simmetria facoltativa.
 
+## Ricerca, etichette e preferiti
+
+- **Ricerca globale:** il campo **Cerca…** in alto (oppure **Ctrl K**, **⌘K** sul Mac, o `/`) trova progetti, sequenze
+  (anche per accessione UniProt), documenti, job (anche per tipo: «modellazione»), template (id, titolo, organismo) ed
+  etichette, raggruppati e ordinati per pertinenza. Ogni parola vale come inizio di una parola: «p6990» trova
+  «sp|P69905|HBA_HUMAN», maiuscole e accenti non contano. Frecce per scegliere, Invio per aprire (anche in un altro
+  progetto), Esc per chiudere. `#etichetta` cerca solo fra gli elementi con quell'etichetta, `tipo:job` (o `tipo:template`,
+  `tipo:sequenze`…) solo un tipo. A campo vuoto mostra i preferiti.
+- **Etichette e stella:** progetti, job, sequenze e template hanno la stella dei preferiti e fino a 20 etichette
+  (minuscole, al più 32 caratteri; «Da Rivedere» diventa «da-rivedere»). Si aggiungono nel dettaglio dell'elemento (per
+  il progetto attivo nella Panoramica); negli elenchi di job e template, e nel dialogo **Progetti** della barra in alto, si
+  filtra per etichetta o per preferiti. Eliminando un elemento se ne vanno anche le sue etichette.
+- **Tema:** Scuro, Chiaro o **Sistema** (segue il tema del sistema operativo) in fondo alla barra laterale.
+- **Tasti:** `?` (o **Tasti** nella barra laterale) elenca le scorciatoie: `g` e poi una lettera per le pagine principali
+  (`g s` Sequenze, `g j` Job, `g q` Qualità…). Mentre scrivi in un campo valgono solo Ctrl K ed Esc.
+- **Liste lunghe:** la tabella dei residui in Qualità, le coppie in Confronto e gli allineamenti con molte sequenze
+  disegnano solo le righe visibili, e restano fluidi anche con migliaia di righe.
+
 ## Cosa contiene
 
 | Area | Strumenti |
@@ -366,6 +384,10 @@ sperimentale**, con il pLDDT medio (confidenza della predizione, 0–100).
 
 A fine calcolo in `data/` vengono salvati solo i risultati: i file intermedi di MODELLER restano fuori, salvo
 diversa impostazione. Upload e cache scaduti si puliscono da soli (Impostazioni → Spazio e file temporanei).
+
+Quando una nuova versione di BioLoom aggiorna la struttura del database (`data/bioloom.db`), lo fa da sola all'avvio
+dopo averne salvato una copia in `data/backups/` (una per aggiornamento; si può cancellare quando tutto funziona). Se
+l'aggiornamento non riesce, il database resta com'era e BioLoom lo dice all'avvio.
 
 ## Chiavetta USB
 

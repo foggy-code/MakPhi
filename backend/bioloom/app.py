@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import __version__
-from .api import analysis
+from .api import analysis, labels
 from .api import auth as auth_api
 from .api import bio, compute, databases, files, jobs, licenses, projects, system, templates
 from .api import structure_tools
@@ -73,6 +73,7 @@ def create_app(paths: Optional[Paths] = None, frontend_dist: Optional[Path] = FR
         app.include_router(module.router)
     app.include_router(analysis.router)  # analisi strutturale (F7)
     app.include_router(structure_tools.router)  # tasche, elettrostatica, rifinitura (F7b, F9.1)
+    app.include_router(labels.router)  # etichette, preferiti e ricerca globale (F8b)
 
     @app.get("/api/{rest:path}", include_in_schema=False)
     async def api_not_found(rest: str):

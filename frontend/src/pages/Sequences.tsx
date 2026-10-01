@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { CoverageCheck, InterProDomain, Sequence, SequenceAnalysis, UniProtEntry, UniProtHit } from "../api/types";
+import type { CoverageCheck, EntityLabels, InterProDomain, Sequence, SequenceAnalysis, UniProtEntry, UniProtHit } from "../api/types";
 import { FeatureMap, SSStrip, StackBar, type Track } from "../components/charts";
 import { SequenceFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
+import { FavoriteStar, LabelEditor, TagChips } from "../components/Labels";
 import { Alert, Badge, Card, Confirm, CopyButton, Empty, PageHead, Spinner, Stat, Tabs } from "../components/ui";
 import { sequenceAccession } from "../lib/alphafold";
 import { useProject, useToast } from "../lib/context";
@@ -42,7 +43,7 @@ export function uniprotTracks(entry: UniProtEntry, domains: InterProDomain[] | n
   return tracks;
 }
 
-function SequenceDetail({ seq }: { seq: Sequence }) {
+function SequenceDetail({ seq, onLabels }: { seq: Sequence; onLabels: (l: EntityLabels) => void }) {
   const navigate = useNavigate();
   const { data: analysis, error } = useAsync<SequenceAnalysis>(() => api.analyzeSequence(seq.sequence), [seq.id]);
   const accession = (seq.meta?.accession as string) || "";
@@ -72,6 +73,7 @@ function SequenceDetail({ seq }: { seq: Sequence }) {
           </>
         }
       >
+        <div style={{ marginBottom: 10 }}><LabelEditor key={seq.id} type="sequence" id={seq.id} onChange={onLabels} /></div>
         <pre className="seq-block">{wrapSequence(seq.sequence, 60)}</pre>
       </Card>
       {error && <Alert tone="err">{error.message}</Alert>}
@@ -223,14 +225,28 @@ function UniProtImport({ onAdded }: { onAdded: () => void }) {
 export default function Sequences() {
   const { projectId, reload: reloadProjects } = useProject();
   const toast = useToast();
-  const { data: seqs, reload, loading } = useAsync<Sequence[]>(() => (projectId ? api.sequences(projectId) : Promise.resolve([])), [projectId]);
-  const [selected, setSelected] = useState<string | null>(null);
+  const { data: seqs, reload, loading, setData } = useAsync<Sequence[]>(() => (projectId ? api.sequences(projectId) : Promise.resolve([])), [projectId]);
+  // `?id=` (ricerca globale, link) sceglie la sequenza appena l'elenco del suo progetto è caricato
+  const [params, setParams] = useSearchParams();
+  const wanted = params.get("id");
+  const [selected, setSelected] = useState<string | null>(wanted);
   const [tab, setTab] = useState<"fasta" | "uniprot">("fasta");
   const [fasta, setFasta] = useState("");
   const [toDelete, setToDelete] = useState<Sequence | null>(null);
   useEffect(() => {
-    if (seqs?.length && !seqs.some((s) => s.id === selected)) setSelected(seqs[seqs.length - 1].id);
-  }, [seqs, selected]);
+    if (!seqs) return;
+    if (wanted) {
+      if (seqs.some((s) => s.id === wanted)) {
+        setSelected(wanted);
+        setParams({}, { replace: true });
+        return;
+      }
+      if (loading) return; // l'elenco del progetto giusto sta ancora arrivando
+      setParams({}, { replace: true }); // sequenza non trovata (eliminata, link vecchio)
+    }
+    if (seqs.length && !seqs.some((s) => s.id === selected)) setSelected(seqs[seqs.length - 1].id);
+  }, [seqs, selected, wanted, loading, setParams]);
+  const patchLabels = (l: EntityLabels) => setData((seqs ?? []).map((s) => (s.id === l.entity_id ? { ...s, tags: l.tags, favorite: l.favorite } : s)));
   const current = seqs?.find((s) => s.id === selected) ?? null;
   const afterChange = () => {
     reload();
@@ -278,7 +294,8 @@ export default function Sequences() {
                   <tbody>
                     {seqs.map((s) => (
                       <tr key={s.id} className={`clickable ${s.id === selected ? "selected" : ""}`} onClick={() => setSelected(s.id)}>
-                        <td><b>{s.name}</b><div className="tiny muted">{s.source} · {relTime(s.created_at)}</div></td>
+                        <td style={{ width: 30 }}><FavoriteStar type="sequence" id={s.id} value={!!s.favorite} onChange={patchLabels} size={13} /></td>
+                        <td><b>{s.name}</b> <TagChips tags={s.tags} max={3} /><div className="tiny muted">{s.source} · {relTime(s.created_at)}</div></td>
                         <td className="num nowrap">{fmtInt(s.length)} aa</td>
                         <td style={{ width: 36 }}>
                           <button className="btn btn-ghost btn-icon" onClick={(e) => { e.stopPropagation(); setToDelete(s); }} aria-label="Elimina">
@@ -293,7 +310,7 @@ export default function Sequences() {
             )}
           </Card>
         </div>
-        <div>{current ? <SequenceDetail seq={current} /> : <Card><Empty icon="dna" title="Seleziona o importa una sequenza" /></Card>}</div>
+        <div>{current ? <SequenceDetail seq={current} onLabels={patchLabels} /> : <Card><Empty icon="dna" title="Seleziona o importa una sequenza" /></Card>}</div>
       </div>
       {toDelete && projectId && (
         <Confirm

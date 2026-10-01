@@ -46,10 +46,29 @@ class TemplateLibrary:
         # un download alla volta per modello AlphaFold: elementi di pipeline in parallelo con lo stesso template
         # aspettano il primo e poi lo trovano in libreria
         self._fetching: dict[str, threading.Lock] = {}
+        self._listeners: list[Callable[[str, str], None]] = []
 
     def _fetch_lock(self, tid: str) -> threading.Lock:
         with self._lock:
             return self._fetching.setdefault(tid, threading.Lock())
+
+    # ----------------------------------------------------------------------------- notifiche (F8b)
+    def subscribe(self, listener: Callable[[str, str], None]) -> None:
+        """`listener(evento, id)` dopo ogni modifica fatta dalla libreria: "changed" (template aggiunto o sostituito)
+        o "deleted". La usano l'indice della ricerca globale e la pulizia di etichette e preferiti
+        (services/labels.py); le modifiche fatte a mano nella cartella le scopre l'indice dalle date dei file."""
+        self._listeners.append(listener)
+
+    def _notify(self, event: str, tid: str) -> None:
+        for listener in list(self._listeners):
+            try:
+                listener(event, tid)
+            except Exception as exc:  # l'operazione sulla libreria è già fatta: un ascoltatore non la annulla
+                print(f"[BioLoom] notifica della libreria ({event} {tid}) non riuscita: {exc}")
+
+    def ids(self) -> list[str]:
+        """Identificativi dei template presenti, dai soli nomi dei file (nessuna lettura dei metadati)."""
+        return sorted(self._files())
 
     # ----------------------------------------------------------------------------- accesso ai file
     def _files(self) -> dict[str, Path]:
@@ -254,6 +273,7 @@ class TemplateLibrary:
         else:
             meta["predicted"] = False
         atomic_write_json(self._meta_path(tid), meta)
+        self._notify("changed", tid)
         return self.describe(tid)
 
     def describe(self, template_id: str) -> dict:
@@ -268,6 +288,7 @@ class TemplateLibrary:
         path.unlink()
         self._meta_path(tid).unlink(missing_ok=True)
         self._analysis_path(tid).unlink(missing_ok=True)
+        self._notify("deleted", tid)  # etichette e stella del template se ne vanno con il file
 
     def text(self, template_id: str) -> str:
         return self.path(template_id).read_text(encoding="utf-8", errors="replace")

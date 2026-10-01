@@ -42,6 +42,12 @@ import type {
   TemplateRef,
   UniProtEntry,
   UniProtHit,
+  EntityLabels,
+  EntityType,
+  FavoriteEntry,
+  SearchGroupType,
+  SearchResponse,
+  TagCount,
 } from "./types";
 import { filenameFromDisposition, reportFallbackName } from "../lib/report";
 
@@ -115,6 +121,23 @@ const patch = <T,>(path: string, body: unknown) => request<T>("PATCH", path, bod
 const del = <T,>(path: string) => request<T>("DELETE", path);
 const enc = encodeURIComponent;
 
+/** Filtri per etichetta e stella degli elenchi (F8b). */
+export interface LabelQuery {
+  tag?: string;
+  favorite?: boolean;
+}
+
+/** Query string senza i valori vuoti (`?` compreso, '' se non resta nulla). */
+function queryString(q: object): string {
+  const params = new URLSearchParams();
+  Object.entries(q).forEach(([k, v]) => {
+    if (Array.isArray(v)) v.forEach((x) => params.append(k, String(x)));
+    else if (v !== undefined && v !== null && v !== "") params.set(k, String(v));
+  });
+  const text = params.toString();
+  return text ? `?${text}` : "";
+}
+
 export const api = {
   // sistema
   health: () => get<{ status: string; version: string }>("/api/health"),
@@ -168,11 +191,11 @@ export const api = {
   },
 
   // progetti
-  projects: () => get<Project[]>("/api/projects"),
+  projects: (q: LabelQuery = {}) => get<Project[]>(`/api/projects${queryString(q)}`),
   createProject: (name: string, description = "") => post<Project>("/api/projects", { name, description }),
   updateProject: (id: string, data: Partial<Project>) => patch<Project>(`/api/projects/${id}`, data),
   deleteProject: (id: string) => del(`/api/projects/${id}`),
-  sequences: (pid: string) => get<Sequence[]>(`/api/projects/${pid}/sequences`),
+  sequences: (pid: string, q: LabelQuery = {}) => get<Sequence[]>(`/api/projects/${pid}/sequences${queryString(q)}`),
   addSequence: (pid: string, name: string, sequence: string, source = "manual", meta: Record<string, unknown> = {}) =>
     post<Sequence>(`/api/projects/${pid}/sequences`, { name, sequence, source, meta }),
   importFasta: (pid: string, fasta: string) => post<Sequence[]>(`/api/projects/${pid}/sequences/import`, { fasta }),
@@ -199,7 +222,7 @@ export const api = {
   preflight: (body: PreflightRequest) => post<PreflightResult>("/api/compute/preflight", body),
 
   // template
-  templates: () => get<TemplateItem[]>("/api/templates"),
+  templates: (q: LabelQuery = {}) => get<TemplateItem[]>(`/api/templates${queryString(q)}`),
   fetchTemplate: (pdb_id: string, format = "pdb") => post<TemplateItem & { cached: boolean }>("/api/templates/fetch", { pdb_id, format }),
   /** modello di AlphaFold DB per accessione UniProt (o id AF-<ACC>-F<n>): l'accessione va a EBI */
   fetchAlphaFold: (accession: string) => post<TemplateItem & { cached: boolean }>("/api/templates/alphafold", { accession }),
@@ -219,7 +242,7 @@ export const api = {
     post<TemplateItem & { cached: boolean }>(`/api/templates/${enc(id)}/assemblies/${enc(assemblyId)}`),
 
   // job
-  jobs: (q: { project_id?: string; kind?: string; status?: string; limit?: number } = {}) => {
+  jobs: (q: { project_id?: string; kind?: string; status?: string; limit?: number } & LabelQuery = {}) => {
     const params = new URLSearchParams();
     Object.entries(q).forEach(([k, v]) => v !== undefined && v !== "" && params.set(k, String(v)));
     return get<JobSummary[]>(`/api/jobs?${params}`);
@@ -290,6 +313,19 @@ export const api = {
   pipelineItem: (id: string, idx: number) => get<PipelineItem & { sequence: string }>(`/api/pipeline/${id}/items/${idx}`),
   pipelineCsvUrl: (id: string) => `/api/pipeline/${id}/export.csv`,
   pipelineZipUrl: (id: string) => `/api/pipeline/${id}/export.zip`,
+
+  // etichette, preferiti e ricerca globale (F8b)
+  /** etichette in uso con i conteggi (tutte o di un tipo) */
+  tags: (entityType?: EntityType) => get<TagCount[]>(`/api/tags${queryString({ entity_type: entityType })}`),
+  entityLabels: (type: EntityType, id: string) => get<EntityLabels>(`/api/tags/${type}/${enc(id)}`),
+  addTag: (type: EntityType, id: string, tag: string) => post<EntityLabels>(`/api/tags/${type}/${enc(id)}`, { tag }),
+  removeTag: (type: EntityType, id: string, tag: string) => del<EntityLabels>(`/api/tags/${type}/${enc(id)}/${enc(tag)}`),
+  setFavorite: (type: EntityType, id: string, on: boolean) =>
+    on ? put<EntityLabels>(`/api/favorites/${type}/${enc(id)}`, {}) : del<EntityLabels>(`/api/favorites/${type}/${enc(id)}`),
+  favorites: (entityType?: EntityType) => get<FavoriteEntry[]>(`/api/favorites${queryString({ entity_type: entityType })}`),
+  /** ricerca globale: `q` vuoto con `tag` = elementi con l'etichetta, senza nulla = preferiti */
+  globalSearch: (q: { q: string; tag?: string | null; type?: SearchGroupType[]; limit?: number }) =>
+    get<SearchResponse>(`/api/search${queryString({ q: q.q, tag: q.tag ?? undefined, type: q.type?.length ? q.type : undefined, limit: q.limit })}`),
 
   // analisi strutturale (F7): interazioni, interfacce, conservazione; il risultato è quello del job
   analysis: (body: AnalysisRequest) => post<JobSummary>("/api/analysis", body),

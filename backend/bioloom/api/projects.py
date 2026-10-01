@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
 from ..core.container import Core
@@ -42,9 +42,16 @@ class DocumentIn(BaseModel):
     meta: dict = {}
 
 
+TAG_HELP = "Solo gli elementi con questa etichetta"
+FAVORITE_HELP = "true = solo con la stella, false = solo senza"
+
+
 @router.get("")
-def list_projects(core: Core = Depends(get_core)) -> list[dict]:
-    return core.projects.list()
+def list_projects(tag: Optional[str] = Query(None, max_length=200, description=TAG_HELP),
+                  favorite: Optional[bool] = Query(None, description=FAVORITE_HELP),
+                  core: Core = Depends(get_core)) -> list[dict]:
+    """Progetti con `tags` e `favorite` (F8b)."""
+    return core.labels.filter("project", core.projects.list(), tag=tag, favorite=favorite)
 
 
 @router.post("")
@@ -69,8 +76,11 @@ def delete_project(project_id: str, core: Core = Depends(get_core)) -> dict:
 
 
 @router.get("/{project_id}/sequences")
-def list_sequences(project_id: str, core: Core = Depends(get_core)) -> list[dict]:
-    return core.projects.list_sequences(project_id)
+def list_sequences(project_id: str, tag: Optional[str] = Query(None, max_length=200, description=TAG_HELP),
+                   favorite: Optional[bool] = Query(None, description=FAVORITE_HELP),
+                   core: Core = Depends(get_core)) -> list[dict]:
+    """Sequenze del progetto con `tags` e `favorite` (F8b)."""
+    return core.labels.filter("sequence", core.projects.list_sequences(project_id), tag=tag, favorite=favorite)
 
 
 @router.post("/{project_id}/sequences")

@@ -35,7 +35,15 @@ const PATHS: Record<string, string> = {
   grid: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z",
   folder: "M3 6h6l2 2h10v11H3z",
   compare: "M4 8h14M14 4l4 4-4 4M20 16H6M10 12l-4 4 4 4",
+  // etichette, preferiti, tema di sistema, scorciatoie (F8b)
+  star: "M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z",
+  starFill: "M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z",
+  tag: "M3 12V4h8l10 10-8 8zM7.5 8.5h.01",
+  monitor: "M3 5h18v11H3zM8 20h8M12 16v4",
+  keyboard: "M3 7h18v10H3zM7 11h.01M11 11h.01M15 11h.01M7 14h10",
 };
+
+const FILLED = new Set(["play", "stop", "starFill"]);
 
 export function Icon({ name, size = 16, className }: { name: keyof typeof PATHS | string; size?: number; className?: string }) {
   return (
@@ -43,7 +51,7 @@ export function Icon({ name, size = 16, className }: { name: keyof typeof PATHS 
       width={size}
       height={size}
       viewBox="0 0 24 24"
-      fill={name === "play" || name === "stop" ? "currentColor" : "none"}
+      fill={FILLED.has(name) ? "currentColor" : "none"}
       stroke="currentColor"
       strokeWidth={1.9}
       strokeLinecap="round"

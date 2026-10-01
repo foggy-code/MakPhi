@@ -29,6 +29,7 @@ import {
 } from "../lib/residueColoring";
 import { qmeanRoute } from "../lib/status";
 import type { ToolJobMemory } from "../lib/toolJobs";
+import { TABLE_ROW_HEIGHT, useVirtualRows } from "../lib/virtual";
 
 type Tab = "rama" | "profiles" | "clashes" | "residues" | "3d" | "interactions" | "pockets" | "electrostatics";
 
@@ -190,10 +191,16 @@ function ResidueTable({ residues, onPick, selected, consensus, plddt }: { residu
   const selectedIsProblem = selected ? residues.some((r, i) => sameResidue(selected, r) && problem(r, i)) : true;
   const [only, setOnly] = useState<"all" | "problems">(selectedIsProblem ? "problems" : "all");
   const rows = residues.map((r, i) => ({ r, i })).filter(({ r, i }) => only === "all" || problem(r, i));
-  const selRow = useRef<HTMLTableRowElement>(null);
+  // oltre VIRTUAL_THRESHOLD righe si disegnano solo quelle visibili (F8b); il residuo scelto (3D, grafici) si porta in
+  // vista scorrendo solo la tabella, anche se la sua riga non è disegnata
+  const virtual = useVirtualRows<HTMLDivElement>({ count: rows.length, rowHeight: TABLE_ROW_HEIGHT, measure: true });
+  const rowStyle = virtual.active ? { height: TABLE_ROW_HEIGHT } : undefined;
+  const selIndex = selected ? rows.findIndex(({ r }) => sameResidue(selected, r)) : -1;
+  const { reveal } = virtual;
   useEffect(() => {
-    selRow.current?.scrollIntoView({ block: "center" });
-  }, [selected, only]);
+    if (selIndex >= 0) reveal(selIndex);
+  }, [selected, only, selIndex, reveal]);
+  const columns = counts ? 10 : 9;
   return (
     <div className="stack-sm">
       <div className="row small">
@@ -202,14 +209,15 @@ function ResidueTable({ residues, onPick, selected, consensus, plddt }: { residu
         {counts && <span className="muted">Problematici: outlier, clash o segnalati da almeno 2 metodi del consenso.</span>}
       </div>
       {!rows.length ? <Alert tone="ok">{counts ? "Nessun outlier di Ramachandran, residuo coinvolto in clash o segnalato da almeno 2 metodi del consenso." : "Nessun outlier di Ramachandran né residuo coinvolto in clash."}</Alert> : (
-        <div className="table-wrap" style={{ maxHeight: 420, overflowY: "auto" }}>
+        <div ref={virtual.ref} onScroll={virtual.onScroll} className="table-wrap" style={{ maxHeight: 420, overflowY: "auto" }}>
           <table className="table">
             <thead><tr><th>Residuo</th><th>DSSP</th><th className="num">φ</th><th className="num">ψ</th><th>Ramachandran</th><th className="num">Clash</th><th className="num">RSA</th><th className="num">DOPE</th><th className="num">{plddt ? "pLDDT" : "B-factor"}</th>{counts && <th>Consenso</th>}</tr></thead>
             <tbody>
-              {rows.map(({ r, i }) => {
+              {virtual.range.padTop > 0 && <tr className="virtual-spacer" aria-hidden="true" style={{ height: virtual.range.padTop }}><td colSpan={columns} /></tr>}
+              {rows.slice(virtual.range.start, virtual.range.end).map(({ r, i }, n) => {
                 const sel = sameResidue(selected, r);
                 return (
-                  <tr key={`${r.chain}${r.resnum}`} ref={sel ? selRow : undefined} className={`clickable${sel ? " selected" : ""}`} onClick={() => onPick(r)}>
+                  <tr key={`${r.chain}${r.resnum}`} data-vrow={virtual.range.start + n} style={rowStyle} className={`clickable${sel ? " selected" : ""}${virtual.active ? " virtual-row" : ""}`} onClick={() => onPick(r)}>
                     <td className="nowrap"><b>{r.resname}</b> {r.chain}{r.resnum}</td>
                     <td>{r.ss}</td>
                     <td className="num">{fmtNum(r.phi, 0)}</td>
@@ -223,6 +231,7 @@ function ResidueTable({ residues, onPick, selected, consensus, plddt }: { residu
                   </tr>
                 );
               })}
+              {virtual.range.padBottom > 0 && <tr className="virtual-spacer" aria-hidden="true" style={{ height: virtual.range.padBottom }}><td colSpan={columns} /></tr>}
             </tbody>
           </table>
         </div>

@@ -33,7 +33,8 @@ Container "qmean" (profilo compose "qmean", immagine ufficiale QMEAN 4.3.0 + wor
   /cache ◀─ volume qmean_cache: cs219 ricreati per i database HH-suite 2
 
 data/
-  bioloom.db          progetti, sequenze, documenti, job, elementi di pipeline (SQLite, WAL esclusivo)
+  bioloom.db          progetti, sequenze, documenti, job, elementi di pipeline, etichette e preferiti (SQLite, WAL esclusivo, schema versionato)
+  backups/            copie di sicurezza di bioloom.db fatte prima di ogni migrazione dello schema
   jobs/<id>/          params.json, job.log, result.json e i soli risultati (niente intermedi MODELLER)
   templates/          libreria globale (ID.pdb|cif + ID.meta.json + ID.analysis.json in cache)
   uploads/  cache/    file caricati per l'analisi; risposte remote e cache dei calcoli in cache/compute (pulizia automatica)
@@ -64,7 +65,8 @@ data/
   anche un report HTML per elemento, generato e scritto uno alla volta (vedi [Report del modello](#report-del-modello)).
 - **SQLite:** `locking_mode=EXCLUSIVE` impostato prima del WAL, quindi nessun file `-shm`. È affidabile
   sui bind mount di Docker Desktop e su exFAT, e impedisce a una seconda istanza di aprire la stessa
-  cartella dati (errore chiaro).
+  cartella dati (errore chiaro). Lo schema ha una versione e si aggiorna all'avvio con migrazioni non distruttive,
+  dopo una copia di sicurezza in `backups/` (vedi [Migrazioni dello schema](#migrazioni-dello-schema-coredbpy)).
 - **Pulizia automatica** (`services/housekeeping.py`), all'avvio, ogni 24 ore e con un pulsante:
   - upload più vecchi dei giorni impostati;
   - cache remota e cache dei calcoli oltre i 30 giorni, più i file temporanei di scritture interrotte;
@@ -98,11 +100,11 @@ data/
 
 | Pacchetto | Contenuto |
 |---|---|
-| `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `dispatch` (coda con priorità di ogni pool), `budget` (budget di CPU condiviso fra i job), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi), `eta` (stima del tempo residuo), `events` (notifiche in-process dei cambiamenti dei job), `parallel` (passi indipendenti di un calcolo su un pool locale di thread, vedi [Prestazioni](#prestazioni)) |
-| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG), `template_rank` (punteggio motivato dei template e selezione dei complementari), `multitemplate` (scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template), `ligands` (classificazione dei gruppi eteroatomici, colonne '.' del PIR, verifica di contatti, scontri e coordinazione dei metalli), `disorder` (disordine FoldIndex, bassa complessità SEG, domini e copertura del bersaglio), `interactions`, `interfaces`, `conservation` (analisi strutturale, vedi [Analisi strutturale](#analisi-strutturale)), `pockets` (uscita di fpocket), `electrostatics` (PQR, griglia e input di APBS, mappe OpenDX, potenziale di superficie), `refinement` (protocollo della rifinitura, copia pulita, confronto prima/dopo; vedi [Tasche, elettrostatica e rifinitura energetica](#tasche-elettrostatica-e-rifinitura-energetica-f7b-f91)), assembly` (assemblaggi biologici dal mmCIF e dal REMARK 350), `complexes` (bersagli a più catene, simmetria, confronto delle interfacce con il template; vedi [Complessi e omo-oligomeri](#complessi-e-omo-oligomeri-domainassemblypy-domaincomplexespy)), `preflight` (regole dei controlli preventivi, vedi [Controlli preventivi](#controlli-preventivi-domainpreflightpy-servicespreflightpy)) |
+| `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo, migrazioni versionate), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `dispatch` (coda con priorità di ogni pool), `budget` (budget di CPU condiviso fra i job), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi), `eta` (stima del tempo residuo), `events` (notifiche in-process dei cambiamenti dei job), `parallel` (passi indipendenti di un calcolo su un pool locale di thread, vedi [Prestazioni](#prestazioni)) |
+| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG), `template_rank` (punteggio motivato dei template e selezione dei complementari), `multitemplate` (scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template), `ligands` (classificazione dei gruppi eteroatomici, colonne '.' del PIR, verifica di contatti, scontri e coordinazione dei metalli), `disorder` (disordine FoldIndex, bassa complessità SEG, domini e copertura del bersaglio), `interactions`, `interfaces`, `conservation` (analisi strutturale, vedi [Analisi strutturale](#analisi-strutturale)), `pockets` (uscita di fpocket), `electrostatics` (PQR, griglia e input di APBS, mappe OpenDX, potenziale di superficie), `refinement` (protocollo della rifinitura, copia pulita, confronto prima/dopo; vedi [Tasche, elettrostatica e rifinitura energetica](#tasche-elettrostatica-e-rifinitura-energetica-f7b-f91)), assembly` (assemblaggi biologici dal mmCIF e dal REMARK 350), `complexes` (bersagli a più catene, simmetria, confronto delle interfacce con il template; vedi [Complessi e omo-oligomeri](#complessi-e-omo-oligomeri-domainassemblypy-domaincomplexespy)), `preflight` (regole dei controlli preventivi, vedi [Controlli preventivi](#controlli-preventivi-domainpreflightpy-servicespreflightpy)), `labels` (normalizzazione delle etichette), `textsearch` (parole, corrispondenza e pertinenza della ricerca globale, escape per FTS5 e LIKE) |
 | `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB), `remote` (client HTTP), `tools` (rilevamento strumenti e librerie Python di calcolo, preambolo di licenza), `pockets` (fpocket), `electrostatics` (PDB2PQR + APBS), `refine` e `refine_worker` (OpenMM e PDBFixer in un processo separato) |
-| `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job), `reports` (dati del report di un modello o di un'analisi), `coverage` (copertura del bersaglio da parte dei template, avvisi su disordine e domini), `analysis` (job dell'analisi strutturale), `structure_tools` (job `pockets` ed `electrostatics`), `refine` (job `refine`), `preflight` (fatti per i controlli preventivi) |
-| `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases`, `analysis`, `structure_tools` oltre a sistema, progetti, calcoli — compresi i controlli preventivi — e job) |
+| `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job), `reports` (dati del report di un modello o di un'analisi), `coverage` (copertura del bersaglio da parte dei template, avvisi su disordine e domini), `analysis` (job dell'analisi strutturale), `structure_tools` (job `pockets` ed `electrostatics`), `refine` (job `refine`), `preflight` (fatti per i controlli preventivi), `labels` (etichette e preferiti), `globalsearch` (ricerca globale; vedi [Etichette, preferiti e ricerca globale](#etichette-preferiti-e-ricerca-globale-f8b)) |
+| `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases`, `analysis`, `structure_tools`, `labels` oltre a sistema, progetti, calcoli — compresi i controlli preventivi — e job) |
 
 ### Job
 
@@ -1991,6 +1993,95 @@ proteina globulare, nessuno fra le catene): il tempo cresce in proporzione ai re
 | altro (PROCHECK, log, allineamento, script) | 2714 KiB | 3344 KiB |
 | **risultati** | **3103 KiB** | **4861 KiB** |
 | intermedi di MODELLER (scratch, "Conserva file intermedi") | 855 KiB | 3168 KiB |
+### Migrazioni dello schema (`core/db.py`)
+
+Lo schema SQLite ha una versione in `meta.schema_version`. `SCHEMA` è lo schema di base (versione 1, quello di prima
+delle migrazioni) e `MIGRATIONS` elenca i passaggi successivi (`Migration(versione, descrizione, istruzioni)`).
+All'apertura `Database._migrate`:
+
+1. esegue lo schema di base (`IF NOT EXISTS`, come ha sempre fatto) e legge la versione; un database **di una versione
+   più recente** di BioLoom non si apre (`MigrationError`: le sue tabelle potrebbero avere vincoli che questa versione
+   non conosce);
+2. se ci sono migrazioni da applicare a un database esistente, fa prima una **copia di sicurezza** in
+   `backups/bioloom.schema<N>.<data>.db` con l'API di backup di SQLite: la copia passa dalla connessione e contiene anche
+   le pagine ancora nel WAL (una copia del solo file le perderebbe; verificato con un database della versione 1 lasciato
+   con le righe solo nel WAL) e funziona con il lock esclusivo. Si scrive con un nome temporaneo, si verifica con
+   `PRAGMA quick_check` e solo dopo prende il nome definitivo; se non riesce (disco pieno, cartella non scrivibile) la
+   migrazione non parte e l'avvio si ferma con il motivo. Un database nuovo non ha copia;
+3. applica ogni migrazione in **una transazione** con la nuova `schema_version` scritta nella stessa transazione: un
+   errore a metà annulla tutto (anche il DDL, transazionale in SQLite) e il file resta alla versione precedente, con dati
+   e tabelle di prima; l'avvio si ferma con `MigrationError`, che dice a quale versione è rimasto e dov'è la copia.
+
+Le istruzioni sono **idempotenti** (`IF NOT EXISTS`): la versione 4.1.0, aperta sulla stessa cartella dati dopo la
+nuova, riscrive `schema_version` a 1 a ogni avvio, e al ritorno la migrazione riparte su tabelle già presenti senza
+errori e senza perdere etichette (provato). Le copie restano in `backups/` (una per migrazione: sono rare) e si possono
+cancellare a mano. Il log dell'avvio riporta le migrazioni applicate e la copia.
+
+| Versione | Migrazione |
+|---|---|
+| 1 | schema di base: `meta`, `projects`, `sequences`, `documents`, `jobs`, `pipeline_items` |
+| 2 | etichette e preferiti: tabelle `tags` (tipo, id, etichetta) e `favorites` (tipo, id), indice per etichetta, trigger di pulizia su `projects`, `sequences`, `jobs` |
+
+### Etichette, preferiti e ricerca globale (F8b)
+
+**Etichette e stella** (`domain/labels.py`, `services/labels.py`, rotte in `api/labels.py`). Progetti, job, sequenze e
+template possono avere etichette (al più 20) e la stella dei preferiti. Chiave: tipo di elemento e id (per i template
+l'id normalizzato della libreria, maiuscolo); un vincolo CHECK ammette solo i quattro tipi.
+
+- **Normalizzazione** (una forma sola per etichetta, la stessa in `lib/tags.ts`): Unicode NFC, minuscole, spazi esterni
+  e `#` iniziale tolti, spazi interni → `-`, trattini ripetuti uniti, `- _ . :` tolti ai bordi; ammessi lettere e cifre
+  (anche accentate) e `- _ . : +`, inizio con una lettera o una cifra (`+` anche in fondo: "zn2+"); al più 32 caratteri,
+  oltre è un errore (`invalid_tag`), mai un troncamento. "Urgente", " urgente " e "#URGENTE" sono la stessa etichetta.
+- **Pulizia a cascata:** trigger del database (migrazione 2) tolgono etichette e stella quando si elimina un progetto, una
+  sequenza o un job, qualunque sia il percorso: rotta, eliminazione di un progetto con i suoi job uno per uno, cascata
+  `ON DELETE` delle sequenze (SQLite esegue i trigger anche sulle righe eliminate in cascata: verificato). I template
+  stanno su file: la libreria avvisa dopo l'eliminazione (`TemplateLibrary.subscribe`), e `prune_templates` toglie
+  all'avvio e prima dei conteggi le etichette dei template spariti per altre vie (file cancellati a mano); non tocca
+  nulla se la cartella della libreria non esiste.
+- **Concorrenza:** controllo dell'elemento, limite e inserimento nella stessa transazione della connessione unica: due
+  aggiunte concorrenti non superano il limite, la stessa etichetta aggiunta da più richieste resta una, e un elemento
+  eliminato nel frattempo non riceve etichette orfane (per i template, eliminati fra controllo e inserimento, una verifica
+  successiva toglie l'etichetta).
+
+| Rotta | Funzione |
+|---|---|
+| `GET /api/tags?entity_type=` | etichette in uso con il numero di elementi, in totale e per tipo |
+| `GET`, `POST {tag}` `/api/tags/{tipo}/{id}` | etichette e stella dell'elemento; aggiunta (404 se l'elemento non esiste, 400 se l'etichetta non è valida o oltre il limite) |
+| `DELETE /api/tags/{tipo}/{id}/{etichetta}` | rimozione, idempotente |
+| `GET /api/favorites?entity_type=`, `PUT`/`DELETE /api/favorites/{tipo}/{id}` | preferiti |
+| `GET /api/projects`, `/api/projects/{id}/sequences`, `/api/jobs`, `/api/templates` | con `tags` e `favorite` in ogni riga e i filtri `?tag=` e `?favorite=`; per i job il filtro è in SQL, prima del limite |
+
+**Ricerca globale** (`domain/textsearch.py`, `services/globalsearch.py`, `GET /api/search?q=&tag=&type=&limit=`).
+
+- **FTS5:** la build di SQLite dell'immagine (3.45.1 di Ubuntu 24.04, `ENABLE_FTS5` fra le opzioni di compilazione:
+  verificato) lo ha; si controlla comunque all'avvio creando una tabella temporanea, e senza FTS5 si usa LIKE
+  (`BIOLOOM_SEARCH_FTS=0` lo forza). L'indice è **temporaneo**: una tabella FTS5 per tipo (`temp.search_<tipo>`, rowid =
+  rowid della riga) riempita all'avvio e tenuta allineata da trigger temporanei su inserimenti, eliminazioni (anche in
+  cascata) e modifiche dei soli campi indicizzati (gli aggiornamenti di progresso dei job non lo toccano). Nulla di FTS5
+  finisce in `bioloom.db`: una build senza FTS5 apre e scrive la stessa cartella dati, cosa impossibile con tabelle
+  virtuali o trigger FTS5 salvati nello schema. Costo misurato: 0,04 s per 10 000 job all'avvio.
+- **Campi:** progetti (nome; descrizione), sequenze (nome; accessione, proteina e organismo dai metadati), documenti
+  (nome; tipo), job (titolo; tipo e sua etichetta italiana, "modellazione" trova i job `model`), template (id; titolo e
+  organismo dai metadati o dall'intestazione del file: `SOURCE … ORGANISM_SCIENTIFIC` o la voce mmCIF), etichette. I
+  template stanno su file: un indice in memoria si ricostruisce quando cambia la firma della cartella (nomi, date e
+  dimensioni di strutture e metadati) o quando la libreria avvisa; l'organismo letto dal file resta in cache per data.
+- **Corrispondenza:** ogni parola della richiesta deve essere l'inizio di una parola di un campo, con le parole divise
+  come il tokenizer `unicode61 remove_diacritics 2` (lettere e cifre; minuscole; senza accenti): «p6990» trova
+  «sp_P69905_HBA_HUMAN», «proteina» trova «Proteína», «ubq» non trova «1UBQ» (non è l'inizio di una parola). FTS5 (query
+  `"p6990"* "hba"*`) o LIKE (`bioloom_fold(campo) LIKE '%p6990%'`, funzione SQL della connessione che toglie accenti e
+  maiuscole) selezionano i candidati; la stessa regola in Python decide e dà la pertinenza, così FTS5, LIKE e template
+  danno gli stessi risultati (provato sugli stessi dati).
+- **Pertinenza** (pesatura per campo come in BM25F, Robertson, Zaragoza e Taylor 2004: il nome vale il doppio degli altri
+  campi): parola intera nel nome 3, inizio di parola nel nome 2, parola intera in un altro campo 1,5, inizio 1; +10 se il
+  nome coincide con la richiesta, +4 se comincia con essa; +1 con la stella. A parità: il più recente, poi titolo e id.
+  Per gruppo si leggono al più 200 candidati per BM25 (FTS5) o 2000 dai più recenti (LIKE) e se ne restituiscono `limit`
+  (5, al più 50) con `truncated`; i gruppi si ordinano per il miglior punteggio.
+- **Filtri:** `tag` restringe agli elementi con l'etichetta (senza testo li elenca tutti); `type` ai gruppi indicati;
+  senza testo né etichetta si elencano i preferiti.
+- **Sicurezza:** le parole contengono solo lettere e cifre e nella query FTS5 stanno comunque tra virgolette (con le
+  virgolette interne raddoppiate): `AND`, `OR`, `NEAR`, `*`, `:`, parentesi e virgolette della richiesta restano parole o
+  spariscono, mai operatori; nei LIKE `%`, `_` e `\` sono protetti con `ESCAPE`; tutto passa come parametro. Richiesta al
+  più 200 caratteri e 8 parole.
 
 ## Frontend (`frontend/`)
 
@@ -2058,22 +2149,50 @@ Il client API (`api/client.ts`) e i tipi (`api/types.ts`) sono l'unico punto di 
 - **Risultati precedenti** (senza `pairs` e senza `comparison_version`): metriche che hanno, viewer con le catene e un
   avviso per rilanciare, anche accanto alla nota del metodo integrato.
 
+**Ricerca globale, etichette, tema, scorciatoie e liste lunghe (F8b):**
+
+- **Ricerca globale** (`components/GlobalSearch.tsx`, `lib/search.ts`): campo «Cerca…» nella barra in alto, Ctrl+K / ⌘K
+  o `/`. Risultati raggruppati come li ordina il server, con le parole trovate evidenziate (`highlightParts`, stessa
+  regola del backend); ↑/↓ (Ctrl+Home/End, PagSu/PagGiù) scelgono, Invio apre, Esc chiude. `#etichetta` cerca solo fra
+  gli elementi con quell'etichetta, `tipo:job` (o `in:`, nomi italiani e inglesi, anche più tipi) limita i gruppi; scelta
+  un'etichetta, la ricerca diventa `#etichetta`. Senza testo mostra i preferiti. Aprire un risultato di un altro progetto
+  lo rende prima il progetto attivo (`resultTarget`); `/sequences?id=` e `/templates?id=&tag=` scelgono l'elemento.
+- **Etichette e stella** (`components/Labels.tsx`, `lib/tags.ts`): stella e chip negli elenchi di job, template e
+  sequenze e nel dialogo «Progetti» della barra in alto (preferiti in cima, filtro); `LabelEditor` (stella, chip con la ×,
+  campo con l'etichetta normalizzata mostrata mentre si scrive e i suggerimenti di quelle già usate) nei dettagli e,
+  per il progetto attivo, nella Panoramica. Filtro per etichetta o preferiti (`LabelFilterSelect`) negli elenchi di job e
+  template, nell'URL (`?tag=`), così un link lo conserva; un clic su un chip filtra per quell'etichetta.
+- **Tema** (`lib/theme.ts`): Scuro, Chiaro o Sistema nella barra laterale. "Sistema" segue `prefers-color-scheme` e
+  cambia con il sistema operativo (evento `change` della media query); il tema si applica prima del primo render
+  (`initialTheme` in `main.tsx`). La scelta resta in `bioloom.theme` come prima: i valori salvati "dark" e "light" valgono
+  ancora, uno illeggibile vale il predefinito (scuro).
+- **Scorciatoie** (`lib/shortcuts.ts`, pannello «Tasti» o `?`): Ctrl+K / ⌘K anche dentro un campo; `/`, `?` e `g` più
+  una lettera (`g s` Sequenze, `g j` Job, `g q` Qualità… entro 1,5 s) solo fuori dai campi di testo e senza dialoghi
+  aperti; Esc chiude dialoghi e ricerca.
+- **Liste lunghe** (`lib/virtual.ts`, `useVirtualRows`): oltre 200 righe si disegnano solo quelle visibili più 8 sopra e
+  sotto, con due spaziatori che tengono l'altezza della lista; sotto la soglia tutto come prima. Usato dalla tabella dei
+  residui in Qualità, dalle coppie in Confronto (righe alte 40 px, tutte uguali e misurate) e dalle righe di
+  AlignmentView (righello, sequenze e consenso 19 px, spazio fra i blocchi 12 px; riquadro alto al più il 70% della
+  finestra). La selezione dal 3D, dai grafici o dai tratti si porta in vista scorrendo solo il contenitore anche se la
+  riga non è disegnata (`revealScrollTop`, poi `rowScrollDelta` sulla riga vera); lo "scroll anchoring" del browser è
+  spento nel contenitore. Misurato con 304 residui: 20 righe disegnate invece di 304.
+
 Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni risultato ha un link stabile.
 
 | Pagina | Funzione |
 |---|---|
-| Panoramica | flusso guidato, esempi, motori disponibili, risorse del computer |
+| Panoramica | flusso guidato, esempi, motori disponibili, risorse del computer; stella ed etichette del progetto attivo |
 | Nuovo modello guidato | `/wizard`: sequenza → template → allineamento → opzioni → avvio → risultati, con i controlli preventivi prima di ogni calcolo e lo stato nell'URL e nel browser (vedi [Procedura guidata](#procedura-guidata-pageswizardtsx-libwizardts)); Modellazione e Pipeline hanno gli stessi controlli sopra il pulsante di avvio |
-| Sequenze | import FASTA/UniProt, proprietà ProtParam, predizione GOR, annotazioni UniProt/InterPro/PDB; mappa di disordine (FoldIndex), bassa complessità (SEG), domini InterPro e GOR |
+| Sequenze | import FASTA/UniProt, proprietà ProtParam, predizione GOR, annotazioni UniProt/InterPro/PDB; mappa di disordine (FoldIndex), bassa complessità (SEG), domini InterPro e GOR; stella ed etichette (`?id=` sceglie la sequenza) |
 | Ricerca template | RCSB/NCBI/locale/AlphaFold DB (accessione UniProt facoltativa, precompilata dalle sequenze UniProt), tabella ordinabile (predefinito: punteggio), colonna Punteggio con fascia e motivazioni (suggerimento; per componente nella riga espansa, sopra l'allineamento dell'hit), riquadro dei template consigliati (principale e complementari, esclusi con il motivo) con «Usa i consigliati per la modellazione» (`lib/templateRank.modelingLink`: un `t=ID:CATENA` per template), righe consigliate evidenziate, download, "modella con"; badge "modello predetto" e pLDDT; nota "dalla cache (data)" e ricalcolo ignorando la cache; per ogni hit gli avvisi su regioni disordinate e domini fuori dal tratto allineato |
-| Libreria template | download RCSB e "Da AlphaFold DB (UniProt)", upload PDB/mmCIF, catene, residui mancanti, ligandi classificati (metallo, cofattore noto, additivo, altro ligando, residuo modificato), DSSP, 3D; badge "AlphaFold", pLDDT medio e fasce di confidenza; assemblaggi biologici (REMARK 350, `pdbx_struct_assembly`) con lo stato oligomerico e «Importa come template» (`<ID>_ASM<n>`), badge "assemblaggio" |
+| Libreria template | download RCSB e "Da AlphaFold DB (UniProt)", upload PDB/mmCIF, catene, residui mancanti, ligandi classificati (metallo, cofattore noto, additivo, altro ligando, residuo modificato), DSSP, 3D; badge "AlphaFold", pLDDT medio e fasce di confidenza; assemblaggi biologici (REMARK 350, `pdbx_struct_assembly`) con lo stato oligomerico e «Importa come template» (`<ID>_ASM<n>`), badge "assemblaggio"; stella, etichette e filtro (`?tag=`), preferiti in cima |
 | Allineamenti | pairwise, multiplo, strutturale (con il confronto per residuo e «Apri in Confronto»); esportazione FASTA/Clustal/PIR; salvataggio nel progetto; cache per multiplo e strutturale |
 | Editor PIR | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
 | Modellazione | input automatico, da PIR o «Complesso» (template o assemblaggio, una sequenza per catena anche «stessa della catena …», simmetria, anteprima dell'allineamento per catena; nei risultati confronto delle interfacce con DockQ e 3D colorato per catena e interfaccia), parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); avvisi prima del lancio su regioni disordinate e domini non coperti dai template, con suggerimento; modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job; «Trasferisci ligandi, cofattori e metalli dai template» con la scelta dei gruppi (additivi e ioni del tampone deselezionati per default, `LigandPicker`, che usa le analisi già lette dal selettore dei template anche dopo un download; una lettura non riuscita si mostra con «Riprova», un 404 di un template in download si riprova da sé, e sotto «Avvia modellazione» si dice quale template blocca) e la verifica del modello migliore; «Rifinisci» (OpenMM) per ogni modello e per una struttura qualunque, con i risultati prima/dopo |
 | Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche, disordine predetto come segnale informativo), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura; sezione Ligandi e metalli (esiti, coordinazione, confronto con il sito del template): il clic su un gruppo lo mostra nel 3D con i residui coordinanti e le linee di coordinazione (`LigandsPanel`, `lib/ligands.ts`; ioni metallici sempre a sfere); scheda Interazioni (analisi strutturale: legami H, ponti salini, disolfuri, aromatiche, interfacce, conservazione; `?ajob=`); schede Tasche (fpocket, `?pjob=`) ed Elettrostatica (PDB2PQR + APBS, `?ejob=`) |
 | Confronto | `/compare?a=&ca=&b=&cb=&job=`: B sovrapposta ad A (riferimento), metriche (TM-score su A e su B, RMSD, RMSD entro 5 Å, GDT-TS, GDT-HA, lDDT, lunghezza allineata), 3D con B colorata per distanza (0 → ≥ 5 Å) o lDDT e A in grigio chiaro, grafico di distanza e lDDT per posizione, tratti che deviano, tabella per coppia; clic ovunque → coppia evidenziata nel 3D |
 | Pipeline batch | multi-FASTA → modelli validati, template da ricerca automatica, «Più template complementari» (N da 2 a 5) o fissi (casella «Ligandi» del template solo se la scelta predefinita trasferisce qualcosa dalle catene scelte, con i gruppi esclusi nel suggerimento: `lib/ligands.defaultTransfer`); filtro zona crepuscolare, tabella paginata (template usati elencati, motivazioni nel suggerimento), CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
-| Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione e la posizione di quelli in coda ("2° in coda") |
+| Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione e la posizione di quelli in coda ("2° in coda"); stella, etichette e filtro per etichetta o preferiti (`?tag=`) |
 | Impostazioni | schede Generale (esecuzione, QMEAN, email), Licenze (MODELLER, ProSA, PROCHECK), Database (pdbaa, MMseqs2, UniClust30), Strumenti (verifica dell'installazione), Spazio e file temporanei (con la cache dei calcoli) |
 | Login | solo in modalità server, quando l'API risponde 401 |
 
@@ -2283,6 +2402,26 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     punteggio dalla ricerca, stessa validazione della rotta di avvio (stesso messaggio), controlli concorrenti; QMEAN con 8 e
     11,7 GiB per UniRef30_2020_06 e fallback; motori di ricerca, pipeline con 51 ricerche NCBI, accessioni AlphaFold,
     sequenze lunghe e disordinate, spazio;
+  - migrazioni (`test_migrations.py`), con un database della versione 1 generato da `db.SCHEMA` con dati in tutte le
+    tabelle: passaggio alla 2 senza righe perse né cambiate, copia di sicurezza integra con lo schema 1 (anche con le
+    righe rimaste solo nel WAL), riapertura senza nuove copie, migrazione ripetuta dopo che la versione 4.1.0 ha riscritto
+    `schema_version` a 1 (etichette conservate), errore a metà della migrazione (database, tabelle e versione invariati),
+    errore nella migrazione successiva (resta la precedente), nessuna migrazione senza copia, database nuovo, schema più
+    recente rifiutato, seconda istanza, trigger di pulizia (anche in cascata) e vincolo sui tipi, avvio dell'applicazione
+    su una cartella dati della versione 1, scritture concorrenti;
+  - etichette e preferiti (`test_labels.py`): normalizzazione (forme equivalenti, accenti composti e scomposti, "zn2+",
+    32 caratteri, caratteri rifiutati), rotte per i quattro tipi, errori (404, 422, 400, limite di 20), preferiti, elenchi
+    con `tags`/`favorite` e filtri `?tag=`/`?favorite=` (job filtrati prima del limite), pulizia alla cancellazione di
+    sequenze, progetti (job e sequenze in cascata), job e template (anche cancellati a mano dalla cartella; cartella
+    assente non toccata), aggiunte concorrenti (limite rispettato, stessa etichetta una volta), template eliminato
+    durante l'aggiunta;
+  - ricerca globale (`test_global_search.py`, ogni test con FTS5 e con LIKE): parole e query FTS5/LIKE con escape,
+    tabella dei punteggi, organismo dalle intestazioni PDB/mmCIF, ordine per pertinenza (Chinasi 13, «Chinasi di
+    lievito» 7, descrizione 1,5), accenti e maiuscole, accessione, gruppi (documento per nome, job per tipo, template per
+    id, titolo e organismo), limite e `truncated`, 22 richieste con caratteri speciali e tentativi di iniezione SQL e FTS5
+    (tabelle intatte, nessun risultato "tutto"), operatori come parole, indice allineato a modifiche, eliminazioni e
+    cascate, template aggiunti e tolti a mano dalla cartella, gruppo delle etichette e filtro `tag`, preferiti in testa e
+    senza testo, stessi risultati dai due motori, indice di 10 000 job, ripiego senza FTS5 e nessun oggetto FTS5 nel file;
   - verifica dell'installazione.
 
   `pytest -m network` prova i servizi reali. Oltre a 1UBQ, `tests/data` contiene strutture sintetiche generate
@@ -2353,6 +2492,13 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     sequenza, preselezione dei consigliati una volta per ricerca, una catena per voce PDB, invalidazione dei passi
     successivi, motore consigliato, opzioni predefinite e spiegazioni, richieste delle rotte, passi raggiungibili, URL
     (andata e ritorno, valori non validi, indietro del browser), bozza non valida, ripresa da un link senza bozza, risultati.
+  - F8b: finestra della virtualizzazione (`virtual.test.ts`: soglia, posizioni con altezza fissa e per indice, righe
+    visibili con margine e spaziatori, fondo e scorrimento oltre il fondo, blocchi dell'allineamento, riga selezionata
+    portata in vista sotto l'intestazione fissa e nei limiti), scelta del tema (`theme.test.ts`: valori salvati vecchi e
+    nuovi, valori illeggibili, tema del sistema, ciclo, tema prima del render), ricerca da tastiera (`search.test.ts`:
+    `#etichetta`, `tipo:`, testo, chiave della richiesta, elenco piatto, frecce con giro e pagine, destinazioni,
+    evidenza), scorciatoie (`shortcuts.test.ts`: Ctrl+K e ⌘K, `/`, `?`, `g` + lettera, campi di testo e dialoghi
+    aperti), etichette (`tags.test.ts`: stessa normalizzazione del backend, filtro degli elenchi).
 - **Profilazione:** `scripts/test.sh backend tests/perf_timing.py -s` (fuori dalla suite, vedi
   [Prestazioni](#prestazioni)).
 - **Immagine di sviluppo:** per provare strumenti nuovi senza toccare l'immagine dell'avviatore,

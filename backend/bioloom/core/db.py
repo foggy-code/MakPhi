@@ -1,16 +1,25 @@
-"""Persistenza SQLite (progetti, sequenze, documenti, job, elementi della pipeline)."""
+"""Persistenza SQLite (progetti, sequenze, documenti, job, elementi della pipeline, etichette e preferiti).
+
+Lo schema ha una versione (`meta.schema_version`). `SCHEMA` è lo schema di base, quello della versione 1; le
+versioni successive si ottengono con le migrazioni di `MIGRATIONS`, applicate all'apertura in ordine (vedi
+`Database._migrate`): copia di sicurezza del file prima di toccarlo, una transazione per migrazione e versione
+scritta nella stessa transazione, quindi aggiornata solo se la migrazione riesce.
+"""
 
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
 
-SCHEMA_VERSION = 1
+# schema di base: tabelle create da `SCHEMA` (la versione 1, dalla quale partono le migrazioni)
+BASE_SCHEMA_VERSION = 1
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -93,6 +102,61 @@ CREATE TABLE IF NOT EXISTS pipeline_items (
 );
 """
 
+
+@dataclass(frozen=True)
+class Migration:
+    """Passaggio dalla versione `version - 1` a `version`: istruzioni SQL eseguite una per una nella stessa
+    transazione (niente `executescript`, che chiuderebbe la transazione).
+
+    Le istruzioni devono essere idempotenti (`IF NOT EXISTS`): una versione precedente di BioLoom, aperta sulla
+    stessa cartella dati, riscriveva `schema_version` a 1 a ogni avvio, e la migrazione può quindi ripartire su
+    tabelle che esistono già. Una migrazione che ricostruisce tabelle deve gestire da sé `foreign_keys` (il PRAGMA
+    non ha effetto dentro una transazione).
+    """
+
+    version: int
+    description: str
+    statements: tuple[str, ...]
+
+
+# entità che possono avere etichette e stella (vincolo CHECK delle tabelle e rotte /api/tags, /api/favorites)
+LABEL_ENTITIES = ("project", "job", "sequence", "template")
+_ENTITY_CHECK = "entity_type IN (" + ", ".join(f"'{e}'" for e in LABEL_ENTITIES) + ")"
+
+
+def _cleanup_trigger(table: str, entity: str) -> str:
+    """Etichette e stella spariscono con l'entità, qualunque sia il percorso dell'eliminazione: rotta, eliminazione
+    del progetto (i suoi job uno per uno) o ON DELETE CASCADE (sequenze del progetto: SQLite esegue i trigger anche
+    sulle righe eliminate in cascata). I template stanno su file: li pulisce la libreria (services/labels.py)."""
+    return (f"CREATE TRIGGER IF NOT EXISTS {table}_labels_cleanup AFTER DELETE ON {table} BEGIN "
+            f"DELETE FROM tags WHERE entity_type='{entity}' AND entity_id=OLD.id; "
+            f"DELETE FROM favorites WHERE entity_type='{entity}' AND entity_id=OLD.id; END")
+
+
+MIGRATIONS: tuple[Migration, ...] = (
+    Migration(2, "etichette e preferiti", (
+        f"""CREATE TABLE IF NOT EXISTS tags (
+            entity_type TEXT NOT NULL CHECK ({_ENTITY_CHECK}),
+            entity_id TEXT NOT NULL,
+            tag TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (entity_type, entity_id, tag)
+        ) WITHOUT ROWID""",
+        "CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag, entity_type)",
+        f"""CREATE TABLE IF NOT EXISTS favorites (
+            entity_type TEXT NOT NULL CHECK ({_ENTITY_CHECK}),
+            entity_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (entity_type, entity_id)
+        ) WITHOUT ROWID""",
+        _cleanup_trigger("projects", "project"),
+        _cleanup_trigger("sequences", "sequence"),
+        _cleanup_trigger("jobs", "job"),
+    )),
+)
+
+SCHEMA_VERSION = MIGRATIONS[-1].version if MIGRATIONS else BASE_SCHEMA_VERSION
+
 JSON_COLUMNS = {"params", "result", "meta", "metrics"}
 
 
@@ -120,6 +184,14 @@ class DatabaseInUse(RuntimeError):
     """La cartella dati è già aperta da un'altra istanza di BioLoom."""
 
 
+class MigrationError(RuntimeError):
+    """Migrazione dello schema non riuscita, oppure database di una versione più recente di BioLoom: il file resta
+    com'era (la transazione della migrazione fallita è annullata)."""
+
+
+BACKUP_DIR = "backups"
+
+
 class Database:
     """Connessione SQLite unica del processo, serializzata da un lock.
 
@@ -127,10 +199,16 @@ class Database:
     che non funziona in modo affidabile sui bind mount di Docker Desktop e sulle chiavette exFAT, e il
     file resta bloccato finché il server è attivo, così due istanze non possono usare la stessa
     cartella dati.
+
+    All'apertura lo schema si porta all'ultima versione (`_migrate`). `migrated` elenca le migrazioni applicate
+    (versione, descrizione) e `backup` è la copia di sicurezza fatta prima, None se non serviva.
     """
 
     def __init__(self, path: Path, busy_timeout: float = 5.0) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = path
+        self.migrated: list[tuple[int, str]] = []
+        self.backup: Optional[Path] = None
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None,
                                      timeout=busy_timeout)
@@ -143,10 +221,7 @@ class Database:
                     self._conn.execute("PRAGMA journal_mode=DELETE")
                 self._conn.execute("PRAGMA foreign_keys=ON")
                 self._conn.execute("PRAGMA synchronous=NORMAL")
-                self._conn.executescript(SCHEMA)
-                self._conn.execute(
-                    "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),)
-                )
+                self._migrate()
             except sqlite3.OperationalError as exc:
                 self._conn.close()
                 if "locked" in str(exc).lower():
@@ -154,6 +229,113 @@ class Database:
                         f"La cartella dati {path.parent} è già usata da un'altra istanza di BioLoom: "
                         "chiudi l'altra istanza oppure usa un'altra cartella dati.") from exc
                 raise
+            except BaseException:
+                self._conn.close()
+                raise
+
+    # ------------------------------------------------------------------ versioni dello schema
+    def schema_version(self) -> int:
+        """Versione dello schema scritta nel file (0 se manca: database mai inizializzato)."""
+        with self._lock:
+            return self._stored_version()
+
+    def _stored_version(self) -> int:
+        try:
+            row = self._conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+        except sqlite3.OperationalError:  # nessuna tabella meta
+            return 0
+        try:
+            return int(row[0]) if row else 0
+        except (TypeError, ValueError):
+            return 0
+
+    def _migrate(self) -> None:
+        """Porta lo schema all'ultima versione, senza perdere dati.
+
+        1. Database nuovo (nessuna tabella): schema di base e migrazioni, senza copia di sicurezza.
+        2. Database esistente con migrazioni da applicare: prima una copia coerente del file con l'API di backup di
+           SQLite (`_backup`; legge anche le pagine ancora nel WAL), verificata con `quick_check`; senza copia non
+           si migra.
+        3. Ogni migrazione in una transazione con la nuova `schema_version`: se un'istruzione fallisce la
+           transazione si annulla, il file resta alla versione precedente (DDL compreso: in SQLite è
+           transazionale) e l'avvio si ferma con `MigrationError`.
+
+        Un database di una versione più recente di BioLoom (schema più alto di quello noto) non si apre: le sue
+        tabelle potrebbero avere vincoli che questa versione non rispetta.
+        """
+        migrations = MIGRATIONS
+        latest = migrations[-1].version if migrations else BASE_SCHEMA_VERSION
+        fresh = not self._conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1").fetchone()
+        # Schema di base idempotente (IF NOT EXISTS), come a ogni avvio della versione 1. Un file della versione 1
+        # ha sempre la riga `schema_version`; senza (avvio interrotto prima di scriverla) è la versione di base.
+        self._conn.executescript(SCHEMA)
+        current = self._stored_version()
+        if not current:
+            current = BASE_SCHEMA_VERSION
+            self._set_version(current)
+        if current > latest:
+            raise MigrationError(
+                f"Il database {self.path} è stato aggiornato da una versione più recente di BioLoom (schema "
+                f"{current}, questa versione conosce fino allo schema {latest}): aggiorna BioLoom.")
+        pending = [m for m in migrations if m.version > current]
+        if not pending:
+            return
+        if not fresh:
+            self.backup = self._backup(current)
+        for migration in pending:
+            try:
+                self._conn.execute("BEGIN")
+                for sql in migration.statements:
+                    self._conn.execute(sql)
+                self._set_version(migration.version)
+                self._conn.execute("COMMIT")
+            except BaseException as exc:
+                if self._conn.in_transaction:
+                    self._conn.execute("ROLLBACK")
+                if isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower():
+                    raise
+                where = f" (copia di sicurezza: {self.backup})" if self.backup else ""
+                raise MigrationError(
+                    f"Aggiornamento del database allo schema {migration.version} ({migration.description}) non "
+                    f"riuscito: {exc}. Il database è rimasto allo schema {self._stored_version()}{where}.") from exc
+            self.migrated.append((migration.version, migration.description))
+
+    def _set_version(self, version: int) -> None:
+        self._conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)", (str(version),))
+
+    def _backup(self, version: int) -> Path:
+        """Copia coerente del database in `backups/bioloom.schema<N>.<data>.db`, accanto al file.
+
+        L'API di backup di SQLite copia le pagine attraverso questa connessione, quindi anche quelle ancora nel WAL,
+        e funziona con il lock esclusivo (una copia del file con `shutil` le perderebbe). La copia si scrive con un
+        nome temporaneo, si verifica con `PRAGMA quick_check` e solo allora prende il nome definitivo: una copia a
+        metà (disco pieno) non viene scambiata per buona e la migrazione non parte.
+        """
+        folder = self.path.parent / BACKUP_DIR
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        final = folder / f"{self.path.stem}.schema{version}.{stamp}.db"
+        partial = folder / f".{final.name}.tmp"
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            target = sqlite3.connect(str(partial))
+            try:
+                self._conn.backup(target)
+                check = target.execute("PRAGMA quick_check").fetchone()[0]
+            finally:
+                target.close()
+            if str(check).lower() != "ok":
+                raise sqlite3.DatabaseError(f"copia non integra ({check})")
+            os.replace(partial, final)
+        except (OSError, sqlite3.Error) as exc:
+            for leftover in (partial, Path(f"{partial}-journal")):
+                try:
+                    leftover.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise MigrationError(
+                f"Copia di sicurezza del database non riuscita ({exc}): il database (schema {version}) non è stato "
+                "aggiornato. Libera spazio nella cartella dati e riavvia BioLoom.") from exc
+        return final
 
     def execute(self, sql: str, params: tuple | dict = ()) -> int:
         with self._lock:
@@ -194,6 +376,12 @@ class Database:
             except BaseException:
                 self._conn.execute("ROLLBACK")
                 raise
+
+    def create_function(self, name: str, nargs: int, fn: Callable[..., Any]) -> None:
+        """Funzione SQL scritta in Python, valida per questa connessione (es. il confronto senza accenti della
+        ricerca globale): mai nei trigger o nello schema del file, che altre connessioni non conoscono."""
+        with self._lock:
+            self._conn.create_function(name, nargs, fn, deterministic=True)
 
     def close(self) -> None:
         with self._lock:

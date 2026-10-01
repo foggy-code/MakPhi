@@ -11,7 +11,9 @@ from ..engines import remote, search, tools
 from ..services.analysis import AnalysisService
 from ..services.compute import ComputeService
 from ..services.databases import DatabaseService
+from ..services.globalsearch import GlobalSearch
 from ..services.housekeeping import Housekeeping
+from ..services.labels import LabelService
 from ..services.licenses import LicenseService
 from ..services.live import LiveService
 from ..services.pipeline import PipelineService
@@ -42,6 +44,8 @@ class Core:
     started_at: float = field(default_factory=time.time)
     server: Any = None
     live: LiveService | None = None  # flussi SSE dei job, creato in build_core
+    labels: LabelService | None = None  # etichette e preferiti (F8b), creato in build_core
+    search: GlobalSearch | None = None  # ricerca globale (F8b), creato in build_core
 
     def shutting_down(self) -> bool:
         """Arresto in corso: segnale ricevuto da uvicorn (`should_exit`) o JobManager chiuso. I flussi SSE si
@@ -73,10 +77,18 @@ def build_core(paths: Paths) -> Core:
     cache.configure(paths.compute_cache)
     search.configure(paths.local_cache)
     db = Database(paths.db)
+    if db.migrated:
+        steps = ", ".join(f"{version} ({what})" for version, what in db.migrated)
+        print(f"[BioLoom] database aggiornato: migrazioni allo schema {steps}"
+              + (f"; copia di sicurezza in {db.backup}" if db.backup else ""))
     # job di calcolo in parallelo e budget di CPU seguono le Impostazioni anche dopo un cambio (workers=None)
     jobs = JobManager(db, paths.jobs, None, settings.get, scratch_dir=paths.scratch)
     recovered = jobs.recover()
     library = TemplateLibrary(paths.templates)
+    # etichette e preferiti, e indice della ricerca globale (F8b) prima di ogni altra scrittura
+    labels = LabelService(db, library)
+    labels.prune_templates()
+    global_search = GlobalSearch(db, library, labels)
     projects = ProjectService(db)
     compute = ComputeService(jobs, library, paths.uploads, paths.databases)
     AnalysisService(jobs, compute).register()  # job "analysis" (F7)
@@ -95,6 +107,7 @@ def build_core(paths: Paths) -> Core:
     core = Core(paths, settings, db, jobs, library, projects, compute, pipeline, housekeeping, licenses, databases)
     core.live = LiveService(jobs)
     core.live.stopping = core.shutting_down
+    core.labels, core.search = labels, global_search
     if recovered:
         print(f"[BioLoom] {recovered} job interrotti dal precedente arresto sono stati marcati come falliti "
               "(le pipeline si possono riprendere).")

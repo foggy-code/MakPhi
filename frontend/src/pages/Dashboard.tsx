@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { Example, JobSummary, SystemInfo, SystemStats } from "../api/types";
 import { Icon } from "../components/Icon";
+import { LabelEditor } from "../components/Labels";
 import { Badge, Card, Empty, PageHead, Progress, Stat, StatusBadge } from "../components/ui";
 import { useProject, useToast } from "../lib/context";
 import { fmtBytes, fmtCpuSlots, KIND_LABEL, relTime } from "../lib/format";
@@ -69,6 +70,8 @@ export default function Dashboard() {
           </>
         }
       />
+      {/* stella ed etichette del progetto attivo (F8b) */}
+      {projectId && <LabelEditor key={projectId} type="project" id={projectId} onChange={() => reloadProjects().catch(() => undefined)} />}
 
       <div className="grid grid-4" style={{ gridTemplateColumns: "repeat(5, minmax(0,1fr))" }}>
         {FLOW.map((f, i) => (
