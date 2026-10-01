@@ -20,6 +20,7 @@ const Jobs = lazy(() => import("./pages/Jobs"));
 const SettingsPage = lazy(() => import("./pages/Settings"));
 const Login = lazy(() => import("./pages/Login"));
 const Wizard = lazy(() => import("./pages/Wizard")); // procedura guidata (F8a)
+const Rerun = lazy(() => import("./pages/Rerun")); // riesecuzione da pacchetto (F9.4)
 
 function Loading() {
   return (
@@ -75,6 +76,7 @@ export function App() {
                 ["/jobs", <Jobs />],
                 ["/settings", <SettingsPage />],
                 ["/wizard", <Wizard />],
+                ["/rerun", <Rerun />],
               ].map(([path, el]) => (
                 <Route
                   key={path as string}

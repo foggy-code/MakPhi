@@ -20,6 +20,7 @@ import type {
   JobSummary,
   LatestToolJob,
   LigandRef,
+  PackageSummary,
   PipelineItem,
   PipelinePage,
   PipelineRequest,
@@ -94,6 +95,24 @@ async function requestFile(path: string, body: unknown, fallback: string): Promi
   let resp: Response;
   try {
     resp = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
+  } catch {
+    throw new ApiError("Server BioLoom non raggiungibile. È ancora in esecuzione?", 0, "network");
+  }
+  if (!resp.ok) {
+    const json = (resp.headers.get("content-type") || "").includes("application/json");
+    const payload = json ? await resp.json().catch(() => null) : null;
+    const err = payload && typeof payload === "object" ? (payload as { error?: { message?: string; code?: string; details?: unknown } }).error : undefined;
+    if (resp.status === 401 && err?.code === "auth_required") notifyAuthRequired();
+    throw new ApiError(err?.message || `Errore ${resp.status}`, resp.status, err?.code || "http_error", err?.details);
+  }
+  return { blob: await resp.blob(), filename: filenameFromDisposition(resp.headers.get("content-disposition"), fallback) };
+}
+
+/** GET di un file da salvare (pacchetto di riproducibilità): contenuto e nome, errori come `request`. */
+async function downloadFile(path: string, fallback: string): Promise<ReportFile> {
+  let resp: Response;
+  try {
+    resp = await fetch(path);
   } catch {
     throw new ApiError("Server BioLoom non raggiungibile. È ancora in esecuzione?", 0, "network");
   }
@@ -347,6 +366,27 @@ export const api = {
     for (const key of ["id", "job_id", "file"] as const) if (source[key]) params.set(key, String(source[key]));
     return get<LatestToolJob>(`/api/${kind}/latest?${params}`);
   },
+
+  // riproducibilità (F9.4): pacchetto di un job e riesecuzione da pacchetto
+  packageUrl: (id: string) => `/api/jobs/${enc(id)}/package`,
+  /** pacchetto ZIP di un job completato (manifest, input, output, script, LEGGIMI), da salvare */
+  downloadPackage: (id: string): Promise<ReportFile> =>
+    downloadFile(api.packageUrl(id), `bioloom_riproducibile_${id}.zip`),
+  /** carica e verifica un pacchetto: anteprima del manifest con `package_id` (conservato 24 ore) */
+  inspectPackage: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<PackageSummary>("POST", "/api/jobs/rerun/inspect", form, true);
+  },
+  /** riesecuzione di un pacchetto già caricato (`packageId`) o di un file */
+  rerunPackage: (o: { packageId?: string; file?: File; projectId?: string | null }) => {
+    const form = new FormData();
+    if (o.file) form.append("file", o.file);
+    if (o.packageId) form.append("package_id", o.packageId);
+    if (o.projectId) form.append("project_id", o.projectId);
+    return request<JobSummary>("POST", "/api/jobs/rerun", form, true);
+  },
+  discardPackage: (packageId: string) => del<{ deleted: string }>(`/api/jobs/rerun/${enc(packageId)}`),
 };
 
 export type { Align2dResult, AlignResult };

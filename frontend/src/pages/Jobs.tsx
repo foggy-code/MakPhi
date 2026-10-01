@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import type { EntityLabels, JobKind, JobSummary, ResumeScope } from "../api/types";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
+import { ReproButton } from "../components/ReproButton";
 import { FavoriteStar, LabelEditor, LabelFilterSelect, TagChips } from "../components/Labels";
 import { Card, Confirm, Empty, PageHead, Progress, StatusBadge } from "../components/ui";
 import { useProject, useToast } from "../lib/context";
@@ -31,6 +32,7 @@ const OPEN_IN: Record<JobKind, (id: string) => string> = {
   pockets: (id) => `/quality?pjob=${id}`,
   electrostatics: (id) => `/quality?ejob=${id}`,
   refine: (id) => `/modeling?job=${id}`,
+  rerun: (id) => `/rerun?job=${id}`,
 };
 
 function Detail({ id, labels, onDeleted, onChanged, onLabels }: { id: string; labels?: ItemLabels; onDeleted: () => void; onChanged: () => void; onLabels: (l: EntityLabels) => void }) {
@@ -57,6 +59,7 @@ function Detail({ id, labels, onDeleted, onChanged, onLabels }: { id: string; la
           <>
             <Link className="btn btn-sm btn-primary" to={OPEN_IN[summary.kind](summary.id)}>Apri risultati</Link>
             <a className="btn btn-sm" href={api.archiveUrl(id)}><Icon name="download" size={14} /> Archivio</a>
+            <ReproButton jobId={id} kind={summary.kind} status={summary.status} />
             <button className="btn btn-sm btn-danger" disabled={isActive(summary.status)} onClick={() => setConfirm(true)}><Icon name="trash" size={14} /></button>
           </>
         }
@@ -123,7 +126,8 @@ export default function Jobs() {
   };
   return (
     <div className="page">
-      <PageHead title="Job" lead="Tutti i calcoli eseguiti in background, con stato, log, file prodotti e durata. I job attivi possono essere annullati." />
+      <PageHead title="Job" lead="Tutti i calcoli eseguiti in background, con stato, log, file prodotti e durata. I job attivi possono essere annullati."
+        actions={<Link className="btn" to="/rerun" title="Ricrea un calcolo da un pacchetto riproducibile e confronta i risultati"><Icon name="refresh" size={14} /> Riesegui da pacchetto</Link>} />
       <div className="split">
         <Card
           title="Elenco"

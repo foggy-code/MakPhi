@@ -19,6 +19,7 @@ from ..services.live import LiveService
 from ..services.pipeline import PipelineService
 from ..services.projects import ProjectService
 from ..services.refine import RefineService
+from ..services.reproducibility import ReproducibilityService
 from ..services.selftest import SelfTestService
 from ..services.structure_tools import StructureToolsService
 from ..services.templates import TemplateLibrary
@@ -46,6 +47,7 @@ class Core:
     live: LiveService | None = None  # flussi SSE dei job, creato in build_core
     labels: LabelService | None = None  # etichette e preferiti (F8b), creato in build_core
     search: GlobalSearch | None = None  # ricerca globale (F8b), creato in build_core
+    repro: ReproducibilityService | None = None  # pacchetti di riproducibilità e riesecuzione (F9.4)
 
     def shutting_down(self) -> bool:
         """Arresto in corso: segnale ricevuto da uvicorn (`should_exit`) o JobManager chiuso. I flussi SSE si
@@ -94,6 +96,8 @@ def build_core(paths: Paths) -> Core:
     AnalysisService(jobs, compute).register()  # job "analysis" (F7)
     StructureToolsService(jobs, compute).register()  # job "pockets" ed "electrostatics" (F7b)
     RefineService(jobs, compute).register()  # job "refine" (F9.1)
+    repro = ReproducibilityService(jobs, compute, library, paths, settings.get, licenses)
+    repro.register()  # job "rerun" (F9.4)
     pipeline = PipelineService(db, jobs, compute)
     databases = DatabaseService(jobs, paths.databases, paths.local_cache, settings.get)
     SelfTestService(jobs, paths.databases)
@@ -108,6 +112,7 @@ def build_core(paths: Paths) -> Core:
     core.live = LiveService(jobs)
     core.live.stopping = core.shutting_down
     core.labels, core.search = labels, global_search
+    core.repro = repro
     if recovered:
         print(f"[BioLoom] {recovered} job interrotti dal precedente arresto sono stati marcati come falliti "
               "(le pipeline si possono riprendere).")

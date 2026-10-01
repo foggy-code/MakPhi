@@ -1,4 +1,7 @@
-"""Avvio: `python -m bioloom [--port 8765] [--host 127.0.0.1] [--no-browser]`."""
+"""Avvio: `python -m bioloom [--port 8765] [--host 127.0.0.1] [--no-browser]`.
+
+Comandi: `python -m bioloom rerun <pacchetto.zip> [--data <cartella>]` (riesecuzione di un pacchetto di
+riproducibilità, bioloom/cli.py)."""
 
 from __future__ import annotations
 
@@ -11,7 +14,13 @@ import webbrowser
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="bioloom", description="BioLoom v4 - modellazione per omologia")
+    if len(sys.argv) > 1 and sys.argv[1] == "rerun":  # comando, non avvio del server
+        from .cli import rerun_main
+
+        sys.exit(rerun_main(sys.argv[2:]))
+    parser = argparse.ArgumentParser(prog="bioloom", description="BioLoom v4 - modellazione per omologia",
+                                     epilog="Comandi: rerun <pacchetto.zip> [--data <cartella>] riesegue un pacchetto "
+                                            "di riproducibilità e confronta i risultati.")
     parser.add_argument("--host", default=os.environ.get("BIOLOOM_HOST", "127.0.0.1"),
                         help="Indirizzo di ascolto (default 127.0.0.1: solo questo computer)")
     parser.add_argument("--port", type=int, default=int(os.environ.get("BIOLOOM_PORT", "8765")))

@@ -6,7 +6,8 @@ import { Icon } from "./Icon";
 import type { Viewer3DHandle } from "./Viewer3D";
 import { Spinner } from "./ui";
 
-function saveFile(filename: string, blob: Blob) {
+/** Salva un file scaricato con il nome indicato (anche ReproButton). */
+export function saveFile(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

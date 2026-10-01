@@ -5,7 +5,8 @@ export type JobKind =
   | "search" | "align" | "align2d" | "model" | "loop" | "quality" | "qmean" | "pipeline"
   | "selftest" | "db_update_pdbaa" | "db_build_mmseqs" | "db_index_mmseqs" | "db_convert_uniclust" | "db_local_uniclust"
   | "analysis"
-  | "pockets" | "electrostatics" | "refine";
+  | "pockets" | "electrostatics" | "refine"
+  | "rerun";
 
 export type SearchEngine = "rcsb" | "ncbi" | "local" | "mmseqs" | "alphafold";
 
@@ -1714,7 +1715,8 @@ export interface ComplexResult {
 }
 
 // ---------------------------------------------------------------------------------- controlli preventivi (F8a)
-export type PreflightKind = "model" | "loop" | "align2d" | "pipeline" | "quality" | "qmean" | "search" | "analysis";
+export type PreflightKind = "model" | "loop" | "align2d" | "pipeline" | "quality" | "qmean" | "search" | "analysis"
+  | "rerun";
 /** error = l'avvio fallirebbe (pulsante disattivato); warning = conferma richiesta; info = da sapere */
 export type PreflightLevel = "error" | "warning" | "info";
 
@@ -1835,4 +1837,139 @@ export interface SearchResponse {
   favorites: boolean;
   engine: "fts5" | "like";
   groups: SearchGroup[];
+}
+
+// ------------------------------------------------------------------ riproducibilità (F9.4)
+
+/** Ruolo di un file nel pacchetto: ingressi (estratti per la riesecuzione), risultati, script, log, LEGGIMI. */
+export type PackageRole =
+  | "params" | "sequences" | "template" | "template_meta" | "template_prepared" | "alignment" | "structure" | "msa"
+  | "output" | "script" | "log" | "documentation";
+
+/** Strumento nel manifest (engines/versions.py): nessun percorso, solo nome e versione. */
+export interface PackageTool {
+  label: string;
+  available: boolean;
+  version: string | null;
+}
+
+export interface PackageEnvironment {
+  python?: string;
+  system?: string;
+  machine?: string;
+  libraries?: Record<string, string | null>;
+  tools?: Record<string, PackageTool>;
+  detected?: string;
+}
+
+export interface PackageVersion {
+  version: string;
+  /** BIOLOOM_IMAGE_VERSION del container; null fuori da Docker */
+  image: string | null;
+}
+
+/** Livello degli esiti dell'anteprima: come i controlli preventivi. */
+export interface PackageCheck {
+  level: PreflightLevel;
+  /** rerun_not_reproducible, rerun_unsupported, rerun_version_bioloom, rerun_version_tool, rerun_remote_input, … */
+  code: string;
+  message: string;
+}
+
+/** POST /api/jobs/rerun/inspect: anteprima di un pacchetto caricato e verificato (checksum compresi). */
+export interface PackageSummary {
+  /** pacchetto conservato nello scratch per 24 ore: controlli preventivi e avvio lo indicano */
+  package_id: string;
+  format_version: number;
+  created_at: string;
+  bioloom: PackageVersion;
+  environment: PackageEnvironment;
+  job: { id: string; kind: JobKind | string; title: string; status: string; created_at?: string | null;
+    started_at?: string | null; finished_at?: string | null; duration_seconds?: number | null };
+  kind_label: string;
+  /** parametri completi del job originale */
+  params: Record<string, unknown>;
+  seeds: Record<string, unknown>;
+  settings: { values: Record<string, unknown>; meaning: Record<string, string>; note: string } | null;
+  cache: { use_cache?: boolean | null; result_from_cache: boolean; cached_at: string | null } | null;
+  remote: { service: string; what: string; date: string | null; url?: string | null }[];
+  databases: { name: string; stamp: unknown; note?: string }[];
+  notes: string[];
+  rerun: { supported: boolean; reason: string | null };
+  files: { count: number; bytes: number; by_role: Partial<Record<PackageRole, { count: number; bytes: number }>>;
+    list: { path: string; role: PackageRole; size: number }[] };
+  /** versioni di questa installazione, per il confronto */
+  current: { bioloom: PackageVersion; environment: PackageEnvironment };
+  checks: PackageCheck[];
+  manifest_sha256: string;
+}
+
+export type RerunVerdict = "identico" | "equivalente" | "diverso";
+export type RerunFileStatus = "identical" | "equivalent" | "different" | "missing" | "extra";
+
+/** Confronto delle coordinate di un PDB, senza sovrapposizione. */
+export interface RerunCoordinates {
+  atoms: number;
+  rerun_atoms: number;
+  common: number;
+  only_original: number;
+  only_rerun: number;
+  rmsd: number | null;
+  max_deviation: number | null;
+  max_atom: string | null;
+  within: boolean;
+}
+
+export interface RerunDiff {
+  numbers: number;
+  beyond_tolerance: number;
+  max_delta: number;
+  max_delta_at: string | null;
+  text: number;
+  structure: number;
+  examples: { where: string; original: unknown; rerun: unknown }[];
+}
+
+export interface RerunFile {
+  path: string;
+  status: RerunFileStatus;
+  role: PackageRole;
+  /** conta per l'esito (non gli script né i file intermedi di MODELLER) */
+  principal: boolean;
+  detail?: string;
+  coordinates?: RerunCoordinates;
+  diff?: RerunDiff;
+}
+
+export interface RerunMetricRow {
+  key: string;
+  label: string;
+  original: unknown;
+  rerun: unknown;
+  delta: number | null;
+  within: boolean;
+}
+
+/** Risultato di un job `rerun` (file completi in confronto.json, rapporto in RAPPORTO_RIESECUZIONE.txt). */
+export interface RerunResult {
+  verdict: RerunVerdict;
+  summary: string;
+  kind: JobKind | string;
+  original: { job_id: string; kind: string; title: string; finished_at: string | null; bioloom: string | null;
+    image: string | null; package_created_at: string | null };
+  counts: Record<RerunFileStatus, number>;
+  structures: { path: string; coordinates: RerunCoordinates }[];
+  metrics: { title: string; rows: RerunMetricRow[] }[];
+  warnings: string[];
+  tolerance: { coordinates_angstrom: number; score_abs: number; score_rel: number; ignored: string[] };
+  bioloom: string;
+  image: string | null;
+  created_at: string;
+  duration_seconds: number;
+  report_file: string;
+  report_json: string;
+  /** cartella dei file della riesecuzione nel job */
+  folder: string;
+  /** file non identici (al più 200) */
+  files: RerunFile[];
 }

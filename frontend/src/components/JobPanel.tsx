@@ -4,6 +4,7 @@ import type { JobSummary, ResumeItems, ResumeScope } from "../api/types";
 import { fmtDuration, fmtEta, isActive, KIND_LABEL, queueLabel } from "../lib/format";
 import { resumeOptions } from "../lib/status";
 import { Icon } from "./Icon";
+import { ReproButton } from "./ReproButton";
 import { Alert, Progress, StatusBadge } from "./ui";
 
 interface Props {
@@ -51,6 +52,7 @@ export function JobPanel({ summary, log, onCancel, resume, onResume, compact = f
               <Icon name="file" size={14} /> {showLog ? "Nascondi log" : "Log"}
             </button>
           )}
+          {!compact && <ReproButton jobId={summary.id} kind={summary.kind} status={summary.status} />}
           {!compact && (
             <Link className="btn btn-sm btn-ghost" to={`/jobs?id=${summary.id}`}>
               Dettagli
