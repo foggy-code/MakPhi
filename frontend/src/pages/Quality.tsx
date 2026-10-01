@@ -13,6 +13,7 @@ import { StructurePicker } from "../components/Pickers";
 import { ReportButton } from "../components/ReportButton";
 import { AnalysisJobCard, StructuralAnalysisPanel } from "../components/StructuralAnalysis";
 import { ElectrostaticsPanel, PocketsPanel, ToolJobCard } from "../components/StructureTools";
+import { MutagenesisPanel } from "../components/Mutagenesis";
 import { Viewer3D, type Viewer3DHandle } from "../components/Viewer3D";
 import { Alert, Badge, BarCell, Card, DropZone, Empty, Grade, PageHead, Stat, Tabs } from "../components/ui";
 import { compareLink } from "../lib/compare";
@@ -31,7 +32,8 @@ import { qmeanRoute } from "../lib/status";
 import type { ToolJobMemory } from "../lib/toolJobs";
 import { TABLE_ROW_HEIGHT, useVirtualRows } from "../lib/virtual";
 
-type Tab = "rama" | "profiles" | "clashes" | "residues" | "3d" | "interactions" | "pockets" | "electrostatics";
+type Tab = "rama" | "profiles" | "clashes" | "residues" | "3d" | "interactions" | "pockets" | "electrostatics"
+  | "mutations"; // mutagenesi e scansione di alanina (F9.2)
 
 function structureUrl(source: StructureSource | undefined): string | null {
   if (!source) return null;
@@ -383,6 +385,7 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
   // schede Tasche ed Elettrostatica (F7b): job seguito, conservato quando si cambia scheda
   const [pocketsMemory, setPocketsMemory] = useState<ToolJobMemory | null>(null);
   const [electroMemory, setElectroMemory] = useState<ToolJobMemory | null>(null);
+  const [mutationMemory, setMutationMemory] = useState<ToolJobMemory | null>(null); // scheda Mutagenesi (F9.2)
   // vista 3D per il report: c'è solo con la scheda 3D aperta
   const viewer = useRef<Viewer3DHandle>(null);
   const g = report.grade;
@@ -511,6 +514,7 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
           { value: "interactions", label: "Interazioni" },
           { value: "pockets", label: "Tasche" },
           { value: "electrostatics", label: "Elettrostatica" },
+          { value: "mutations", label: "Mutagenesi" },
         ]} />
         {tab === "rama" && (
           <div className="grid grid-2" style={{ alignItems: "start" }}>
@@ -594,6 +598,10 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
         )}
         {tab === "pockets" && (source ?? report.source) && <PocketsPanel source={(source ?? report.source)!} url={url} memory={pocketsMemory} onMemory={setPocketsMemory} />}
         {tab === "electrostatics" && (source ?? report.source) && <ElectrostaticsPanel source={(source ?? report.source)!} url={url} memory={electroMemory} onMemory={setElectroMemory} />}
+        {/* mutagenesi in silico e scansione di alanina della stessa struttura (F9.2) */}
+        {tab === "mutations" && ((source ?? report.source)
+          ? <MutagenesisPanel source={(source ?? report.source)!} memory={mutationMemory} onMemory={setMutationMemory} />
+          : <p className="small muted">Struttura del rapporto non disponibile: rilancia l'analisi di qualità.</p>)}
       </Card>
     </div>
   );

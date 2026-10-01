@@ -46,6 +46,8 @@ CSP = ("default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri '
 
 KIND_LABEL = {"model": "Modellazione", "loop": "Raffinamento di un loop", "pipeline": "Pipeline batch",
               "quality": "Analisi di qualità", "refine": "Rifinitura energetica"}
+KIND_LABEL.update({"mutate": "Mutagenesi in silico", "alascan": "Scansione di alanina"})  # F9.2
+MUTATION_KINDS = ("mutate", "alascan")
 
 
 def _image_error(reason: str) -> AppError:
@@ -740,6 +742,54 @@ LEGEND = {
                        "rotameri; non corregge errori di allineamento né di ripiegamento."),
 }
 
+# mutagenesi in silico e scansione di alanina (F9.2): fonti e voci della legenda delle sezioni "Mutagenesi"
+REFERENCES.update({
+    "mutate_model": "Feyfant E., Sali A., Fiser A. (2007) Modeling mutations in protein structures. Protein Sci. "
+                    "16:2030–2039.",
+    "pace_scholtz": "Pace C.N., Scholtz J.M. (1998) A helix propensity scale based on experimental studies of peptides "
+                    "and proteins. Biophys. J. 75:422–427.",
+    "macarthur": "MacArthur M.W., Thornton J.M. (1991) Influence of proline residues on protein conformation. J. Mol. "
+                 "Biol. 218:397–412.",
+    "minor_kim": "Minor D.L. Jr., Kim P.S. (1994) Measurement of the β-sheet-forming propensities of amino acids. Nature "
+                 "367:660–663.",
+    "myers_pace": "Myers J.K., Pace C.N. (1996) Hydrogen bonding stabilizes globular proteins. Biophys. J. "
+                  "71:2033–2039.",
+    "strop_mayo": "Strop P., Mayo S.L. (2000) Contribution of surface salt bridges to protein stability. Biochemistry "
+                  "39:1251–1255.",
+    "chothia1974": "Chothia C. (1974) Hydrophobic bonding and accessible surface area in proteins. Nature 248:338–339.",
+    "betz": "Betz S.F. (1993) Disulfide bonds and the stability of globular proteins. Protein Sci. 2:1551–1558.",
+    "isom": "Isom D.G., Castañeda C.A., Cannon B.R., García-Moreno E.B. (2011) Large shifts in pKa values of lysine "
+            "residues buried inside a protein. Proc. Natl. Acad. Sci. USA 108:5260–5265.",
+    "blosum": "Henikoff S., Henikoff J.G. (1992) Amino acid substitution matrices from protein blocks. Proc. Natl. Acad. "
+              "Sci. USA 89:10915–10919.",
+    "kortemme": "Kortemme T., Baker D. (2002) A simple physical model for binding energy hot spots in protein–protein "
+                "complexes. Proc. Natl. Acad. Sci. USA 99:14116–14121.",
+    "bogan_thorn": "Bogan A.A., Thorn K.S. (1998) Anatomy of hot spots in protein interfaces. J. Mol. Biol. 280:1–9.",
+})
+LEGEND.update({
+    "mutation_class": ("Effetto stimato della mutazione", "classe qualitativa da indicatori dichiarati, ognuno con un peso "
+                       "(forte, moderato, informativo): probabilmente destabilizzante con un segnale forte o almeno due "
+                       "moderati; incerta con un solo segnale moderato, con un residuo sepolto senza segnali o con soli "
+                       "segnali di possibile stabilizzazione; probabilmente neutra senza segnali su un residuo esposto. "
+                       "Non è un ΔΔG: indica la direzione probabile dell'effetto sulla stabilità."),
+    "mutation_dope": ("ΔDOPE della mutazione", "DOPE del mutante meno quello del selvatico riottimizzato con lo stesso "
+                      "protocollo (stessi semi, si tiene il modello migliore di 3 per ciascuno); in residui equivalenti "
+                      "= ΔDOPE / (|DOPE del selvatico| / residui). Locale: coppie di atomi con almeno un atomo nei residui "
+                      "entro 8 Å dai siti; fra le catene: coppie fra la catena mutata e le altre. Da 1 residuo "
+                      "equivalente segnale moderato, da 2 forte."),
+    "mutation_energy": ("ΔΔE con OpenMM", "(E_mutante − E_selvatico) − (E_rif,mutante − E_rif,selvatico): energie "
+                        "potenziali AMBER ff14SB con solvente implicito OBC2 dopo la minimizzazione con restrizioni della "
+                        "rifinitura; il riferimento (tripeptidi i−1..i+1 isolati) toglie la parte che dipende solo dalla "
+                        "composizione. È un'energia senza entropia, non un'energia libera: da 50 kJ/mol segnale "
+                        "moderato, da 100 forte (oltre lo scarto misurato fra due selvatici ottimizzati, fino a 36 "
+                        "kJ/mol)."),
+    "alascan": ("Scansione di alanina", "ogni residuo scelto diventa alanina con lo stesso protocollo della mutagenesi; "
+                "glicina e prolina escluse (Kortemme & Baker 2002). Hot spot d'interfaccia probabile: residuo "
+                "d'interfaccia sepolto nel complesso (RSA < 20%) con contributo al legame (ΔDOPE fra le catene ≥ 0,5 "
+                "residui equivalenti o interazioni fra catene perse); possibile con il solo contributo (definizione "
+                "sperimentale di hot spot: ΔΔG di legame ≥ 2 kcal/mol, Bogan & Thorn 1998)."),
+})
+
 
 # ---------------------------------------------------------------------------------------------- composizione
 CSS = """
@@ -887,7 +937,8 @@ def _raw(method: dict) -> str:
 def _header(data: dict, toc: list[tuple[str, str]]) -> str:
     """Intestazione: titolo del job, progetto, date, strumenti e indice delle sezioni (fuori dalla stampa)."""
     kind = data.get("kind")
-    heading = {"quality": "Report dell'analisi di qualità", "refine": "Report del modello rifinito"}.get(
+    heading = {"quality": "Report dell'analisi di qualità", "refine": "Report del modello rifinito",
+               "mutate": "Report della mutagenesi", "alascan": "Report della scansione di alanina"}.get(
         str(kind), "Report del modello")
     meta = [("Job", f"{_e(data.get('job_id'))} · {_e(_lookup(KIND_LABEL, kind))}"),
             ("Progetto", _e(data.get("project")) or "—")]
@@ -946,11 +997,12 @@ def _summary(doc: _Doc, data: dict) -> None:
         cards.append(_card("RMSD catena principale", _num(rmsd.get("rmsd"), 2, " Å"),
                            f"{_e(rmsd.get('atoms'))} atomi N, CA, C, O"))
         doc.explain("refine_energy", "refine_rmsd")
+    cards += _mutation_cards(doc, data)  # mutagenesi e scansione di alanina (F9.2)
     if not cards:
         return
     doc.section("riepilogo", "Riepilogo")
     doc.add('<div class="cards">', *cards, "</div>")
-    if not quality:
+    if not quality and data.get("kind") != "alascan":
         doc.add(_note("Analisi di qualità non calcolata per questo modello: il report riporta solo i risultati "
                       + ("della rifinitura." if data.get("kind") == "refine" else "di MODELLER."), "warn"))
     doc.end()
@@ -959,7 +1011,8 @@ def _summary(doc: _Doc, data: dict) -> None:
 def _target(doc: _Doc, data: dict) -> None:
     target = data.get("target") or {}
     structure = data.get("structure")
-    doc.section("bersaglio", {"quality": "Struttura analizzata", "refine": "Struttura rifinita"}.get(
+    doc.section("bersaglio", {"quality": "Struttura analizzata", "refine": "Struttura rifinita",
+                              "mutate": "Modello mutato", "alascan": "Struttura scandita"}.get(
         str(data.get("kind")), "Bersaglio"))
     chains = [c for c in str(target.get("sequence") or "").split("/") if c]
     rows = [("Nome", _e(target.get("name"))),
@@ -1388,8 +1441,8 @@ def _external_block(doc: _Doc, quality: dict) -> None:
 
 def _quality(doc: _Doc, data: dict) -> None:
     quality = data.get("quality")
-    title = {"quality": "Qualità della struttura", "refine": "Qualità del modello rifinito"}.get(
-        str(data.get("kind")), "Qualità del modello scelto")
+    title = {"quality": "Qualità della struttura", "refine": "Qualità del modello rifinito",
+             "mutate": "Qualità del modello mutato"}.get(str(data.get("kind")), "Qualità del modello scelto")
     doc.section("qualita", title, page_break=True)
     image = data.get("image_png")
     if image:
@@ -1743,6 +1796,201 @@ def _refinement(doc: _Doc, data: dict) -> None:
     doc.end()
 
 
+# ---------------------------------------------------------------------------------------------- mutagenesi (F9.2)
+MUTATION_TONE = {"destabilizing": "err", "uncertain": "warn", "neutral": "ok"}
+SIGNAL_LEVEL = {"strong": ("forte", "err"), "moderate": ("moderato", "warn"), "gain": ("possibile guadagno", "info"),
+                "info": ("informativo", "info")}
+
+
+def _class_tag(assessment: dict) -> str:
+    code = assessment.get("code")
+    return f'<span class="tag {_lookup(MUTATION_TONE, code, "")}">{_e(assessment.get("label") or "—")}</span>'
+
+
+def _mutation_cards(doc: _Doc, data: dict) -> list[str]:
+    """Riquadri del riepilogo di un mutante (classe, ΔDOPE, ΔΔE) o di una scansione di alanina (conteggi)."""
+    cards: list[str] = []
+    mut, scan = _dict(data.get("mutation")), _dict(data.get("scan"))
+    if mut:
+        a, d, e = _dict(mut.get("assessment")), _dict(mut.get("dope")), _dict(mut.get("energy"))
+        cards.append(_card("Effetto stimato", _class_tag(a), _e(mut.get("notation"))))
+        cards.append(_card("ΔDOPE", _signed(d.get("delta"), 0),
+                           f"{_signed(d.get('delta_eq'), 2)} residui equivalenti"))
+        if _isnum(e.get("ddE")):
+            cards.append(_card("ΔΔE (OpenMM)", _signed(e.get("ddE"), 0, " kJ/mol"),
+                               f"{_signed(e.get('ddE_kcal'), 1)} kcal/mol · energia, non ΔΔG"))
+        doc.explain("mutation_class", "mutation_dope")
+    if scan:
+        s, counts = _dict(scan.get("summary")), _dict(_dict(scan.get("summary")).get("counts"))
+        cards.append(_card("Residui in alanina", _e(s.get("residues")), f"{_e(s.get('skipped'))} esclusi"))
+        cards.append(_card("Probabilmente destabilizzanti", _e(counts.get("destabilizing")),
+                           f"incerte {_e(counts.get('uncertain'))} · neutre {_e(counts.get('neutral'))}"))
+        if scan.get("interface"):
+            cards.append(_card("Hot spot d'interfaccia", _e(s.get("hotspots")), "probabili o possibili"))
+        doc.explain("alascan", "mutation_class", "mutation_dope")
+    return cards
+
+
+def _signal_items(signals: list) -> list[str]:
+    out = []
+    for s in signals:
+        if not isinstance(s, dict):
+            continue
+        label, tone = SIGNAL_LEVEL.get(str(s.get("level")), ("", "info"))
+        site = f" <b>{_e(s.get('site'))}</b>" if s.get("site") else ""
+        out.append(f'<li><span class="tag {tone}">{_e(label)}</span>{site} {_e(s.get("text"))}</li>')
+    return out
+
+
+def _mutation_protocol(doc: _Doc, protocol: dict, energy: bool) -> None:
+    seeds = ", ".join(str(s) for s in protocol.get("seeds") or [])
+    rows = [
+        ("Metodo", _e(protocol.get("method"))),
+        ("Ottimizzazione", f"residuo mutato randomizzato di {_num(protocol.get('randomize'), 1)} Å e ottimizzato, poi con "
+                           f"le catene laterali entro {_num(protocol.get('radius'), 1)} Å (gradienti coniugati e "
+                           "ricottura fino a 1000 K; il resto fermo)"),
+        ("Modelli", f"{_e(protocol.get('models'))} per variante (semi {_e(seeds)}); {_e(protocol.get('selection'))}"),
+        ("Selvatico", _e(protocol.get("wild_type"))),
+        ("DOPE locale", f"residui entro {_num(protocol.get('local_radius'), 1)} Å dai siti"),
+        ("Nucleo", f"RSA sotto {_num(100 * float(protocol.get('core_rsa') or 0), 0)}% (ASA massime di Tien et al. "
+                   "2013)"),
+        ("Energia", "OpenMM: minimizzazione con restrizioni di selvatico, mutante e tripeptidi di riferimento"
+         if energy else "non calcolata"),
+    ]
+    doc.add("<h3>Protocollo</h3>", "<table><tbody>",
+            *(f"<tr><th>{_e(k)}</th><td>{v}</td></tr>" for k, v in rows), "</tbody></table>")
+    doc.cite("mutate_model", "modeller", "dope", "pace_scholtz", "macarthur", "minor_kim", "myers_pace", "strop_mayo",
+             "chothia1974", "betz", "isom", "blosum", "tien", "lovell", "probe")
+    if energy:
+        doc.cite("openmm", "ff14sb", "obc")
+        doc.explain("mutation_energy")
+
+
+def _mutagenesis(doc: _Doc, data: dict) -> None:
+    """Mutagenesi in silico (F9.2): classe con le motivazioni e l'avvertenza, siti, DOPE ed energia, confronto delle
+    metriche fra selvatico riottimizzato e mutante, protocollo."""
+    mut = _dict(data.get("mutation"))
+    if not mut:
+        return
+    from .secondary import SS_LABELS
+
+    a = _dict(mut.get("assessment"))
+    doc.section("mutagenesi", "Mutagenesi in silico")
+    doc.add(_note(f"<b>{_e(mut.get('notation'))}</b>: {_class_tag(a)} {_e(a.get('summary'))}",
+                  _lookup(MUTATION_TONE, a.get("code"), "")))
+    doc.add(_note(_e(mut.get("caveat")), "warn"))
+    rows = []
+    for s in mut.get("sites") or []:
+        s = _dict(s)
+        lost = _dict(s.get("interactions")).get("lost") or []
+        rsa = s.get("rsa_wt")
+        rows.append("<tr>" + _td(_e(s.get("label"))) + _td(_e(_lookup(SS_LABELS, s.get("ss"), s.get("ss") or "—")))
+                    + _td(_num(100 * rsa, 0, "%") if _isnum(rsa) else "—", True)
+                    + _td(_num(s.get("blosum62"), 0), True)
+                    + _td(_signed(_dict(s.get("buried_delta")).get("apolar"), 0, " Å²"), True)
+                    + _td(_e(len(lost)), True) + _td("sì" if s.get("interface") else "no") + "</tr>")
+    doc.add("<h3>Siti</h3>", _table([("Mutazione", False), ("Struttura secondaria", False), ("RSA", True),
+                                     ("BLOSUM62", True), ("Δ superficie apolare sepolta", True),
+                                     ("Interazioni perse", True), ("Interfaccia", False)], rows))
+    doc.add("<h3>Motivazioni</h3>", "<ul>", *_signal_items(a.get("signals") or []), "</ul>")
+    binding = _dict(a.get("binding"))
+    if binding:
+        doc.add(_note(_e(binding.get("text")), "warn" if binding.get("hotspot") else ""))
+        doc.cite("krissinel", "bogan_thorn")
+    d, e = _dict(mut.get("dope")), _dict(mut.get("energy"))
+    erows = [("DOPE totale", d.get("wild_type"), d.get("mutant"), d.get("delta"), d.get("delta_eq")),
+             (f"DOPE locale ({_e(d.get('local_residues'))} residui entro {_num(d.get('local_radius'), 0)} Å)",
+              d.get("local_wild_type"), d.get("local_mutant"), d.get("delta_local"), None)]
+    if _isnum(d.get("interchain_delta")):
+        erows.append(("DOPE fra le catene", d.get("interchain_wild_type"), d.get("interchain_mutant"),
+                      d.get("interchain_delta"), d.get("interchain_delta_eq")))
+    table = ["<tr>" + _td(label) + _td(_num(w, 1), True) + _td(_num(m, 1), True) + _td(_signed(delta, 1), True)
+             + _td(_signed(eq, 2), True) + "</tr>" for label, w, m, delta, eq in erows]
+    if _isnum(e.get("ddE")):
+        table.append("<tr>" + _td("Energia OpenMM (kJ/mol)") + _td(_num(e.get("wild_type"), 1), True)
+                     + _td(_num(e.get("mutant"), 1), True) + _td(_signed(e.get("delta_folded"), 1), True)
+                     + _td("—", True) + "</tr>")
+        table.append("<tr>" + _td("Riferimento: tripeptidi isolati (kJ/mol)")
+                     + _td(_num(e.get("reference_wild_type"), 1), True) + _td(_num(e.get("reference_mutant"), 1), True)
+                     + _td(_signed(e.get("delta_reference"), 1), True) + _td("—", True) + "</tr>")
+    doc.add("<h3>DOPE ed energia</h3>",
+            _table([("Termine", False), ("Selvatico", True), ("Mutante", True), ("Differenza", True),
+                    ("Residui equivalenti", True)], table))
+    if _isnum(e.get("ddE")):
+        doc.add(f"<p>ΔΔE = {_signed(e.get('ddE'), 1)} kJ/mol ({_signed(e.get('ddE_kcal'), 1)} kcal/mol): differenza di "
+                "energia fra mutante e selvatico meno quella dei tripeptidi di riferimento.</p>")
+    spread = _dict(d.get("spread"))
+    if spread:
+        doc.add(f'<p class="small muted">Scarto del DOPE fra i modelli della stessa variante: selvatico '
+                f"{_num(spread.get('wild_type'), 1)}, mutante {_num(spread.get('mutant'), 1)} (rumore del "
+                "protocollo).</p>")
+    rows = []
+    for r in mut.get("comparison") or []:
+        r = _dict(r)
+        digits = REFINE_DIGITS.get(str(r.get("key")), 2)
+        verdict = r.get("verdict")
+        tag = (f'<span class="tag {_lookup(REFINE_VERDICT_TONE, verdict, "")}">{_e(verdict)}</span>' if verdict
+               else "—")
+        rows.append("<tr>" + _td(_e(r.get("label"))) + _td(_num(r.get("before"), digits), True)
+                    + _td(_num(r.get("after"), digits), True) + _td(_signed(r.get("delta"), digits + 1), True)
+                    + _td(tag) + "</tr>")
+    if rows:
+        doc.add("<h3>Selvatico riottimizzato e mutante</h3>",
+                _table([("Metrica", False), ("Selvatico", True), ("Mutante", True), ("Differenza", True),
+                        ("Esito", False)], rows))
+        doc.explain("grade", "rama", "clash")
+    rmsd = _dict(mut.get("rmsd"))
+    if rmsd:
+        doc.add(f"<p>RMSD della catena principale fra selvatico e mutante: {_num(rmsd.get('all'), 3, ' Å')} su "
+                f"{_e(rmsd.get('atoms'))} atomi, {_num(rmsd.get('outside'), 3, ' Å')} fuori dai residui ottimizzati "
+                "(ferma per costruzione).</p>")
+    _mutation_protocol(doc, _dict(mut.get("protocol")), bool(_dict(mut.get("protocol")).get("energy")))
+    doc.end()
+
+
+def _scan(doc: _Doc, data: dict) -> None:
+    """Scansione di alanina (F9.2): tabella dalla sostituzione più destabilizzante, esclusi, hot spot, protocollo."""
+    scan = _dict(data.get("scan"))
+    if not scan:
+        return
+    doc.section("scansione", "Scansione di alanina")
+    sel = _dict(scan.get("selection"))
+    doc.add(f"<p>Residui scelti: {_e(sel.get('detail'))}. Ordine: dalla sostituzione più destabilizzante (classe, poi "
+            "segnali, poi ΔDOPE).</p>", _note(_e(scan.get("caveat")), "warn"))
+    rows = []
+    for r in scan.get("rows") or []:
+        r = _dict(r)
+        a, d, e, s = _dict(r.get("assessment")), _dict(r.get("dope")), _dict(r.get("energy")), _dict(r.get("site"))
+        binding = _dict(a.get("binding"))
+        iface = ("hot spot " + str(binding.get("hotspot"))) if binding.get("hotspot") else (
+            "sì" if s.get("interface") else "no")
+        reason = (a.get("reasons") or ["—"])[0]
+        rows.append("<tr>" + _td(_e(r.get("label"))) + _td(_class_tag(a)) + _td(_signed(d.get("delta"), 0), True)
+                    + _td(_signed(d.get("delta_eq"), 2), True) + _td(_signed(d.get("interchain_delta"), 0), True)
+                    + _td(_signed(e.get("ddE"), 0), True)
+                    + _td(_num(100 * s["rsa_wt"], 0, "%") if _isnum(s.get("rsa_wt")) else "—", True)
+                    + _td(_e(s.get("ss"))) + _td(_e(iface)) + _td(f'<span class="small">{_e(reason)}</span>') + "</tr>")
+    doc.add(_table([("Mutazione", False), ("Effetto", False), ("ΔDOPE", True), ("Residui eq.", True),
+                    ("ΔDOPE fra catene", True), ("ΔΔE kJ/mol", True), ("RSA", True), ("DSSP", False),
+                    ("Interfaccia", False), ("Motivo principale", False)], rows))
+    skipped = [x for x in scan.get("skipped") or [] if isinstance(x, dict)]
+    if skipped:
+        doc.add("<h3>Residui esclusi</h3>", "<ul>",
+                *(f"<li>{_e(x.get('resname'))} {_e(str(x.get('chain') or '').strip() or '_')}{_e(x.get('resnum'))}: "
+                  f"{_e(x.get('reason'))}</li>" for x in skipped[:60]), "</ul>")
+        doc.cite("kortemme")
+    hot = [h for h in scan.get("hotspots") or [] if isinstance(h, dict)]
+    if hot:
+        doc.add("<h3>Hot spot d'interfaccia</h3>", "<ul>",
+                *(f"<li><b>{_e(h.get('label'))}</b> ({_e(h.get('level'))}): {_e(h.get('text'))}</li>" for h in hot),
+                "</ul>")
+    if scan.get("interface"):
+        doc.cite("bogan_thorn", "krissinel")
+    protocol = _dict(scan.get("protocol"))
+    _mutation_protocol(doc, protocol, bool(protocol.get("energy")))
+    doc.end()
+
+
 def _warnings(doc: _Doc, data: dict) -> None:
     items: list[str] = []
     for w in [*(data.get("warnings") or []), *(((data.get("quality") or {}).get("warnings")) or [])]:
@@ -1784,6 +2032,10 @@ def render(data: dict) -> str:
     refine (solo kind "refine", F9.1: dal risultato del job di services/refine.py: label, protocol, openmm, added, input,
     energy, rmsd, quality {before, after}, comparison); con "refine" niente template, allineamento, parametri di
     MODELLER e tabella dei modelli.
+    mutation (kind "mutate", F9.2: risultato del job di services/mutations.py: notation, assessment, sites, dope,
+    energy, comparison, rmsd, protocol, caveat) e scan (kind "alascan": rows, skipped, summary, hotspots, selection,
+    protocol, caveat, interface): sezioni "Mutagenesi in silico" e "Scansione di alanina"; la scansione non ha la
+    sezione della qualità.
     """
     doc = _Doc()
     kind = data.get("kind")
@@ -1793,6 +2045,9 @@ def render(data: dict) -> str:
         _refinement(doc, data)
         if (data.get("quality") or {}).get("dope"):
             doc.cite("modeller", "dope")
+    elif kind in MUTATION_KINDS:  # mutagenesi e scansione di alanina (F9.2): niente template né allineamento
+        _mutagenesis(doc, data)
+        _scan(doc, data)
     elif kind != "quality":
         _templates(doc, data)
         _alignment(doc, data)
@@ -1801,14 +2056,16 @@ def render(data: dict) -> str:
         doc.cite("modeller")
     elif (data.get("quality") or {}).get("dope"):
         doc.cite("modeller", "dope")
-    _quality(doc, data)
+    if kind != "alascan":  # la scansione non ha un modello analizzato
+        _quality(doc, data)
     _ligands(doc, data)
     _complex(doc, data)
     _structural(doc, data)
     _warnings(doc, data)
     _legend_and_refs(doc)
     subject = data.get("title") or data.get("model") or ""
-    title = ({"quality": "Report qualità", "refine": "Report rifinitura"}.get(str(kind), "Report modello")
+    title = ({"quality": "Report qualità", "refine": "Report rifinitura", "mutate": "Report mutagenesi",
+              "alascan": "Report scansione di alanina"}.get(str(kind), "Report modello")
              + (f" · {subject}" if subject else ""))
     version = dict(data.get("tools") or []).get("BioLoom", "")
     footer = (f"<footer>Generato da BioLoom {_e(version)} il {_date(data.get('generated_at'))} dai file del job "

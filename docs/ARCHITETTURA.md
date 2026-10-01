@@ -106,10 +106,14 @@ data/
 | `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job), `reports` (dati del report di un modello o di un'analisi), `coverage` (copertura del bersaglio da parte dei template, avvisi su disordine e domini), `analysis` (job dell'analisi strutturale), `structure_tools` (job `pockets` ed `electrostatics`), `refine` (job `refine`), `preflight` (fatti per i controlli preventivi), `labels` (etichette e preferiti), `globalsearch` (ricerca globale; vedi [Etichette, preferiti e ricerca globale](#etichette-preferiti-e-ricerca-globale-f8b)) |
 | `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases`, `analysis`, `structure_tools`, `labels` oltre a sistema, progetti, calcoli — compresi i controlli preventivi — e job) |
 
+Mutagenesi (F9.2): `domain/mutations` (notazione, copia per MODELLER, indicatori, classificazione, scansione, varianti
+di UniProt), `engines/mutate` (script di MODELLER, energia con OpenMM), `services/mutations` (job `mutate` e `alascan`),
+`api/mutations`; vedi [Mutagenesi in silico e scansione di alanina](#mutagenesi-in-silico-e-scansione-di-alanina-f92).
+
 ### Job
 
 Tutti i calcoli (`search`, `align`, `align2d`, `model`, `loop`, `quality`, `qmean`, `analysis`, `pockets`,
-`electrostatics`, `refine`, `pipeline`) passano dal `JobManager`:
+`electrostatics`, `refine`, `mutate`, `alascan`, `pipeline`) passano dal `JobManager`:
 
 - stato `queued → running → completed | failed | cancelled` (più `cancelling`) salvato su SQLite;
 - coda con priorità per tipo di job e budget di CPU condiviso dai processi esterni di tutti i job (vedi [Coda con
@@ -268,8 +272,8 @@ con 8. I worker prendono sempre il primo job avviabile in quest'ordine (`core/jo
 
 | Priorità | Tipi di job | Perché |
 |---|---|---|
-| 0 | `search`, `align`, `align2d`, `quality`, `qmean`, `analysis`, `pockets`, `electrostatics` (e `compare`) | interattivi brevi: l'utente aspetta davanti allo schermo |
-| 1 | `model`, `loop`, `selftest`, `refine` e i tipi non elencati | minuti |
+| 0 | `search`, `align`, `align2d`, `quality`, `qmean`, `analysis`, `pockets`, `electrostatics`, `mutate` (e `compare`) | interattivi brevi: l'utente aspetta davanti allo schermo |
+| 1 | `model`, `loop`, `selftest`, `refine`, `alascan` e i tipi non elencati | minuti |
 | 2 | `pipeline`, `db_update_pdbaa`, `db_build_mmseqs`, `db_index_mmseqs`, `db_convert_uniclust`, `db_local_uniclust` | lavori lunghi in blocco |
 
 - **A parità:** `created_at`, poi il rowid della riga (ordine di creazione anche nello stesso secondo). Un job ripreso
@@ -704,7 +708,7 @@ spazio, servizio QMEAN, job attivi) li raccoglie `services/preflight.PreflightSe
 
 **Rotta** `POST /api/compute/preflight` con `{kind, params, context}`:
 
-- `kind`: `model`, `loop`, `align2d`, `pipeline`, `quality`, `qmean`, `search`, `analysis`;
+- `kind`: `model`, `loop`, `align2d`, `pipeline`, `quality`, `qmean`, `search`, `analysis`, `mutate`, `alascan`;
 - `params`: lo stesso corpo della rotta di avvio, validato con lo stesso modello Pydantic (`ModelIn`, `PipelineIn`, …):
   un campo non valido è un esito `error` (`validation_error`), come il 422 dell'avvio, non un 422 dei controlli;
 - `context` (facoltativo): `accession` (domini InterPro, come `/api/bio/coverage`), `search_job` (ricerca da cui vengono i
@@ -757,6 +761,9 @@ message, suggestion}` più `group: "coverage"` per gli avvisi di copertura e `te
 | `ncbi_many_searches` / `ncbi_parallel` | warning / info | pipeline con oltre 50 ricerche NCBI (motore NCBI, o AlphaFold DB senza accessione) / più ricerche NCBI insieme | linee guida di NCBI per l'interfaccia URL di BLAST: oltre 50 ricerche di sera o nel fine settimana, una richiesta ogni 10 s |
 | `pipeline_too_long` / `pipeline_alphafold`, `pipeline_disorder` | warning / info | sequenze oltre 5000 residui; sequenze con e senza accessione; sequenze con regioni disordinate lunghe (FoldIndex, fino a 500 000 residui in tutto) | |
 | `queue_busy`, `single_model`, `identical_models`, `invalid_accession`, `check_skipped` | info | job attivi ≥ job in parallelo; un solo modello; più modelli con il raffinamento rapidissimo (`a.very_fast()` non perturba le coordinate iniziali: modelli identici, anche fra gli avvisi del risultato); accessione non valida (niente domini); controllo non eseguito | misura in [Prestazioni](#misure-per-i-controlli-preventivi) |
+| `invalid_mutation`, `invalid_scan` | error | notazione, catena, residuo originale o scelta dei residui rifiutati dalla rotta di avvio (stesso messaggio); oltre 50 residui (20 con l'energia) | mutagenesi (F9.2) |
+| `mutation_energy_unavailable` / `mutation_energy` | warning / info | energia chiesta senza OpenMM o PDBFixer (il job prosegue senza) / che cosa misura | |
+| `mutation_ligand_near`, `mutation_break_near`, `scan_skipped` | warning, info, info | gruppo eteroatomico entro 8 Å dai residui da mutare (MODELLER lavora sulla sola proteina); interruzione della catena entro 5 Å; residui esclusi dalla scansione (Gly, Pro, Ala) | |
 
 **Stima del tempo** (secondi; costanti misurate, vedi [Prestazioni](#misure-per-i-controlli-preventivi)):
 preparazione 0,02 + allineamento 0,34 · s + avvio di MODELLER 0,26 + s · (restrizioni 0,46 + M · 2,29 · f) + qualità,
@@ -827,6 +834,9 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
     `items/<idx>_<nome>/<modello>` di un elemento completato) e per il modello rifinito di un job `refine`
     (`refined_file`);
   - `GET /api/jobs/{id}/report` per un job `quality`: report ridotto, senza template, allineamento e parametri;
+  - mutagenesi (F9.2): `GET /api/jobs/{id}/report/{modello}` per il mutante o il selvatico riottimizzato di un job
+    `mutate` (sezione "Mutagenesi in silico" e la qualità del modello) e `GET /api/jobs/{id}/report` per un job `alascan`
+    (sezione "Scansione di alanina", niente qualità);
   - le varianti `POST`, con corpo `{"image_png_base64"}`, incorporano la vista 3D;
   - `qmean_job=` aggiunge QMEAN con gli stessi controlli della rotta del consenso; `download=false` restituisce il
     file `inline` invece che `attachment`.
@@ -851,6 +861,7 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
   | Qualità | `<modello>.quality.json` (o risultato del job quality); consenso ricomposto con GA341 e zDOPE del modello (`consensus.compute`), oppure dalla rotta del consenso quando c'è QMEAN |
   | Ligandi e metalli | campo `ligands` del rapporto di qualità; per il modello migliore senza analisi, `ligands.verification` del risultato. Sezione solo se presente: esito, classe, coordinazione con i donatori e le distanze attese, residui entro 4 Å, confronto con il sito del template, motivazione; nei parametri i gruppi trasferiti e da quale template |
   | Analisi strutturale | ponti disolfuro e interfacce (area, residui, interazioni fra le catene, plausibilità con i limiti) del job `analysis` completato più recente sulla stessa struttura (`AnalysisService.latest`: stessa sorgente, `{job, file}` per i modelli, e stessa impronta del file); la sezione "Analisi strutturale" compare solo se ce ne sono (vedi [Analisi strutturale](#analisi-strutturale)) |
+  | Mutagenesi | job `mutate` e `alascan` (F9.2): dal risultato del job; classe con le motivazioni pesate e l'avvertenza, siti (struttura secondaria, RSA, BLOSUM62, superficie apolare sepolta, interazioni perse, interfaccia), DOPE totale, locale e fra le catene, energia di OpenMM con i riferimenti, metriche del selvatico riottimizzato e del mutante, protocollo e fonti; per la scansione la tabella ordinata, gli esclusi e gli hot spot. Sezioni bilanciate (`doc.section`/`doc.end`) |
   | Interfacce del complesso | modelli a più catene (F5.3): `complex` del risultato (catene del modello e del template, simmetria) e il confronto delle interfacce del rapporto di qualità del modello (per il migliore senza analisi, quello del risultato): tabella con area (e quella del template), residui conservati, Fnat, iRMS, LRMS, DockQ ed esito, testo motivato per interfaccia e limiti; nei parametri la riga "Simmetria fra catene" (vedi [Complessi e omo-oligomeri](#complessi-e-omo-oligomeri-domainassemblypy-domaincomplexespy)) |
 
   Un modello senza rapporto di qualità ha il report dei soli risultati di MODELLER, con un avviso.
@@ -1274,6 +1285,170 @@ La mappa si scarica da `/api/jobs/{id}/files/potential.dx?download=true`.
 
 Totale: circa 139 MB in più nei livelli dell'immagine (bioloom:4.1.0 869 MB, immagine di sviluppo 1,04 GB; contenuto
 compresso 215 → 244 MB). I test di questi strumenti si saltano, con il motivo, nelle immagini che non li hanno.
+
+### Mutagenesi in silico e scansione di alanina (F9.2)
+
+Mutanti costruiti con MODELLER, stima qualitativa dell'effetto sulla stabilità, scansione di alanina e varianti di
+UniProt. Logica pura in `domain/mutations.py`; motore in `engines/mutate.py` (script di MODELLER, energia con
+`engines/refine.py`); job `mutate` e `alascan` in `services/mutations.py`; rotte in `api/mutations.py`. Nessuno strumento
+nuovo e nessuna dipendenza: MODELLER c'è già, OpenMM e PDBFixer (F9.1) sono facoltativi. FoldX e Rosetta non si usano
+(licenze non ridistribuibili). Nessuna colonna né tabella nuova in SQLite, nessuna impostazione nuova; niente cache dei
+calcoli (i modelli sono file del job).
+
+**Notazione.** `[catena:]<originale><numero>[inserzione]<nuovo>`, codici a una o tre lettere (`A:K48R`, `A:LYS48ARG`,
+`A:G52AA` = Gly 52A → Ala), più mutazioni separate da virgole (una sola variante, al più 10); la catena si omette con
+una sola catena, `_` è la catena senza identificativo. La parte dopo il numero si legge dalla lunghezza (1 = residuo, 2 =
+inserzione + residuo, 3 = tre lettere, 4 = inserzione + tre lettere), quindi non è mai ambigua; le lettere degli
+amminoacidi non distinguono maiuscole e minuscole, la catena sì. Errori chiari (`invalid_mutation`, 400 prima della coda):
+voce non valida, amminoacido non standard, sostituzione identica, catena inesistente o omessa con più catene, residuo
+assente o non amminoacido, **residuo originale diverso** ("A48 è LYS (K), non GLU (E): usa la numerazione della
+struttura"), residuo ripetuto. La rotta salva la forma canonica (`A:K48R`). Il frontend ripete la stessa sintassi
+(`lib/mutations.parseMutations`) per un riscontro immediato.
+
+**Copia per MODELLER** (`modeller_input`): solo la proteina del primo modello (residui modificati come il residuo
+standard: MSE → MET con SE → SD, SEP → SER…), prima altloc, niente idrogeni, acque e gruppi eteroatomici (esclusi con
+avviso; quelli entro 8 Å dai siti con un avviso proprio). Ogni tratto continuo (C–N ≤ 2,0 Å) è una catena per MODELLER:
+senza, `generate_topology` legherebbe i residui ai lati di un'interruzione. Il primo tratto di una catena con un nome di
+un carattere lo conserva, gli altri tratti e la catena senza nome prendono una lettera libera; `restore_chains` riporta i
+nomi originali nei modelli e toglie i TER fra i tratti della stessa catena.
+
+**Protocollo** (`MUTATE_SCRIPT`, da `mutate_model.py` della Sali lab; Feyfant, Sali & Fiser, Protein Sci. 16:2030,
+2007):
+
+1. `Selection.mutate`, topologia dalla sequenza mutata, coordinate trasferite dal selvatico e costruite per coordinate
+   interne dove mancano, numerazione originale (`res_num_from`);
+2. restrizioni statistiche: stereochimica, φ/ψ binormali, diedri ω e χ1–χ4;
+3. residuo mutato randomizzato di 4 Å e ottimizzato da solo (coppie non legate interne alla selezione), poi con le
+   catene laterali dei residui entro 5 Å (estensione di BioLoom: lo script originale ottimizza solo il residuo mutato):
+   gradienti coniugati sul programma dei loop, ricottura (150 → 1000 → 300 K) e gradienti coniugati finali. Il resto
+   della struttura non si muove: la catena principale fuori dai residui mutati è identica (test: RMSD 0,000 Å, atomi
+   oltre 10 Å identici);
+4. **stesso trattamento per il selvatico**: i residui da mutare si "mutano" in sé stessi con la stessa randomizzazione
+   e gli stessi semi. Senza, la differenza misurerebbe anche l'ottimizzazione: su 1UBQ la sola riottimizzazione di Ile30
+   cambia il DOPE di 40–90 unità rispetto al cristallo;
+5. **3 modelli per variante** (semi consecutivi da −49837, il seme di `mutate_model.py`; modificabile), si tiene quello
+   con il DOPE più basso (come la scelta del modello di AutoModel, Shen & Sali 2006). Misurato su 1UBQ: con un modello lo
+   scarto fra due semi arrivava a 55 unità di DOPE; con il migliore di 3, due serie di semi danno ΔDOPE di K48R −39 e
+   −34, di I30G +349 e +368;
+6. DOPE di ogni modello (`complete_pdb(..., transfer_res_num=True)`: senza, la numerazione della seconda catena
+   ripartirebbe e la selezione locale fallirebbe): totale, **locale** (`assess_dope` sui residui entro 8 Å dai siti:
+   conta le coppie con almeno un atomo selezionato) e, con più catene, **fra le catene** (per un gruppo g:
+   DOPE(g) + DOPE(resto) − DOPE(tutto), cioè le sole coppie fra g e le altre catene). Risultati in `mutate_models.json`,
+   progressi con `@@BIOLOOM model k/n`. Un processo per variante (selvatico e mutante insieme, 6 modelli), da
+   `JobContext.run` con uno slot.
+
+**Energia con OpenMM** (facoltativa, `energy`): selvatico e mutante scelti passano dalla minimizzazione con restrizioni
+della rifinitura (`engines/refine.run`: AMBER ff14SB, OBC2, catena principale a 10 kcal·mol⁻¹·Å⁻²), poi i **tripeptidi di
+riferimento** i−1..i+1 estratti dalle due strutture minimizzate (`fragments_pdb`: finestre adiacenti unite, frammenti
+distanti 1000 Å nello stesso calcolo, meno di 0,1 kJ/mol di interazione) con lo stesso protocollo. ΔΔE = (E_mut − E_wt) −
+(E_rif,mut − E_rif,wt): il riferimento toglie la parte che dipende solo dalla composizione (K48R: −659 kJ/mol fra le
+proteine, −664 fra i tripeptidi, ΔΔE +6). È un'energia senza entropia, non un'energia libera, e il rumore è grande: due
+selvatici ottimizzati di K48 differiscono fino a 36 kJ/mol nei termini del ΔΔE. Quattro processi di OpenMM, due alla
+volta; senza OpenMM l'energia manca con un avviso e la stima resta. I minimizzati sono fra i file
+(`openmm_mutante/<nome>_min.pdb`): la «rifinitura del mutante».
+
+**Stima dell'effetto** (`site_indicators`, `site_signals`, `classify`): indicatori dichiarati, ognuno con un peso
+qualitativo; *probabilmente destabilizzante* con un segnale forte o almeno due moderati, *incerta* con uno moderato (o
+residuo sepolto senza segnali, o soli segnali di possibile stabilizzazione), *probabilmente neutra* senza segnali su un
+residuo esposto. Ogni risultato porta le motivazioni in italiano e l'avvertenza (`CAVEAT`): non è un ΔΔG.
+
+| Indicatore | Segnale | Fonte o motivo |
+|---|---|---|
+| ΔDOPE in residui equivalenti = ΔDOPE / (\|DOPE del selvatico\| / residui) | ≥ 2 forte, ≥ 1 moderato, ≤ −1 possibile guadagno | DOPE (Shen & Sali 2006); scala per residuo per proteine di dimensioni diverse; soglie oltre il rumore misurato (scelta BioLoom). Un residuo più grande aggiunge contatti: un ΔDOPE negativo non dimostra una stabilizzazione |
+| ΔΔE di OpenMM | ≥ 100 kJ/mol forte, ≥ 50 moderato, ≤ −50 possibile guadagno | soglie oltre lo scarto di 36 kJ/mol fra due selvatici (scelta BioLoom) |
+| prolina in α-elica (DSSP H) oltre il primo giro | forte | propensione per l'elica, Pace & Scholtz 1998 (Pro +3,16 kcal/mol rispetto ad Ala); nel primo giro solo informativa (MacArthur & Thornton 1991) |
+| altra sostituzione in α-elica con ΔP ≥ 0,5 kcal/mol (non agli estremi) | moderato | Pace & Scholtz 1998 |
+| prolina o glicina in un filamento β | forte se si perde il legame H dell'NH, altrimenti moderato | Minor & Kim 1994; Smith, Withka & Regan 1994 |
+| conformazione φ/ψ del selvatico fuori dalle regioni del nuovo residuo | forte | regioni di Ramachandran di BioLoom (Lovell et al. 2003): es. una glicina con φ > 0 |
+| ponte disolfuro perso | forte | Betz 1993 |
+| legami idrogeno persi del residuo (criteri di `domain/interactions`) | moderato se sepolto o almeno 2 | circa 1 kcal/mol ciascuno (Myers & Pace 1996) |
+| ponte salino perso | moderato se sepolto, altrimenti informativo | Strop & Mayo 2000 |
+| superficie apolare sepolta persa ≥ 40 Å² (riferimento: il residuo nel tripeptide isolato, Shrake & Rupley) | moderato | effetto idrofobico circa 25 cal·mol⁻¹·Å⁻² (Chothia 1974) |
+| residuo nel nucleo (RSA < 20%, ASA massime di Tien et al. 2013) con BLOSUM62 < 0 | moderato | Henikoff & Henikoff 1992 |
+| carica introdotta nel nucleo | moderato | Isom et al. 2011 |
+| nuovi contatti sterici del residuo mutato (sovrapposizione > 0,4 Å) | moderato | Word et al. 1999 |
+| residuo d'interfaccia (ΔSASA > 1 Å², `domain/interfaces`) | effetto sul legame, a parte: hot spot *probabile* se sepolto nel complesso (RSA < 20%) e con contributo al legame (ΔDOPE fra le catene ≥ 0,5 residui equivalenti o interazioni fra catene perse), *possibile* con il solo contributo | Bogan & Thorn 1998; Kortemme & Baker 2002 |
+
+**Scansione di alanina** (`alascan`): residui da un elenco (`A:30, A:43, A:45-48`, anche con la verifica `A:I30`),
+dall'interfaccia (tutte le catene o una) o da una tasca di un job `pockets` completato sulla stessa struttura. Glicina e
+prolina escluse (la sostituzione cambia la flessibilità della catena principale e non misura la catena laterale, come in
+Kortemme & Baker 2002), alanina esclusa, residui non standard esclusi, tutti con il motivo. **Al più 50 residui** (6
+modelli di MODELLER ciascuno: circa 7 minuti stimati per una proteina di 300 residui con 3 processi insieme), **20 con
+l'energia** (4 minimizzazioni per residuo). Ogni residuo è un passo indipendente (`core/parallel.Steps`, fino ai job
+paralleli delle Impostazioni) con il suo processo e il suo slot; una copia sola per MODELLER nella cartella del job, i
+modelli in `siti/<residuo>/`. Righe ordinate dalla più destabilizzante (classe, poi punteggio = 100 per segnale forte +
+10 per moderato + residui equivalenti di ΔDOPE, poi ΔDOPE); `alascan.csv`; un residuo fallito diventa un avviso, tutti
+falliti fanno fallire il job.
+
+**Varianti di UniProt** (`remote.uniprot_variants`, `map_variants`): le feature "Natural variant" e "Mutagenesis" sono già
+nella risposta `{acc}.json` usata da `uniprot_entry`, che però ne tiene solo tipo e posizione: la stessa richiesta ha un
+proprio namespace di cache (7 giorni), così le voci di `uniprot_entry` in cache non cambiano formato. Si tengono le
+sostituzioni di un residuo; categoria *malattia* se la descrizione ("in CMH1; …") cita la sigla di una malattia dei
+commenti DISEASE della voce, *mutagenesi*, *naturale*. La sequenza di UniProt si allinea a ogni catena (Needleman-Wunsch,
+BLOSUM62, gap terminali gratuiti, come la conservazione); la numerazione non si assume mai uguale (es. UniProt con
+l'etichetta N-terminale: K53 → A:K48R, nota "Numerazione di UniProt = numerazione della struttura + 5"). Con le
+ripetizioni (poliubiquitina: tre copie in UBB, P0CG47) l'allineamento globale sceglierebbe una copia qualunque e la
+mutagenesi annotata sulla prima non si mapperebbe: nelle parti della voce fuori dal primo tratto si cercano le copie con
+identità entro 5 punti e quasi la stessa copertura, e le varianti di ogni copia arrivano sulla struttura (`segment`).
+Una variante è applicabile se l'amminoacido originale coincide con quello della struttura; altrimenti il motivo. Sotto il
+30% di identità le varianti non si mappano (errore), sotto il 90% una nota (omologo).
+
+**Rotte** (`api/mutations.py`):
+
+| Rotta | Funzione |
+|---|---|
+| `POST /api/mutate` | `{source, mutations, energy, seed}` → job `mutate` ("Mutagenesi · 1UBQ A:K48R"); struttura assente 404, notazione o residui non validi 400 `invalid_mutation`, seme fuori da −50000…−2 422 |
+| `POST /api/alascan` | `{source, selection: {mode: residues \| interface \| pocket, residues, chain, pocket_job, pocket}, energy, seed}` → job `alascan`; scelta non valida o troppi residui 400 `invalid_scan`, tasche non completate 409 |
+| `GET /api/mutations/variants?accession=&type=&id=&job_id=&file=&chain=` | varianti mappate sulla struttura (`chain`, `identity`, `coverage`, `offset`, `segments`, `variants` con `applicable`, `notation`, `reason`, `segment`) |
+| `GET /api/mutations/history?type=&id=&job_id=&file=` | job `mutate` e `alascan` sulla stessa sorgente, dal più recente |
+
+Risultato di `mutate`: `mutations`, `notation`, `files` (selvatico riottimizzato `<nome>_wt.pdb` e mutante
+`<nome>_K48R.pdb`, con `.quality.json`; con l'energia i minimizzati), `models` (DOPE di tutti i modelli, `chosen`),
+`dope`, `energy`, `sites` (indicatori), `assessment` (classe, motivazioni, segnali, punteggio, effetto sul legame),
+`quality` e `comparison` (`refinement.compare` fra selvatico riottimizzato e mutante), `rmsd` (catena principale fuori dai
+residui ottimizzati e totale), `protocol`, `warnings`, `caveat`. Righe `REMARK 999 BIOLOOM` nel mutante (mutazioni,
+protocollo, ΔDOPE, classe "QUALITATIVE, NOT A DDG").
+
+**Controlli preventivi** (`kind` `mutate` e `alascan`): stessa validazione delle rotte, MODELLER, OpenMM se chiesta
+l'energia, gruppi eteroatomici e interruzioni vicini ai siti, residui esclusi, tempo e spazio. Tempi misurati sul portatile
+dei test: un modello di mutante 0,85 + 0,0046 s per residuo, avvio 1 s, indicatori 0,01 s per residuo, analisi di qualità
+dei due modelli 1,5 × quella di un modello; energia 8 + 0,8 s per residuo (misurata solo su 1UBQ); nella scansione +25%
+per ogni residuo in più nello stesso turno (3 insieme su 4 CPU logiche: 14,7 s per turno contro 9 s di un residuo da
+solo). Job `mutate` su 1UBQ: 10–15 s, 80 s con l'energia.
+
+**Valori di riferimento** (test in `test_mutations.py`, container di sviluppo):
+
+| Caso | Valore |
+|---|---|
+| K48R su 1UBQ | Arg 48 nel mutante, Lys nel selvatico riottimizzato, catena principale fuori dai residui ottimizzati identica (0,000 Å), atomi oltre 10 Å identici; ΔDOPE −39 (−0,37 residui equivalenti), DOPE locale su 15 residui; RSA 47%: probabilmente neutra. Con OpenMM ΔΔE +6 kJ/mol |
+| I30P su 1UBQ | Ile30 sepolto (RSA 4%) nell'elica 23–34, ottava posizione: prolina oltre il primo giro (+2,75 kcal/mol), ΔDOPE +305 (+2,93), legame H dell'NH con Val26 perso, 46 Å² apolari persi: probabilmente destabilizzante (2 segnali forti, 4 moderati) |
+| I30G, L43G | ΔDOPE +349 e +404 (+3,35 e +3,85); I30G con OpenMM ΔΔE +73 kJ/mol: probabilmente destabilizzanti |
+| scansione A:30, A:43, A:48 (G10 esclusa) | L43A (+308, 2,93) e I30A (+253, 2,43) probabilmente destabilizzanti, K48A (+10) probabilmente neutra, in quest'ordine |
+| D58A sul dimero sintetico | residuo d'interfaccia, DOPE fra le catene circa −150, nessun hot spot (interfaccia piccola, 123 Å²) |
+| mutanti grezzi senza MODELLER | Ile30 → Ala: due segnali moderati (superficie apolare, nucleo non conservativo); Ile30 → Pro: prolina oltre il primo giro e NH di Val26; Lys48 → Ala: nessun segnale |
+
+**Interfaccia** (`components/Mutagenesis.tsx`, logica in `lib/mutations.ts`):
+
+- **Qualità**, scheda **Mutagenesi**: modulo (mutazioni con l'anteprima della notazione, oppure scansione per residui,
+  interfaccia o tasca dell'ultimo calcolo di fpocket), varianti di UniProt (accessione → tabella con filtri Applicabili,
+  Malattia, Mutagenesi, Tutte, ricerca, «Aggiungi» porta la notazione nel campo senza doppioni), energia facoltativa
+  (disattivata senza OpenMM), `PreflightPanel` e `LaunchButton`; cronologia dei calcoli sulla struttura; il job seguito
+  si conserva cambiando scheda.
+- **Modellazione**: «Mutagenesi» in ogni riga della tabella dei modelli e «Mutagenesi e scansione di alanina» per una
+  struttura qualunque (stesso modulo in una finestra); il job si apre in `/modeling?job=<id>` (anche «Apri» nella pagina
+  Job).
+- **Risultati del mutante**: classe con le motivazioni pesate e l'avvertenza, ΔDOPE, ΔΔE, RMSD, tabella dei siti,
+  confronto delle metriche, «Qualità del mutante», «Qualità del selvatico», «Confronta con il selvatico» (pagina Confronto
+  con il selvatico riottimizzato come riferimento A) e «Con l'originale», PDB, rifinito (OpenMM), report; 3D del mutante
+  con i siti a bastoncini.
+- **Risultati della scansione**: conteggi, filtri (destabilizzanti, incerte, neutre, hot spot), tabella ordinata, dettaglio
+  della riga scelta, 3D della struttura colorato per classe con la tavolozza di Okabe & Ito (residui esclusi in grigio,
+  non scanditi chiari; clic → la riga), CSV e report.
+
+**Limiti dichiarati** (nel risultato, nel report e nell'interfaccia): stima qualitativa, non un ΔΔG né una previsione
+calibrata; i predittori dedicati sbagliano il segno di una parte delle mutazioni; un modello per omologia aggiunge
+l'incertezza della struttura; il protocollo non considera ligandi, metalli, acqua né movimenti della catena principale
+oltre il residuo mutato.
 
 ### Ricerca di template
 
@@ -2238,8 +2413,8 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 | Libreria template | download RCSB e "Da AlphaFold DB (UniProt)", upload PDB/mmCIF, catene, residui mancanti, ligandi classificati (metallo, cofattore noto, additivo, altro ligando, residuo modificato), DSSP, 3D; badge "AlphaFold", pLDDT medio e fasce di confidenza; assemblaggi biologici (REMARK 350, `pdbx_struct_assembly`) con lo stato oligomerico e «Importa come template» (`<ID>_ASM<n>`), badge "assemblaggio"; stella, etichette e filtro (`?tag=`), preferiti in cima |
 | Allineamenti | pairwise, multiplo, strutturale (con il confronto per residuo e «Apri in Confronto»); esportazione FASTA/Clustal/PIR; salvataggio nel progetto; cache per multiplo e strutturale |
 | Editor PIR | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
-| Modellazione | input automatico, da PIR o «Complesso» (template o assemblaggio, una sequenza per catena anche «stessa della catena …», simmetria, anteprima dell'allineamento per catena; nei risultati confronto delle interfacce con DockQ e 3D colorato per catena e interfaccia), parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); avvisi prima del lancio su regioni disordinate e domini non coperti dai template, con suggerimento; modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job; «Trasferisci ligandi, cofattori e metalli dai template» con la scelta dei gruppi (additivi e ioni del tampone deselezionati per default, `LigandPicker`, che usa le analisi già lette dal selettore dei template anche dopo un download; una lettura non riuscita si mostra con «Riprova», un 404 di un template in download si riprova da sé, e sotto «Avvia modellazione» si dice quale template blocca) e la verifica del modello migliore; «Rifinisci» (OpenMM) per ogni modello e per una struttura qualunque, con i risultati prima/dopo |
-| Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche, disordine predetto come segnale informativo), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura; sezione Ligandi e metalli (esiti, coordinazione, confronto con il sito del template): il clic su un gruppo lo mostra nel 3D con i residui coordinanti e le linee di coordinazione (`LigandsPanel`, `lib/ligands.ts`; ioni metallici sempre a sfere); scheda Interazioni (analisi strutturale: legami H, ponti salini, disolfuri, aromatiche, interfacce, conservazione; `?ajob=`); schede Tasche (fpocket, `?pjob=`) ed Elettrostatica (PDB2PQR + APBS, `?ejob=`) |
+| Modellazione | input automatico, da PIR o «Complesso» (template o assemblaggio, una sequenza per catena anche «stessa della catena …», simmetria, anteprima dell'allineamento per catena; nei risultati confronto delle interfacce con DockQ e 3D colorato per catena e interfaccia), parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); avvisi prima del lancio su regioni disordinate e domini non coperti dai template, con suggerimento; modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job; «Trasferisci ligandi, cofattori e metalli dai template» con la scelta dei gruppi (additivi e ioni del tampone deselezionati per default, `LigandPicker`, che usa le analisi già lette dal selettore dei template anche dopo un download; una lettura non riuscita si mostra con «Riprova», un 404 di un template in download si riprova da sé, e sotto «Avvia modellazione» si dice quale template blocca) e la verifica del modello migliore; «Rifinisci» (OpenMM) per ogni modello e per una struttura qualunque, con i risultati prima/dopo; «Mutagenesi» (mutazioni, varianti di UniProt, scansione di alanina) per ogni modello e per una struttura qualunque, con i risultati del mutante o della scansione |
+| Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche, disordine predetto come segnale informativo), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura; sezione Ligandi e metalli (esiti, coordinazione, confronto con il sito del template): il clic su un gruppo lo mostra nel 3D con i residui coordinanti e le linee di coordinazione (`LigandsPanel`, `lib/ligands.ts`; ioni metallici sempre a sfere); scheda Interazioni (analisi strutturale: legami H, ponti salini, disolfuri, aromatiche, interfacce, conservazione; `?ajob=`); schede Tasche (fpocket, `?pjob=`) ed Elettrostatica (PDB2PQR + APBS, `?ejob=`); scheda Mutagenesi (mutazioni e scansione di alanina della struttura del rapporto, cronologia) |
 | Confronto | `/compare?a=&ca=&b=&cb=&job=`: B sovrapposta ad A (riferimento), metriche (TM-score su A e su B, RMSD, RMSD entro 5 Å, GDT-TS, GDT-HA, lDDT, lunghezza allineata), 3D con B colorata per distanza (0 → ≥ 5 Å) o lDDT e A in grigio chiaro, grafico di distanza e lDDT per posizione, tratti che deviano, tabella per coppia; clic ovunque → coppia evidenziata nel 3D |
 | Pipeline batch | multi-FASTA → modelli validati, template da ricerca automatica, «Più template complementari» (N da 2 a 5) o fissi (casella «Ligandi» del template solo se la scelta predefinita trasferisce qualcosa dalle catene scelte, con i gruppi esclusi nel suggerimento: `lib/ligands.defaultTransfer`); filtro zona crepuscolare, tabella paginata (template usati elencati, motivazioni nel suggerimento), CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
 | Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione e la posizione di quelli in coda ("2° in coda"); stella, etichette e filtro per etichetta o preferiti (`?tag=`) |
@@ -2412,6 +2587,15 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     con code e inserzioni nella riga), scelta della riga, catene multiple, allineamenti non validi; prestazioni su 4816
     atomi; job e rotte (allineamento da testo, da sequenze non allineate e da un job; errori; analisi più recente per
     sorgente e impronta; job concorrenti), sezione del report (dimero sì, 1UBQ no, modelli di un job, escape);
+  - mutagenesi (`test_mutations.py`): notazione (forme a una e tre lettere, inserzioni, catena omessa o senza
+    identificativo, errori), verifica sulla struttura (residuo originale sbagliato, catena inesistente, ligando, residuo
+    ripetuto), copia per MODELLER (tratti alle interruzioni, MSE → MET, catena senza nome, ripristino dei nomi),
+    intorni e gruppi vicini, indicatori su mutanti grezzi di 1UBQ, regole della classificazione e soglie di DOPE ed
+    energia, hot spot, frammenti di riferimento, scansione (elenco, intervalli, esclusi, limiti, ordine, CSV), varianti
+    di UniProt simulate con la mappatura della numerazione (anche con le ripetizioni) e la cache, controlli preventivi,
+    rotte e priorità. Con MODELLER: K48R su 1UBQ (Arg 48, resto invariato, neutra o incerta, report, cronologia),
+    I30P (destabilizzante, elica), scansione di 3 residui ordinata, D58A sul dimero (DOPE fra le catene), catena senza
+    identificativo con un'interruzione, annullamento durante MODELLER; con OpenMM l'energia di K48R;
   - tasche, elettrostatica e rifinitura (`test_pockets.py`, `test_electrostatics.py`, `test_refine.py`): parser sulle
     uscite reali di fpocket (4 tasche di 1UBQ, ordine per druggability, sfere = sfere dichiarate, baricentro) e di
     PDB2PQR (carica netta 0, residui carichi per tipo, His68 con HD1); griglia come psize (97 × 97 × 129, le dimensioni
@@ -2534,6 +2718,11 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     (una lettera come catena o amminoacido, codici di inserzione, testo libero), residui da evidenziare, scale della
     conservazione e dell'interfaccia (soglia di 1 Å² esclusa), opzioni di colorazione, richiesta dell'allineamento e
     FASTA da un file letto dal server.
+  - mutagenesi (`mutations.test.ts`, `Mutagenesis.test.tsx`): notazione come il backend, aggiunta delle varianti senza
+    doppioni, richieste di mutagenesi e scansione con i controlli preventivi, testi di DOPE, energia e sito, link a
+    Qualità e Confronto (selvatico riottimizzato e originale come A), filtri e colorazione della scansione per classe con
+    gli esclusi, varianti di UniProt (applicabili prima, filtri, ricerca) e cronologia; markup dei risultati del mutante
+    (classe, segnali pesati, siti, link, avvertenza) e della scansione (ordine, esclusi, CSV).
   - tasche, elettrostatica e rifinitura (`pockets.test.ts`, `electrostatics.test.ts`, `refine.test.ts`): soglia di
     druggability, colori per posto, residuo condiviso fra due tasche, tasca scelta, sfere e centri, tasca di un residuo;
     scala ±5 kT/e saturata, kT/e in mV, colori per segno e residui sepolti, residui estremi e cariche per tipo;

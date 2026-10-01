@@ -6,6 +6,8 @@ import type {
   TemplateRef,
 } from "../api/types";
 import type { RefineResult } from "../api/types";
+import type { AlaScanResult, MutateResult } from "../api/types";
+import { AlaScanResults, MutateDialog, MutationResults } from "../components/Mutagenesis";
 import { LigandPicker } from "../components/LigandPicker";
 import { LigandTable } from "../components/LigandsPanel";
 import { groupTitle, STATUS_TONE } from "../lib/ligands";
@@ -57,7 +59,7 @@ function CompareSelect({ jobId, model, models, templates }: { jobId: string; mod
   );
 }
 
-function ModelsTable({ jobId, models, selected, onSelect, templates, viewer, onRefine }: { jobId: string; models: ModelEntry[]; selected: string; onSelect: (f: string) => void; templates?: PreparedTemplate[]; viewer?: RefObject<Viewer3DHandle | null>; onRefine?: (file: string) => void }) {
+function ModelsTable({ jobId, models, selected, onSelect, templates, viewer, onRefine, onMutate }: { jobId: string; models: ModelEntry[]; selected: string; onSelect: (f: string) => void; templates?: PreparedTemplate[]; viewer?: RefObject<Viewer3DHandle | null>; onRefine?: (file: string) => void; onMutate?: (file: string) => void }) {
   const navigate = useNavigate();
   return (
     <div className="table-wrap">
@@ -99,6 +101,7 @@ function ModelsTable({ jobId, models, selected, onSelect, templates, viewer, onR
                 {/* il viewer mostra il modello selezionato: solo il suo report riceve la vista 3D */}
                 <ReportButton jobId={jobId} model={m.file} viewer={m.file === selected ? viewer : undefined} disabled={!!m.failure} />
                 {onRefine && <>{" "}<button className="btn btn-sm" disabled={!!m.failure} title="Rifinitura energetica con OpenMM (minimizzazione con restrizioni sulla catena principale)" onClick={() => onRefine(m.file)}><Icon name="flask" size={13} /> Rifinisci</button></>}
+                {onMutate && <>{" "}<button className="btn btn-sm" disabled={!!m.failure} title="Mutagenesi in silico o scansione di alanina del modello (MODELLER), con la stima dell'effetto" onClick={() => onMutate(m.file)}><Icon name="dna" size={13} /> Mutagenesi</button></>}
               </td>
             </tr>
           ))}
@@ -155,6 +158,7 @@ function Results({ jobId, result, kind }: { jobId: string; result: ModelResult |
   const [selected, setSelected] = useState(result.best_model);
   const [loop, setLoop] = useState(false);
   const [refine, setRefine] = useState<string | null>(null); // modello da rifinire con OpenMM (F9.1)
+  const [mutate, setMutate] = useState<string | null>(null); // modello per la mutagenesi (F9.2)
   // complesso (F5.3): catene e interfacce del modello mostrato colorate nel 3D
   const [complexView, setComplexView] = useState<ComplexView | null>(null);
   const viewer = useRef<Viewer3DHandle>(null);
@@ -198,7 +202,7 @@ function Results({ jobId, result, kind }: { jobId: string; result: ModelResult |
           </>
         }
       >
-        <ModelsTable jobId={jobId} models={result.models} selected={selected} onSelect={setSelected} templates={full?.templates} viewer={viewer} onRefine={setRefine} />
+        <ModelsTable jobId={jobId} models={result.models} selected={selected} onSelect={setSelected} templates={full?.templates} viewer={viewer} onRefine={setRefine} onMutate={setMutate} />
       </Card>
       {full?.ligands && (
         <Card title="Ligandi, cofattori e metalli trasferiti" sub="verifica del modello migliore; il dettaglio e la vista 3D sono nella pagina Qualità">
@@ -232,6 +236,7 @@ function Results({ jobId, result, kind }: { jobId: string; result: ModelResult |
       )}
       {loop && <LoopDialog source={{ type: "job", job_id: jobId, file: selected }} label={selected} onClose={() => setLoop(false)} />}
       {refine && <RefineDialog source={{ type: "job", job_id: jobId, file: refine }} label={refine} onClose={() => setRefine(null)} />}
+      {mutate && <MutateDialog source={{ type: "job", job_id: jobId, file: mutate }} label={mutate} onClose={() => setMutate(null)} />}
     </div>
   );
 }
@@ -273,6 +278,7 @@ export default function Modeling() {
   const [loopSource, setLoopSource] = useState<StructureSource | null>(null);
   const [loopOpen, setLoopOpen] = useState(false);
   const [refineOpen, setRefineOpen] = useState(false); // rifinitura energetica della struttura scelta (F9.1)
+  const [mutateOpen, setMutateOpen] = useState(false); // mutagenesi della struttura scelta (F9.2)
   const { data: info } = useAsync<SystemInfo>(() => api.systemInfo(), []);
   // libreria riletta quando cambiano i template scelti: un modello AlphaFold appena scaricato risulta predetto
   const templateKey = activeTemplates.map((t) => t.id).join(",");
@@ -544,8 +550,14 @@ export default function Modeling() {
               <button className="btn btn-sm" style={{ alignSelf: "start" }} disabled={!loopSource} onClick={() => setRefineOpen(true)} title="Minimizzazione con OpenMM e restrizioni sulla catena principale">
                 <Icon name="flask" size={13} /> Rifinitura energetica (OpenMM)
               </button>
+              <button className="btn btn-sm" style={{ alignSelf: "start" }} disabled={!loopSource || !!modellerMissing} onClick={() => setMutateOpen(true)} title="Mutazioni puntuali o multiple, varianti di UniProt e scansione di alanina con MODELLER">
+                <Icon name="dna" size={13} /> Mutagenesi e scansione di alanina
+              </button>
             </div>
           </Card>
+          {mutateOpen && loopSource && (
+            <MutateDialog source={loopSource} label={loopSource.id ?? loopSource.file ?? "struttura"} onClose={() => setMutateOpen(false)} />
+          )}
           {loopOpen && loopSource && (
             <LoopDialog source={loopSource} label={loopSource.id ?? loopSource.file ?? "struttura"} onClose={() => setLoopOpen(false)} />
           )}
@@ -569,7 +581,9 @@ export default function Modeling() {
           {jobId ? <JobPanel summary={summary} log={log} onCancel={cancel} /> : <Card><Empty icon="cube" title="Configura bersaglio e template, poi avvia la modellazione" /></Card>}
           {job?.status === "completed" && job.result && (job.kind === "refine"
             ? <RefineResults key={job.id} jobId={job.id} result={job.result as unknown as RefineResult} />
-            : <Results key={job.id} jobId={job.id} result={job.result} kind={job.kind} />)}
+            : job.kind === "mutate" ? <MutationResults key={job.id} jobId={job.id} result={job.result as unknown as MutateResult} />
+              : job.kind === "alascan" ? <AlaScanResults key={job.id} jobId={job.id} result={job.result as unknown as AlaScanResult} />
+                : <Results key={job.id} jobId={job.id} result={job.result} kind={job.kind} />)}
         </div>
       </div>
     </div>

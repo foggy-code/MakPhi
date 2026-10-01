@@ -23,7 +23,8 @@ export interface ResidueValue extends ResidueRef {
 export interface ResidueColoring {
   /** opzione "Colora per" della pagina Qualità, del confronto strutturale (lib/compare.ts), dell'analisi strutturale
    *  (lib/interactions.ts), delle tasche (lib/pockets.ts) o dell'elettrostatica (lib/electrostatics.ts) */
-  key: ColorBy | "distance" | "lddt" | "conservation" | "interface" | "pocket" | "potential";
+  key: ColorBy | "distance" | "lddt" | "conservation" | "interface" | "pocket" | "potential"
+    | "mutation"; // scansione di alanina (lib/mutations.ts, F9.2)
   /** titolo della legenda */
   title: string;
   values: ResidueValue[];

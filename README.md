@@ -236,6 +236,31 @@ Tre calcoli con programmi inclusi nell'immagine Docker (se mancano, BioLoom lo d
 Ogni calcolo è un job (pagina Job; link `/quality?pjob=`, `/quality?ejob=`, `/modeling?job=`). Parametri, scelte e
 fonti sono nelle schede e in [Architettura](docs/ARCHITETTURA.md#tasche-elettrostatica-e-rifinitura-energetica-f7b-f91).
 
+## Mutagenesi in silico e scansione di alanina
+
+Nella pagina Qualità (scheda **Mutagenesi**) e in Modellazione (**Mutagenesi** nella tabella dei modelli, oppure per
+qualunque struttura nel riquadro dei loop):
+
+- **Mutazioni** nella numerazione della struttura: `A:K48R`, anche `A:LYS48ARG`; più mutazioni separate da virgole
+  formano una variante. Il residuo originale deve corrispondere a quello della struttura (altrimenti BioLoom lo dice prima
+  di partire). MODELLER sostituisce il residuo e riottimizza la sua catena laterale e quelle vicine (entro 5 Å); il
+  selvatico passa dallo stesso protocollo, così il confronto misura solo la sostituzione.
+- **Varianti di UniProt:** con l'accessione della proteina, le varianti naturali, associate a malattie e di mutagenesi
+  sperimentale, portate sulla numerazione della struttura con un allineamento (anche quando le due numerazioni non
+  coincidono, o la proteina ha copie ripetute come la poliubiquitina); «Aggiungi» le porta nel campo.
+- **Scansione di alanina:** i residui indicati (`A:30, A:43, A:45-48`), quelli dell'interfaccia fra catene o quelli di
+  una tasca trovata da fpocket diventano uno alla volta alanina (al più 50; glicina e prolina escluse). Tabella dalla
+  sostituzione più destabilizzante, 3D colorato per effetto, hot spot d'interfaccia, CSV.
+- **Effetto stimato:** *probabilmente destabilizzante*, *incerta* o *probabilmente neutra*, con le motivazioni: differenza
+  di DOPE fra mutante e selvatico, prolina o glicina in un'elica o in un filamento, legami idrogeno, ponti salini e
+  disolfuri persi, superficie idrofobica sepolta persa, residuo nel nucleo, contatti sterici, residui d'interfaccia.
+  Facoltativa la differenza di energia con OpenMM (circa un minuto in più). **Non è un ΔΔG** né una previsione
+  calibrata come FoldX o Rosetta (che BioLoom non usa: licenze non ridistribuibili): è un'indicazione della direzione
+  probabile dell'effetto, da verificare.
+- Il risultato confronta selvatico e mutante (Qualità di entrambi, pagina Confronto) e ha il suo report HTML. Ogni
+  calcolo è un job (`/modeling?job=`). Protocollo, soglie e fonti in
+  [Architettura](docs/ARCHITETTURA.md#mutagenesi-in-silico-e-scansione-di-alanina-f92).
+
 ## Report del modello
 
 Il pulsante **Report** (tabella dei modelli in Modellazione, pagina Qualità, righe della pipeline e la sua finestra
@@ -370,6 +395,7 @@ sperimentale**, con il pLDDT medio (confidenza della predizione, 0–100).
 | Qualità | Ramachandran, clashscore, DSSP (mkdssp), SASA, profilo DOPE, **PROCHECK**, **ProSA II**, **QMEAN locale** (UniClust30) o SWISS-MODEL, voto A–D, consenso tra i metodi, qualità per residuo nel 3D (anche pLDDT di AlphaFold), verifica di ligandi e metalli (contatti, scontri, coordinazione); i passi indipendenti girano in parallelo e con l'analisi "Su tutti i modelli" si analizzano più modelli insieme, report HTML stampabile in PDF |
 | Analisi strutturale | legami idrogeno, ponti salini, ponti disolfuro, interazioni aromatiche, interfacce fra catene (superficie sepolta, plausibilità), conservazione da un allineamento multiplo mappata sulla struttura; tasche con **fpocket** (druggability), potenziale elettrostatico con **PDB2PQR** (PROPKA) e **APBS** |
 | Rifinitura | **OpenMM** e **PDBFixer**: minimizzazione con restrizioni sulla catena principale e dinamica breve facoltativa, confronto prima/dopo |
+| Mutagenesi | mutazioni puntuali e multiple con MODELLER (protocollo mutate_model), varianti di UniProt mappate sulla struttura, scansione di alanina con gli hot spot d'interfaccia, stima qualitativa dell'effetto (DOPE, indicatori strutturali, energia con OpenMM facoltativa) |
 | Automazione | pipeline batch da multi-FASTA, riprendibili dopo un annullamento, un errore o un riavvio ("Riprendi" o "Riprova solo i falliti": le sequenze già modellate non si rifanno) e, se completate con sequenze fallite, "Riprova i falliti"; avanzamento, log e tabella dei risultati aggiornati in tempo reale, con la stima del tempo residuo ("circa 3 min rimanenti"); un template usato da più sequenze si prepara una volta sola per pipeline; verifica dell'installazione (Impostazioni → Strumenti) |
 
 ## Dove stanno i dati

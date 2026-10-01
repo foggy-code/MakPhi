@@ -16,6 +16,7 @@ from ..services.housekeeping import Housekeeping
 from ..services.labels import LabelService
 from ..services.licenses import LicenseService
 from ..services.live import LiveService
+from ..services.mutations import MutationService
 from ..services.pipeline import PipelineService
 from ..services.projects import ProjectService
 from ..services.refine import RefineService
@@ -94,6 +95,7 @@ def build_core(paths: Paths) -> Core:
     AnalysisService(jobs, compute).register()  # job "analysis" (F7)
     StructureToolsService(jobs, compute).register()  # job "pockets" ed "electrostatics" (F7b)
     RefineService(jobs, compute).register()  # job "refine" (F9.1)
+    MutationService(jobs, compute).register()  # job "mutate" e "alascan" (F9.2)
     pipeline = PipelineService(db, jobs, compute)
     databases = DatabaseService(jobs, paths.databases, paths.local_cache, settings.get)
     SelfTestService(jobs, paths.databases)
