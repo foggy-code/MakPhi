@@ -24,6 +24,8 @@ import type {
   PipelinePage,
   PipelineRequest,
   PirReport,
+  PreflightRequest,
+  PreflightResult,
   Project,
   QualityReport,
   ReportFile,
@@ -193,6 +195,8 @@ export const api = {
   disorder: (sequence: string) => post<DisorderPrediction>("/api/bio/disorder", { sequence }),
   /** avvisi prima di modellare: disordine e domini (InterPro, solo con l'accessione) fuori dalla copertura */
   coverage: (body: CoverageRequest) => post<CoverageCheck>("/api/bio/coverage", body),
+  /** controlli preventivi (F8a) di un calcolo, senza avviarlo: `params` = il corpo della rotta di avvio */
+  preflight: (body: PreflightRequest) => post<PreflightResult>("/api/compute/preflight", body),
 
   // template
   templates: () => get<TemplateItem[]>("/api/templates"),

@@ -99,10 +99,10 @@ data/
 | Pacchetto | Contenuto |
 |---|---|
 | `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `dispatch` (coda con priorità di ogni pool), `budget` (budget di CPU condiviso fra i job), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi), `eta` (stima del tempo residuo), `events` (notifiche in-process dei cambiamenti dei job), `parallel` (passi indipendenti di un calcolo su un pool locale di thread, vedi [Prestazioni](#prestazioni)) |
-| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG), `template_rank` (punteggio motivato dei template e selezione dei complementari), `multitemplate` (scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template), `ligands` (classificazione dei gruppi eteroatomici, colonne '.' del PIR, verifica di contatti, scontri e coordinazione dei metalli), `disorder` (disordine FoldIndex, bassa complessità SEG, domini e copertura del bersaglio), `interactions`, `interfaces`, `conservation` (analisi strutturale, vedi [Analisi strutturale](#analisi-strutturale)), `pockets` (uscita di fpocket), `electrostatics` (PQR, griglia e input di APBS, mappe OpenDX, potenziale di superficie), `refinement` (protocollo della rifinitura, copia pulita, confronto prima/dopo; vedi [Tasche, elettrostatica e rifinitura energetica](#tasche-elettrostatica-e-rifinitura-energetica-f7b-f91)), assembly` (assemblaggi biologici dal mmCIF e dal REMARK 350), `complexes` (bersagli a più catene, simmetria, confronto delle interfacce con il template; vedi [Complessi e omo-oligomeri](#complessi-e-omo-oligomeri-domainassemblypy-domaincomplexespy)) |
+| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG), `template_rank` (punteggio motivato dei template e selezione dei complementari), `multitemplate` (scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template), `ligands` (classificazione dei gruppi eteroatomici, colonne '.' del PIR, verifica di contatti, scontri e coordinazione dei metalli), `disorder` (disordine FoldIndex, bassa complessità SEG, domini e copertura del bersaglio), `interactions`, `interfaces`, `conservation` (analisi strutturale, vedi [Analisi strutturale](#analisi-strutturale)), `pockets` (uscita di fpocket), `electrostatics` (PQR, griglia e input di APBS, mappe OpenDX, potenziale di superficie), `refinement` (protocollo della rifinitura, copia pulita, confronto prima/dopo; vedi [Tasche, elettrostatica e rifinitura energetica](#tasche-elettrostatica-e-rifinitura-energetica-f7b-f91)), assembly` (assemblaggi biologici dal mmCIF e dal REMARK 350), `complexes` (bersagli a più catene, simmetria, confronto delle interfacce con il template; vedi [Complessi e omo-oligomeri](#complessi-e-omo-oligomeri-domainassemblypy-domaincomplexespy)), `preflight` (regole dei controlli preventivi, vedi [Controlli preventivi](#controlli-preventivi-domainpreflightpy-servicespreflightpy)) |
 | `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB), `remote` (client HTTP), `tools` (rilevamento strumenti e librerie Python di calcolo, preambolo di licenza), `pockets` (fpocket), `electrostatics` (PDB2PQR + APBS), `refine` e `refine_worker` (OpenMM e PDBFixer in un processo separato) |
-| `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job), `reports` (dati del report di un modello o di un'analisi), `coverage` (copertura del bersaglio da parte dei template, avvisi su disordine e domini), `analysis` (job dell'analisi strutturale), `structure_tools` (job `pockets` ed `electrostatics`), `refine` (job `refine`) |
-| `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases`, `analysis`, `structure_tools` oltre a sistema, progetti, calcoli, job) |
+| `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job), `reports` (dati del report di un modello o di un'analisi), `coverage` (copertura del bersaglio da parte dei template, avvisi su disordine e domini), `analysis` (job dell'analisi strutturale), `structure_tools` (job `pockets` ed `electrostatics`), `refine` (job `refine`), `preflight` (fatti per i controlli preventivi) |
+| `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases`, `analysis`, `structure_tools` oltre a sistema, progetti, calcoli — compresi i controlli preventivi — e job) |
 
 ### Job
 
@@ -678,9 +678,10 @@ rotte del consenso e del report lo ricalcolano.
 - **Sequenze:** riquadro "Disordine, bassa complessità e domini" con la mappa delle caratteristiche (tracce Disordine,
   Bassa complessità, Domini InterPro con l'accessione, Struttura secondaria GOR; le tracce vuote lo dicono), sintesi e
   "Metodi e limiti". Una sola richiesta (`/api/bio/coverage` senza template).
-- **Modellazione:** sotto i template, gli avvisi (`combined`) appena bersaglio e template (o il PIR) sono scelti, con la
-  soglia pLDDT se c'è un template AlphaFold; richiesta dopo 0,6 s dall'ultimo cambio, risposte superate ignorate, nuovi
-  tentativi se un template si sta ancora scaricando. Non blocca il lancio. L'accessione per i domini
+- **Modellazione:** gli avvisi (`combined`) appena bersaglio e template (o il PIR) sono scelti, con la soglia pLDDT se c'è
+  un template AlphaFold. Dalla F8a arrivano dai controlli preventivi (stessa verifica, una sola richiesta, vedi [Controlli
+  preventivi](#controlli-preventivi-domainpreflightpy-servicespreflightpy)) e i loro avvisi chiedono conferma all'avvio;
+  prima venivano da `/api/bio/coverage` e non bloccavano il lancio. L'accessione per i domini
   (`modelingAccession`) viene dal bersaglio della modalità in uso: in modalità PIR dalla voce `sequence` del documento
   (sequenza del progetto uguale, oppure codice `sp|ACC|…`), non dal selettore della modalità automatica, nascosto.
 - **Ricerca:** per ogni hit un badge ("disordine scoperto · dominio scoperto"), gli avvisi nella riga espansa e, sopra la
@@ -688,6 +689,128 @@ rotte del consenso e del report lo ricalcolano.
 - **Qualità:** la frase del disordine sotto le regioni problematiche e una riga "disordine (info)" nel grafico del consenso
   per residuo; le regioni `expected` in arancione invece che in rosso.
 - Logica pura in `lib/disorder.ts` (tracce, richieste, badge, ordine degli avvisi), componente `CoverageAlerts`.
+
+### Controlli preventivi (`domain/preflight.py`, `services/preflight.py`)
+
+Prima di avviare un calcolo, che cosa lo farebbe fallire o renderebbe il risultato poco affidabile, senza avviare nulla
+(F8a). Regole e soglie, con le fonti, in `domain/preflight.py` (logica pura); i fatti (licenze, strumenti, libreria,
+spazio, servizio QMEAN, job attivi) li raccoglie `services/preflight.PreflightService`, creato a ogni richiesta come
+`CoverageService` (nessun servizio nuovo nel `Core`).
+
+**Rotta** `POST /api/compute/preflight` con `{kind, params, context}`:
+
+- `kind`: `model`, `loop`, `align2d`, `pipeline`, `quality`, `qmean`, `search`, `analysis`;
+- `params`: lo stesso corpo della rotta di avvio, validato con lo stesso modello Pydantic (`ModelIn`, `PipelineIn`, …):
+  un campo non valido è un esito `error` (`validation_error`), come il 422 dell'avvio, non un 422 dei controlli;
+- `context` (facoltativo): `accession` (domini InterPro, come `/api/bio/coverage`), `search_job` (ricerca da cui vengono i
+  template: punteggio dei template scelti).
+
+Risposta: `ok` (nessun errore), `counts`, `checks` (errori, poi avvisi, poi informazioni, ciascuno `{level, code,
+message, suggestion}` più `group: "coverage"` per gli avvisi di copertura e `template`), `estimate` (`seconds`, `low`,
+`high`, `detail`, `basis`) e, per la modellazione, `coverage` (la verifica completa di `services/coverage.py`).
+
+| Livello | Significato | Interfaccia |
+|---|---|---|
+| `error` | la rotta di avvio o l'handler rifiuterebbero la richiesta, oppure il job fallirebbe di sicuro | pulsante disattivato con il primo errore come motivo |
+| `warning` | parte, ma il risultato rischia di essere poco affidabile o il job di non finire | conferma «Avvia comunque» con l'elenco degli avvisi |
+| `info` | da sapere, senza conseguenze sul risultato | elenco discreto sotto gli avvisi |
+
+- **Stessa validazione dell'avvio:** `modeller.parse_options`, `compute._record`, `_template_specs`,
+  `_apply_ligand_options`, `sequences.validate_pir` con il numero dei template, `PipelineService.validate` (estratta da
+  `submit`), `resolve_structure`, `AnalysisService.validate`, i limiti del loop: un loro errore è un esito `error` con lo
+  stesso codice e lo stesso messaggio (test: per ogni richiesta rifiutata dall'avvio, 400 o job fallito, lo stesso
+  messaggio fra gli errori dei controlli).
+- **Nessun effetto:** niente job, niente download (un template assente con un codice PDB o un id AlphaFold è
+  un'informazione: lo scaricherà il job), richieste remote solo per i domini (UniProt e InterPro con l'accessione, in
+  cache 7 giorni) e per lo stato del servizio QMEAN locale (rete interna, in cache 15 s).
+- **Robustezza:** un fatto che non si legge (template illeggibile durante il ritaglio, ricerca eliminata) diventa
+  `check_skipped` (informazione), mai un errore del server.
+
+**Esiti** (ogni codice ha un test che lo produce e uno che non lo produce, `test_preflight.py`):
+
+| Codice | Livello | Regola | Fonte o motivo |
+|---|---|---|---|
+| `modeller_license_missing`, `modeller_license_invalid`, `modeller_not_installed` | error | MODELLER non utilizzabile (stato di `LicenseService`: chiave assente, rifiutata, modulo assente) | senza MODELLER modellazione, loop e allineamento non partono |
+| `dope_unavailable` | warning | analisi di qualità con il DOPE senza MODELLER | l'analisi prosegue senza zDOPE |
+| `template_missing`, `template_chain_missing`, `template_unreadable` | error | template né in libreria né scaricabile, catena assente, file illeggibile | la preparazione fallirebbe |
+| `template_download` | info | assente ma scaricabile da RCSB o AlphaFold DB | serve la rete all'avvio |
+| `twilight_zone` | warning | identità sotto la curva di Rost per le coppie allineate | Rost 1999 (`template_rank.rost_threshold`): omologia non dimostrata |
+| `low_identity` | info | sopra la curva ma sotto il 30% | Baker & Šali 2001: bassa accuratezza, gli errori di allineamento dominano |
+| `low_coverage` | warning | copertura dei template insieme sotto il 40% | soglia della pipeline e confine della fascia scarsa della copertura (`template_rank`) |
+| `template_score_poor` | warning | con `search_job`: punteggio del template sotto 40, con le due componenti più basse | fascia scarsa di `template_rank` |
+| `disorder_uncovered`, `domain_uncovered`, `domain_partial` / `disorder_covered` | warning / info | gli avvisi di `disorder.coverage_assessment` (gruppo `coverage`, il suggerimento sul primo avviso) | F5.5; nessun calcolo duplicato |
+| `plddt_too_few` | error | ritaglio che lascia meno di 30 residui o una catena vuota | come `modeller.prepare_template` (`plddt.MIN_TRIMMED_RESIDUES`) |
+| `plddt_trim_most` / `plddt_trim` | warning / info | il ritaglio toglie più della metà dei residui / qualcuno (con gli intervalli) | AlphaFold confidente solo su una minoranza della catena |
+| `plddt_untrimmed` | warning | ritaglio spento e residui con pLDDT < 70 | vincoli da conformazioni predette con bassa confidenza |
+| `procheck_unavailable`, `prosa_unavailable` | warning se nessuno degli strumenti chiesti gira, altrimenti info | PROCHECK assente; ProSA assente, senza licenza, licenza illeggibile o MAC diverso | l'opzione non avrebbe effetto / l'analisi prosegue |
+| `estimated_time` / `timeout_risk` | info / warning | stima del tempo; costruzione dei modelli (un solo processo) oltre metà del timeout dei processi | incertezza della stima di un fattore 2 |
+| `disk_full_data`, `disk_full_scratch` / `disk_low_*` | error / warning | spazio libero sotto la stima / sotto il massimo fra 1 GiB e 10 volte la stima; dati e scratch sullo stesso disco: una voce con la somma | il salvataggio finale fallirebbe a calcolo finito; 1 GiB per database SQLite con il WAL, cache (fino a 20 MB per voce) e download degli altri job (scelta BioLoom) |
+| `qmean_memory`, `qmean_unavailable` | error, warning con il fallback consentito | `qmean_local.memory_problem` (12 GB per UniRef30_2020_06) o servizio assente; fallback attivo senza consenso o email = errore | come il controllo del job QMEAN |
+| `qmean_remote_disabled`, `email_required` / `qmean_remote`, `qmean_local`, `qmean_busy` | error / info | SWISS-MODEL senza consenso o email; dove si calcola, servizio occupato | |
+| `blast_missing`, `pdbaa_missing`, `mmseqs_missing`, `mmseqs_database_missing` | error | motore locale senza programma o database | |
+| `mmseqs_no_index`, `remote_ncbi`, `ncbi_email`, `alphafold_blast`, `remote_alphafold` | info | ricerca più lenta senza l'indice (12 s invece di 2,3); dati che vanno a NCBI o EBI | misure di MMseqs2 (sopra) |
+| `ncbi_many_searches` / `ncbi_parallel` | warning / info | pipeline con oltre 50 ricerche NCBI (motore NCBI, o AlphaFold DB senza accessione) / più ricerche NCBI insieme | linee guida di NCBI per l'interfaccia URL di BLAST: oltre 50 ricerche di sera o nel fine settimana, una richiesta ogni 10 s |
+| `pipeline_too_long` / `pipeline_alphafold`, `pipeline_disorder` | warning / info | sequenze oltre 5000 residui; sequenze con e senza accessione; sequenze con regioni disordinate lunghe (FoldIndex, fino a 500 000 residui in tutto) | |
+| `queue_busy`, `single_model`, `invalid_accession`, `check_skipped` | info | job attivi ≥ job in parallelo; un solo modello; accessione non valida (niente domini); controllo non eseguito | |
+
+**Stima del tempo** (secondi; costanti misurate, vedi [Prestazioni](#misure-per-i-controlli-preventivi)):
+preparazione 0,02 + allineamento 0,34 · s + avvio di MODELLER 0,26 + s · (restrizioni 0,46 + M · 2,29 · f) + qualità,
+con s = residui / 76, M modelli, f il fattore del raffinamento (very_fast 0,23, fast e normal 1, thorough 4,05) e la
+qualità 1,22 · s sul migliore (1,23 senza PROCHECK e ProSA), su tutti i modelli a gruppi di 3. Intervallo: da metà al
+doppio (altri processori, emulazione x86, carico). Pipeline: ⌈elementi / parallelo effettivo⌉ × (modellazione + ricerca
+media), con le ricerche da 1 a 5 minuti per NCBI, 2,3–12 s per MMseqs2, pochi secondi per gli altri. Su 1UBQ (test): 13,9 s
+per 5 modelli con la qualità estesa (misurato 13,89), 9,2 s per un elemento di pipeline (9,13), 11,3 s di costruzione per
+304 residui (11,25).
+
+**Spazio stimato:** risultati 2,5 MiB + residui × (880 × modelli + 3600 × modelli analizzati); scratch in più 2300 × residui
+× modelli per gli intermedi di MODELLER. Pipeline: la somma dei risultati e, per lo scratch, gli elementi più grandi che
+girano insieme.
+
+**Copertura e identità** (`services/coverage.py`): i template della libreria e le righe del PIR hanno anche `identity` e
+`aligned` dallo stesso allineamento della copertura (Smith-Waterman, BLOSUM62, gap 11/1, come la ricerca; per il PIR le
+colonne), che i controlli confrontano con la curva di Rost; per un bersaglio a più catene l'identità viene dalle colonne del
+PIR (`report.alignment_identity`).
+
+**Interfaccia** (`components/Preflight.tsx`, logica in `lib/preflight.ts`):
+
+- `usePreflight(request)`: richiesta 0,6 s dopo l'ultimo cambio (0,8 s nella Pipeline), risposte superate ignorate, nuovi
+  tentativi (5, ogni 4 s) finché un template risulta da scaricare; `check()` ripete i controlli subito.
+- `PreflightPanel`: errori e avvisi come riquadri con il suggerimento, avvisi di copertura con `CoverageAlerts` (una volta
+  sola, dalla verifica della stessa risposta), informazioni in piccolo con la base della stima nel suggerimento.
+- `LaunchButton` (`launchDecision`): disattivato con il motivo se c'è un errore; con avvisi una finestra di conferma
+  («Avvia comunque»); con i controlli ancora in corso li ripete al clic; se i controlli non riescono (server) l'avvio resta
+  possibile, perché la rotta di avvio valida comunque.
+- **Modellazione:** il riquadro sta sopra «Avvia modellazione» e sostituisce la verifica di copertura del riquadro Input
+  (una richiesta invece di due); il corpo della richiesta è lo stesso dell'avvio (`useMemo`). **Pipeline:** sopra «Avvia
+  pipeline». **Procedura guidata:** prima della ricerca (`search`), dell'allineamento (`align2d`) e della modellazione
+  (`model`, con `search_job`).
+
+### Procedura guidata (`pages/Wizard.tsx`, `lib/wizard.ts`)
+
+`/wizard`, «Nuovo modello guidato» nella barra laterale e nella Panoramica. Riusa i componenti delle altre pagine
+(`SequencePicker`, `FeatureMap`, `JobPanel` con il flusso in tempo reale, `AlignmentView` aperto in modalità Confidenza con
+il nuovo `initialMode`, `LigandPicker`, `PlddtOption`, `Viewer3D`, `ReportButton`, `compareTargets`) e le rotte esistenti;
+la logica dei passi è in `lib/wizard.ts` (pura, testata).
+
+| Passo | Contenuto | Per andare avanti |
+|---|---|---|
+| 1 Sequenza | incollata, dal progetto, da file o da UniProt (accessione); anteprima di disordine, bassa complessità e domini (`/api/bio/coverage`); «Aggiungi al progetto» | sequenza proteica di 1–5000 residui |
+| 2 Template | motore consigliato (`engineChoices`: RCSB, oppure il motore locale delle Impostazioni se è pronto) con le alternative spiegate e la disponibilità; risultati per punteggio, consigliati preselezionati una volta per ricerca; suggerimento di un altro motore se non ci sono template o il migliore è in zona crepuscolare | almeno un template, una catena per voce PDB |
+| 3 Allineamento | job `align2d` sui template scelti; «Apri nell'Editor PIR» (`/pir?fromjob=`) oppure un documento PIR del progetto (con i template del documento) | allineamento completato o documento scelto |
+| 4 Opzioni | 5 modelli (esempio di base del tutorial di MODELLER), raffinamento Rapido (in MODELLER 10.8 uguale a Standard, misurato), analisi estesa se PROCHECK o ProSA sono utilizzabili, ligandi se la scelta predefinita trasferisce qualcosa, ritaglio pLDDT a 70 con un template AlphaFold; ogni opzione con la spiegazione (`optionNotes`); i predefiniti si ricalcolano finché l'utente non cambia nulla | controlli preventivi senza errori |
+| 5 Avvio | `JobPanel` del job `model`; a fine calcolo, se lo si stava guardando, ai risultati | modellazione completata |
+| 6 Risultati | modello migliore (DOPE minimo), voto, consenso (dal rapporto di qualità), DOPE, zDOPE, GA341, 3D; Qualità, Confronta con il template, Report, Tutti i modelli | |
+
+- **Stato:** passo e job nell'URL (`?step=&search=&align=&doc=&model=`), il resto (bersaglio, accessione, motore, template,
+  opzioni, scelta dei ligandi) nel browser (`localStorage`, `bioloom.wizard.<progetto>`, letto con `sanitizeDraft`: un
+  valore non valido torna al predefinito). All'apertura la bozza, poi l'URL, che prevale; un link senza bozza (altro
+  browser) riprende bersaglio, motore, template e opzioni dai parametri dei job (`fillFromJobs`).
+- **Passaggi:** un cambio invalida i passi successivi (sequenza diversa → ricerca, template, allineamento e modello;
+  template diversi → allineamento e modello; opzioni cambiate dall'utente → modello); un passo oltre quelli raggiungibili
+  (`reachable`) mostra il più avanzato possibile.
+- **Cronologia:** ogni passo è una voce della cronologia del browser (indietro e avanti cambiano passo); i job nuovi
+  aggiornano l'URL senza voci nuove. Il passaggio automatico ai risultati avviene solo se il job era in corso sotto gli occhi
+  dell'utente: tornando al passo 5 con «indietro» si resta lì (con «Vai ai risultati»).
 
 ### Report del modello
 
@@ -1836,6 +1959,39 @@ ed `Environ()` 0,21 s; più le librerie di DOPE 0,28 s; DOPE completa di 1UBQ 0,
   solo ad aspettare più passi insieme. Ogni processo passa da `JobContext.run`, quindi il budget di CPU condiviso del
   JobManager (F1.4) governa anche i passi paralleli, senza un secondo limitatore.
 
+#### Misure per i controlli preventivi
+
+`test_preflight_calibration` (`scripts/test.sh backend tests/perf_timing.py -s -k preflight_calibration`, stesse condizioni
+di sopra, con altri container di test attivi: i tempi assoluti sono circa il 3% più alti della tabella, per questo le stime
+usano i rapporti con i valori della tabella). Mediana di 3 giri, varianti alternate nello stesso processo.
+
+| Raffinamento (2 modelli, 76 residui) | Restrizioni + modello 1 | Modello successivo | Rapporto con fast |
+|---|---|---|---|
+| very_fast (`a.very_fast()`) | 0,96 | 0,55 | 0,23 |
+| fast (`md_level = refine.very_fast`) | 2,90 | 2,37 | 1 |
+| normal (predefiniti di MODELLER) | 2,85 | 2,32 | 0,98 |
+| thorough (`autosched.slow`, `refine.slow`, ottimizzazione ripetuta) | 10,36 | 9,60 | 4,05 |
+
+"normal" e "fast" sono la stessa ottimizzazione: in MODELLER 10.8 il predefinito di AutoModel è già `md_level =
+refine.very_fast`.
+
+| Bersaglio (1 modello fast) | `model.py` | Secondi per residuo |
+|---|---|---|
+| 76 residui (1 catena) | 2,93 | 0,0386 |
+| 152 residui (2 catene) | 5,61 | 0,0369 |
+| 304 residui (4 catene) | 11,25 | 0,0370 |
+
+Bersagli a più catene di ubiquitina di lievito su copie di 1UBQ traslate di 40 Å (ogni catena con i contatti di una
+proteina globulare, nessuno fra le catene): il tempo cresce in proporzione ai residui.
+
+| Spazio (5 modelli fast, analisi estesa del migliore) | 76 residui | 304 residui |
+|---|---|---|
+| modelli PDB | 329 KiB | 1308 KiB |
+| rapporto di qualità | 60 KiB | 209 KiB |
+| altro (PROCHECK, log, allineamento, script) | 2714 KiB | 3344 KiB |
+| **risultati** | **3103 KiB** | **4861 KiB** |
+| intermedi di MODELLER (scratch, "Conserva file intermedi") | 855 KiB | 3168 KiB |
+
 ## Frontend (`frontend/`)
 
 React 19 + TypeScript + Vite, nessuna libreria UI esterna: componenti propri (`components/ui.tsx`), grafici SVG
@@ -1907,6 +2063,7 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 | Pagina | Funzione |
 |---|---|
 | Panoramica | flusso guidato, esempi, motori disponibili, risorse del computer |
+| Nuovo modello guidato | `/wizard`: sequenza → template → allineamento → opzioni → avvio → risultati, con i controlli preventivi prima di ogni calcolo e lo stato nell'URL e nel browser (vedi [Procedura guidata](#procedura-guidata-pageswizardtsx-libwizardts)); Modellazione e Pipeline hanno gli stessi controlli sopra il pulsante di avvio |
 | Sequenze | import FASTA/UniProt, proprietà ProtParam, predizione GOR, annotazioni UniProt/InterPro/PDB; mappa di disordine (FoldIndex), bassa complessità (SEG), domini InterPro e GOR |
 | Ricerca template | RCSB/NCBI/locale/AlphaFold DB (accessione UniProt facoltativa, precompilata dalle sequenze UniProt), tabella ordinabile (predefinito: punteggio), colonna Punteggio con fascia e motivazioni (suggerimento; per componente nella riga espansa, sopra l'allineamento dell'hit), riquadro dei template consigliati (principale e complementari, esclusi con il motivo) con «Usa i consigliati per la modellazione» (`lib/templateRank.modelingLink`: un `t=ID:CATENA` per template), righe consigliate evidenziate, download, "modella con"; badge "modello predetto" e pLDDT; nota "dalla cache (data)" e ricalcolo ignorando la cache; per ogni hit gli avvisi su regioni disordinate e domini fuori dal tratto allineato |
 | Libreria template | download RCSB e "Da AlphaFold DB (UniProt)", upload PDB/mmCIF, catene, residui mancanti, ligandi classificati (metallo, cofattore noto, additivo, altro ligando, residuo modificato), DSSP, 3D; badge "AlphaFold", pLDDT medio e fasce di confidenza; assemblaggi biologici (REMARK 350, `pdbx_struct_assembly`) con lo stato oligomerico e «Importa come template» (`<ID>_ASM<n>`), badge "assemblaggio" |
@@ -2116,6 +2273,16 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     catene non più a contatto, interfaccia nuova, PIR che non corrisponde), sezione del report bilanciata con l'escape;
     rotte con complessi non validi (nessun job accodato); con MODELLER l'anteprima per catena e l'omodimero dell'ubiquitina
     di lievito con e senza simmetria (catene, numerazione, RMSD fra le catene, DockQ, REMARK, report) e dallo stesso PIR;
+  - controlli preventivi (`test_preflight.py`, licenze, strumenti, spazio e worker QMEAN simulati): ogni codice con un caso
+    che lo produce e uno che non lo produce; curva di Rost (33,2% a 76 residui, 20,0% a 300) e soglia di Baker & Šali;
+    stime contro le misure (job model 13,89 s, elemento di pipeline 9,13 s, thorough, 304 residui, byte dei risultati e
+    degli intermedi); ubiquitina di lievito su 1UBQ senza errori né avvisi (identità 96,1%, copertura 100%) e nessun job
+    avviato; 1UBQ al 25% di identità (zona crepuscolare), bersaglio con una coda disordinata (copertura e disordine), PIR a
+    una e a due catene, template assenti, scaricabili o con una catena sbagliata (nessun download), ritaglio pLDDT
+    (11 residui, 25 rimasti, più della metà, ritaglio spento), timeout, spazio, PROCHECK e ProSA (licenza, MAC), coda,
+    punteggio dalla ricerca, stessa validazione della rotta di avvio (stesso messaggio), controlli concorrenti; QMEAN con 8 e
+    11,7 GiB per UniRef30_2020_06 e fallback; motori di ricerca, pipeline con 51 ricerche NCBI, accessioni AlphaFold,
+    sequenze lunghe e disordinate, spazio;
   - verifica dell'installazione.
 
   `pytest -m network` prova i servizi reali. Oltre a 1UBQ, `tests/data` contiene strutture sintetiche generate
@@ -2180,6 +2347,12 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     compresi), simmetria solo con catene uguali, allineamento per catena dell'anteprima, colorazione per catena con i
     residui d'interfaccia conservati, nuovi e persi, residui da centrare, testi degli assemblaggi; markup della tabella del
     confronto.
+  - controlli preventivi e procedura guidata (`preflight.test.ts`, `Preflight.test.tsx`, `wizard.test.ts`): esiti per
+    livello e copertura a parte, decisione del pulsante (bloccato, conferma, pronto, in corso, non riuscito), testi e tempi
+    come il backend, richieste di Modellazione e Pipeline; markup del riquadro (copertura una volta sola); validazione della
+    sequenza, preselezione dei consigliati una volta per ricerca, una catena per voce PDB, invalidazione dei passi
+    successivi, motore consigliato, opzioni predefinite e spiegazioni, richieste delle rotte, passi raggiungibili, URL
+    (andata e ritorno, valori non validi, indietro del browser), bozza non valida, ripresa da un link senza bozza, risultati.
 - **Profilazione:** `scripts/test.sh backend tests/perf_timing.py -s` (fuori dalla suite, vedi
   [Prestazioni](#prestazioni)).
 - **Immagine di sviluppo:** per provare strumenti nuovi senza toccare l'immagine dell'avviatore,

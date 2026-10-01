@@ -12,6 +12,7 @@ const NAV: { section: string; items: { to: string; label: string; icon: string }
   {
     section: "Flusso di lavoro",
     items: [
+      { to: "/wizard", label: "Nuovo modello guidato", icon: "wand" },
       { to: "/sequences", label: "Sequenze", icon: "dna" },
       { to: "/search", label: "Ricerca template", icon: "search" },
       { to: "/templates", label: "Libreria template", icon: "library" },

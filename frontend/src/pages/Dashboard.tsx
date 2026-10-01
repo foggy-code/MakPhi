@@ -59,9 +59,14 @@ export default function Dashboard() {
         title={project ? project.name : "BioLoom"}
         lead="Modellazione di proteine per omologia: dalla sequenza al modello 3D validato. Ogni calcolo gira in background e resta consultabile nella sezione Job."
         actions={
-          <Link className="btn btn-primary" to="/modeling">
-            <Icon name="cube" /> Nuovo modello
-          </Link>
+          <>
+            <Link className="btn btn-primary" to="/wizard" title="Procedura guidata: sequenza, template, allineamento, opzioni con i controlli, risultati">
+              <Icon name="wand" /> Nuovo modello guidato
+            </Link>
+            <Link className="btn" to="/modeling">
+              <Icon name="cube" /> Nuovo modello
+            </Link>
+          </>
         }
       />
 

@@ -12,7 +12,6 @@ import { groupTitle, STATUS_TONE } from "../lib/ligands";
 import { AlignmentView } from "../components/AlignmentView";
 import { ComplexInput } from "../components/ComplexInput";
 import { ComplexResults, type ComplexView } from "../components/ComplexResults";
-import { CoverageAlerts, useCoverageCheck } from "../components/CoverageAlerts";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { TextFileButton } from "../components/FileLoad";
@@ -27,7 +26,9 @@ import { hasPredictedTemplate, PLDDT_DEFAULT, removedRanges, trimSummary } from 
 import { compareTargets } from "../lib/compare";
 import { complexRequest, complexTemplateRefs, emptyComplex, STATUS_TONE as COMPLEX_TONE, symmetryOptions, type ComplexState } from "../lib/complex";
 import { useProject, useToast } from "../lib/context";
-import { modelingAccession, modelingCoverageRequest } from "../lib/disorder";
+import { modelingAccession } from "../lib/disorder";
+import { modelingPreflight } from "../lib/preflight";
+import { LaunchButton, PreflightPanel, usePreflight } from "../components/Preflight";
 import { fileStem, formatRestraints, parseRestraints, type RestraintRow } from "../lib/files";
 import { downloadText, fmtNum, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
@@ -245,8 +246,9 @@ export default function Modeling() {
   const [templates, setTemplates] = useState<TemplateRef[]>([]);
   // modalità Complesso (F5.3): un template, una sequenza del bersaglio per catena, simmetria
   const [complexState, setComplexState] = useState<ComplexState>(() => emptyComplex());
-  const complexCheck = complexRequest(complexState);
-  const activeTemplates = mode === "complex" ? complexTemplateRefs(complexState) : templates;
+  // memorizzati: entrano nel corpo della richiesta, da cui dipendono i controlli preventivi (niente richieste a ogni render)
+  const complexCheck = useMemo(() => complexRequest(complexState), [complexState]);
+  const activeTemplates = useMemo(() => (mode === "complex" ? complexTemplateRefs(complexState) : templates), [mode, complexState, templates]);
   const [docId, setDocId] = useState("");
   const [nModels, setNModels] = useState(5);
   const [refinement, setRefinement] = useState("fast");
@@ -291,12 +293,51 @@ export default function Modeling() {
       current = false;
     };
   }, [mode, docId, projectId]);
-  // nella modalità Complesso gli avvisi di copertura non si calcolano (una sequenza per catena)
-  const coverageRequest = useMemo(() => (mode === "complex" ? null : modelingCoverageRequest({
-    mode, target, templates, pirText, accession: modelingAccession({ mode, target, pirText }, projectSeqs),
-    plddtMin: predictedChosen && plddtTrim ? plddtMin : null,
-  })), [mode, target, templates, pirText, projectSeqs, predictedChosen, plddtTrim, plddtMin]);
-  const coverage = useCoverageCheck(coverageRequest);
+  // Corpo della modellazione (senza l'allineamento, letto al lancio): lo stesso per l'avvio e per i controlli preventivi
+  const body = useMemo(() => {
+    const regions = loopRegions
+      .split(/[,;\n]/)
+      .map((r) => r.trim())
+      .filter(Boolean)
+      .map((r) => {
+        const [s, e] = r.split("-").map((x) => x.trim());
+        return { start: s, end: e };
+      });
+    const options = {
+      models: nModels,
+      refinement,
+      seed,
+      loop: { enabled: loopOn, models: loopModels, level: "fast", regions },
+      restraints,
+      // solo per i template AlphaFold; le strutture sperimentali non si ritagliano mai
+      plddt_trim: plddtTrim,
+      plddt_min: plddtMin,
+      // ligandi: esattamente i gruppi scelti (un elenco vuoto = nessuno)
+      hetatm: ligandsOn,
+      ...(ligandsOn ? { ligands: ligandRefs } : {}),
+      // complesso: restrizioni di simmetria solo con catene uguali
+      ...(mode === "complex" ? symmetryOptions(complexState, complexCheck) : {}),
+    };
+    return {
+      project_id: projectId ?? undefined,
+      target: mode === "auto" ? { name: target.name || "target", sequence: target.sequence } : null,
+      // la scelta dei ligandi è quella del riquadro Parametri, non la casella del singolo template
+      templates: activeTemplates.map((t) => ({ id: t.id, chains: t.chains })),
+      options,
+      quality,
+      extended_quality: quality !== "none" && extended,
+      ...(mode === "complex" && complexCheck.request ? { complex: complexCheck.request } : {}),
+    };
+  }, [projectId, mode, target, templates, nModels, refinement, seed, loopOn, loopModels, loopRegions, restraints, plddtTrim, plddtMin, ligandsOn, ligandRefs, quality, extended, activeTemplates, complexState, complexCheck]);
+  // Controlli preventivi (F8a), compresi disordine e domini fuori dalla copertura (F5.5): accessione dalla sequenza del
+  // progetto o dall'intestazione sp|ACC|…
+  // nella modalità Complesso niente avvisi di copertura (una sequenza per catena): solo i controlli del corpo
+  const preflightRequest = useMemo(() => (mode === "complex"
+    ? (complexCheck.request ? { kind: "model" as const, params: { ...body, alignment: null } } : null)
+    : modelingPreflight({
+      mode, target, templates, pirText, accession: modelingAccession({ mode, target, pirText }, projectSeqs), body,
+    })), [mode, target, templates, pirText, projectSeqs, body, complexCheck]);
+  const preflight = usePreflight(preflightRequest);
 
   // Parametri in arrivo da altre pagine (sequenza, template, documento PIR).
   useEffect(() => {
@@ -335,40 +376,7 @@ export default function Modeling() {
         alignment = (await api.document(projectId, docId)).content ?? "";
       }
       if (mode === "complex" && !complexCheck.request) throw new Error(complexCheck.errors[0] ?? "Complesso incompleto.");
-      const regions = loopRegions
-        .split(/[,;\n]/)
-        .map((r) => r.trim())
-        .filter(Boolean)
-        .map((r) => {
-          const [s, e] = r.split("-").map((x) => x.trim());
-          return { start: s, end: e };
-        });
-      const options = {
-        models: nModels,
-        refinement,
-        seed,
-        loop: { enabled: loopOn, models: loopModels, level: "fast", regions },
-        restraints,
-        // solo per i template AlphaFold; le strutture sperimentali non si ritagliano mai
-        plddt_trim: plddtTrim,
-        plddt_min: plddtMin,
-        // ligandi: esattamente i gruppi scelti (un elenco vuoto = nessuno)
-        hetatm: ligandsOn,
-        ...(ligandsOn ? { ligands: ligandRefs } : {}),
-        // complesso: restrizioni di simmetria solo con catene uguali
-        ...(mode === "complex" ? symmetryOptions(complexState, complexCheck) : {}),
-      };
-      const j = await api.model({
-        project_id: projectId ?? undefined,
-        target: mode === "auto" ? { name: target.name || "target", sequence: target.sequence } : null,
-        alignment,
-        // la scelta dei ligandi è quella del riquadro Parametri, non la casella del singolo template
-        templates: activeTemplates.map((t) => ({ id: t.id, chains: t.chains })),
-        options,
-        quality,
-        extended_quality: quality !== "none" && extended,
-        ...(mode === "complex" ? { complex: complexCheck.request } : {}),
-      });
+      const j = await api.model({ ...body, alignment });
       setParams({ job: j.id });
     } catch (e) {
       toast.error(e);
@@ -440,12 +448,6 @@ export default function Modeling() {
                 <div className="stack-sm">
                   <span className="small text-2" style={{ fontWeight: 550 }}>Template {mode === "pir" && "(stessi del PIR, nello stesso ordine)"}</span>
                   <TemplatePicker value={templates} onChange={setTemplates} ligands={false} onAnalysis={(id, a) => setTemplateInfo((prev) => ({ ...prev, [id]: a }))} />
-                </div>
-              )}
-              {coverageRequest && (
-                <div className="stack-sm">
-                  <span className="small text-2" style={{ fontWeight: 550 }}>Disordine e domini del bersaglio</span>
-                  <CoverageAlerts check={coverage.check} assessment={coverage.check?.combined} loading={coverage.loading} error={coverage.error} />
                 </div>
               )}
             </div>
@@ -523,7 +525,9 @@ export default function Modeling() {
                   <Field label="Seme casuale MODELLER" hint="Tra −50000 e −2: cambia per ottenere modelli diversi."><input className="input" type="number" value={seed} onChange={(e) => setSeed(Number(e.target.value))} /></Field>
                 </div>
               )}
-              <button className="btn btn-primary" disabled={!canSubmit || !!modellerMissing} onClick={submit}><Icon name="play" size={14} /> Avvia modellazione</button>
+              {/* controlli preventivi: disordine e domini, template, licenze, tempi, spazio (errori bloccano, avvisi con conferma) */}
+              <PreflightPanel state={preflight} />
+              <LaunchButton preflight={preflight} disabled={!canSubmit || !!modellerMissing} onLaunch={submit}>Avvia modellazione</LaunchButton>
               {mode !== "complex" && templates.some((t) => !t.chains.length) && <span className="tiny" style={{ color: "var(--warn)" }}>Seleziona almeno una catena per ogni template.</span>}
               {mode === "complex" && !complexCheck.request && complexCheck.errors[0] && <span className="tiny" style={{ color: "var(--warn)" }}>{complexCheck.errors[0]}</span>}
               {ligandsOn && !ligandsReady && activeTemplates.length > 0 && (ligandsFailed.length

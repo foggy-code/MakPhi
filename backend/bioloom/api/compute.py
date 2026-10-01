@@ -282,3 +282,43 @@ def pipeline_zip(job_id: str, core: Core = Depends(get_core)) -> Response:
         dest.unlink(missing_ok=True)
         raise
     return send_temp(dest, f"pipeline_{job_id}.zip", "application/zip")
+
+
+class PreflightContext(BaseModel):
+    accession: Optional[str] = Field(None, max_length=20, description="Accessione UniProt del bersaglio: domini di "
+                                                                      "InterPro (come /api/bio/coverage)")
+    search_job: Optional[str] = Field(None, max_length=64, description="Ricerca da cui vengono i template: punteggio "
+                                                                       "dei template scelti")
+
+
+class PreflightIn(BaseModel):
+    kind: Literal["model", "loop", "align2d", "pipeline", "quality", "qmean", "search", "analysis"]
+    params: dict = Field(default_factory=dict, description="Lo stesso corpo della rotta di avvio del calcolo")
+    context: PreflightContext = Field(default_factory=PreflightContext)
+
+
+def _preflight_bodies() -> dict:
+    from .analysis import AnalysisIn  # api/analysis importa questo modulo
+
+    return {"model": ModelIn, "loop": LoopIn, "align2d": Align2dIn, "pipeline": PipelineIn, "quality": QualityIn,
+            "qmean": QmeanIn, "search": SearchIn, "analysis": AnalysisIn}
+
+
+@router.post("/compute/preflight")
+def preflight(body: PreflightIn, core: Core = Depends(get_core)) -> dict:
+    """Controlli preventivi (F8a), senza avviare nulla: esiti `error` (l'avvio fallirebbe), `warning` (conferma
+    richiesta), `info`, con stima del tempo e, per la modellazione, la verifica di copertura. `params` si valida con
+    lo stesso modello della rotta di avvio: un campo non valido è un esito `error`, come il 422 dell'avvio."""
+    from pydantic import ValidationError
+
+    from ..domain import preflight as rules
+    from ..services.preflight import PreflightService
+
+    try:
+        params = _preflight_bodies()[body.kind].model_validate(body.params).model_dump()
+    except ValidationError as exc:
+        details = [f"{'.'.join(str(p) for p in e.get('loc', []))}: {e.get('msg')}" for e in exc.errors()]
+        check = rules.invalid("validation_error", "; ".join(details[:5]) or "Richiesta non valida.")
+        return {"kind": body.kind, "ok": False, "counts": rules.counts([check]), "checks": [check], "estimate": None,
+                "coverage": None}
+    return PreflightService(core).run(body.kind, params, body.context.model_dump())

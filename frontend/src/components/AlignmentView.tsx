@@ -26,7 +26,7 @@ interface Props {
   width?: number;
   /** riga del bersaglio per la modalità "Confidenza" (PIR: la voce `sequence`); predefinita la prima */
   reference?: number;
-  /** modalità iniziale dei colori (l'anteprima per catena dei complessi parte da "Confidenza") */
+  /** colorazione iniziale (l'anteprima per catena dei complessi e la procedura guidata partono da "Confidenza") */
   initialMode?: Mode;
 }
 

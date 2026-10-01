@@ -363,3 +363,99 @@ def test_paired(client_with_ubq, timer, monkeypatch, tmp_path):
             wall[f"pipeline {label}: job"].append(sum(rows["TEMPO REALE DEL JOB"]))
             wall[f"pipeline {label}: preparazione (somma)"].append(sum(rows["preparazione dei template"]))
     _print_pair(f"pipeline 4 x template mmCIF di 4560 residui, {REPEAT} coppie alternate", wall)
+
+
+def _chains_pir(template_id: str, chains: str, target: str, template_seq: str) -> str:
+    """PIR con un bersaglio di `len(chains)` catene uguali (`target`) sulle catene omonime di un template."""
+    from bioloom.domain import sequences
+
+    n = len(chains)
+    return sequences.format_pir([
+        sequences.template_entry(f"{template_id}_{chains}", "/".join([template_seq] * n), "1", chains[0], "76",
+                                 chains[-1]),
+        sequences.target_entry("target", "/".join([target] * n))])
+
+
+def _sizes(root: Path) -> dict[str, int]:
+    """Byte per tipo di file di una cartella di job: modelli, rapporti, intermedi di MODELLER, altro."""
+    out: dict[str, int] = defaultdict(int)
+    for p in root.rglob("*"):
+        if not p.is_file():
+            continue
+        name = p.name
+        kind = ("intermedi MODELLER" if jobs_module.is_intermediate(name) else
+                "modelli (.pdb)" if name.endswith(".pdb") else
+                "rapporti di qualità (.quality.json)" if name.endswith(".quality.json") else "altro")
+        out[kind] += p.stat().st_size
+        out["TOTALE"] += p.stat().st_size
+    return dict(out)
+
+
+@pytest.mark.modeller
+@requires_modeller
+def test_preflight_calibration(client_with_ubq, timer, tmp_path):
+    """Valori dei controlli preventivi (domain/preflight.py), nello stesso processo e alternati:
+
+    1. raffinamento: tempo del processo model.py (2 modelli, senza qualità) per livello, rapporto con "fast";
+    2. lunghezza: bersaglio di 1, 2 e 4 catene di ubiquitina di lievito (76, 152, 304 residui) su copie traslate di
+       1UBQ (a 40 Å l'una dall'altra: ogni catena ha i contatti di una proteina globulare, nessuno fra le catene), 1
+       modello `fast`: tempo per residuo;
+    3. spazio: byte dei risultati (5 modelli, qualità estesa sul migliore) e, con "Conserva file intermedi", dei file
+       che il job scrive nello scratch, per 76 e 304 residui.
+    """
+    c = client_with_ubq
+    core = c.app.state.core
+    with open(_big_template(tmp_path / "BIG1.cif", n_chains=4), "rb") as fh:
+        big_id = c.post("/api/templates/upload", files={"file": ("BIG1.cif", fh, "chemical/x-mmcif")}).json()["id"]
+    template_seq = next(ch["sequence"] for ch in core.library.analyze(big_id)["chains"] if ch["chain"] == "A")
+    rounds = max(REPEAT, 2)
+
+    def model_body(chains: str, **extra) -> dict:
+        body = {"templates": [{"id": big_id, "chains": list(chains)}], "quality": "none", **extra}
+        if len(chains) == 1:
+            body["target"] = {"name": "yeast_ub", "sequence": YEAST_UB}
+        else:
+            body["alignment"] = _chains_pir(big_id, chains, YEAST_UB, template_seq)
+        return body
+
+    def process(rows: dict[str, list[float]]) -> float:
+        return sum(rows["processo model.py"])
+
+    # 1. livelli di raffinamento, 2 modelli: primo modello (con le restrizioni) e successivo dai marcatori
+    levels: dict[str, list[float]] = defaultdict(list)
+    for _ in range(rounds):
+        for level in ("very_fast", "fast", "normal", "thorough"):
+            rows, _done = _run_job(c, timer, "/api/model", model_body("A", options={"models": 2, "refinement": level}))
+            levels[f"{level}: model.py (2 modelli)"].append(process(rows))
+            levels[f"{level}: restrizioni + modello 1"].append(sum(rows["  model.py: restrizioni + modello 1"]))
+            levels[f"{level}: modello successivo"].append(sum(rows["  model.py: modello successivo"]))
+    _print_pair(f"raffinamento, {rounds} giri alternati", levels)
+    fast = statistics.median(levels["fast: modello successivo"])
+    for level in ("very_fast", "normal", "thorough"):
+        ratio = statistics.median(levels[f"{level}: modello successivo"]) / fast
+        print(f"rapporto {level}/fast (modello successivo): {ratio:.2f}")
+
+    # 2. lunghezza del bersaglio
+    lengths: dict[str, list[float]] = defaultdict(list)
+    for _ in range(rounds):
+        for chains in ("A", "AB", "ABCD"):
+            rows, _done = _run_job(c, timer, "/api/model", model_body(chains, options={"models": 1,
+                                                                                     "refinement": "fast"}))
+            lengths[f"{76 * len(chains)} residui: model.py (1 modello)"].append(process(rows))
+    _print_pair(f"lunghezza del bersaglio, {rounds} giri alternati", lengths)
+    per = {n: statistics.median(lengths[f"{n} residui: model.py (1 modello)"]) for n in (76, 152, 304)}
+    print("secondi per residuo: " + ", ".join(f"{n}: {per[n] / n:.4f}" for n in per))
+
+    # 3. spazio occupato
+    for keep in (False, True):
+        c.put("/api/settings", json={"keep_intermediates": keep})
+        for chains in ("A", "ABCD"):
+            body = model_body(chains, options={"models": 5, "refinement": "fast"})
+            body.update(quality="best", extended_quality=True)
+            _rows, done = _run_job(c, timer, "/api/model", body)
+            sizes = _sizes(core.jobs.workdir(done["id"]))
+            print(f"\n=== spazio, {76 * len(chains)} residui, 5 modelli, "
+                  f"{'con i file intermedi (come nello scratch)' if keep else 'risultati'}")
+            for kind, n in sorted(sizes.items()):
+                print(f"{kind:45s} {n / 1024:10.1f} KiB")
+    c.put("/api/settings", json={"keep_intermediates": False})
