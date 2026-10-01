@@ -19,6 +19,7 @@ const Pipeline = lazy(() => import("./pages/Pipeline"));
 const Jobs = lazy(() => import("./pages/Jobs"));
 const SettingsPage = lazy(() => import("./pages/Settings"));
 const Login = lazy(() => import("./pages/Login"));
+const Wizard = lazy(() => import("./pages/Wizard")); // procedura guidata (F8a)
 
 function Loading() {
   return (
@@ -73,6 +74,7 @@ export function App() {
                 ["/pipeline", <Pipeline />],
                 ["/jobs", <Jobs />],
                 ["/settings", <SettingsPage />],
+                ["/wizard", <Wizard />],
               ].map(([path, el]) => (
                 <Route
                   key={path as string}

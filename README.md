@@ -114,6 +114,34 @@ sequenze e altre opzioni di modellazione salta così tutte le ricerche.
   interrompe. La Panoramica mostra gli slot di calcolo in uso.
 - **Impostazione:** il numero di job in parallelo vale subito, senza riavviare BioLoom.
 
+## Procedura guidata e controlli prima dell'avvio
+
+- **Nuovo modello guidato** (barra laterale e Panoramica) porta dalla sequenza al modello in sei passi:
+  1. **sequenza** incollata, dal progetto, da file o da UniProt (accessione), con l'anteprima di disordine, bassa
+     complessità e domini;
+  2. **template**: motore consigliato (con le alternative spiegate e la loro disponibilità su questo computer), risultati
+     in ordine di punteggio e i consigliati già scelti;
+  3. **allineamento** con MODELLER, mostrato in modalità Confidenza; si apre nell'Editor PIR per correggerlo, e un
+     documento PIR salvato nel progetto si può usare al suo posto;
+  4. **opzioni** con valori predefiniti spiegati (5 modelli, raffinamento Rapido, analisi estesa se PROCHECK o ProSA ci
+     sono, ligandi se i template ne hanno, ritaglio pLDDT per i template AlphaFold);
+  5. **avvio** con l'avanzamento in tempo reale;
+  6. **risultati**: modello migliore, voto e consenso, con **Qualità**, **Confronta con il template** e **Report**.
+
+  Lo stato sta nell'indirizzo della pagina (passo e job) e nel browser: si ricarica, si torna indietro con il browser o
+  si riprende più tardi; un link aperto su un altro computer riprende dai job.
+- **Controlli prima dell'avvio** (Modellazione, Pipeline e procedura guidata): mentre scegli, BioLoom verifica senza
+  avviare nulla licenza MODELLER, template (presenti, scaricabili, catene), identità sotto la zona crepuscolare e
+  copertura, regioni disordinate e domini scoperti, ritaglio pLDDT che lascia pochi residui, PROCHECK e ProSA per
+  l'analisi estesa, tempo stimato e rischio di timeout, spazio libero nella cartella dati e nello scratch, molte
+  ricerche su NCBI (le sue linee guida chiedono di lanciarne più di 50 di sera o nel fine settimana).
+  - **Errori** (rosso): il pulsante di avvio resta disattivato, con il motivo;
+  - **avvisi** (giallo): l'avvio chiede conferma («Avvia comunque»);
+  - **informazioni**: in piccolo, senza conseguenze (tempo stimato, dati inviati ai servizi remoti).
+
+  I tempi sono stimati dalle misure su un portatile a 4 CPU logiche e crescono con i residui e i modelli: su un altro
+  computer possono variare di un fattore 2.
+
 ## Qualità per residuo e consenso
 
 - **Viewer 3D colorato per valore:** nella pagina Qualità (schede 3D e Profili) il menu **Colora per** colora la
@@ -140,7 +168,7 @@ Dove il modello sarà poco affidabile, prima di modellare:
   accessione UniProt) e la struttura secondaria predetta.
 - **Modellazione e Ricerca:** prima di lanciare, un avviso se una regione disordinata lunga resta fuori dalla copertura
   del template o se un dominio non è coperto, con un suggerimento (per esempio modellare per domini). Nella Ricerca ogni
-  template ha il suo avviso.
+  template ha il suo avviso; in Modellazione gli avvisi fanno parte dei controlli prima dell'avvio e chiedono conferma.
 - **Qualità e report:** le regioni disordinate predette compaiono nel consenso per residuo e, nel report HTML, come
   profilo accanto agli altri.
 - **Limiti:** FoldIndex è un metodo semplice e documentato (carica e idropatia medie), molto meno accurato dei predittori

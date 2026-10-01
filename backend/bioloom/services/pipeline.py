@@ -75,6 +75,20 @@ class PipelineService:
 
     # ------------------------------------------------------------------------------ sottomissione
     def submit(self, params: dict, project_id: Optional[str]) -> dict:
+        records = self.validate(params)
+        stored = {**params, "sequences": [{"name": r.name, "length": len(r.sequence)} for r in records]}
+
+        def prepare(job_id: str, _workdir: Path) -> None:
+            self.db.executemany(
+                "INSERT INTO pipeline_items(job_id, idx, name, sequence, status) VALUES (?,?,?,?, 'pending')",
+                [(job_id, i, r.name, r.sequence) for i, r in enumerate(records)])
+
+        title = params.get("name") or f"Pipeline di {_seqs(len(records))}"
+        return self.jobs.submit("pipeline", stored, project_id=project_id, title=title, prepare=prepare)
+
+    def validate(self, params: dict) -> list[SeqRecord]:
+        """Controlli della sottomissione, prima della coda (anche per i controlli preventivi, services/preflight.py):
+        sequenze, opzioni di modellazione e modalità dei template. Restituisce le sequenze con i nomi unici."""
         records = self._records(params)
         opts = params.get("options") or {}
         from ..engines import modeller
@@ -92,15 +106,7 @@ class PipelineService:
             raise AppError("Con la ricerca automatica dei template non si possono scegliere i singoli ligandi: usa "
                            "l'opzione hetatm (metalli, cofattori e ligandi, additivi esclusi) oppure un template "
                            "fisso.", code="invalid_ligand")
-        stored = {**params, "sequences": [{"name": r.name, "length": len(r.sequence)} for r in records]}
-
-        def prepare(job_id: str, _workdir: Path) -> None:
-            self.db.executemany(
-                "INSERT INTO pipeline_items(job_id, idx, name, sequence, status) VALUES (?,?,?,?, 'pending')",
-                [(job_id, i, r.name, r.sequence) for i, r in enumerate(records)])
-
-        title = params.get("name") or f"Pipeline di {_seqs(len(records))}"
-        return self.jobs.submit("pipeline", stored, project_id=project_id, title=title, prepare=prepare)
+        return records
 
     # ------------------------------------------------------------------------------ ripresa
     def resume(self, job_id: str, scope: str = "incomplete") -> dict:

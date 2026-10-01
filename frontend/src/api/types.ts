@@ -408,6 +408,9 @@ export interface CoverageTemplate extends Partial<CoverageAssessment> {
   id?: string;
   chains?: string[];
   note?: string | null;
+  /** template della libreria o del PIR: identità (%) sulle coppie allineate e loro numero (controlli preventivi) */
+  identity?: number | null;
+  aligned?: number | null;
   /** template non valutabile (assente dalla libreria, catena inesistente) */
   error?: string;
 }
@@ -1414,4 +1417,50 @@ export interface AnalysisRequest {
   source: StructureSource;
   chains?: string[];
   msa?: { job_id?: string; text?: string; row?: string; tool?: "auto" | "builtin" | "clustalo" | "mafft" | "muscle" } | null;
+}
+
+// ---------------------------------------------------------------------------------- controlli preventivi (F8a)
+export type PreflightKind = "model" | "loop" | "align2d" | "pipeline" | "quality" | "qmean" | "search" | "analysis";
+/** error = l'avvio fallirebbe (pulsante disattivato); warning = conferma richiesta; info = da sapere */
+export type PreflightLevel = "error" | "warning" | "info";
+
+/** Un esito dei controlli preventivi (domain/preflight.py). */
+export interface PreflightCheck {
+  level: PreflightLevel;
+  /** codice stabile: modeller_license_missing, twilight_zone, disk_low_data, … */
+  code: string;
+  message: string;
+  suggestion: string | null;
+  /** "coverage": avviso di copertura (disordine, domini), mostrato con CoverageAlerts */
+  group?: "coverage";
+  template?: string;
+}
+
+/** Tempo stimato in secondi, con l'intervallo e la base della stima. */
+export interface PreflightEstimate {
+  seconds: number;
+  low: number;
+  high: number;
+  detail: string;
+  basis: string;
+}
+
+/** Risposta di POST /api/compute/preflight. */
+export interface PreflightResult {
+  kind: PreflightKind;
+  /** nessun errore */
+  ok: boolean;
+  counts: Record<PreflightLevel, number>;
+  /** errori, poi avvisi, poi informazioni */
+  checks: PreflightCheck[];
+  estimate: PreflightEstimate | null;
+  /** solo modellazione: la verifica di copertura di /api/bio/coverage */
+  coverage: CoverageCheck | null;
+}
+
+/** Corpo di POST /api/compute/preflight: `params` è lo stesso corpo della rotta di avvio. */
+export interface PreflightRequest {
+  kind: PreflightKind;
+  params: Record<string, unknown>;
+  context?: { accession?: string | null; search_job?: string | null };
 }

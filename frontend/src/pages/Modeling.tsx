@@ -9,7 +9,6 @@ import { LigandPicker } from "../components/LigandPicker";
 import { LigandTable } from "../components/LigandsPanel";
 import { groupTitle, STATUS_TONE } from "../lib/ligands";
 import { AlignmentView } from "../components/AlignmentView";
-import { CoverageAlerts, useCoverageCheck } from "../components/CoverageAlerts";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { TextFileButton } from "../components/FileLoad";
@@ -22,7 +21,9 @@ import { PlddtOption } from "../components/PlddtOption";
 import { hasPredictedTemplate, PLDDT_DEFAULT, removedRanges, trimSummary } from "../lib/alphafold";
 import { compareTargets } from "../lib/compare";
 import { useProject, useToast } from "../lib/context";
-import { modelingAccession, modelingCoverageRequest } from "../lib/disorder";
+import { modelingAccession } from "../lib/disorder";
+import { modelingPreflight } from "../lib/preflight";
+import { LaunchButton, PreflightPanel, usePreflight } from "../components/Preflight";
 import { fileStem, formatRestraints, parseRestraints, type RestraintRow } from "../lib/files";
 import { downloadText, fmtNum, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
@@ -274,11 +275,45 @@ export default function Modeling() {
       current = false;
     };
   }, [mode, docId, projectId]);
-  const coverageRequest = useMemo(() => modelingCoverageRequest({
-    mode, target, templates, pirText, accession: modelingAccession({ mode, target, pirText }, projectSeqs),
-    plddtMin: predictedChosen && plddtTrim ? plddtMin : null,
-  }), [mode, target, templates, pirText, projectSeqs, predictedChosen, plddtTrim, plddtMin]);
-  const coverage = useCoverageCheck(coverageRequest);
+  // Corpo della modellazione (senza l'allineamento, letto al lancio): lo stesso per l'avvio e per i controlli preventivi
+  const body = useMemo(() => {
+    const regions = loopRegions
+      .split(/[,;\n]/)
+      .map((r) => r.trim())
+      .filter(Boolean)
+      .map((r) => {
+        const [s, e] = r.split("-").map((x) => x.trim());
+        return { start: s, end: e };
+      });
+    const options = {
+      models: nModels,
+      refinement,
+      seed,
+      loop: { enabled: loopOn, models: loopModels, level: "fast", regions },
+      restraints,
+      // solo per i template AlphaFold; le strutture sperimentali non si ritagliano mai
+      plddt_trim: plddtTrim,
+      plddt_min: plddtMin,
+      // ligandi: esattamente i gruppi scelti (un elenco vuoto = nessuno)
+      hetatm: ligandsOn,
+      ...(ligandsOn ? { ligands: ligandRefs } : {}),
+    };
+    return {
+      project_id: projectId ?? undefined,
+      target: mode === "auto" ? { name: target.name || "target", sequence: target.sequence } : null,
+      // la scelta dei ligandi è quella del riquadro Parametri, non la casella del singolo template
+      templates: templates.map((t) => ({ id: t.id, chains: t.chains })),
+      options,
+      quality,
+      extended_quality: quality !== "none" && extended,
+    };
+  }, [projectId, mode, target, templates, nModels, refinement, seed, loopOn, loopModels, loopRegions, restraints, plddtTrim, plddtMin, ligandsOn, ligandRefs, quality, extended]);
+  // Controlli preventivi (F8a), compresi disordine e domini fuori dalla copertura (F5.5): accessione dalla sequenza del
+  // progetto o dall'intestazione sp|ACC|…
+  const preflightRequest = useMemo(() => modelingPreflight({
+    mode, target, templates, pirText, accession: modelingAccession({ mode, target, pirText }, projectSeqs), body,
+  }), [mode, target, templates, pirText, projectSeqs, body]);
+  const preflight = usePreflight(preflightRequest);
 
   // Parametri in arrivo da altre pagine (sequenza, template, documento PIR).
   useEffect(() => {
@@ -311,37 +346,7 @@ export default function Modeling() {
         if (!projectId || !docId) throw new Error("Scegli un documento PIR.");
         alignment = (await api.document(projectId, docId)).content ?? "";
       }
-      const regions = loopRegions
-        .split(/[,;\n]/)
-        .map((r) => r.trim())
-        .filter(Boolean)
-        .map((r) => {
-          const [s, e] = r.split("-").map((x) => x.trim());
-          return { start: s, end: e };
-        });
-      const options = {
-        models: nModels,
-        refinement,
-        seed,
-        loop: { enabled: loopOn, models: loopModels, level: "fast", regions },
-        restraints,
-        // solo per i template AlphaFold; le strutture sperimentali non si ritagliano mai
-        plddt_trim: plddtTrim,
-        plddt_min: plddtMin,
-        // ligandi: esattamente i gruppi scelti (un elenco vuoto = nessuno)
-        hetatm: ligandsOn,
-        ...(ligandsOn ? { ligands: ligandRefs } : {}),
-      };
-      const j = await api.model({
-        project_id: projectId ?? undefined,
-        target: mode === "auto" ? { name: target.name || "target", sequence: target.sequence } : null,
-        alignment,
-        // la scelta dei ligandi è quella del riquadro Parametri, non la casella del singolo template
-        templates: templates.map((t) => ({ id: t.id, chains: t.chains })),
-        options,
-        quality,
-        extended_quality: quality !== "none" && extended,
-      });
+      const j = await api.model({ ...body, alignment });
       setParams({ job: j.id });
     } catch (e) {
       toast.error(e);
@@ -410,12 +415,6 @@ export default function Modeling() {
                 <span className="small text-2" style={{ fontWeight: 550 }}>Template {mode === "pir" && "(stessi del PIR, nello stesso ordine)"}</span>
                 <TemplatePicker value={templates} onChange={setTemplates} ligands={false} onAnalysis={(id, a) => setTemplateInfo((prev) => ({ ...prev, [id]: a }))} />
               </div>
-              {coverageRequest && (
-                <div className="stack-sm">
-                  <span className="small text-2" style={{ fontWeight: 550 }}>Disordine e domini del bersaglio</span>
-                  <CoverageAlerts check={coverage.check} assessment={coverage.check?.combined} loading={coverage.loading} error={coverage.error} />
-                </div>
-              )}
             </div>
           </Card>
           <Card title="Parametri">
@@ -491,7 +490,9 @@ export default function Modeling() {
                   <Field label="Seme casuale MODELLER" hint="Tra −50000 e −2: cambia per ottenere modelli diversi."><input className="input" type="number" value={seed} onChange={(e) => setSeed(Number(e.target.value))} /></Field>
                 </div>
               )}
-              <button className="btn btn-primary" disabled={!canSubmit || !!modellerMissing} onClick={submit}><Icon name="play" size={14} /> Avvia modellazione</button>
+              {/* controlli preventivi: disordine e domini, template, licenze, tempi, spazio (errori bloccano, avvisi con conferma) */}
+              <PreflightPanel state={preflight} />
+              <LaunchButton preflight={preflight} disabled={!canSubmit || !!modellerMissing} onLaunch={submit}>Avvia modellazione</LaunchButton>
               {templates.some((t) => !t.chains.length) && <span className="tiny" style={{ color: "var(--warn)" }}>Seleziona almeno una catena per ogni template.</span>}
               {ligandsOn && !ligandsReady && templates.length > 0 && (ligandsFailed.length
                 ? <span className="tiny" style={{ color: "var(--warn)" }}>Ligandi di {ligandsFailed.join(", ")} non letti: usa «Riprova» nel riquadro dei ligandi oppure togli la spunta.</span>

@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { JobItemsEvent, JobSummary, PipelinePage, PipelineResult, ResumeScope, SearchEngine, Sequence, TemplateItem, TemplateMode, TemplateRef } from "../api/types";
+import type { JobItemsEvent, JobSummary, PipelinePage, PipelineRequest, PipelineResult, ResumeScope, SearchEngine, Sequence, TemplateItem, TemplateMode, TemplateRef } from "../api/types";
+import { LaunchButton, PreflightPanel, usePreflight } from "../components/Preflight";
+import { pipelinePreflight } from "../lib/preflight";
 import { RecomputeOption } from "../components/CacheOption";
 import { SequenceFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
@@ -191,24 +193,28 @@ export default function Pipeline() {
     }
   };
 
+  // corpo della pipeline: lo stesso per l'avvio e per i controlli preventivi (F8a)
+  const body = useMemo<PipelineRequest>(() => ({
+    project_id: projectId ?? undefined,
+    name: name || undefined,
+    fasta,
+    template_mode: mode,
+    max_templates: clampMaxTemplates(maxTemplates),
+    templates,
+    engine,
+    evalue,
+    twilight: { filter: twFilter, identity: twIdentity, coverage: twCoverage },
+    options: { models, refinement, plddt_trim: plddtTrim, plddt_min: plddtMin },
+    quality,
+    extended_quality: quality && extended,
+    parallel,
+    use_cache: !recompute,
+  }), [projectId, name, fasta, mode, maxTemplates, templates, engine, evalue, twFilter, twIdentity, twCoverage, models, refinement, plddtTrim, plddtMin, quality, extended, parallel, recompute]);
+  const preflight = usePreflight(useMemo(() => pipelinePreflight(body, count), [body, count]), 800);
+
   const submit = async () => {
     try {
-      const j = await api.pipeline({
-        project_id: projectId ?? undefined,
-        name: name || undefined,
-        fasta,
-        template_mode: mode,
-        max_templates: clampMaxTemplates(maxTemplates),
-        templates,
-        engine,
-        evalue,
-        twilight: { filter: twFilter, identity: twIdentity, coverage: twCoverage },
-        options: { models, refinement, plddt_trim: plddtTrim, plddt_min: plddtMin },
-        quality,
-        extended_quality: quality && extended,
-        parallel,
-        use_cache: !recompute,
-      });
+      const j = await api.pipeline(body);
       setParams({ job: j.id });
       toast.push("Pipeline avviata: prosegue anche chiudendo il browser");
     } catch (e) {
@@ -301,7 +307,9 @@ export default function Pipeline() {
               {predictedPossible && <PlddtOption enabled={plddtTrim} threshold={plddtMin} onEnabled={setPlddtTrim} onThreshold={setPlddtMin} />}
               <label className="check"><input type="checkbox" checked={quality} onChange={(e) => setQuality(e.target.checked)} /> Analisi di qualità del modello migliore</label>
               {quality && <label className="check"><input type="checkbox" checked={extended} onChange={(e) => setExtended(e.target.checked)} /> Includi PROCHECK e ProSA II (qualche secondo in più per sequenza)</label>}
-              <button className="btn btn-primary" disabled={count < 1 || (mode === "fixed" && !templates.length)} onClick={submit}><Icon name="play" size={14} /> Avvia pipeline</button>
+              {/* controlli preventivi: licenza, motore e database, tempi e limiti dei servizi, spazio */}
+              <PreflightPanel state={preflight} />
+              <LaunchButton preflight={preflight} disabled={count < 1 || (mode === "fixed" && !templates.length)} onLaunch={submit}>Avvia pipeline</LaunchButton>
             </div>
           </Card>
           <Card title="Pipeline recenti">

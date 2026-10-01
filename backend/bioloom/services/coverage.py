@@ -18,6 +18,9 @@ fuori dalla copertura del template o domini non coperti, con un suggerimento (`d
   - intervalli (Ricerca): il tratto del bersaglio allineato da ogni hit (`query_start`–`query_end`).
   I template e il PIR si valutano anche insieme (`combined`: MODELLER li usa tutti); gli intervalli sono candidati
   alternativi e si valutano uno per uno.
+- **Identità** (template della libreria e PIR): residui identici sulle coppie allineate (`identity`, `aligned`), dallo
+  stesso allineamento della copertura; la usano i controlli preventivi (services/preflight.py) per la zona
+  crepuscolare.
 """
 
 from __future__ import annotations
@@ -57,9 +60,15 @@ def local_pairs(target: str, template: str) -> list[tuple[int, int]]:
     return pairs
 
 
+def _identity(identical: int, aligned: int) -> Optional[float]:
+    """Identità (%) sulle coppie allineate, come `report.alignment_identity` e il `% SEQ ID` di MODELLER."""
+    return round(100.0 * identical / aligned, 1) if aligned else None
+
+
 def pir_coverage(text: str) -> tuple[str, list[dict], Optional[str]]:
     """Bersaglio (lettere della riga `sequence`), copertura di ogni template dalle colonne del PIR e una nota (None
-    se va tutto bene). Solo bersagli a una catena."""
+    se va tutto bene). Solo bersagli a una catena. Per ogni template anche le coppie allineate (`aligned`) e
+    l'identità su quelle coppie (`identity`), per i controlli preventivi (services/preflight.py)."""
     entries = sequences.parse_pir(text)
     target = next((e for e in entries if e.kind == "sequence"), None)
     if target is None:
@@ -72,14 +81,16 @@ def pir_coverage(text: str) -> tuple[str, list[dict], Optional[str]]:
     for e in entries:
         if not e.is_template:
             continue
-        covered, pos = set(), 0
+        covered, pos, identical = set(), 0, 0
         for k, c in enumerate(target.sequence):
             if not c.isalpha():
                 continue
             pos += 1
             if k < len(e.sequence) and e.sequence[k].isalpha():
                 covered.add(pos)
-        out.append({"label": e.code, "covered_positions": covered})
+                identical += e.sequence[k].upper() == c.upper()
+        out.append({"label": e.code, "covered_positions": covered, "aligned": len(covered),
+                    "identity": _identity(identical, len(covered))})
     return letters, out, None
 
 
@@ -142,13 +153,21 @@ class CoverageService:
                     kept[c] = [bool(r[5]) for r in rows]
             trim_note = f"residui con pLDDT < {float(plddt_min):g} esclusi, come nel ritaglio della modellazione"
         covered: set[int] = set()
+        # identità: sulla catena con più coppie allineate (quella su cui MODELLER allinea il bersaglio; le catene di un
+        # omo-oligomero danno la stessa), sui soli residui che restano nel template
+        best = (0, 0)
         for c in chosen:
             keep = kept.get(c)
-            for t_pos, s_pos in local_pairs(target, available[c]["sequence"]):
+            seq = available[c]["sequence"]
+            pairs = identical = 0
+            for t_pos, s_pos in local_pairs(target, seq):
                 if keep is None or keep[s_pos - 1]:
                     covered.add(t_pos)
+                    pairs += 1
+                    identical += target[t_pos - 1] == seq[s_pos - 1]
+            best = max(best, (pairs, identical))
         return {"label": f"{tid}:{''.join(chosen)}", "id": tid, "chains": chosen, "covered_positions": covered,
-                "note": trim_note}
+                "note": trim_note, "aligned": best[0], "identity": _identity(best[1], best[0])}
 
     # ------------------------------------------------------------------------------ verifica completa
     def check(self, *, sequence: str = "", accession: Optional[str] = None, templates: Optional[list[dict]] = None,
@@ -191,7 +210,8 @@ class CoverageService:
                 out_templates.append({"label": s["label"], "id": s.get("id"), "error": s["error"]})
                 continue
             out_templates.append({"label": s["label"], "id": s.get("id"), "chains": s.get("chains"),
-                                  "note": s.get("note"), **assess(s["covered_positions"])})
+                                  "note": s.get("note"), "identity": s.get("identity"), "aligned": s.get("aligned"),
+                                  **assess(s["covered_positions"])})
         valid = [s for s in sets if "error" not in s]
         combined = None
         if valid:
