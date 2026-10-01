@@ -8,7 +8,7 @@ export type JobKind =
 
 export type SearchEngine = "rcsb" | "ncbi" | "local" | "mmseqs" | "alphafold";
 
-export interface JobSummary {
+export interface JobSummary extends Labelled {
   id: string;
   kind: JobKind;
   title: string;
@@ -65,7 +65,7 @@ export interface ResumeItems {
   failed: number;
 }
 
-export interface Project {
+export interface Project extends Labelled {
   id: string;
   name: string;
   description: string;
@@ -76,7 +76,7 @@ export interface Project {
   jobs?: number;
 }
 
-export interface Sequence {
+export interface Sequence extends Labelled {
   id: string;
   project_id: string;
   name: string;
@@ -435,7 +435,7 @@ export interface CoverageRequest {
   plddt_min?: number | null;
 }
 
-export interface TemplateItem {
+export interface TemplateItem extends Labelled {
   id: string;
   format: string;
   size: number;
@@ -1414,4 +1414,82 @@ export interface AnalysisRequest {
   source: StructureSource;
   chains?: string[];
   msa?: { job_id?: string; text?: string; row?: string; tool?: "auto" | "builtin" | "clustalo" | "mafft" | "muscle" } | null;
+}
+
+// ------------------------------------------------------------------ etichette, preferiti e ricerca globale (F8b)
+
+/** Elementi che possono avere etichette e stella. */
+export type EntityType = "project" | "job" | "sequence" | "template";
+
+/** Campi aggiunti dagli elenchi di progetti, job, sequenze e template (`?tag=` e `?favorite=` li filtrano). */
+export interface Labelled {
+  /** etichette normalizzate (minuscole, al più 32 caratteri), in ordine alfabetico */
+  tags?: string[];
+  favorite?: boolean;
+}
+
+/** GET/POST/DELETE /api/tags/{tipo}/{id}, PUT/DELETE /api/favorites/{tipo}/{id}. */
+export interface EntityLabels {
+  entity_type: EntityType;
+  entity_id: string;
+  tags: string[];
+  favorite: boolean;
+}
+
+/** GET /api/tags: etichetta in uso con il numero di elementi, in totale e per tipo. */
+export interface TagCount {
+  tag: string;
+  count: number;
+  types: Partial<Record<EntityType, number>>;
+}
+
+export interface FavoriteEntry {
+  entity_type: EntityType;
+  entity_id: string;
+  created_at: string;
+}
+
+export type SearchGroupType = "project" | "sequence" | "document" | "job" | "template" | "tag";
+
+/** Voce di un gruppo della ricerca globale. */
+export interface SearchItem {
+  type: SearchGroupType;
+  /** id dell'elemento (per le etichette: l'etichetta) */
+  id: string;
+  title: string;
+  subtitle: string;
+  /** pertinenza (domain/textsearch.py), +1 con la stella */
+  score: number;
+  /** progetto dell'elemento (per un progetto: sé stesso); null per template ed etichette */
+  project_id: string | null;
+  project_name: string | null;
+  tags?: string[];
+  favorite?: boolean;
+  /** job: tipo e stato */
+  kind?: JobKind;
+  status?: JobStatus;
+  /** template: modello predetto */
+  predicted?: boolean;
+  /** etichette: numero di elementi */
+  count?: number;
+}
+
+export interface SearchGroup {
+  type: SearchGroupType;
+  label: string;
+  items: SearchItem[];
+  /** il gruppo aveva più risultati del limite */
+  truncated: boolean;
+}
+
+/** GET /api/search: gruppi ordinati per il miglior punteggio. */
+export interface SearchResponse {
+  query: string;
+  /** parole cercate (minuscole, senza accenti) */
+  terms: string[];
+  tag: string | null;
+  /** nessun testo né etichetta: i gruppi sono i preferiti */
+  favorites: boolean;
+  engine: "fts5" | "like";
+  groups: SearchGroup[];
 }

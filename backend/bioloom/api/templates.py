@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
@@ -25,8 +25,11 @@ class AlphaFoldIn(BaseModel):
 
 
 @router.get("")
-def list_templates(core: Core = Depends(get_core)) -> list[dict]:
-    return core.library.list()
+def list_templates(tag: Optional[str] = Query(None, max_length=200, description="Solo i template con questa etichetta"),
+                   favorite: Optional[bool] = Query(None, description="true = solo con la stella, false = solo senza"),
+                   core: Core = Depends(get_core)) -> list[dict]:
+    """Template della libreria con `tags` e `favorite` (F8b)."""
+    return core.labels.filter("template", core.library.list(), tag=tag, favorite=favorite)
 
 
 @router.post("/fetch")

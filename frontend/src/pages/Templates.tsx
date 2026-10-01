@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { TemplateAnalysis, TemplateItem } from "../api/types";
+import type { EntityLabels, TemplateAnalysis, TemplateItem } from "../api/types";
 import { SSStrip } from "../components/charts";
 import { Icon } from "../components/Icon";
+import { FavoriteStar, LabelEditor, LabelFilterSelect, TagChips } from "../components/Labels";
 import { Viewer3D } from "../components/Viewer3D";
 import { Alert, Badge, Card, Confirm, DropZone, Empty, PageHead, Spinner, Stat } from "../components/ui";
 import { isAlphaFoldId, isUniProtAccession, normalizeAccession, PLDDT_BAND_LABEL, PLDDT_BAND_TONE, plddtLabel, plddtTone, type PlddtBand } from "../lib/alphafold";
@@ -11,6 +12,7 @@ import { useToast } from "../lib/context";
 import { fmtBytes, fmtNum, relTime } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { CLASS_LABEL, CLASS_TONE, groupClass } from "../lib/ligands";
+import { favoritesFirst, filterParams, filterValue, matchesFilter, parseFilterValue, type LabelFilter } from "../lib/tags";
 
 /** Avviso e dettagli di un modello predetto (AlphaFold): versione, intervallo UniProt, fasce di pLDDT. */
 function PredictedNote({ meta }: { meta: TemplateItem }) {
@@ -42,7 +44,7 @@ function PredictedNote({ meta }: { meta: TemplateItem }) {
   );
 }
 
-function TemplateDetail({ id, onDeleted }: { id: string; onDeleted: () => void }) {
+function TemplateDetail({ id, onDeleted, onLabels }: { id: string; onDeleted: () => void; onLabels: (l: EntityLabels) => void }) {
   const navigate = useNavigate();
   const toast = useToast();
   const { data: a, error, loading } = useAsync<TemplateAnalysis>(() => api.template(id), [id]);
@@ -68,6 +70,7 @@ function TemplateDetail({ id, onDeleted }: { id: string; onDeleted: () => void }
           </>
         }
       >
+        <div style={{ marginBottom: 12 }}><LabelEditor type="template" id={a.id} onChange={onLabels} /></div>
         <div className="grid grid-4">
           <Stat label="Metodo" value={<span style={{ fontSize: 14 }}>{a.header.method || a.meta.method || "—"}</span>} />
           {predicted
@@ -129,15 +132,35 @@ export default function Templates() {
   const toast = useToast();
   const [params, setParams] = useSearchParams();
   const selected = params.get("id");
-  const { data: list, reload, loading } = useAsync<TemplateItem[]>(() => api.templates(), []);
+  // filtro per etichetta o preferiti nell'URL (?tag=); preferiti in cima all'elenco
+  const labelFilter = parseFilterValue(params.get("tag"));
+  const labelKey = filterValue(labelFilter);
+  const setLabelFilter = (f: LabelFilter) => setParams((p) => {
+    const next = new URLSearchParams(p);
+    if (filterValue(f)) next.set("tag", filterValue(f));
+    else next.delete("tag");
+    return next;
+  });
+  const selectTemplate = (id: string) => setParams((p) => {
+    const next = new URLSearchParams(p);
+    next.set("id", id);
+    return next;
+  });
+  const { data: rawList, reload, loading, setData } = useAsync<TemplateItem[]>(() => api.templates(filterParams(labelFilter)), [labelKey]);
+  const list = rawList ? favoritesFirst(rawList) : rawList;
+  const patchLabels = (l: EntityLabels) => {
+    if (!rawList) return;
+    const next = rawList.map((t) => (t.id === l.entity_id ? { ...t, tags: l.tags, favorite: l.favorite } : t));
+    setData(next.filter((t) => t.id === selected || matchesFilter(t, labelFilter)));
+  };
   const [pdbId, setPdbId] = useState("");
   const [format, setFormat] = useState("pdb");
   const [busy, setBusy] = useState(false);
   const [accession, setAccession] = useState("");
   const accessionOk = isUniProtAccession(accession) || isAlphaFoldId(accession);
   useEffect(() => {
-    if (!selected && list?.length) setParams({ id: list[0].id }, { replace: true });
-  }, [list, selected, setParams]);
+    if (!selected && list?.length) setParams(labelKey ? { id: list[0].id, tag: labelKey } : { id: list[0].id }, { replace: true });
+  }, [list, selected, setParams, labelKey]);
 
   const fetchPdb = async () => {
     setBusy(true);
@@ -146,7 +169,7 @@ export default function Templates() {
       toast.push(t.cached ? `${t.id} era già in libreria` : `${t.id} scaricato (${t.format.toUpperCase()})`);
       setPdbId("");
       reload();
-      setParams({ id: t.id });
+      selectTemplate(t.id);
     } catch (e) {
       toast.error(e);
     } finally {
@@ -160,7 +183,7 @@ export default function Templates() {
       toast.push(t.cached ? `${t.id} era già in libreria` : `${t.id} scaricato da AlphaFold DB (${plddtLabel(t.plddt_mean)})`);
       setAccession("");
       reload();
-      setParams({ id: t.id });
+      selectTemplate(t.id);
     } catch (e) {
       toast.error(e);
     } finally {
@@ -173,7 +196,7 @@ export default function Templates() {
       const t = await api.uploadTemplate(file);
       toast.push(`${t.id} caricato`);
       reload();
-      setParams({ id: t.id });
+      selectTemplate(t.id);
     } catch (e) {
       toast.error(e);
     } finally {
@@ -209,19 +232,23 @@ export default function Templates() {
               <DropZone accept=".pdb,.ent,.cif,.mmcif" onFile={upload} label={<>Trascina un file <b>.pdb</b> o <b>.cif</b> oppure fai clic (max 50 MB)</>} />
             </div>
           </Card>
-          <Card title="Template in libreria" sub={list ? String(list.length) : ""}>
+          <Card title="Template in libreria" sub={list ? String(list.length) : ""} right={<LabelFilterSelect type="template" value={labelFilter} onChange={setLabelFilter} width={150} />}>
             {loading && !list ? <Spinner /> : !list?.length ? (
-              <Empty icon="library" title="Libreria vuota">Scarica un template da RCSB o dai risultati della ricerca.</Empty>
+              labelFilter.kind !== "all"
+                ? <Empty icon="tag" title="Nessun template con questo filtro" />
+                : <Empty icon="library" title="Libreria vuota">Scarica un template da RCSB o dai risultati della ricerca.</Empty>
             ) : (
               <div className="table-wrap" style={{ maxHeight: 520, overflowY: "auto" }}>
                 <table className="table">
                   <tbody>
                     {list.map((t) => (
-                      <tr key={t.id} className={`clickable ${t.id === selected ? "selected" : ""}`} onClick={() => setParams({ id: t.id })}>
+                      <tr key={t.id} className={`clickable ${t.id === selected ? "selected" : ""}`} onClick={() => selectTemplate(t.id)}>
                         <td>
+                          <FavoriteStar type="template" id={t.id} value={!!t.favorite} onChange={patchLabels} size={13} />{" "}
                           <b>{t.id}</b> <span className="tiny muted">{t.format.toUpperCase()}</span>
                           {t.predicted && <> <Badge tone="warn" title="Modello predetto da AlphaFold, non struttura sperimentale">AlphaFold</Badge></>}
                           <div className="tiny muted ellipsis" style={{ maxWidth: 230 }}>{t.title || t.source}</div>
+                          <TagChips tags={t.tags} max={4} onPick={(tag) => setLabelFilter({ kind: "tag", tag })} />
                         </td>
                         <td className="num small nowrap">
                           {t.predicted
@@ -237,7 +264,7 @@ export default function Templates() {
             )}
           </Card>
         </div>
-        <div>{selected ? <TemplateDetail key={selected} id={selected} onDeleted={() => { setParams({}); reload(); }} /> : <Card><Empty icon="library" title="Seleziona un template" /></Card>}</div>
+        <div>{selected ? <TemplateDetail key={selected} id={selected} onDeleted={() => { setParams(labelKey ? { tag: labelKey } : {}); reload(); }} onLabels={patchLabels} /> : <Card><Empty icon="library" title="Seleziona un template" /></Card>}</div>
       </div>
     </div>
   );

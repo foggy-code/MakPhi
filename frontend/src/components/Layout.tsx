@@ -1,11 +1,47 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { SystemInfo } from "../api/types";
 import { useProject, useToast } from "../lib/context";
-import { SYSTEM_CHANGED, useInterval, useJobsFeed, useLocalStorage } from "../lib/hooks";
+import { SYSTEM_CHANGED, useInterval, useJobsFeed } from "../lib/hooks";
+import { isMacPlatform, PENDING_MS, shortcutFor } from "../lib/shortcuts";
+import { THEME_OPTIONS, useThemePreference } from "../lib/theme";
+import { GlobalSearch } from "./GlobalSearch";
 import { Icon } from "./Icon";
+import { ProjectsDialog } from "./ProjectsDialog";
+import { ShortcutsHelp } from "./ShortcutsHelp";
 import { Confirm, Modal } from "./ui";
+
+const MAC = typeof navigator !== "undefined" && isMacPlatform(navigator);
+
+/**
+ * Scorciatoie globali (lib/shortcuts.ts): ricerca, pannello "?", `g` + lettera per le pagine. Un tasto gestito qui non
+ * arriva alla pagina; mentre si scrive in un campo valgono solo Ctrl+K / ⌘K.
+ */
+function useGlobalShortcuts(handlers: { search: () => void; help: () => void; navigate: (path: string) => void }) {
+  const saved = useRef(handlers);
+  saved.current = handlers;
+  useEffect(() => {
+    let pendingUntil = 0;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      const action = shortcutFor(e as unknown as Parameters<typeof shortcutFor>[0], {
+        pending: Date.now() < pendingUntil,
+        dialogOpen: !!document.querySelector('[role="dialog"]'),
+        mac: MAC,
+      });
+      pendingUntil = 0;
+      if (!action) return;
+      e.preventDefault();
+      if (action.type === "pending") pendingUntil = Date.now() + PENDING_MS;
+      else if (action.type === "search") saved.current.search();
+      else if (action.type === "help") saved.current.help();
+      else saved.current.navigate(action.path);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+}
 
 const NAV: { section: string; items: { to: string; label: string; icon: string }[] }[] = [
   { section: "", items: [{ to: "/", label: "Panoramica", icon: "home" }] },
@@ -36,16 +72,20 @@ export function Layout() {
   const { projects, projectId, select, create } = useProject();
   const toast = useToast();
   const navigate = useNavigate();
-  const [theme, setTheme] = useLocalStorage<"dark" | "light">("bioloom.theme", "dark");
+  const { pref: themePref, setPref: setThemePref } = useThemePreference();
   const [active, setActive] = useState(0);
   const [info, setInfo] = useState<SystemInfo | null>(null);
   const [newProject, setNewProject] = useState<string | null>(null);
   const [askShutdown, setAskShutdown] = useState(false);
   const [offline, setOffline] = useState(false);
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [projectsOpen, setProjectsOpen] = useState(false);
+  useGlobalShortcuts({
+    search: () => setSearchOpen((open) => !open), // Ctrl+K a ricerca aperta la chiude
+    help: () => setHelpOpen(true),
+    navigate: (path) => navigate(path),
+  });
 
   useEffect(() => {
     const load = () => api.systemInfo().then(setInfo).catch(() => undefined);
@@ -102,9 +142,17 @@ export function Layout() {
             <span className="dot" style={{ color: !info ? "var(--muted)" : info.modeller.available ? "var(--ok)" : "var(--err)" }} />
             MODELLER {!info ? "· verifica…" : info.modeller.available ? info.modeller.version : "non disponibile"}
           </div>
+          <div className="segmented theme-switch" role="radiogroup" aria-label="Tema">
+            {THEME_OPTIONS.map((o) => (
+              <button key={o.value} type="button" role="radio" aria-checked={themePref === o.value} className={themePref === o.value ? "on" : ""}
+                title={o.hint} onClick={() => setThemePref(o.value)}>
+                <Icon name={o.icon} size={13} /> {o.label}
+              </button>
+            ))}
+          </div>
           <div className="row">
-            <button className="btn btn-ghost btn-sm" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
-              <Icon name={theme === "dark" ? "sun" : "moon"} size={14} /> Tema
+            <button className="btn btn-ghost btn-sm" onClick={() => setHelpOpen(true)} title="Scorciatoie da tastiera (?)">
+              <Icon name="keyboard" size={14} /> Tasti
             </button>
             {info?.runtime?.auth && (
               <button className="btn btn-ghost btn-sm" onClick={() => api.logout().finally(() => window.location.reload())} title="Esci dalla sessione">
@@ -137,6 +185,14 @@ export function Layout() {
           </select>
           <button className="btn btn-sm" onClick={() => setNewProject("")}>
             <Icon name="plus" size={14} /> Nuovo progetto
+          </button>
+          <button className="btn btn-sm btn-ghost" onClick={() => setProjectsOpen(true)} title="Tutti i progetti, con stella ed etichette">
+            <Icon name="star" size={14} /> Progetti
+          </button>
+          <button className="search-trigger" onClick={() => setSearchOpen(true)} title="Ricerca globale" aria-label="Ricerca globale">
+            <Icon name="search" size={14} />
+            <span>Cerca…</span>
+            <kbd>{MAC ? "⌘" : "Ctrl"} K</kbd>
           </button>
           <div className="spacer" />
           {offline && <span className="badge badge-err">Server non raggiungibile</span>}
@@ -196,6 +252,9 @@ export function Layout() {
           </label>
         </Modal>
       )}
+      {searchOpen && <GlobalSearch onClose={() => setSearchOpen(false)} />}
+      {helpOpen && <ShortcutsHelp mac={MAC} onClose={() => setHelpOpen(false)} />}
+      {projectsOpen && <ProjectsDialog onClose={() => setProjectsOpen(false)} />}
       {askShutdown && (
         <Confirm
           text={active > 0 ? `Ci sono ${active} job attivi: verranno interrotti. Arrestare BioLoom?` : "Arrestare BioLoom? Potrai riavviarlo con l'avviatore (Avvia BioLoom)."}

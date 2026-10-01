@@ -1,14 +1,15 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent as RMouseEvent } from "react";
+import { useEffect, useMemo, useState, type MouseEvent as RMouseEvent } from "react";
 import { api } from "../api/client";
 import type { AlignResult, StructuralPair } from "../api/types";
 import { colorFor } from "../lib/colorscale";
 import {
   breaksBefore, comparisonColoring, comparisonOutdated, deviatingSegments, DISTANCE_MAX, DISTANCE_SCALE, pairHighlight, pairIndexOf, pairRows,
-  rowScrollDelta, seriesPath, tmVerdict,
+  seriesPath, tmVerdict,
   type CompareColorBy, type DeviatingSegment, type PairSort,
 } from "../lib/compare";
 import { fmtNum } from "../lib/format";
 import type { ResidueRef } from "../lib/residueColoring";
+import { TABLE_ROW_HEIGHT, useVirtualRows } from "../lib/virtual";
 import { Viewer3D } from "./Viewer3D";
 import { Alert, Card, Segmented, Stat } from "./ui";
 
@@ -115,17 +116,16 @@ function PairTable({ pairs, selected, onSelect }: { pairs: StructuralPair[]; sel
   const [sort, setSort] = useState<PairSort>("position");
   const [minDistance, setMinDistance] = useState(0);
   const rows = useMemo(() => pairRows(pairs, sort, minDistance), [pairs, sort, minDistance]);
-  const selRow = useRef<HTMLTableRowElement>(null);
-  const wrap = useRef<HTMLDivElement>(null);
+  // oltre VIRTUAL_THRESHOLD coppie si disegnano solo le righe visibili (F8b). La coppia scelta si porta in vista
+  // scorrendo solo il contenitore della tabella (`reveal`, con `rowScrollDelta` sulla riga vera quando è disegnata):
+  // una selezione dal 3D, dal grafico o dai tratti non sposta la pagina
+  const virtual = useVirtualRows<HTMLDivElement>({ count: rows.length, rowHeight: TABLE_ROW_HEIGHT, measure: true });
+  const rowStyle = virtual.active ? { height: TABLE_ROW_HEIGHT } : undefined;
+  const selIndex = selected === null ? -1 : rows.indexOf(selected);
+  const { reveal } = virtual;
   useEffect(() => {
-    // solo il contenitore della tabella: una selezione dal 3D, dal grafico o dai tratti non sposta la pagina
-    const box = wrap.current;
-    const row = selRow.current;
-    if (!box || !row) return;
-    const header = box.querySelector("thead")?.getBoundingClientRect().height ?? 0;
-    const delta = rowScrollDelta(row.getBoundingClientRect(), box.getBoundingClientRect(), header);
-    if (delta) box.scrollTop += delta;
-  }, [selected]);
+    if (selIndex >= 0) reveal(selIndex);
+  }, [selected, selIndex, reveal]);
   const head = (key: PairSort, label: string, num = false) => (
     <th className={`sortable${num ? " num" : ""}`} onClick={() => setSort(key)} title="Ordina">{label} {sort === key ? "▼" : ""}</th>
   );
@@ -140,15 +140,16 @@ function PairTable({ pairs, selected, onSelect }: { pairs: StructuralPair[]; sel
         </label>
         <span className="muted">{rows.length} righe · clic su una riga per evidenziare i due residui nel 3D.</span>
       </div>
-      <div ref={wrap} className="table-wrap" style={{ maxHeight: 380, overflowY: "auto" }}>
+      <div ref={virtual.ref} onScroll={virtual.onScroll} className="table-wrap" style={{ maxHeight: 380, overflowY: "auto" }}>
         <table className="table">
           <thead><tr>{head("position", "Posizione")}<th>Residuo di A</th><th>Residuo di B</th>{head("distance", "Distanza (Å)", true)}{head("lddt", "lDDT", true)}</tr></thead>
           <tbody>
-            {rows.map((i) => {
+            {virtual.range.padTop > 0 && <tr className="virtual-spacer" aria-hidden="true" style={{ height: virtual.range.padTop }}><td colSpan={5} /></tr>}
+            {rows.slice(virtual.range.start, virtual.range.end).map((i, n) => {
               const p = pairs[i];
               const sel = i === selected;
               return (
-                <tr key={i} ref={sel ? selRow : undefined} className={`clickable${sel ? " selected" : ""}`} onClick={() => onSelect(i)}>
+                <tr key={i} data-vrow={virtual.range.start + n} style={rowStyle} className={`clickable${sel ? " selected" : ""}${virtual.active ? " virtual-row" : ""}`} onClick={() => onSelect(i)}>
                   <td className="muted">{i + 1}</td>
                   <td className="nowrap"><b>{p.aa_a}</b> {p.chain_a}{p.resnum_a}</td>
                   <td className="nowrap"><b>{p.aa_b}</b> {p.chain_b}{p.resnum_b}{p.aa_a !== p.aa_b && <span className="tiny muted"> (diverso)</span>}</td>
@@ -157,6 +158,7 @@ function PairTable({ pairs, selected, onSelect }: { pairs: StructuralPair[]; sel
                 </tr>
               );
             })}
+            {virtual.range.padBottom > 0 && <tr className="virtual-spacer" aria-hidden="true" style={{ height: virtual.range.padBottom }}><td colSpan={5} /></tr>}
           </tbody>
         </table>
       </div>

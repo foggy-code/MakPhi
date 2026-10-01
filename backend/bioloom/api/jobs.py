@@ -49,10 +49,21 @@ def _event_stream(stream: AsyncIterator[str]) -> StreamingResponse:
 @router.get("")
 def list_jobs(project_id: Optional[str] = None, kind: Optional[str] = None,
               status: Optional[str] = Query(None, description="Stati separati da virgola"),
-              limit: int = 100, offset: int = 0, core: Core = Depends(get_core)) -> list[dict]:
+              limit: int = 100, offset: int = 0,
+              tag: Optional[str] = Query(None, max_length=200, description="Solo i job con questa etichetta"),
+              favorite: bool = Query(False, description="true = solo i job con la stella"),
+              core: Core = Depends(get_core)) -> list[dict]:
+    """Job (dal più recente) con `tags` e `favorite` (F8b); `tag` e `favorite` filtrano in SQL, prima del limite."""
     statuses = [s for s in (status or "").split(",") if s]
-    return core.jobs.with_eta(
-        core.jobs.list(project_id=project_id, kind=kind, statuses=statuses or None, limit=limit, offset=offset))
+    ids: Optional[set[str]] = None
+    if tag:
+        ids = core.labels.ids_with("job", tag)
+    if favorite:
+        stars = core.labels.favorite_ids("job")
+        ids = stars if ids is None else ids & stars
+    rows = core.jobs.list(project_id=project_id, kind=kind, statuses=statuses or None, limit=limit, offset=offset,
+                          ids=ids)
+    return core.jobs.with_eta(core.labels.annotate("job", rows))
 
 
 @router.get("/events", response_class=StreamingResponse, responses=SSE_RESPONSE)
