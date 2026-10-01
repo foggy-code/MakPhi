@@ -40,8 +40,14 @@ const OPEN_IN: Record<JobKind, (id: string) => string> = {
 
 function Detail({ id, labels, onDeleted, onChanged, onLabels }: { id: string; labels?: ItemLabels; onDeleted: () => void; onChanged: () => void; onLabels: (l: EntityLabels) => void }) {
   const toast = useToast();
-  const { job, summary, log, cancel, resume } = useJob(id, { withLog: true });
+  const { job, summary, log, cancel, resume, error, gone } = useJob(id, { withLog: true });
   const [confirm, setConfirm] = useState(false);
+  // link a un job che non è in questa installazione (pacchetto di un altro computer, job eliminato)
+  if (!summary && (gone || error)) {
+    return gone
+      ? <Card><Empty icon="activity" title="Job non trovato in questa installazione">Il job {id} non esiste qui: è stato eliminato o viene da un'altra installazione (per esempio il job originale di un pacchetto di riproducibilità).</Empty></Card>
+      : <Card><Empty icon="activity" title="Job non letto">{error}</Empty></Card>;
+  }
   if (!summary) return null;
   const doResume = async (scope: ResumeScope) => {
     const retry = scope === "failed" || summary.status === "completed"; // da completata restano solo i falliti

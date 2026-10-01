@@ -7,17 +7,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type {
-  AlaScanResult, AlaScanRow, JobSummary, MutateResult, MutationClass, MutationHistoryItem, MutationSignal, PocketsResult, ScanMode,
+  AlaScanResult, AlaScanRow, JobSummary, LatestToolJob, MutateResult, MutationClass, MutationHistoryItem, MutationSignal, PocketsResult, ScanMode,
   StructureSource, SystemInfo, VariantMapping,
 } from "../api/types";
 import { encodeSource } from "../lib/compare";
 import { useProject, useToast } from "../lib/context";
 import { fmtNum, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
+import { followedAnalysis } from "../lib/interactions";
 import {
-  addNotation, CATEGORY_LABEL, CATEGORY_TONE, CLASS_LABEL, CLASS_TONE, dopeText, energyText, historyText, LEVEL_LABEL, LEVEL_TONE, MAX_SCAN,
-  MAX_SCAN_ENERGY, modelQualityLink, mutateRequest, mutationCompareLinks, mutationPreflight, parseMutations, scanColoring, scanRequest, scanRowOf,
-  scanRows, siteSummary, sitesFocus, variantRows, variantText, type VariantFilter,
+  addNotation, CATEGORY_LABEL, CATEGORY_TONE, CLASS_LABEL, CLASS_TONE, dopeText, energyText, historyOption, LEVEL_LABEL, LEVEL_TONE, MAX_SCAN,
+  MAX_SCAN_ENERGY, modelQualityLink, mutateRequest, mutationCompareLinks, mutationPreflight, parseMutations, pocketsView, scanColoring, scanRequest,
+  scanRowOf, scanRows, siteSummary, sitesFocus, variantRows, variantText, type VariantFilter,
 } from "../lib/mutations";
 import { fmtDelta, fmtRefineValue, verdictTone } from "../lib/refine";
 import { resiNumber, type ResidueRef } from "../lib/residueColoring";
@@ -28,7 +29,7 @@ import { LaunchButton, PreflightPanel, usePreflight } from "./Preflight";
 import { ReportButton } from "./ReportButton";
 import { sourceFileUrl } from "./StructuralAnalysis";
 import { Viewer3D } from "./Viewer3D";
-import { Alert, Badge, Card, Empty, Field, Modal, Segmented, Stat } from "./ui";
+import { Alert, Badge, Card, Empty, Field, Modal, Segmented, Spinner, Stat } from "./ui";
 
 type Mode = "mutate" | "alascan";
 
@@ -117,16 +118,17 @@ function VariantPicker({ source, onAdd }: { source: StructureSource; onAdd: (not
 }
 
 // ---------------------------------------------------------------------------------- avvio
-/** Scelta delle tasche per la scansione: il calcolo di fpocket più recente sulla struttura (scheda Tasche). */
+/** Scelta delle tasche per la scansione: il calcolo di fpocket in corso sulla struttura (seguito fino alla fine, poi la
+ *  tendina compare da sola), altrimenti il più recente completato (scheda Tasche). */
 function usePockets(source: StructureSource, enabled: boolean) {
   const sourceKey = encodeSource(source) ?? "";
-  return useAsync<{ jobId: string; result: PocketsResult } | null>(async () => {
-    if (!enabled) return null;
-    const latest = await api.latestToolJob("pockets", source);
-    if (!latest.job_id) return null;
-    const job = await api.job<PocketsResult>(latest.job_id);
-    return job.result ? { jobId: latest.job_id, result: job.result } : null;
-  }, [sourceKey, enabled]);
+  const latest = useAsync<LatestToolJob | null>(async () => (enabled ? api.latestToolJob("pockets", source) : null), [sourceKey, enabled]);
+  const jobId = enabled && latest.data ? followedAnalysis(null, latest.data) : null;
+  const { job, summary, error: jobError } = useJob<PocketsResult>(jobId);
+  const result = job?.status === "completed" && job.kind === "pockets" && job.id === jobId ? job.result ?? null : null;
+  const error = latest.error?.message ?? jobError;
+  const view = pocketsView({ loading: latest.loading, error, jobId, status: summary?.status, ready: !!result });
+  return { view, error, jobId, result, reload: latest.reload };
 }
 
 /** Modulo di avvio: mutazioni (con le varianti di UniProt) o scansione di alanina, controlli preventivi, energia. */
@@ -143,8 +145,9 @@ export function MutationForm({ source, onLaunched, initialMode = "mutate" }: { s
   const openmmMissing = missingTools(info, ["openmm", "pdbfixer"]).length > 0;
   const pockets = usePockets(source, mode === "alascan" && scanMode === "pocket");
   const mutate = useMemo(() => mutateRequest({ source, text, energy, projectId }), [source, text, energy, projectId]);
-  const scan = useMemo(() => scanRequest({ source, mode: scanMode, residues, chain, pocketJob: pockets.data?.jobId ?? null, pocket, energy, projectId }),
-    [source, scanMode, residues, chain, pockets.data, pocket, energy, projectId]);
+  const pocketJob = pockets.result ? pockets.jobId : null;
+  const scan = useMemo(() => scanRequest({ source, mode: scanMode, residues, chain, pocketJob, pocket, energy, projectId }),
+    [source, scanMode, residues, chain, pocketJob, pocket, energy, projectId]);
   const request = useMemo(() => (mode === "mutate" ? mutationPreflight("mutate", mutate.body) : mutationPreflight("alascan", scan.body)), [mode, mutate.body, scan.body]);
   const preflight = usePreflight(request);
   const parsed = parseMutations(text);
@@ -179,15 +182,30 @@ export function MutationForm({ source, onLaunched, initialMode = "mutate" }: { s
               <input className="input" style={{ width: 90 }} maxLength={4} value={chain} onChange={(e) => setChain(e.target.value)} />
             </Field>
           )}
-          {scanMode === "pocket" && (pockets.loading ? <p className="small muted">Lettura delle tasche…</p>
-            : !pockets.data ? <Alert tone="info">Nessun calcolo delle tasche su questa struttura: avvialo dalla scheda Tasche della pagina Qualità.</Alert> : (
-              <Field label="Tasca di fpocket" hint="I residui che rivestono la tasca diventano alanina.">
-                <select className="input" style={{ width: 320 }} value={pocket ?? ""} onChange={(e) => setPocket(e.target.value ? Number(e.target.value) : null)}>
-                  <option value="">— scegli —</option>
-                  {pockets.data.result.pockets.map((p) => <option key={p.id} value={p.id}>Tasca {p.id} · druggability {fmtNum(p.druggability ?? null, 2)} · {p.residues.length} residui</option>)}
-                </select>
-              </Field>
-            ))}
+          {scanMode === "pocket" && (pockets.view === "loading" ? <p className="small muted">Lettura delle tasche…</p>
+            : pockets.view === "error" ? (
+              <Alert tone="err">
+                <div className="row" style={{ gap: 8 }}>
+                  <span>Tasche non lette: {pockets.error}</span>
+                  <button className="btn btn-sm" onClick={pockets.reload}><Icon name="refresh" size={13} /> Riprova</button>
+                </div>
+              </Alert>
+            ) : pockets.view === "running" ? <p className="small muted"><Spinner /> Calcolo delle tasche in corso: la tasca si sceglie appena finisce.</p>
+              : pockets.view === "failed" ? (
+                <Alert tone="warn">
+                  <div className="row" style={{ gap: 8 }}>
+                    <span>L'ultimo calcolo delle tasche non è riuscito: rilancialo dalla scheda Tasche della pagina Qualità.</span>
+                    <button className="btn btn-sm" onClick={pockets.reload}><Icon name="refresh" size={13} /> Rileggi</button>
+                  </div>
+                </Alert>
+              ) : pockets.view === "none" || !pockets.result ? <Alert tone="info">Nessun calcolo delle tasche su questa struttura: avvialo dalla scheda Tasche della pagina Qualità.</Alert> : (
+                <Field label="Tasca di fpocket" hint="I residui che rivestono la tasca diventano alanina.">
+                  <select className="input" style={{ width: 320 }} value={pocket ?? ""} onChange={(e) => setPocket(e.target.value ? Number(e.target.value) : null)}>
+                    <option value="">— scegli —</option>
+                    {pockets.result.pockets.map((p) => <option key={p.id} value={p.id}>Tasca {p.id} · druggability {fmtNum(p.druggability ?? null, 2)} · {p.residues.length} residui</option>)}
+                  </select>
+                </Field>
+              ))}
         </div>
       )}
       <label className="check">
@@ -396,9 +414,16 @@ export function AlaScanResults({ jobId, result }: { jobId: string; result: AlaSc
 }
 
 // ---------------------------------------------------------------------------------- scheda della pagina Qualità
-function ResultView({ jobId, compact = false }: { jobId: string; compact?: boolean }) {
-  const { job, summary, cancel } = useJob<MutateResult | AlaScanResult>(jobId);
-  if (!summary) return null;
+/** Job seguito dal pannello: avanzamento, poi i risultati. `onStatus` riceve ogni cambio di stato (la cronologia si
+ *  rilegge a fine job) e "gone" se il job non c'è più (eliminato altrove: la voce sparisce dalla cronologia). */
+function ResultView({ jobId, compact = false, onStatus }: { jobId: string; compact?: boolean; onStatus?: (status: string) => void }) {
+  const { job, summary, cancel, error, gone } = useJob<MutateResult | AlaScanResult>(jobId);
+  const status = gone ? "gone" : summary?.status ?? "";
+  useEffect(() => {
+    if (status) onStatus?.(status);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
+  if (!summary) return error ? <Alert tone="err">{gone ? "Job non trovato" : "Job non letto"}: {error}</Alert> : <Spinner />;
   if (job?.status !== "completed" || !job.result) return <JobPanel summary={summary} onCancel={cancel} compact={compact} />;
   return job.kind === "alascan" ? <AlaScanResults jobId={jobId} result={job.result as AlaScanResult} /> : <MutationResults jobId={jobId} result={job.result as MutateResult} />;
 }
@@ -428,13 +453,13 @@ export function MutagenesisPanel({ source, memory, onMemory }: { source: Structu
         {history && history.length > 0 && (
           <select className="input" style={{ width: 340, minHeight: 28, padding: "2px 6px" }} value={jobId ?? ""} onChange={(e) => e.target.value && open(e.target.value)}>
             <option value="">Calcoli su questa struttura ({history.length})…</option>
-            {history.map((h) => <option key={h.id} value={h.id}>{historyText(h)} · {h.status === "completed" ? relTime(h.finished_at) : h.status}</option>)}
+            {history.map((h) => <option key={h.id} value={h.id}>{historyOption(h, relTime)}</option>)}
           </select>
         )}
         <button className="btn btn-sm btn-ghost" onClick={reload} title="Rileggi la cronologia"><Icon name="refresh" size={13} /></button>
       </div>
       {showForm && <Card><MutationForm source={source} onLaunched={(j) => open(j.id)} /></Card>}
-      {jobId ? <ResultView key={jobId} jobId={jobId} compact /> : !showForm && (
+      {jobId ? <ResultView key={jobId} jobId={jobId} compact onStatus={reload} /> : !showForm && (
         <Empty icon="dna" title="Nessuna mutagenesi su questa struttura">
           Mutazioni puntuali o multiple (anche dalle varianti di UniProt) e scansione di alanina, con una stima qualitativa dell'effetto sulla stabilità.
         </Empty>

@@ -2,28 +2,38 @@
 // manifest (contenuto, versioni, parametri), esiti e confronto della riesecuzione. Logica pura, testata.
 import type {
   PackageCheck, PackageEnvironment, PackageRole, PackageSummary, PackageVersion, PreflightLevel, PreflightRequest,
-  RerunFile, RerunFileStatus, RerunMetricRow, RerunResult, RerunVerdict,
+  RerunFile, RerunFileStatus, RerunMetricRow, RerunResult, RerunScientificCheck, RerunVerdict,
 } from "../api/types";
 
 /** Tipi di job con un pacchetto di riproducibilità (domain/reproducibility.EXPORTABLE). */
 export const EXPORTABLE_KINDS: readonly string[] = [
-  "model", "loop", "align2d", "quality", "align", "analysis", "refine", "pockets", "electrostatics", "search", "qmean",
+  "model", "loop", "align2d", "quality", "align", "analysis", "refine", "pockets", "electrostatics", "mutate", "alascan", "search", "qmean",
+  "predict",
 ];
-/** Quelli che si possono rieseguire in locale (RERUNNABLE): ricerca e QMEAN dipendono da servizi remoti. */
-export const RERUNNABLE_KINDS: readonly string[] = EXPORTABLE_KINDS.filter((k) => k !== "search" && k !== "qmean");
+/** Quelli che si possono rieseguire in locale (RERUNNABLE): ricerca, QMEAN e confronto con una predizione dipendono da
+ *  servizi remoti. */
+export const RERUNNABLE_KINDS: readonly string[] = EXPORTABLE_KINDS.filter((k) => k !== "search" && k !== "qmean" && k !== "predict");
 
 /** Il pulsante «Pacchetto riproducibile» si mostra per i job completati dei tipi con un pacchetto. */
 export function canExport(kind: string, status: string): boolean {
   return status === "completed" && EXPORTABLE_KINDS.includes(kind);
 }
 
-export const VERDICT_LABEL: Record<RerunVerdict, string> = { identico: "Identico", equivalente: "Equivalente", diverso: "Diverso" };
-export const VERDICT_TONE: Record<RerunVerdict, "ok" | "info" | "err"> = { identico: "ok", equivalente: "info", diverso: "err" };
+export const VERDICT_LABEL: Record<RerunVerdict, string> = { identico: "Identico", equivalente: "Equivalente", compatibile: "Compatibile", diverso: "Diverso" };
+export const VERDICT_TONE: Record<RerunVerdict, "ok" | "info" | "warn" | "err"> = { identico: "ok", equivalente: "info", compatibile: "warn", diverso: "err" };
 export const VERDICT_HELP: Record<RerunVerdict, string> = {
   identico: "Tutti i file sono uguali (a parte la data di MODELLER nella riga EXPDTA, la durata dei passi e i thread).",
   equivalente: "Nessuna differenza oltre le tolleranze: valori uguali entro la tolleranza, formattazione o file accessori diversi.",
+  compatibile: "Differenze oltre l'arrotondamento ma entro le tolleranze scientifiche del calcolo (per esempio la rifinitura con OpenMM su più thread): rumore numerico atteso, non un risultato diverso.",
   diverso: "Ci sono differenze oltre le tolleranze o file mancanti: vedi le righe evidenziate.",
 };
+
+/** Riga del controllo con le tolleranze scientifiche: "Energia dopo (kJ/mol): Δ -38.23 (limite 62.2) entro". */
+export function scientificLine(c: RerunScientificCheck): string {
+  const delta = c.delta == null ? "—" : fmtValue(c.delta);
+  const limit = c.limit == null ? "—" : fmtValue(c.limit);
+  return `${c.what}: Δ ${delta} (limite ${limit}) ${c.within ? "entro" : "oltre"}${c.detail ? `; ${c.detail}` : ""}`;
+}
 export const FILE_STATUS_LABEL: Record<RerunFileStatus, string> = {
   identical: "identico", equivalent: "equivalente", different: "diverso", missing: "mancante", extra: "in più",
 };

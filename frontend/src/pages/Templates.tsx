@@ -8,7 +8,9 @@ import { Icon } from "../components/Icon";
 import { FavoriteStar, LabelEditor, LabelFilterSelect, TagChips } from "../components/Labels";
 import { Viewer3D } from "../components/Viewer3D";
 import { Alert, Badge, Card, Confirm, DropZone, Empty, PageHead, Spinner, Stat } from "../components/ui";
-import { isAlphaFoldId, isUniProtAccession, normalizeAccession, PLDDT_BAND_LABEL, PLDDT_BAND_TONE, plddtLabel, plddtTone, type PlddtBand } from "../lib/alphafold";
+import {
+  isAlphaFoldId, isUniProtAccession, normalizeAccession, PLDDT_BAND_LABEL, PLDDT_BAND_TONE, plddtLabel, plddtTone, predictorBadge, predictorTitle, type PlddtBand,
+} from "../lib/alphafold";
 import { useToast } from "../lib/context";
 import { fmtBytes, fmtNum, relTime } from "../lib/format";
 import { useAsync } from "../lib/hooks";
@@ -24,7 +26,8 @@ function PredictedNote({ meta }: { meta: TemplateItem }) {
       <div className="stack-sm">
         <span>
           <b>Modello predetto, non struttura sperimentale</b>
-          {af ? <> · AlphaFold DB {af.version ? `v${af.version}` : ""} · UniProt {af.accession}{af.uniprot_start && af.uniprot_end ? ` (residui ${af.uniprot_start}–${af.uniprot_end})` : ""}{af.gene ? ` · ${af.gene}` : ""}</> : " · file di AlphaFold caricato"}
+          {af ? <> · AlphaFold DB {af.version ? `v${af.version}` : ""} · UniProt {af.accession}{af.uniprot_start && af.uniprot_end ? ` (residui ${af.uniprot_start}–${af.uniprot_end})` : ""}{af.gene ? ` · ${af.gene}` : ""}</>
+            : meta.predictor === "esmfold" ? " · predizione di ESMFold caricata" : predictorBadge(meta) === "AlphaFold" ? " · file di AlphaFold caricato" : " · file caricato"}
           {" "}· {plddtLabel(meta.plddt_mean)}
         </span>
         {fractions && (
@@ -60,7 +63,7 @@ function TemplateDetail({ id, labels, onDeleted, onAdded, onLabels }: { id: stri
     <div className="stack">
       {predicted && <PredictedNote meta={a.meta} />}
       <Card
-        title={<>{a.id} {predicted && <Badge tone="warn" title="Modello predetto da AlphaFold">AlphaFold</Badge>}</>}
+        title={<>{a.id} {predicted && <Badge tone="warn" title={predictorTitle(a.meta)}>{predictorBadge(a.meta)}</Badge>}</>}
         sub={a.header.title}
         right={
           <>
@@ -249,7 +252,7 @@ export default function Templates() {
                         <td>
                           <FavoriteStar type="template" id={t.id} value={!!t.favorite} onChange={patchLabels} size={13} />{" "}
                           <b>{t.id}</b> <span className="tiny muted">{t.format.toUpperCase()}</span>
-                          {t.predicted && <> <Badge tone="warn" title="Modello predetto da AlphaFold, non struttura sperimentale">AlphaFold</Badge></>}
+                          {t.predicted && <> <Badge tone="warn" title={predictorTitle(t)}>{predictorBadge(t)}</Badge></>}
                           {t.assembly && <> <Badge tone="info" title={`Assemblaggio biologico ${t.assembly.assembly_id} di ${t.assembly.source_id}`}>assemblaggio</Badge></>}
                           <div className="tiny muted ellipsis" style={{ maxWidth: 230 }}>{t.title || t.source}</div>
                           <TagChips tags={t.tags} max={4} onPick={(tag) => setLabelFilter({ kind: "tag", tag })} />

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { SearchGroupType, SearchItem, SearchResponse } from "../api/types";
+import { predictorBadge, predictorTitle } from "../lib/alphafold";
 import { useProject } from "../lib/context";
 import { KIND_LABEL, STATUS_LABEL } from "../lib/format";
 import { enterAction, flattenResults, highlightParts, moveSelection, parseSearchQuery, queryForTag, queryKey, resultTarget, TYPE_LABEL } from "../lib/search";
@@ -163,7 +164,7 @@ export function GlobalSearch({ onClose }: { onClose: () => void }) {
                     <div className="palette-title">
                       {it.favorite && <Icon name="starFill" size={12} className="star-on" />}
                       <span className="ellipsis"><Highlighted text={it.type === "tag" ? `#${it.title}` : it.title} query={parsed.text} /></span>
-                      {it.type === "template" && it.predicted && <span className="badge badge-warn">AlphaFold</span>}
+                      {it.type === "template" && it.predicted && <span className="badge badge-warn" title={predictorTitle(it)}>{predictorBadge(it)}</span>}
                       <TagChips tags={it.tags} max={3} />
                     </div>
                     {sub && <div className="palette-sub ellipsis">{sub}</div>}

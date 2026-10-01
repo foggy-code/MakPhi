@@ -10,8 +10,8 @@ import { useProject, useToast } from "../lib/context";
 import { fmtNum, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
 import {
-  consentText, esmfoldService, followedJob, metricsLine, needsConsent, originText, PREDICTOR_LABEL, predictionCompareLink, predictionQualityLink, predictPreflight,
-  predictRequest, STATUS_TONE, verdictTitle,
+  consentText, ESMFOLD_MAX_LENGTH, esmfoldBlocked, esmfoldService, followedJob, metricsLine, needsConsent, originText, pastedSequence, PREDICTOR_LABEL,
+  predictionCompareLink, predictionQualityLink, predictPreflight, predictRequest, STATUS_TONE, verdictTitle,
 } from "../lib/predict";
 import { Icon } from "./Icon";
 import { JobPanel } from "./JobPanel";
@@ -30,16 +30,22 @@ export function PredictDialog({ source, label, residues, onClose, onLaunched }: 
 }) {
   const { projectId } = useProject();
   const toast = useToast();
-  const { data: loaded } = useAsync<Settings>(() => api.settings(), []);
+  const { data: loaded, error: settingsError, loading: settingsLoading, reload: reloadSettings } = useAsync<Settings>(() => api.settings(), []);
   const [settings, setSettings] = useState<Settings | null>(null);
   const current = settings ?? loaded;
   const [predictor, setPredictor] = useState<PredictorName>("esmfold");
   const [accession, setAccession] = useState("");
+  const [sequence, setSequence] = useState("");
   const [saving, setSaving] = useState(false);
   const consent = needsConsent(predictor, current);
-  const req = predictRequest(predictor, source, { accession, projectId });
+  // sequenza nota e oltre il limite di ESMFold: niente consenso per un invio che non può avvenire
+  const blocked = esmfoldBlocked(predictor, residues, sequence);
+  const own = pastedSequence(sequence);
+  const req = predictRequest(predictor, source, { accession, projectId, sequence, name: label });
+  // AlphaFold DB non chiede il consenso: non dipende dalle impostazioni
+  const ready = predictor === "alphafold" || !!current;
   // i controlli partono solo a consenso dato: prima la sequenza non deve nemmeno sembrare in partenza
-  const preflight = usePreflight(current && !consent ? predictPreflight(req.body) : null);
+  const preflight = usePreflight(ready && !blocked && (predictor === "alphafold" || !consent) ? predictPreflight(req.body) : null);
   const giveConsent = async () => {
     setSaving(true);
     try {
@@ -75,11 +81,32 @@ export function PredictDialog({ source, label, residues, onClose, onLaunched }: 
             <input className="input mono" style={{ width: 220 }} value={accession} maxLength={40} onChange={(e) => setAccession(e.target.value.trim())} />
           </Field>
         )}
-        {!current ? <Spinner /> : consent ? (
+        {predictor === "esmfold" && (
+          <Field label="Sequenza (facoltativa)" hint="Vuota = la sequenza della catena del modello. Se la catena ha residui mancanti, incolla qui la sequenza completa (SEQRES o UniProt): unire i tratti darebbe una proteina che non esiste.">
+            <textarea className="input mono" rows={2} value={sequence} maxLength={12000} placeholder="sequenza della catena" onChange={(e) => setSequence(e.target.value)} />
+            {own && <span className="tiny muted">{own.length} residui</span>}
+          </Field>
+        )}
+        {blocked ? (
+          <>
+            <Alert tone="warn">ESMFold accetta al più {ESMFOLD_MAX_LENGTH} residui ({own ? "la sequenza indicata" : "questa catena"} ne ha {own ? own.length : residues}): confronta con AlphaFold DB indicando l'accessione, oppure incolla un dominio alla volta.</Alert>
+            <div className="row"><button className="btn" onClick={onClose}>Annulla</button></div>
+          </>
+        ) : !ready ? (settingsError && !settingsLoading ? (
+          <Alert tone="err">
+            <div className="stack-sm">
+              <span>Impostazioni non lette: {settingsError.message}</span>
+              <div className="row" style={{ gap: 8 }}>
+                <button className="btn btn-sm" onClick={reloadSettings}><Icon name="refresh" size={13} /> Riprova</button>
+                <button className="btn btn-sm" onClick={onClose}>Annulla</button>
+              </div>
+            </div>
+          </Alert>
+        ) : <Spinner />) : predictor === "esmfold" && consent ? (
           <Alert tone="warn">
             <div className="stack-sm">
               <b>Consenso all'invio della sequenza</b>
-              <span>{consentText(esmfoldService(current), residues ?? null)}</span>
+              <span>{consentText(esmfoldService(current), own ? own.length : residues ?? null)}</span>
               <div className="row" style={{ gap: 8 }}>
                 <button className="btn btn-primary btn-sm" disabled={saving} onClick={giveConsent}>{saving ? <Spinner /> : <Icon name="check" size={13} />} Acconsento e continua</button>
                 <button className="btn btn-sm" onClick={onClose}>Annulla</button>

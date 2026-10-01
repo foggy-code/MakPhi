@@ -9,7 +9,7 @@ import type {
 } from "../api/types";
 import type { CategoricalScale } from "./colorscale";
 import { compareLink } from "./compare";
-import { fmtNum } from "./format";
+import { fmtNum, STATUS_LABEL } from "./format";
 import { resiNumber, residueKey, type ResidueColoring, type ResidueValue } from "./residueColoring";
 
 /** I 20 amminoacidi standard (lettera → codice a tre lettere). */
@@ -183,9 +183,10 @@ export function mutationCompareLinks(jobId: string, result: Pick<MutateResult, "
   return { wildType: compareLink(wildTypeSource(jobId, result), b), original: compareLink(result.source, b) };
 }
 
-/** Residui da evidenziare nel 3D (i siti mutati). */
-export function sitesFocus(items: { chain: string; resnum: string }[]): { chain: string; resi: number }[] {
-  return items.map((m) => ({ chain: m.chain, resi: resiNumber(m.resnum) }));
+/** Residui da evidenziare nel 3D dei modelli costruiti (i siti mutati): la catena dei modelli, che per i nomi di più
+ *  caratteri è la lettera di MODELLER. */
+export function sitesFocus(items: { chain: string; resnum: string; model_chain?: string }[]): { chain: string; resi: number }[] {
+  return items.map((m) => ({ chain: m.model_chain ?? m.chain, resi: resiNumber(m.resnum) }));
 }
 
 /** Righe della scansione filtrate (tutte, una classe, solo gli hot spot), nell'ordine del backend. */
@@ -250,4 +251,21 @@ export function variantText(v: MappedVariant): string {
 export function historyText(item: MutationHistoryItem): string {
   if (item.kind === "alascan") return item.title.replace(/^Scansione di alanina · [^(]*/, "Scansione di alanina ").trim();
   return `Mutagenesi ${item.mutations ?? ""}${item.energy ? " (con energia)" : ""}`.trim();
+}
+
+/** Voce del menu della cronologia: il calcolo e, se completato, quando (`when`), altrimenti lo stato in italiano. */
+export function historyOption(item: MutationHistoryItem, when: (iso: string | null) => string): string {
+  return `${historyText(item)} · ${item.status === "completed" ? when(item.finished_at) : STATUS_LABEL[item.status] ?? item.status}`;
+}
+
+/** Stato della scelta delle tasche per la scansione: lettura, errore, nessun calcolo, calcolo in corso (seguito),
+ *  non riuscito, pronto. Il calcolo seguito è quello in corso sulla struttura, altrimenti l'ultimo completato. */
+export type PocketsView = "loading" | "error" | "none" | "running" | "failed" | "ready";
+
+export function pocketsView(s: { loading: boolean; error: string | null; jobId: string | null; status: string | null | undefined; ready: boolean }): PocketsView {
+  if (s.error) return "error";
+  if (!s.jobId) return s.loading ? "loading" : "none";
+  if (s.ready) return "ready";
+  if (s.status === "failed" || s.status === "cancelled") return "failed";
+  return s.status === "completed" ? "loading" : "running";
 }

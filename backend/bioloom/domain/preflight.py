@@ -269,17 +269,21 @@ def rank_checks(hits: list[dict]) -> list[dict]:
 
 
 def plddt_checks(trims: list[dict]) -> list[dict]:
-    """Ritaglio dei template AlphaFold: {template, chains, threshold (None = ritaglio spento), total, kept, below,
-    empty (catene senza residui sopra soglia), low (residui sotto 70, per il ritaglio spento)}."""
+    """Ritaglio dei template predetti: {template, chains, threshold (None = ritaglio spento), total, kept, below,
+    empty (catene senza residui sopra soglia), low (residui sotto 70, per il ritaglio spento), predictor (di
+    `plddt.predictor`: i testi dicono AlphaFold o ESMFold, o «modello predetto»)}."""
     out = []
     for t in trims:
         tid = t["template"]
+        named = plddt.predicted_source(t.get("predictor"), tid)  # "AlphaFold DB", "ESMFold" o None
+        what = f"modello {named}" if named else "modello predetto"
+        source = named or "il predittore"
         if t.get("threshold") is None:
             low = int(t.get("low") or 0)
             if low:
                 out.append(check(
                     "warning", "plddt_untrimmed",
-                    f"{tid}: modello AlphaFold usato senza ritaglio, con {low} di {t['total']} residui a pLDDT < "
+                    f"{tid}: {what} usato senza ritaglio, con {low} di {t['total']} residui a pLDDT < "
                     f"{plddt.DEFAULT_THRESHOLD:g}: MODELLER riceverà vincoli anche da conformazioni predette con bassa "
                     "confidenza (spesso regioni disordinate).",
                     f"Riattiva il ritaglio dei residui con pLDDT < {plddt.DEFAULT_THRESHOLD:g}.", template=tid))
@@ -293,13 +297,13 @@ def plddt_checks(trims: list[dict]) -> list[dict]:
         elif removed and kept < plddt.MIN_TRIMMED_RESIDUES:
             out.append(check("error", "plddt_too_few",
                              f"{tid}: togliendo i residui con pLDDT < {threshold:g} ne restano {kept} su {total} (minimo "
-                             f"{plddt.MIN_TRIMMED_RESIDUES}): il modello AlphaFold è poco affidabile in questa regione.",
+                             f"{plddt.MIN_TRIMMED_RESIDUES}): il {what} è poco affidabile in questa regione.",
                              "Abbassa la soglia pLDDT o disattiva il ritaglio, oppure cerca un altro template.",
                              template=tid))
         elif removed > PLDDT_TRIM_MOST * total:
             out.append(check("warning", "plddt_trim_most",
                              f"{tid}: il ritaglio a pLDDT {threshold:g} toglie {removed} residui su {total} "
-                             f"({_n(100.0 * removed / total, 0)}%): AlphaFold è confidente solo su una minoranza della "
+                             f"({_n(100.0 * removed / total, 0)}%): {source} è confidente solo su una minoranza della "
                              "catena e il resto del bersaglio resterà senza vincoli dal template.",
                              "Controlla le regioni disordinate del bersaglio o cerca un template sperimentale.",
                              template=tid))
@@ -677,6 +681,22 @@ def predict_checks(*, predictor: str, consent: bool, service: Optional[str], len
         out.append(check("info", "predict_no_compare",
                          "Nessuna struttura da confrontare: il job salva solo la predizione."))
     return out
+
+
+def predict_sequence_checks(*, origin: Optional[str], warning: Optional[str], gaps: int, length: int) -> list[dict]:
+    """Sequenza ricavata da una catena interrotta (`domain/prediction.chain_sequence`): avviso se i tratti sarebbero
+    uniti (predizione di una proteina che non esiste vicino alle giunzioni), informazione se si invia la sequenza
+    completa del file (SEQRES)."""
+    if warning:
+        return [check("warning", "predict_sequence_gaps", warning,
+                      "Incolla la sequenza completa della catena (SEQRES del file o voce di UniProt) nel campo "
+                      "Sequenza della finestra di avvio.")]
+    if origin == "seqres":
+        return [check("info", "predict_sequence_seqres",
+                      f"La catena ha {gaps} {'interruzione' if gaps == 1 else 'interruzioni'}: si invia la sequenza "
+                      f"completa del file (SEQRES, {length} residui), non i soli residui con le coordinate; il "
+                      "confronto abbina i residui per sequenza.")]
+    return []
 
 
 def predict_estimate(predictor: str, *, cached: bool, compare: bool, length: int) -> dict:

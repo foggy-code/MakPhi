@@ -170,7 +170,8 @@ class PreflightService:
         return specs, valid
 
     def _trims(self, out: dict, specs: list, opts: modeller.ModelOptions) -> None:
-        """Ritaglio pLDDT dei template AlphaFold scelti, calcolato come nella modellazione (`plddt.low_confidence`)."""
+        """Ritaglio pLDDT dei template predetti scelti (AlphaFold, ESMFold), calcolato come nella modellazione
+        (`plddt.low_confidence`)."""
         trims = []
         for spec in specs:
             if not self.library.is_predicted(spec.id):
@@ -185,11 +186,13 @@ class PreflightService:
                 empty = [c for c in chains if not any(r[0] == c and r[5] for r in rows)]
                 ranges = ", ".join(f"{a}–{b}:{c}" if a != b else f"{a}:{c}" for a, b, c in plddt.removed_ranges(rows))
                 trims.append({"template": tid, "chains": chains, "threshold": float(opts.plddt_min),
-                              "total": len(rows), "kept": kept, "empty": empty, "ranges": ranges})
+                              "total": len(rows), "kept": kept, "empty": empty, "ranges": ranges,
+                              "predictor": self.library.predictor(tid)})
             else:
                 values = [v for _c, _r, v in plddt.residues(model, chains)]
                 trims.append({"template": tid, "chains": chains, "threshold": None, "total": len(values),
-                              "low": sum(1 for v in values if v < plddt.DEFAULT_THRESHOLD)})
+                              "low": sum(1 for v in values if v < plddt.DEFAULT_THRESHOLD),
+                              "predictor": self.library.predictor(tid)})
         out["checks"] += rules.plddt_checks(trims)
 
     def _search_facts(self, engine: str, accession: str = "") -> dict:
@@ -607,6 +610,9 @@ class PreflightService:
                                        service=(req or {}).get("service"), length=length, cached=cached,
                                        compare=bool(p.get("source")), accession=(req or {}).get("accession"),
                                        in_library=in_library)
+        if req and predictor == "esmfold":
+            checks += rules.predict_sequence_checks(origin=req.get("sequence_origin"), warning=req.get("sequence_warning"),
+                                                    gaps=len(req.get("gaps") or []), length=length)
         if req:
             out["estimate"] = rules.predict_estimate(predictor, cached=bool(cached or in_library),
                                                      compare=bool(p.get("source")), length=length)

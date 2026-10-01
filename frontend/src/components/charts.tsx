@@ -121,7 +121,7 @@ const METRIC_INFO: Record<Metric, { label: string; unit: string; hint: string }>
   dope: { label: "Energia DOPE per residuo", unit: "", hint: "Media mobile calcolata da MODELLER (finestra 15): valori più alti (meno negativi) indicano regioni potenzialmente mal modellate." },
   bfactor: { label: "B-factor medio per residuo", unit: "Å²", hint: "Nei modelli MODELLER il B-factor non ha significato sperimentale." },
   rsa: { label: "Accessibilità relativa al solvente", unit: "", hint: "RSA < 0,2 = residuo sepolto." },
-  plddt: { label: "pLDDT per residuo (AlphaFold)", unit: "", hint: "Confidenza di AlphaFold nella colonna B-factor: > 90 molto alta, 70–90 alta, 50–70 bassa, < 50 molto bassa." },
+  plddt: { label: "pLDDT per residuo (modello predetto)", unit: "", hint: "Confidenza del predittore (AlphaFold, ESMFold) nella colonna B-factor: > 90 molto alta, 70–90 alta, 50–70 bassa, < 50 molto bassa." },
 };
 
 interface ProfileProps {

@@ -341,6 +341,7 @@ class ReportService:
                         "first": t.get("first"), "last": t.get("last"), "source": self._source(meta),
                         "title": meta.get("title"), "method": meta.get("method"), "resolution": meta.get("resolution"),
                         "identity": identity, "coverage": coverage, "predicted": predicted,
+                        "predictor": (t.get("predictor") or meta.get("predictor")) if predicted else None,
                         "plddt_mean": meta.get("plddt_mean") if predicted else None,
                         "trim": t.get("plddt") if isinstance(t.get("plddt"), dict) else None,
                         "trim_off": predicted and not t.get("plddt")})
@@ -454,7 +455,8 @@ class ReportService:
             out.append({"id": tid or e.code, "code": e.code, "chains": chains, "first": first, "last": last,
                         "source": self._source(meta), "title": meta.get("title"), "method": meta.get("method"),
                         "resolution": meta.get("resolution"), "identity": identity, "coverage": coverage,
-                        "predicted": predicted, "plddt_mean": meta.get("plddt_mean") if predicted else None,
+                        "predicted": predicted, "predictor": meta.get("predictor") if predicted else None,
+                        "plddt_mean": meta.get("plddt_mean") if predicted else None,
                         "trim": trim, "trim_off": predicted and trim is None and e.code in trims})
         return out
 

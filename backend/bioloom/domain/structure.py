@@ -179,8 +179,21 @@ def parse_cif_header(path: Path) -> dict:
     nums = data.get("_pdbx_unobs_or_zero_occ_residues.auth_seq_id") or []
     for n, c, s in zip(names, chains, nums):
         missing.append({"resname": n, "chain": c, "resnum": s})
+    # sequenza completa per catena (come SEQRES): _entity_poly con le catene dell'autore di ogni entità
+    seqres: dict[str, str] = {}
+
+    def values(key: str) -> list[str]:
+        value = data.get(key)
+        return [value] if isinstance(value, str) else list(value or [])
+
+    for strands, seq in zip(values("_entity_poly.pdbx_strand_id"), values("_entity_poly.pdbx_seq_one_letter_code_can")):
+        if seq in ("?", "."):
+            continue
+        for chain in str(strands).split(","):
+            if chain.strip() and chain.strip() not in ("?", "."):
+                seqres[chain.strip()] = "".join(str(seq).split()).upper()
     return {"title": first("_struct.title"), "method": first("_exptl.method"), "resolution": resolution,
-            "missing_residues": missing, "seqres": {}, "secondary_structure": []}
+            "missing_residues": missing, "seqres": seqres, "secondary_structure": []}
 
 
 class _Selector:

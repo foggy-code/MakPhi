@@ -263,6 +263,34 @@ def is_alphafold_model(name: str, head: str, values: Iterable[float]) -> bool:
     return is_predicted_model(name, head, values)
 
 
+# nei testi dei template e dei modelli predetti (log, note dei risultati, report, interfaccia)
+PREDICTED_SOURCES = {"alphafold": "AlphaFold DB", "esmfold": "ESMFold"}
+# parola delle righe REMARK 999 di tracciabilità dei modelli (domain/report.model_trims le rilegge)
+PREDICTOR_TAGS = {"alphafold": "ALPHAFOLD", "esmfold": "ESMFOLD"}
+
+
+def predicted_source(predictor_name: Optional[str], name: str = "") -> Optional[str]:
+    """Origine di un modello predetto nei testi: "AlphaFold DB" o "ESMFold" dal predittore riconosciuto (`predictor`,
+    salvato nei metadati della libreria); senza predittore noto (metadati precedenti a F9.3) "AlphaFold DB" se il nome
+    è di AlphaFold DB, altrimenti None (testo generico)."""
+    if predictor_name in PREDICTED_SOURCES:
+        return PREDICTED_SOURCES[predictor_name]
+    return PREDICTED_SOURCES["alphafold"] if AF_NAME.search(name or "") else None
+
+
+def predicted_text(predictor_name: Optional[str], name: str = "") -> str:
+    """"modello predetto (AlphaFold DB)", "modello predetto (ESMFold)" o "modello predetto"."""
+    source = predicted_source(predictor_name, name)
+    return f"modello predetto ({source})" if source else "modello predetto"
+
+
+def predictor_tag(predictor_name: Optional[str], name: str = "") -> str:
+    """Parola della riga REMARK di tracciabilità: ALPHAFOLD, ESMFOLD o PREDICTED."""
+    if predictor_name in PREDICTOR_TAGS:
+        return PREDICTOR_TAGS[predictor_name]
+    return PREDICTOR_TAGS["alphafold"] if AF_NAME.search(name or "") else "PREDICTED"
+
+
 def atom_values(model) -> list[float]:
     """B-factor di tutti gli atomi degli amminoacidi del modello (i valori che `is_alphafold_model` controlla)."""
     return [float(a.get_bfactor()) for chain in model for res in chain if structure.is_amino_residue(res)

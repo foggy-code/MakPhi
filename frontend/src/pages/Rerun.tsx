@@ -13,7 +13,7 @@ import { fmtBytes, fmtDate, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
 import {
   contentText, FILE_STATUS_LABEL, FILE_STATUS_TONE, fileDetail, fmtDelta, fmtValue, paramRows, rerunPreflight, ROLE_LABEL,
-  sortFiles, toleranceText, VERDICT_HELP, VERDICT_LABEL, VERDICT_TONE, versionRows,
+  scientificLine, sortFiles, toleranceText, VERDICT_HELP, VERDICT_LABEL, VERDICT_TONE, versionRows,
 } from "../lib/rerun";
 
 function ManifestPreview({ summary }: { summary: PackageSummary }) {
@@ -81,7 +81,15 @@ function ManifestPreview({ summary }: { summary: PackageSummary }) {
   );
 }
 
+/** Il job originale del pacchetto è in questa installazione? null mentre si verifica; un 404 (pacchetto di un altro
+ *  computer, job eliminato) dà false: l'id resta come testo, senza un link a una pagina vuota. */
+function useLocalJob(id: string | null | undefined): boolean | null {
+  const { data, error } = useAsync<boolean>(async () => (id ? !!(await api.jobStatus(id)) : false), [id]);
+  return error ? false : data;
+}
+
 function RerunReport({ jobId, result }: { jobId: string; result: RerunResult }) {
+  const local = useLocalJob(result.original.job_id);
   const files = sortFiles(result.files);
   const c = result.counts;
   return (
@@ -100,11 +108,19 @@ function RerunReport({ jobId, result }: { jobId: string; result: RerunResult }) 
           <span style={{ flex: 1 }}>{result.summary}</span>
         </div>
         <p className="small text-2" style={{ margin: 0 }}>
-          Pacchetto del job <Link to={`/jobs?id=${result.original.job_id}`} className="mono">{result.original.job_id}</Link> «{result.original.title}», concluso {fmtDate(result.original.finished_at)} con BioLoom {result.original.bioloom ?? "?"}; riesecuzione con BioLoom {result.bioloom} in {fmtValue(result.duration_seconds)} s, file in <span className="mono">{result.folder}/</span>.
+          Pacchetto del job {local ? <Link to={`/jobs?id=${result.original.job_id}`} className="mono">{result.original.job_id}</Link> : <span className="mono" title={local === false ? "Job non presente in questa installazione" : undefined}>{result.original.job_id}</span>}{local === false ? " (non in questa installazione)" : ""} «{result.original.title}», concluso {fmtDate(result.original.finished_at)} con BioLoom {result.original.bioloom ?? "?"}; riesecuzione con BioLoom {result.bioloom} in {fmtValue(result.duration_seconds)} s, file in <span className="mono">{result.folder}/</span>.
         </p>
         {result.warnings.length > 0 && (
           <Alert tone="warn">
             <ul style={{ margin: 0, paddingLeft: 18 }}>{result.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
+          </Alert>
+        )}
+        {result.scientific && (
+          <Alert tone={result.scientific.within ? "info" : "err"}>
+            <div className="stack-sm">
+              <span>{result.scientific.text}</span>
+              <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>{result.scientific.checks.map((x, i) => <li key={i}>{scientificLine(x)}</li>)}</ul>
+            </div>
           </Alert>
         )}
         {result.structures.length > 0 && (
@@ -112,13 +128,14 @@ function RerunReport({ jobId, result }: { jobId: string; result: RerunResult }) 
             <h4 style={{ marginBottom: 6 }}>Strutture (coordinate senza sovrapposizione)</h4>
             <div className="table-wrap">
               <table className="table">
-                <thead><tr><th>File</th><th className="num">Atomi in comune</th><th className="num">RMSD (Å)</th><th className="num">Scarto massimo (Å)</th><th /></tr></thead>
+                <thead><tr><th>File</th><th className="num">Atomi in comune</th><th className="num">RMSD (Å)</th><th className="num">Catena principale (Å)</th><th className="num">Scarto massimo (Å)</th><th /></tr></thead>
                 <tbody>
                   {result.structures.map((s) => (
                     <tr key={s.path}>
                       <td className="mono small">{s.path}</td>
                       <td className="num">{s.coordinates.common} / {s.coordinates.atoms}</td>
                       <td className="num">{fmtValue(s.coordinates.rmsd)}</td>
+                      <td className="num">{fmtValue(s.coordinates.backbone_rmsd ?? null)}</td>
                       <td className="num" title={s.coordinates.max_atom ?? undefined}>{fmtValue(s.coordinates.max_deviation)}</td>
                       <td>{s.coordinates.within ? <Badge tone="ok">entro la tolleranza</Badge> : <Badge tone="err">oltre</Badge>}</td>
                     </tr>

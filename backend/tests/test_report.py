@@ -18,6 +18,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 import zlib
 from dataclasses import asdict
+from html.parser import HTMLParser
 
 import pytest
 
@@ -235,7 +236,7 @@ def test_render_marks_alphafold_templates(ubq_quality):
     data = model_data(ubq_quality)
     data["templates"] = [{**data["templates"][0], "id": "AF-P0CG47-F1", "code": "AF-P0CG47-F1_A",
                           "source": "AlphaFold DB (EBI)", "predicted": True, "plddt_mean": 85.1, "trim": trim},
-                         {**data["templates"][0], "id": "AF-Q1-F1", "code": "AF-Q1-F1_A", "predicted": True,
+                         {**data["templates"][0], "id": "AF-P69905-F1", "code": "AF-P69905-F1_A", "predicted": True,
                           "trim": None, "trim_off": True}]
     text = report.render(data)
     assert text.count("modello predetto (AlphaFold DB), non una struttura sperimentale") == 2
@@ -714,3 +715,222 @@ def test_report_of_a_real_model(client_with_ubq):
     assert rama_points(text) == len(rep["ramachandran"]["points"]) > 70
     assert flagged(text, "Energia DOPE per residuo (media mobile di MODELLER)") >= 1
     assert text.count('<tr class="') >= 2 and '<tr class="best chosen">' in text
+
+
+# ---------------------------------------------------------------------------------------------- struttura del documento
+VOID = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"})
+
+
+class _StrictHTML(HTMLParser):
+    """Controllo dell'HTML del report: ogni elemento non vuoto chiuso nell'ordine giusto, nessuna sezione dentro
+    un'altra, id univoci."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.stack: list[str] = []
+        self.ids: list[str] = []
+        self.sections: list[str] = []
+        self.errors: list[str] = []
+
+    def _ids(self, attrs) -> None:
+        self.ids += [v for k, v in attrs if k == "id"]
+
+    def handle_starttag(self, tag, attrs):
+        self._ids(attrs)
+        if tag == "section":
+            if "section" in self.stack:
+                self.errors.append(f"sezione {dict(attrs).get('id')} dentro {self.stack}")
+            self.sections.append(dict(attrs).get("id"))
+        if tag not in VOID:
+            self.stack.append(tag)
+
+    def handle_startendtag(self, tag, attrs):
+        self._ids(attrs)
+
+    def handle_endtag(self, tag):
+        if tag in VOID:
+            return
+        if not self.stack or self.stack[-1] != tag:
+            self.errors.append(f"</{tag}> con aperti {self.stack[-3:]}")
+            if tag in self.stack:
+                while self.stack and self.stack.pop() != tag:
+                    pass
+            return
+        self.stack.pop()
+
+
+def _check_document(text: str) -> _StrictHTML:
+    parser = _StrictHTML()
+    parser.feed(text)
+    parser.close()
+    assert parser.errors == [], parser.errors[:5]
+    assert parser.stack == [], parser.stack
+    duplicated = sorted({i for i in parser.ids if parser.ids.count(i) > 1})
+    assert duplicated == [], duplicated
+    assert text.count("<section") == text.count("</section>") == len(parser.sections)
+    return parser
+
+
+def _site(**over) -> dict:
+    base = {"site": "A:30", "label": "A:I30A", "wt": "I", "mut": "A", "rsa_wt": 0.04, "rsa_mut": 0.05, "core": True,
+            "buried_wt": {"total": 160.0, "apolar": 130.0}, "buried_mut": {"total": 90.0, "apolar": 70.0},
+            "buried_delta": {"total": -70.0, "apolar": -60.0}, "ss": "H", "ss_position": 7, "ss_length": 12,
+            "rama": None, "blosum62": -1, "helix_propensity": -0.41,
+            "interactions": {"wild_type": 1, "mutant": 0, "gained": [], "lost": [
+                {"type": "hbond", "partner": "VAL A26", "role": "NH della catena principale", "atom": "N",
+                 "inter_chain": True, "distance": 2.97}]},
+            "clashes": {"wild_type": 0, "mutant": 0, "worst": None},
+            "interface": {"delta": 40.0, "rsa_complex": 0.0, "lost_inter_chain": 1}}
+    base.update(over)
+    return base
+
+
+def _mutation_result(energy: bool = True) -> dict:
+    from bioloom.domain import mutations, refinement
+    from bioloom.services.mutations import MutationService
+
+    rows = [{"role": "wild_type", "dope": -7918.0, "local": -5576.3, "interchain": -120.0},
+            {"role": "mutant", "dope": -7569.4, "local": -5227.7, "interchain": -60.0}]
+    dope = mutations.dope_summary(rows[0], rows[1], 76, 32, rows)
+    terms = ({"available": True, **mutations.energy_terms(-12393.2, -12370.3, -904.0, -953.7), "openmm": "8.2"}
+             if energy else None)
+    site = _site()
+    metrics = {"grade_score": 98.9, "rama_favored": 95.9, "rama_outliers": 0.0, "clashscore": 1.66, "dope": -7918.0,
+               "zdope": -2.67}
+    return {"notation": "A:I30A", "assessment": mutations.classify([site], dope, terms), "sites": [site],
+            "dope": dope, "energy": terms, "rmsd": {"all": 0.21, "outside": 0.0, "atoms": 304, "outside_atoms": 280},
+            "comparison": refinement.compare(metrics, {**metrics, "clashscore": 3.33}),
+            "protocol": MutationService._protocol(mutations.SEED, energy), "caveat": mutations.CAVEAT}
+
+
+def _scan_result() -> dict:
+    from bioloom.domain import mutations
+
+    mut = _mutation_result(energy=False)
+    row = {"label": "A:I30A", "mutation": {"chain": "A", "resnum": "30"}, "site": mut["sites"][0], "dope": mut["dope"],
+           "energy": None, "assessment": mut["assessment"]}
+    return {"rows": [row, {**row, "label": "A:L43A"}], "selection": {"detail": "2 residui indicati"},
+            "skipped": [{"chain": "A", "resnum": "10", "resname": "GLY", "reason": "glicina"}],
+            "summary": {"residues": 2, "skipped": 1, "counts": {"destabilizing": 2, "uncertain": 0, "neutral": 0},
+                        "hotspots": 1},
+            "hotspots": [{"label": "A:I30A", "level": "probabile", "text": "Hot spot probabile"}], "interface": True,
+            "protocol": mut["protocol"], "caveat": mutations.CAVEAT}
+
+
+def _prediction_summary() -> dict:
+    plaus = {"status": "divergenze locali", "summary": "divergono in 31-37", "label": "ESMFold",
+             "lddt_confident": 0.87, "confident_residues": 76, "pairs": 76,
+             "regions": [{"chain": "A", "start": "31", "end": "37", "divergent": 7, "length": 7, "lddt_mean": 0.24,
+                          "plddt_mean": 90.0, "confidence": "sicura", "consensus": ["DOPE"]}],
+             "notes": ["nota"], "limits": "limiti"}
+    return {"job_id": "p1", "finished_at": "2026-10-01T10:00:00+00:00", "predictor": "esmfold", "label": "ESMFold",
+            "origin": {"service": "https://api.esmatlas.com/x", "scale": "0-1"}, "plddt": {"mean": 90.0},
+            "chain": "A", "sequence": {"length": 76},
+            "comparison": {"tm_score": 0.927, "lddt": 0.878, "gdt_ts": 95.07, "rmsd": 1.74}, "plausibility": plaus}
+
+
+def _analysis_summary() -> dict:
+    cys = {"chain": "A", "resnum": "22", "resname": "CYS"}
+    return {"job_id": "a1", "finished_at": "2026-10-01T10:00:00+00:00",
+            "disulfides": [{"a": cys, "b": {**cys, "resnum": "70"}, "distance": 2.04, "ca_distance": 5.5, "chi3": 92}],
+            "interfaces": [{"chains": ["A", "B"], "area": 650.0, "counts": {"A": 18, "B": 17},
+                            "interactions": {"hbonds": 6, "salt_bridges": 2}, "apolar_fraction": 0.58,
+                            "residues": {"A": [cys], "B": [{**cys, "chain": "B"}]},
+                            "plausibility": {"level": "compatibile", "text": "area tipica", "limits": "limiti"}}]}
+
+
+def _complex_info() -> dict:
+    return {"chains": [{"model_chain": "A", "template_chain": "A", "length": 76},
+                       {"model_chain": "B", "template_chain": "B", "length": 76, "same_as": "A"}],
+            "symmetry": {"applied": True, "groups": [["A", "B"]], "weight": 1.0},
+            "assessment": {"template": "DIMER", "notes": ["nota"], "limits": "limiti",
+                           "comparison": [{"model_chains": ["A", "B"], "template_chains": ["A", "B"],
+                                           "area_model": 640.0, "area_template": 650.0, "conserved_percent": 88.0,
+                                           "conserved": 15, "template_residues": 17, "fnat": 0.82, "irms": 0.9,
+                                           "lrms": 1.8, "dockq": 0.79, "status": "alta",
+                                           "text": "interfaccia riprodotta"}]}}
+
+
+def _disordered_report(rep: dict) -> dict:
+    """1UBQ con la coda dell'alfa-sinucleina sui residui 41-76: una regione disordinata predetta dalla sequenza."""
+    out = json.loads(json.dumps(rep))
+    for row, aa in zip(out["residues"][40:], "APQEGILEDMPVDPDNEAYEMPSEEGYQDYEPEAEEGAPQ"):
+        row["aa"] = aa
+    return out
+
+
+def _report_case(name: str, rep: dict) -> dict:
+    """Dati di render per ogni tipo di report e per le sezioni facoltative."""
+    from bioloom.domain import refinement
+
+    lig = quality.analyze(DATA / "ubq_zn.pdb", None, with_dope=False)
+    base = model_data(rep)
+    plain = {"templates": [], "alignment": None, "options": None, "models": []}
+    if name == "model":
+        return base
+    if name == "model-ligands-complex-prediction":
+        return {**base, "quality": {**rep, "ligands": lig["ligands"]}, "complex": _complex_info(),
+                "prediction": _prediction_summary(), "analysis": _analysis_summary()}
+    if name == "model-without-quality":
+        return {**base, "quality": None, "consensus": None, "ligands": lig["ligands"]}
+    if name == "loop":
+        return {**base, "kind": "loop", "options": None, "templates": [], "alignment": None,
+                "loop": {"source": "1UBQ", "start": "7:A", "end": "12:A", "models": 2, "level": "fast"}}
+    if name == "pipeline":
+        return {**base, "kind": "pipeline", "search": {"engine": "rcsb", "identity": 96.0, "coverage": 100.0,
+                                                        "evalue": 1e-40, "twilight": False},
+                "pipeline": {"template_mode": "auto"}}
+    if name == "quality":
+        return {**base, **plain, "kind": "quality", "structure": rep.get("structure"), "source": "template 1UBQ",
+                "analysis": _analysis_summary(), "prediction": _prediction_summary()}
+    if name == "quality-disorder":
+        dis = _disordered_report(rep)
+        return {**base, **plain, "kind": "quality", "quality": dis, "consensus": consensus.compute(dis)}
+    if name == "refine":
+        raw = {"before": {"total": 71160.0}, "after_minimization": {"total": -5500.0}, "final": {"total": -6000.0},
+               "restraint_final": 12.5}
+        return {**base, **plain, "kind": "refine",
+                "refine": {"protocol": refinement.protocol(0.5, False),
+                           "energy": {**refinement.energy_change(raw), "components": raw},
+                           "rmsd": {"atoms": 304, "rmsd": 0.2}, "comparison": [], "input": {"residues": 76},
+                           "openmm": {"openmm": "8.2", "platform": "CPU", "threads": 1}}}
+    if name == "mutate":
+        return {**base, **plain, "kind": "mutate", "mutation": _mutation_result()}
+    if name == "alascan":
+        return {**base, **plain, "kind": "alascan", "quality": None, "consensus": None, "scan": _scan_result()}
+    raise AssertionError(name)
+
+
+REPORT_CASES = ("model", "model-ligands-complex-prediction", "model-without-quality", "loop", "pipeline", "quality",
+                "quality-disorder", "refine", "mutate", "alascan")
+
+
+@pytest.mark.parametrize("name", REPORT_CASES)
+def test_every_report_kind_is_well_formed(ubq_quality, name):
+    """Ogni tipo di report (con e senza ligandi, complessi, predizione, analisi strutturale, disordine): sezioni
+    bilanciate e mai annidate, id univoci, HTML ben formato (ogni elemento chiuso nell'ordine giusto)."""
+    text = report.render(_report_case(name, ubq_quality))
+    parser = _check_document(text)
+    expected = {"model-ligands-complex-prediction": {"ligandi", "complesso", "predizione", "analisi"},
+                "quality": {"analisi", "predizione"}, "refine": {"rifinitura"}, "mutate": {"mutagenesi"},
+                "alascan": {"scansione"}, "loop": {"parametri"}}.get(name, set())
+    assert expected <= set(parser.sections), (expected, parser.sections)
+    if name == "quality-disorder":
+        assert "Disordine predetto dalla sequenza" in text
+
+
+def test_document_sections_cannot_stay_open():
+    """Equilibrio delle sezioni come proprietà di _Doc: sezione aperta dentro un'altra, chiusa senza essere aperta,
+    id ripetuto o documento finito con una sezione aperta sono errori di programmazione."""
+    doc = report._Doc()
+    doc.section("a", "A")
+    with pytest.raises(report.ReportStructureError, match="ancora aperta"):
+        doc.section("b", "B")
+    with pytest.raises(report.ReportStructureError, match="ancora aperta"):
+        doc.html()
+    doc.end()
+    with pytest.raises(report.ReportStructureError, match="senza una sezione aperta"):
+        doc.end()
+    with pytest.raises(report.ReportStructureError, match="ripetuta"):
+        doc.section("a", "di nuovo A")
+    assert doc.html() == '<section id="a"><h2>A</h2></section>'

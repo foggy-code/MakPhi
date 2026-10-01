@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { ConsensusResult, PredictResult } from "../api/types";
 import { linkedSources } from "./compare";
 import {
-  consensusPredictorNote, consentText, ESMFOLD_MAX_LENGTH, ESMFOLD_PUBLIC_URL, esmfoldService, followedJob, metricsLine, needsConsent, originText, predictionCompareLink,
-  predictionQualityLink, predictionSource, predictPreflight, predictRequest, STATUS_TONE, tooLongForEsmfold, verdictTitle,
+  consensusPredictorNote, consentText, ESMFOLD_MAX_LENGTH, ESMFOLD_PUBLIC_URL, esmfoldBlocked, esmfoldService, followedJob, metricsLine, needsConsent, originText,
+  pastedSequence, predictionCompareLink, predictionQualityLink, predictionSource, predictPreflight, predictRequest, STATUS_TONE, tooLongForEsmfold, verdictTitle,
 } from "./predict";
 
 const UBQ = { type: "template" as const, id: "1UBQ", chain: "A" };
@@ -53,6 +53,25 @@ describe("confronto con una predizione (F9.3)", () => {
     expect(tooLongForEsmfold(400)).toBe(false);
     expect(tooLongForEsmfold(401)).toBe(true);
     expect(tooLongForEsmfold(null)).toBe(false);
+  });
+
+  it("oltre il limite niente consenso né avvio con ESMFold: decide la sequenza incollata, poi la catena", () => {
+    expect(esmfoldBlocked("esmfold", 450)).toBe(true);
+    expect(esmfoldBlocked("esmfold", 400)).toBe(false);
+    expect(esmfoldBlocked("esmfold", null)).toBe(false); // lunghezza ignota: decide il backend
+    expect(esmfoldBlocked("alphafold", 450)).toBe(false); // AlphaFold DB: va solo l'accessione
+    expect(esmfoldBlocked("esmfold", 450, "MQIFVKTLTG".repeat(10))).toBe(false); // un dominio incollato
+    expect(esmfoldBlocked("esmfold", 76, "A".repeat(401))).toBe(true);
+  });
+
+  it("sequenza completa incollata: FASTA o testo, al posto di quella della catena", () => {
+    expect(pastedSequence(">sp|P0CG48 UBC\nmqifv ktltg\r\nKTITL*")).toBe("MQIFVKTLTGKTITL");
+    expect(pastedSequence("  ")).toBe("");
+    expect(predictRequest("esmfold", UBQ, { sequence: ">x\nMQIFV KTLTG", name: "1UBQ" }).body).toEqual({
+      predictor: "esmfold", source: UBQ, chain: "A", sequence: { name: "1UBQ", sequence: "MQIFVKTLTG" },
+    });
+    expect(predictRequest("esmfold", UBQ, { sequence: " " }).body).not.toHaveProperty("sequence");
+    expect(predictRequest("alphafold", UBQ, { accession: "P0CG48", sequence: "MQIFV" }).body).not.toHaveProperty("sequence");
   });
 
   it("job seguito: quello scelto, poi quello in corso, poi il più recente", () => {

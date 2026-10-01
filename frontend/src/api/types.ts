@@ -455,8 +455,10 @@ export interface TemplateItem extends Labelled {
   method: string;
   resolution: number | null;
   chains: string[];
-  /** modello predetto (AlphaFold DB, o file di AlphaFold caricato): non una struttura sperimentale */
+  /** modello predetto (AlphaFold DB, file di AlphaFold o predizione di ESMFold caricati): non una struttura sperimentale */
   predicted?: boolean;
+  /** predittore riconosciuto (domain/plddt.predictor); assente nei metadati precedenti a F9.3 */
+  predictor?: PredictorName | null;
   /** pLDDT medio (0–100) dei modelli predetti */
   plddt_mean?: number | null;
   plddt_fractions?: PlddtFractions | null;
@@ -857,8 +859,9 @@ export interface PreparedTemplate {
   last: string;
   sequence: string;
   ligands: number;
-  /** template AlphaFold (modello predetto) */
+  /** template predetto (AlphaFold, ESMFold) */
   predicted?: boolean;
+  predictor?: PredictorName | null;
   /** ritaglio dei residui a basso pLDDT; assente se non applicato */
   plddt?: PlddtTrim | null;
   /** con i ligandi attivi: gruppi trasferiti (ordine del file) e gruppi delle catene lasciati fuori, con il motivo */
@@ -1650,6 +1653,9 @@ export interface MutationRef {
   label: string;
   wt_name: string;
   mut_name: string;
+  /** catena del residuo nei modelli costruiti: diversa da `chain` solo per le catene con un nome di più caratteri,
+   *  che nei file PDB restano con la lettera di MODELLER */
+  model_chain?: string;
 }
 
 export interface MutationInteraction {
@@ -2117,8 +2123,9 @@ export interface SearchItem {
   /** job: tipo e stato */
   kind?: JobKind;
   status?: JobStatus;
-  /** template: modello predetto */
+  /** template: modello predetto e da quale predittore */
   predicted?: boolean;
+  predictor?: PredictorName | null;
   /** etichette: numero di elementi */
   count?: number;
 }
@@ -2208,7 +2215,8 @@ export interface PackageSummary {
   manifest_sha256: string;
 }
 
-export type RerunVerdict = "identico" | "equivalente" | "diverso";
+/** compatibile: entro le tolleranze scientifiche del tipo di calcolo (rumore numerico atteso, es. OpenMM su più thread) */
+export type RerunVerdict = "identico" | "equivalente" | "compatibile" | "diverso";
 export type RerunFileStatus = "identical" | "equivalent" | "different" | "missing" | "extra";
 
 /** Confronto delle coordinate di un PDB, senza sovrapposizione. */
@@ -2219,9 +2227,30 @@ export interface RerunCoordinates {
   only_original: number;
   only_rerun: number;
   rmsd: number | null;
+  /** RMSD della sola catena principale (N, CA, C, O), senza sovrapposizione */
+  backbone_rmsd?: number | null;
   max_deviation: number | null;
   max_atom: string | null;
   within: boolean;
+}
+
+/** Un controllo con le tolleranze scientifiche del tipo di calcolo (domain/reproducibility.scientific_check). */
+export interface RerunScientificCheck {
+  what: string;
+  /** numeri (energie) o testi (classe della mutagenesi); null per le strutture (conta `delta`) */
+  original: number | string | null;
+  rerun: number | string | null;
+  delta: number | null;
+  limit: number | null;
+  within: boolean;
+  detail?: string;
+}
+
+export interface RerunScientific {
+  within: boolean;
+  checks: RerunScientificCheck[];
+  tolerance: Record<string, unknown>;
+  text: string;
 }
 
 export interface RerunDiff {
@@ -2266,6 +2295,8 @@ export interface RerunResult {
   metrics: { title: string; rows: RerunMetricRow[] }[];
   warnings: string[];
   tolerance: { coordinates_angstrom: number; score_abs: number; score_rel: number; ignored: string[] };
+  /** tolleranze scientifiche del tipo di calcolo (null se non ne ha) */
+  scientific?: RerunScientific | null;
   bioloom: string;
   image: string | null;
   created_at: string;
@@ -2340,7 +2371,8 @@ export interface Plausibility {
   divergent_residues: number;
   regions: PlausibilityRegion[];
   /** per coppia del confronto, nell'ordine del modello */
-  residues: { chain: string; resnum: string; lddt: number | null; plddt: number | null; divergent: boolean; confident: boolean }[];
+  /** `junction`: residuo vicino a una giunzione della sequenza inviata senza i residui mancanti (mai divergente) */
+  residues: { chain: string; resnum: string; lddt: number | null; plddt: number | null; divergent: boolean; confident: boolean; junction?: boolean }[];
   consensus_available: boolean;
   notes: string[];
   limits: string;
@@ -2355,7 +2387,14 @@ export interface PredictResult {
   /** file della predizione tra i file del job (riconosciuto come modello predetto, pLDDT su 0–100) */
   prediction_file: string;
   recognized_as: PredictorName | null;
-  sequence: { name: string; length: number };
+  /** sequenza predetta: indicata, della catena (`structure`) o completa dal file (`seqres`, catena interrotta) */
+  sequence: {
+    name: string;
+    length: number;
+    origin?: "input" | "structure" | "seqres" | null;
+    gaps?: { after: string; before: string; missing: number | null }[];
+    modified?: string[];
+  };
   plddt: { mean: number | null; residues: number; fractions: Record<string, number> };
   accession: string | null;
   source: StructureSource | null;

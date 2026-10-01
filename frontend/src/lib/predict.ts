@@ -45,20 +45,29 @@ export function consentText(service: string, residues: number | null): string {
   return `Per la predizione ${what} viene inviata al servizio ESMFold (${service}). Le coordinate del modello non lasciano il computer; la predizione resta in cache su questo computer per 30 giorni. Il consenso vale per tutte le predizioni successive e si revoca in Impostazioni → Generale.`;
 }
 
-/** Corpo di POST /api/predict per la struttura da confrontare, oppure il motivo per cui non si può lanciare. */
+/** Sequenza incollata nella finestra di avvio (testo o FASTA): lettere senza intestazione, spazi né '*' finale, in
+ *  maiuscolo. Vuota = quella della catena del modello (il backend la ricava dalla struttura). */
+export function pastedSequence(text: string | null | undefined): string {
+  return (text ?? "").split(/\r?\n/).filter((line) => !line.trim().startsWith(">")).join("").replace(/[\s*]/g, "").toUpperCase();
+}
+
+/** Corpo di POST /api/predict per la struttura da confrontare, oppure il motivo per cui non si può lanciare.
+ *  `sequence`: sequenza completa da predire al posto di quella della catena (catena interrotta, residui mancanti). */
 export function predictRequest(
   predictor: PredictorName,
   source: StructureSource | null | undefined,
-  opts: { accession?: string; projectId?: string | null; chain?: string | null } = {},
+  opts: { accession?: string; projectId?: string | null; chain?: string | null; sequence?: string | null; name?: string } = {},
 ): { body: PredictRequest | null; error: string | null } {
   if (!source) return { body: null, error: "Scegli la struttura da confrontare." };
   const accession = (opts.accession ?? "").trim();
   if (predictor === "alphafold" && !accession) return { body: null, error: "Indica l'accessione UniProt del modello di AlphaFold DB." };
   const chain = (opts.chain ?? source.chain ?? "").trim() || null;
+  const sequence = predictor === "esmfold" ? pastedSequence(opts.sequence) : "";
   return {
     body: {
       ...(opts.projectId ? { project_id: opts.projectId } : {}),
       predictor, source, chain, ...(predictor === "alphafold" ? { accession } : {}),
+      ...(sequence ? { sequence: { name: opts.name?.trim() || "sequenza", sequence } } : {}),
     },
     error: null,
   };
@@ -72,6 +81,15 @@ export function predictPreflight(body: PredictRequest | null): PreflightRequest 
 /** Sequenza troppo lunga per ESMFold (il controllo vero è nel backend, prima dell'invio). */
 export function tooLongForEsmfold(residues: number | null | undefined): boolean {
   return residues != null && residues > ESMFOLD_MAX_LENGTH;
+}
+
+/** ESMFold non può partire perché la sequenza da inviare (quella incollata, altrimenti la catena, se se ne conoscono
+ *  i residui) supera il limite: la finestra non chiede il consenso per un invio impossibile e propone AlphaFold DB.
+ *  Con la lunghezza ignota decide il backend. */
+export function esmfoldBlocked(predictor: PredictorName, residues: number | null | undefined, pasted?: string | null): boolean {
+  if (predictor !== "esmfold") return false;
+  const own = pastedSequence(pasted);
+  return tooLongForEsmfold(own ? own.length : residues);
 }
 
 /** Job da seguire per una struttura: quello già scelto, altrimenti quello in corso, altrimenti il più recente. */

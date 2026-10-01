@@ -235,8 +235,9 @@ def alignment_identity(target: str, template: str) -> tuple[Optional[float], Opt
 _MODELLER_EXPDTA = re.compile(r"^EXPDTA\s+THEORETICAL MODEL, MODELLER\s+([0-9][\w.]*)", re.MULTILINE)
 _TRIM_REMARK = re.compile(r"^REMARK 999 BIOLOOM PLDDT_TRIM THRESHOLD (\S+) REMOVED (\d+) OF (\d+)(?: FRAGMENTS (\d+))?",
                           re.MULTILINE)
-_MODEL_TRIM = re.compile(r"^REMARK 999 BIOLOOM TEMPLATE (\S+) ALPHAFOLD (?:PLDDT<(\S+) REMOVED (\d+)|(PLDDT_TRIM OFF))",
-                         re.MULTILINE)
+# ALPHAFOLD, ESMFOLD o PREDICTED (plddt.predictor_tag): i modelli precedenti a F9.3 scrivono sempre ALPHAFOLD
+_MODEL_TRIM = re.compile(r"^REMARK 999 BIOLOOM TEMPLATE (\S+) (?:ALPHAFOLD|ESMFOLD|PREDICTED) "
+                         r"(?:PLDDT<(\S+) REMOVED (\d+)|(PLDDT_TRIM OFF))", re.MULTILINE)
 
 
 def modeller_version(head: str) -> Optional[str]:
@@ -258,7 +259,7 @@ def prepared_trim(head: str) -> Optional[dict]:
 
 
 def model_trims(head: str) -> dict[str, Optional[dict]]:
-    """Template AlphaFold dalle righe di tracciabilità del modello: codice → ritaglio (None = ritaglio spento)."""
+    """Template predetti dalle righe di tracciabilità del modello: codice → ritaglio (None = ritaglio spento)."""
     out: dict[str, Optional[dict]] = {}
     for m in _MODEL_TRIM.finditer(head or ""):
         if m.group(4):
@@ -694,10 +695,10 @@ LEGEND = {
     "procheck": ("PROCHECK", "percentuale di residui nelle regioni core del grafico di Ramachandran (Laskowski et al. "
                  "1993): oltre il 90% atteso per strutture a 2 Å o meglio; G-factor globale sopra −0,5 normale, sotto "
                  "−1 insolito."),
-    "plddt": ("pLDDT", "confidenza locale di AlphaFold da 0 a 100 (lDDT-Cα predetto; Jumper et al. 2021; Mariani et "
-              "al. 2013), nella colonna B-factor. Fasce di AlphaFold DB (Tunyasuvunakool et al. 2021): ≥ 90 molto "
-              "alta, 70–90 confidente, 50–70 bassa, < 50 molto bassa (spesso disordine). Un modello AlphaFold è una "
-              "predizione, non una struttura sperimentale."),
+    "plddt": ("pLDDT", "confidenza locale del predittore (AlphaFold, ESMFold) da 0 a 100 (lDDT-Cα predetto; Jumper et "
+              "al. 2021; Lin et al. 2023; Mariani et al. 2013), nella colonna B-factor. Fasce di AlphaFold DB "
+              "(Tunyasuvunakool et al. 2021): ≥ 90 molto alta, 70–90 confidente, 50–70 bassa, < 50 molto bassa "
+              "(spesso disordine). Un modello predetto è una predizione, non una struttura sperimentale."),
     "ss": ("Struttura secondaria", "assegnazione DSSP (Kabsch & Sander 1983) ridotta a 3 stati: elica (H, G, I), "
            "filamento β (E, B), coil (T, S e il resto)."),
     "disorder": ("Disordine predetto", "FoldIndex (Prilusky et al. 2005) dalla sola sequenza della struttura: "
@@ -883,24 +884,51 @@ a{color:inherit;text-decoration:none}
 """
 
 
+class ReportStructureError(RuntimeError):
+    """Errore di programmazione nella struttura del report: sezione aperta dentro un'altra, chiusa due volte, id
+    ripetuto o documento finito con una sezione aperta."""
+
+
 class _Doc:
-    """Accumula il testo del documento e ricorda quali voci della legenda e quali fonti servono."""
+    """Accumula il testo del documento e ricorda quali voci della legenda e quali fonti servono.
+
+    L'equilibrio delle sezioni è una proprietà della classe, non di ogni funzione: `section` con una sezione ancora
+    aperta, `end` senza una sezione aperta, un id ripetuto e `html` con una sezione aperta sollevano
+    `ReportStructureError`. Si è scelto l'errore e non la chiusura automatica con un avviso: le sezioni dipendono solo
+    dal codice (mai dai dati), quindi uno squilibrio è un errore di programmazione che il test parametrizzato su tutti i
+    tipi di report (test_report.py) ferma subito; chiuderle in silenzio nasconderebbe proprio la svista (un `end`
+    perso in un'unione di rami) che ha prodotto HTML con le sezioni annidate."""
 
     def __init__(self) -> None:
         self.parts: list[str] = []
         self.legend: set[str] = set()
         self.refs: set[str] = set()
         self.toc: list[tuple[str, str]] = []
+        self.current: Optional[str] = None
 
     def add(self, *chunks: str) -> None:
         self.parts.extend(chunks)
 
     def section(self, sid: str, title: str, page_break: bool = False) -> None:
+        if self.current is not None:
+            raise ReportStructureError(f"sezione «{sid}» aperta mentre «{self.current}» è ancora aperta")
+        if any(sid == s for s, _t in self.toc):
+            raise ReportStructureError(f"sezione «{sid}» ripetuta: gli id del report devono essere univoci")
         self.toc.append((sid, title))
+        self.current = sid
         self.add(f'<section id="{sid}"' + (' class="page"' if page_break else "") + f"><h2>{_e(title)}</h2>")
 
     def end(self) -> None:
+        if self.current is None:
+            raise ReportStructureError("end() senza una sezione aperta")
+        self.current = None
         self.add("</section>")
+
+    def html(self) -> str:
+        """Testo del corpo; solo a sezioni tutte chiuse."""
+        if self.current is not None:
+            raise ReportStructureError(f"report finito con la sezione «{self.current}» ancora aperta")
+        return "".join(self.parts)
 
     def explain(self, *keys: str) -> None:
         """Voci della legenda (chiavi di LEGEND)."""
@@ -1115,11 +1143,12 @@ def _templates(doc: _Doc, data: dict) -> None:
         if not t.get("predicted"):
             continue
         mean = f" pLDDT medio del modello {_num(t.get('plddt_mean'), 1)}." if _isnum(t.get("plddt_mean")) else ""
-        doc.add(_note(f"<b>{_e(t.get('code') or t.get('id'))}: modello predetto (AlphaFold DB), non una struttura "
-                      f"sperimentale.</b>{mean} Template {_trim_text(t)}. I residui tolti sono costruiti senza "
-                      "vincoli dal template.", "warn"))
+        name = str(t.get("id") or t.get("code") or "")
+        doc.add(_note(f"<b>{_e(t.get('code') or t.get('id'))}: {_e(plddt.predicted_text(t.get('predictor'), name))}, "
+                      f"non una struttura sperimentale.</b>{mean} Template {_trim_text(t)}. I residui tolti sono "
+                      "costruiti senza vincoli dal template.", "warn"))
         doc.explain("plddt")
-        doc.cite("alphafold", "afdb", "lddt")
+        doc.cite(*(("esmfold",) if t.get("predictor") == "esmfold" else ("alphafold", "afdb")), "lddt")
     if search:
         engine = search.get("engine") or "—"
         if _isnum(search.get("identity")):
@@ -1191,7 +1220,7 @@ def _options(doc: _Doc, data: dict) -> None:
                 restraints.append(f"{label} {r.get('start')} – {r.get('end')}")
         rows.append(("Vincoli aggiuntivi", _e("; ".join(restraints)) or "nessuno"))
         if opts.get("plddt_trim") is not None:
-            rows.append(("Ritaglio pLDDT (solo template AlphaFold)",
+            rows.append(("Ritaglio pLDDT (solo template predetti)",
                          f"sì, soglia {_num(opts.get('plddt_min'), 0)}" if opts.get("plddt_trim") else "no"))
         if opts.get("symmetry") or isinstance(data.get("complex"), dict):  # bersaglio a più catene (F5.3)
             rows.append(("Simmetria fra catene", f"sì, C-alfa delle catene con la stessa sequenza, peso "
@@ -1375,10 +1404,12 @@ def _profiles_block(doc: _Doc, quality: dict, cons: Optional[dict]) -> None:
         doc.explain("prosa")
         doc.cite("prosa", "prosa_b")
     if ((quality.get("structure") or {}).get("bfactor_kind")) == "plddt":
-        figs.append(profile_svg(residues, [r.get("bfactor") for r in residues], title="Confidenza pLDDT (AlphaFold)",
+        esm = (quality.get("structure") or {}).get("predictor") == "esmfold"
+        figs.append(profile_svg(residues, [r.get("bfactor") for r in residues],
+                                title=f"Confidenza pLDDT ({'ESMFold' if esm else 'AlphaFold'})",
                                 y_range=(0.0, 100.0), digits=0, guides=((90.0, "90"), (70.0, "70"), (50.0, "50"))))
         doc.explain("plddt")
-        doc.cite("alphafold", "afdb", "lddt")
+        doc.cite(*(("esmfold",) if esm else ("alphafold", "afdb")), "lddt")
     dis = (cons or {}).get("disorder") if isinstance((cons or {}).get("disorder"), dict) else {}
     scores = dis.get("scores") or []
     disorder_fig = ""
@@ -2158,4 +2189,4 @@ def render(data: dict) -> str:
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
             '<meta name="generator" content="BioLoom">'
             f"<title>{_e(title)}</title><style>{CSS}</style></head><body>"
-            + _header(data, doc.toc) + "<main>" + "".join(doc.parts) + "</main>" + footer + "</body></html>\n")
+            + _header(data, doc.toc) + "<main>" + doc.html() + "</main>" + footer + "</body></html>\n")

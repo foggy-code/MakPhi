@@ -622,6 +622,30 @@ def test_cli_rerun_in_a_subprocess_with_a_temporary_data_folder(client_with_ubq,
     assert proc.returncode == 2 and "Checksum SHA-256" in proc.stderr
 
 
+def test_cli_exit_codes_for_a_failed_or_different_rerun_with_italian_messages(client_with_ubq, tmp_path, monkeypatch,
+                                                                            capsys):
+    """Codice 2 e «Riesecuzione non riuscita: …» (mai lo stato in inglese) per un job fallito, codice 1 per un esito
+    diverso: i due casi del docstring di cli.py che il test del sottoprocesso non esercita."""
+    from bioloom import cli
+
+    c = client_with_ubq
+    package = tmp_path / "pacchetto.zip"
+    package.write_bytes(_package(c, _quality(c)["id"]))
+
+    def failing(self, ctx, p):
+        raise AppError("MODELLER non è configurato: manca la chiave di licenza.", code="modeller_license_missing")
+
+    monkeypatch.setattr(service.ReproducibilityService, "handle", failing)
+    assert cli.rerun_main([str(package), "--data", str(tmp_path / "dati_1")]) == cli.EXIT_ERROR
+    err = capsys.readouterr().err
+    assert "Riesecuzione non riuscita: MODELLER non è configurato" in err and "failed" not in err
+    monkeypatch.setattr(service.ReproducibilityService, "handle",
+                        lambda self, ctx, p: {"verdict": "diverso", "summary": "Diverso: 1 file oltre la tolleranza."})
+    assert cli.rerun_main([str(package), "--data", str(tmp_path / "dati_2")]) == cli.EXIT_DIFFERENT
+    assert "Diverso: 1 file oltre la tolleranza." in capsys.readouterr().out
+    assert cli.failure_text({"status": "cancelled", "error": None}) == "Riesecuzione annullata."
+
+
 @pytest.mark.modeller
 @requires_modeller
 def test_model_package_and_rerun_with_the_same_seed(client_with_ubq):
@@ -749,6 +773,143 @@ def test_refine_package_and_rerun_is_identical_with_one_openmm_thread(client_wit
     assert rows["before"]["delta"] == 0 and rows["after"]["delta"] == 0 and rows["rmsd"]["within"]
 
 
+@pytest.mark.modeller
+@requires_modeller
+def test_mutate_package_and_rerun_with_the_same_seeds(client_with_ubq):
+    """Mutagenesi K48R: semi di MODELLER e strumenti nel manifest, struttura nel pacchetto; la riesecuzione dà gli
+    stessi modelli (MODELLER deterministico con gli stessi semi), la stessa classe e lo stesso ΔDOPE."""
+    c = client_with_ubq
+    job = wait_job(c, c.post("/api/mutate", json={"source": {"type": "template", "id": "1UBQ"},
+                                                   "mutations": "A:K48R"}).json()["id"], timeout=600)
+    assert job["status"] == "completed", job.get("error")
+    data = _package(c, job["id"])
+    m = _manifest(data)
+    assert m["rerun"]["supported"] and m["seeds"]["modeller_rand_seed"] == [-49837, -49838, -49839]
+    assert {"modeller", "dssp"} <= set(m["environment"]["tools"]) and "openmm" not in m["environment"]["tools"]
+    files = _members(data)
+    assert "inputs/library/1UBQ.pdb" in files and "outputs/1UBQ_K48R.pdb" in files and "scripts/mutate.py" in files
+    res = _rerun(c, data)["result"]
+    assert res["verdict"] in ("identico", "equivalente"), res["summary"]
+    assert res["scientific"] is None  # senza energia il calcolo è deterministico: nessuna tolleranza scientifica
+    rows = {r["key"]: r for r in res["metrics"][0]["rows"]}
+    assert rows["class"]["original"] == job["result"]["assessment"]["code"] and rows["class"]["within"]
+    assert rows["delta_dope"]["delta"] == 0 and rows["rmsd_all"]["within"]
+
+
+@pytest.mark.modeller
+@requires_modeller
+def test_alascan_of_a_pocket_package_carries_the_pockets_and_reruns(client, monkeypatch):
+    """Scansione della tasca di un job `pockets`: le tasche viaggiano nel pacchetto (inputs/jobs/<id>/pockets.json) e
+    la riesecuzione le usa anche dopo l'eliminazione del job delle tasche."""
+    from bioloom.services import structure_tools
+
+    fake = {"summary": {"count": 1, "druggable": 1, "threshold": 0.5,
+                        "best": {"id": 1, "druggability": 0.8, "volume": 300.0}},
+            "pockets": [{"id": 1, "druggability": 0.8, "residues": [{"chain": "A", "resnum": "30"},
+                                                                   {"chain": "A", "resnum": "43"}]}],
+            "warnings": []}
+    monkeypatch.setattr(structure_tools.pockets, "run", lambda path, ctx, workdir: fake)
+    with open(DATA / "1UBQ.pdb", "rb") as fh:
+        assert client.post("/api/templates/upload", files={"file": ("1UBQ.pdb", fh, "chemical/x-pdb")}).status_code == 200
+    src = {"type": "template", "id": "1UBQ"}
+    pockets = wait_job(client, client.post("/api/pockets", json={"source": src}).json()["id"])
+    scan = wait_job(client, client.post("/api/alascan", json={"source": src, "selection": {
+        "mode": "pocket", "pocket_job": pockets["id"], "pocket": 1}}).json()["id"], timeout=900)
+    assert scan["status"] == "completed", scan.get("error")
+    data = _package(client, scan["id"])
+    files = _members(data)
+    carried = json.loads(files[f"inputs/jobs/{pockets['id']}/pockets.json"])
+    assert carried["result"]["pockets"][0]["residues"][1]["resnum"] == "43"
+    assert next(f for f in _manifest(data)["files"] if f["path"].endswith("pockets.json"))["role"] == "job_result"
+    client.delete(f"/api/jobs/{pockets['id']}")
+    res = _rerun(client, data)["result"]
+    assert res["verdict"] in ("identico", "equivalente"), res["summary"]
+    rows = {r["key"]: r for r in res["metrics"][0]["rows"]}
+    assert rows["counts"]["within"] and rows["A:I30A:class"]["within"] and rows["A:L43A:delta_dope"]["delta"] == 0
+
+
+def test_prediction_package_documents_the_remote_input_and_is_not_rerunnable(client_with_ubq, monkeypatch, tmp_path):
+    """Confronto con ESMFold (servizio simulato): pacchetto con la predizione ricevuta, la struttura confrontata e la
+    predizione come input remoto datato; la riesecuzione è rifiutata come non riproducibile localmente."""
+    import httpx
+
+    from bioloom.engines import remote
+    from tests.test_predict import FakeServices, ubq_prediction
+
+    fake = FakeServices()
+    fake.esm = [(200, ubq_prediction())]
+    monkeypatch.setattr(remote, "_client", httpx.Client(transport=httpx.MockTransport(lambda r: fake.handler(r))))
+    monkeypatch.setattr(remote, "_cache_dir", tmp_path / "remote_cache")
+    c = client_with_ubq
+    assert c.put("/api/settings", json={"esmfold_remote": True}).status_code == 200
+    job = wait_job(c, c.post("/api/predict", json={"source": {"type": "template", "id": "1UBQ", "chain": "A"}}
+                                 ).json()["id"], timeout=120)
+    assert job["status"] == "completed", job.get("error")
+    data = _package(c, job["id"])
+    m = _manifest(data)
+    [esm] = m["remote"]
+    assert esm["service"].startswith("ESMFold") and esm["date"] and "76 residui" in esm["what"]
+    assert m["rerun"]["supported"] is False and "servizio remoto" in m["rerun"]["reason"]
+    assert {"outputs/prediction_esmfold.pdb", "inputs/library/1UBQ.pdb", "outputs/result.json"} <= set(_members(data))
+    summary = _inspect(c, data).json()
+    assert summary["checks"][0]["code"] == "rerun_not_reproducible" and summary["kind_label"] == \
+        "confronto con una predizione"
+    r = c.post("/api/jobs/rerun", files={"file": ("p.zip", data, "application/zip")})
+    assert r.status_code == 400 and r.json()["error"]["code"] == "rerun_not_reproducible"
+
+
+def test_scientific_tolerance_of_a_refinement_rerun():
+    """Rifinitura rieseguita con più thread di OpenMM (risultati simulati): entro le tolleranze scientifiche l'esito è
+    «compatibile», distinto da «identico» e da «diverso»; oltre (catena principale o energia) resta «diverso»."""
+    pdb = (DATA / "1UBQ.pdb").read_text()
+
+    def files(dx: float) -> list[dict]:
+        refined = repro.compare_file("1UBQ_refined.pdb", pdb.encode(), _shift(pdb, dx).encode())
+        return [{**refined, "role": "output", "principal": True},
+                {"path": "result.json", "status": "different", "role": "output", "principal": True}]
+
+    def metrics(after: float) -> list[dict]:
+        return [{"title": "Rifinitura", "rows": repro.metric_rows(
+            {"before": -396.07, "after": -12431.37}, {"before": -395.47, "after": after},
+            (("before", "Energia prima (kJ/mol)"), ("after", "Energia dopo (kJ/mol)")))}]
+
+    near = repro.scientific_check("refine", files(0.01), metrics(-12392.2))  # rumore misurato: 0,020 Å, 41 kJ/mol
+    assert near["within"] and repro.verdict(files(0.01), near) == "compatibile"
+    assert files(0.01)[0]["coordinates"]["backbone_rmsd"] == pytest.approx(0.01, abs=1e-4)
+    assert [c["within"] for c in near["checks"]] == [True, True, True] and near["checks"][2]["limit"] == 62.2
+    backbone = repro.scientific_check("refine", files(0.08), metrics(-12392.2))
+    assert not backbone["within"] and repro.verdict(files(0.08), backbone) == "diverso"
+    energy = repro.scientific_check("refine", files(0.01), metrics(-12300.0))  # 131 kJ/mol: un altro minimo
+    assert not energy["within"] and repro.verdict(files(0.01), energy) == "diverso"
+    missing = files(0.01) + [{"path": "1UBQ_refined.pdb.quality.json", "status": "missing", "principal": True}]
+    assert repro.verdict(missing, repro.scientific_check("refine", missing, metrics(-12392.2))) == "diverso"
+    # tipi senza tolleranze scientifiche (o mutagenesi senza energia: deterministica)
+    assert repro.scientific_check("quality", files(0.01), []) is None
+    assert repro.scientific_check("mutate", files(0.01), [], {"energy": False}) is None
+    assert repro.verdict(files(0.01), None) == "diverso"
+    assert repro.verdict([{"status": "identical"}], near) == "identico"
+    text = repro.report_text({"verdict": "compatibile", "scientific": near, "files": files(0.01)})
+    assert "Esito: COMPATIBILE" in text and "Tolleranze scientifiche" in text and "0,020 Å" in text
+
+
+def test_scientific_tolerance_of_a_mutagenesis_with_energy_keeps_the_class():
+    """Mutagenesi con l'energia: le minimizzazioni hanno il rumore della rifinitura, ma classe e ΔDOPE devono restare
+    uguali; se la classe cambia l'esito è «diverso» anche con energie entro la tolleranza."""
+    pdb = (DATA / "1UBQ.pdb").read_text()
+    files = [{**repro.compare_file("openmm_mutante/m_min.pdb", pdb.encode(), _shift(pdb, 0.01).encode()),
+              "principal": True}]
+    base = {"assessment": {"code": "neutral"}, "dope": {"delta": -30.0}, "energy": {"wild_type": -12000.0,
+                                                                                   "mutant": -12100.0,
+                                                                                   "reference_wild_type": -900.0,
+                                                                                   "reference_mutant": -950.0}}
+    rerun = {**base, "energy": {**base["energy"], "mutant": -12130.0}}
+    metrics = service.ReproducibilityService._metrics("mutate", base, rerun)
+    same = repro.scientific_check("mutate", files, metrics, {"energy": True})
+    assert same["within"] and repro.verdict(files, same) == "compatibile"
+    flipped = service.ReproducibilityService._metrics("mutate", base, {**rerun, "assessment": {"code": "uncertain"}})
+    assert repro.verdict(files, repro.scientific_check("mutate", files, flipped, {"energy": True})) == "diverso"
+
+
 def test_unsupported_rerun_kind_in_a_resealed_manifest_is_refused(client_with_ubq):
     c = client_with_ubq
     data = _package(c, _quality(c)["id"])
@@ -766,6 +927,46 @@ def test_unsupported_rerun_kind_in_a_resealed_manifest_is_refused(client_with_ub
 
     r = c.post("/api/jobs/rerun", files={"file": ("p.zip", _rebuild(data, manifest=bad_params), "application/zip")})
     assert r.status_code == 400 and r.json()["error"]["code"] == "package_params_invalid"
+
+
+def test_manifest_of_an_unexpected_shape_is_a_reasoned_refusal(client_with_ubq):
+    """Il manifest è un input non fidato e l'impronta si ricalcola: campi di forma inattesa (risigillati) danno
+    package_manifest_invalid nell'anteprima, nei controlli preventivi e all'avvio, mai un errore interno."""
+    c = client_with_ubq
+    data = _package(c, _quality(c)["id"])
+    cases = {
+        "libraries": lambda m: m["environment"].update(libraries=[1]),
+        "tools": lambda m: m["environment"].update(tools=[1]),
+        "python": lambda m: m["environment"].update(python={"v": 3}),
+        "notes": lambda m: m.update(notes=5),
+        "remote": lambda m: m.update(remote=["RCSB"]),
+        "duration": lambda m: m["job"].update(duration_seconds="lungo"),
+        "rerun": lambda m: m.update(rerun=[True]),
+    }
+    staged = []
+    for name, tweak in cases.items():
+        bad = _rebuild(data, manifest=tweak)
+        r = _inspect(c, bad)
+        assert r.status_code == 400 and r.json()["error"]["code"] == "package_manifest_invalid", (name, r.text)
+        assert "Manifest del pacchetto non valido" in r.json()["error"]["message"]
+        r = c.post("/api/jobs/rerun", files={"file": ("p.zip", bad, "application/zip")})
+        assert r.status_code == 400 and r.json()["error"]["code"] == "package_manifest_invalid", name
+        package_id = c.app.state.core.repro.stage(io.BytesIO(bad))
+        staged.append(package_id)
+        pre = c.post("/api/compute/preflight", json={"kind": "rerun", "params": {"package_id": package_id}})
+        assert pre.status_code == 200 and not pre.json()["ok"], name
+        assert pre.json()["checks"][0]["code"] == "package_manifest_invalid", name
+    assert not [j for j in c.get("/api/jobs").json() if j["kind"] == "rerun"]
+
+    # parametri liberi di un tipo non rieseguibile (ricerca): anteprima con il rifiuto motivato, non un 500
+    def search_with_odd_engine(m):
+        m["job"]["kind"] = "search"
+        m["params"]["engine"] = ["x"]
+
+    r = _inspect(c, _rebuild(data, manifest=search_with_odd_engine))
+    assert r.status_code == 200 and r.json()["checks"][0]["code"] == "rerun_not_reproducible"
+    for package_id in staged:
+        c.app.state.core.repro.discard(package_id)
 
 
 def test_rerun_registration_and_packaged_compute_never_downloads(client, tmp_path, monkeypatch):

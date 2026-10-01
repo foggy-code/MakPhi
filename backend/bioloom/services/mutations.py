@@ -74,13 +74,18 @@ class MutationService:
 
     def validate_scan(self, params: dict) -> tuple[list[mutations.Mutation], list[dict], dict]:
         """Residui della scansione (in alanina), esclusi con il motivo e descrizione della scelta."""
-        _path, _label, model, _n = self._structure(params.get("source") or {})
+        path, _label, model, _n = self._structure(params.get("source") or {})
         mutations.seeds(int(params.get("seed") or mutations.SEED))
-        residues, selection = self._scan_residues(model, params.get("source") or {}, params.get("selection") or {})
+        residues, selection = self._scan_residues(model, params.get("source") or {}, params.get("selection") or {},
+                                                  cache.content_hash(path))
         muts, skipped = mutations.scan_plan(model, residues, energy=bool(params.get("energy")))
         return muts, skipped, selection
 
-    def _scan_residues(self, model, source: dict, sel: dict) -> tuple[list[tuple[str, str]], dict]:
+    def _scan_residues(self, model, source: dict, sel: dict,
+                       fingerprint: Optional[str] = None) -> tuple[list[tuple[str, str]], dict]:
+        """Residui della scansione e descrizione della scelta. `fingerprint`: impronta del file della sorgente, che in
+        modalità tasca deve essere quella su cui fpocket ha calcolato le tasche (stesso nome, file sostituito = errore,
+        non residui di un'altra struttura scartati o rinumerati in silenzio)."""
         mode = sel.get("mode") or "residues"
         if mode not in SCAN_MODES:
             raise AppError(f"Scelta dei residui non valida: {mode}.", code="invalid_scan")
@@ -104,11 +109,15 @@ class MutationService:
         job_id = str(sel.get("pocket_job") or "").strip()
         if not job_id or sel.get("pocket") in (None, ""):
             raise AppError("Indica il calcolo delle tasche e la tasca da scandire.", code="invalid_scan")
-        job = self.jobs.get(job_id)
+        job = self._pockets_job(job_id)
         if job.get("kind") != "pockets" or job.get("status") != "completed" or not isinstance(job.get("result"), dict):
             raise Conflict("Il calcolo delle tasche indicato non è completato.")
         if source_key((job.get("params") or {}).get("source")) != source_key(source):
             raise AppError("Le tasche indicate sono di un'altra struttura.", code="invalid_scan")
+        computed_on = job["result"].get("source_sha256")
+        if fingerprint and computed_on and computed_on != fingerprint:
+            raise AppError("Le tasche sono state calcolate su una versione precedente del file: ricalcolale dalla scheda "
+                           "Tasche.", code="invalid_scan")
         pocket = next((p for p in job["result"].get("pockets") or [] if int(p.get("id", -1)) == int(sel["pocket"])),
                       None)
         if pocket is None:
@@ -119,7 +128,12 @@ class MutationService:
             if res is not None and (r["chain"], r["resnum"]) not in residues:
                 residues.append((r["chain"], r["resnum"]))
         return residues, {"mode": mode, "pocket_job": job_id, "pocket": int(sel["pocket"]),
+                          "source_sha256": computed_on,
                           "detail": f"residui della tasca {int(sel['pocket'])} di fpocket"}
+
+    def _pockets_job(self, job_id: str) -> dict:
+        """Job `pockets` della scansione per tasca (la riesecuzione da pacchetto lo legge dal pacchetto)."""
+        return self.jobs.get(job_id)
 
     # ------------------------------------------------------------------------------ parti comuni dei job
     @staticmethod
@@ -197,15 +211,26 @@ class MutationService:
             return {}
         return {(r["chain"], r["resnum"]): r for r in result["residues"]}
 
-    def _site_indicators(self, built: dict, muts: list[mutations.Mutation], iface: dict) -> list[dict]:
+    @staticmethod
+    def _model_sites(info: dict, muts: list[mutations.Mutation]) -> list[tuple[str, str]]:
+        """Siti nei modelli costruiti (catene con un nome di più caratteri: lettera di MODELLER, `model_site`)."""
+        return [mutations.model_site(info, m.chain, m.resnum) for m in muts]
+
+    def _site_indicators(self, built: dict, muts: list[mutations.Mutation], iface: dict, info: dict) -> list[dict]:
+        """Indicatori dei siti sui modelli costruiti; la riga d'interfaccia (struttura originale) con la chiave della
+        notazione."""
         wt_facts = mutations.facts(built["wt_model"])
         mut_facts = mutations.facts(built["mut_model"])
-        return [mutations.site_indicators(m, wt_facts, mut_facts, quality.MAX_ASA, iface.get((m.chain, m.resnum)))
+        names = mutations.renamed_chains(info)
+        return [mutations.site_indicators(m, wt_facts, mut_facts, quality.MAX_ASA, iface.get((m.chain, m.resnum)),
+                                          at=mutations.model_site(info, m.chain, m.resnum), chain_names=names)
                 for m in muts]
 
     @staticmethod
-    def _moved(model, muts: list[mutations.Mutation]) -> set[tuple[str, str]]:
-        return set(mutations.neighbourhood(model, [(m.chain, m.resnum) for m in muts], mutations.RADIUS))
+    def _moved(model, muts: list[mutations.Mutation], info: dict) -> set[tuple[str, str]]:
+        """Residui ottimizzati (siti e catene laterali entro RADIUS Å) con le chiavi dei modelli costruiti."""
+        near = mutations.neighbourhood(model, [(m.chain, m.resnum) for m in muts], mutations.RADIUS)
+        return {mutations.model_site(info, c, r) for c, r in near}
 
     @staticmethod
     def _protocol(seed: int, energy: bool) -> dict:
@@ -245,11 +270,12 @@ class MutationService:
             warnings.append("Catene con un nome di più caratteri rinominate nei modelli (formato PDB): "
                             + ", ".join(built["renamed"]) + ".")
         ctx.progress(0.58, "Indicatori strutturali")
-        site_rows = self._site_indicators(built, muts, self._interface_rows(model))
+        site_rows = self._site_indicators(built, muts, self._interface_rows(model), info)
         energy = None
         if want_energy:
             ctx.progress(0.62, "Energia con OpenMM")
-            energy = engine.energy(ctx, ctx.workdir, ctx.workdir / names[0], ctx.workdir / names[1], sites,
+            energy = engine.energy(ctx, ctx.workdir, ctx.workdir / names[0], ctx.workdir / names[1],
+                                   self._model_sites(info, muts),
                                    names=(Path(names[0]).stem, Path(names[1]).stem),
                                    progress=lambda f, stage: ctx.progress(0.62 + 0.23 * f, stage))
             if not energy.get("available"):
@@ -268,7 +294,7 @@ class MutationService:
         for key, name in (("wild_type", names[0]), ("mutant", names[1])):
             atomic_write_json(ctx.workdir / f"{name}.quality.json", reports[key])
         metrics = {k: quality.summary_metrics(v) for k, v in reports.items()}
-        rmsd = mutations.backbone_shift(built["wt_model"], built["mut_model"], self._moved(model, muts))
+        rmsd = mutations.backbone_shift(built["wt_model"], built["mut_model"], self._moved(model, muts, info))
         quality.inject_remarks(ctx.workdir / names[1], [
             f"MUTANT OF {label} {mutations.notation(muts).replace(', ', ' ')}",
             f"MODELLER MUTATE_MODEL RADIUS {mutations.RADIUS:g} A BEST DOPE OF {mutations.MODELS} SEEDS "
@@ -284,7 +310,9 @@ class MutationService:
         ctx.log(f"Mutagenesi completata in {time.perf_counter() - started:.1f} s")
         return {
             "version": mutations.VERSION, "source": source, "label": label, "source_sha256": fingerprint,
-            "mutations": [m.to_dict() for m in muts], "notation": mutations.notation(muts),
+            "mutations": [{**m.to_dict(), "model_chain": mutations.model_site(info, m.chain, m.resnum)[0]}
+                          for m in muts],
+            "notation": mutations.notation(muts),
             "files": {"wild_type": names[0], "mutant": names[1],
                       **({"wild_type_minimized": energy["files"]["wild_type"],
                           "mutant_minimized": energy["files"]["mutant"]}
@@ -303,7 +331,7 @@ class MutationService:
         source = p.get("source") or {}
         path, label, model, n_models = self._structure(source)
         fingerprint = cache.content_hash(path)
-        residues, selection = self._scan_residues(model, source, p.get("selection") or {})
+        residues, selection = self._scan_residues(model, source, p.get("selection") or {}, fingerprint)
         want_energy = bool(p.get("energy"))
         muts, skipped = mutations.scan_plan(model, residues, energy=want_energy)
         seed = int(p.get("seed") or mutations.SEED)
@@ -325,10 +353,10 @@ class MutationService:
             sub = ctx.sub(tag, folder)
             names = (f"{tag}_wt.pdb", f"{tag}_ala.pdb")
             built = self._build(sub, folder, model, [m], info, text, seed, names, (0.0, 1.0), keep_input=False)
-            site_rows = self._site_indicators(built, [m], iface)
+            site_rows = self._site_indicators(built, [m], iface, info)
             energy = None
             if want_energy:
-                energy = engine.energy(sub, folder, folder / names[0], folder / names[1], [(m.chain, m.resnum)],
+                energy = engine.energy(sub, folder, folder / names[0], folder / names[1], self._model_sites(info, [m]),
                                        names=(Path(names[0]).stem, Path(names[1]).stem))
             assessment = mutations.classify(site_rows, built["dope"],
                                             energy if energy and energy.get("ddE") is not None else None)
@@ -336,8 +364,9 @@ class MutationService:
                 done[0] += 1
                 ctx.progress(0.04 + 0.92 * done[0] / total, f"{done[0]} di {total} residui")
             sub.log(f"{m.label}: {assessment['label']} (ΔDOPE {built['dope']['delta']})")
-            return {"mutation": m.to_dict(), "label": m.label, "site": site_rows[0], "dope": built["dope"],
-                    "energy": energy, "assessment": assessment,
+            return {"mutation": {**m.to_dict(), "model_chain": mutations.model_site(info, m.chain, m.resnum)[0]},
+                    "label": m.label, "site": site_rows[0], "dope": built["dope"], "energy": energy,
+                    "assessment": assessment, "renamed": built["renamed"],
                     "files": {"wild_type": f"siti/{tag}/{names[0]}", "mutant": f"siti/{tag}/{names[1]}"}}
 
         lanes = max(1, min(total, int(ctx.settings.effective_workers())))
@@ -358,6 +387,10 @@ class MutationService:
                 f"{f['label']}: {f['error']}" for f in failed[:3]), code="alascan_failed")
         for f in failed:
             warnings.append(f"{f['label']} non calcolato: {f['error']}")
+        renamed = sorted({x for r in rows for x in r.pop("renamed", None) or []})
+        if renamed:
+            warnings.append("Catene con un nome di più caratteri rinominate nei modelli (formato PDB): "
+                            + ", ".join(renamed) + ".")
         if want_energy:
             missing = next((r["energy"].get("message") for r in rows
                             if r.get("energy") and not r["energy"].get("available")), None)

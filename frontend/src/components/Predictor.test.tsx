@@ -3,9 +3,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import type { Plausibility, PredictResult } from "../api/types";
-import { ToastProvider } from "../lib/context";
+import { ProjectProvider, ToastProvider } from "../lib/context";
 import { ESMFOLD_PUBLIC_URL } from "../lib/predict";
-import { PredictionResults } from "./Predictor";
+import { PredictDialog, PredictionResults } from "./Predictor";
 
 // Markup statico (react-dom/server) dei risultati di un job `predict`, senza il confronto 3D (comparison null).
 const render = (node: ReactNode) => renderToStaticMarkup(<MemoryRouter><ToastProvider>{node}</ToastProvider></MemoryRouter>);
@@ -53,5 +53,26 @@ describe("risultati del confronto con una predizione", () => {
     const only = render(<PredictionResults jobId="j2" result={{ ...result(null), source: null }} />);
     expect(only).toContain("Predizione senza confronto");
     expect(only).not.toContain("Apri in Confronto");
+  });
+});
+
+describe("finestra di avvio del confronto", () => {
+  const dialog = (residues: number | null) => render(
+    <ProjectProvider><PredictDialog source={{ type: "template", id: "1UBQ", chain: "A" }} label="1UBQ" residues={residues} onClose={() => undefined} onLaunched={() => undefined} /></ProjectProvider>,
+  );
+
+  it("catena oltre il limite di ESMFold: nessun consenso da dare, avvio nascosto, AlphaFold DB proposto", () => {
+    const html = dialog(450);
+    expect(html).toContain("ESMFold accetta al più 400 residui (questa catena ne ha 450)");
+    expect(html).toContain("AlphaFold DB");
+    expect(html).not.toContain("Consenso all");
+    expect(html).not.toContain("Avvia il confronto");
+  });
+
+  it("entro il limite: campo per la sequenza completa, impostazioni in lettura", () => {
+    const html = dialog(76);
+    expect(html).not.toContain("ESMFold accetta al più");
+    expect(html).toContain("Sequenza (facoltativa)");
+    expect(html).toContain("spinner");
   });
 });

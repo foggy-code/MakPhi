@@ -66,7 +66,7 @@ class PredictService:
         source = params.get("source") if isinstance(params.get("source"), dict) else None
         raw_seq = params.get("sequence") if isinstance(params.get("sequence"), dict) else {}
         chain = str(params.get("chain") or (source or {}).get("chain") or "").strip()
-        path, label, trace = None, "", []
+        path, label, trace, model = None, "", [], None
         if source:
             path, label = self.compute.resolve_structure(source)
             model = structure.first_model(structure.load_structure(path, label))
@@ -80,10 +80,15 @@ class PredictService:
         if not seq and not trace:
             raise AppError("Indica la sequenza da predire oppure la struttura da confrontare con la predizione.",
                            code="predict_input_required")
-        seq = seq or "".join(t["aa"] for t in trace)
+        origin = {"sequence": seq, "origin": "input", "gaps": [], "modified": [], "junctions": [], "warning": None}
+        if not seq:  # dalla catena: residui modificati compresi, interruzioni riconosciute (domain/prediction)
+            origin = self._chain_sequence(path, model[chain], chain, esmfold=name == "esmfold")
+            seq = origin["sequence"]
         seq_name = sequences.sanitize_code(raw_seq.get("name") or label or "sequenza", default="sequenza")
         out = {"predictor": name, "source": source, "path": path, "label": label, "chain": chain or None,
-               "name": seq_name, "accession": None, "service": None}
+               "name": seq_name, "accession": None, "service": None, "sequence_origin": origin["origin"],
+               "gaps": origin["gaps"], "modified": origin["modified"], "junctions": origin["junctions"],
+               "sequence_warning": origin["warning"] if name == "esmfold" else None}
         if name == "esmfold":
             out["sequence"] = remote.esmfold_sequence(seq)  # alfabeto, lunghezza: prima di ogni invio
             out["service"] = remote.validate_esmfold_url(settings.esmfold_url)
@@ -99,7 +104,23 @@ class PredictService:
                                 else remote.validate_uniprot_accession(accession))
             out["sequence"] = _clean_sequence(seq)
             out["service"] = remote.ALPHAFOLD
+            out["junctions"] = []  # AlphaFold DB predice la sequenza intera di UniProt, non quella inviata
         return out
+
+    @staticmethod
+    def _chain_sequence(path, chain, chain_id: str, *, esmfold: bool) -> dict:
+        """Sequenza della catena da predire (`prediction.chain_sequence`); con interruzioni e ESMFold, la sequenza
+        completa del file (SEQRES del PDB, `_entity_poly` del mmCIF) se c'è e corrisponde."""
+        found = prediction.chain_sequence(chain)
+        if not found["gaps"] or not esmfold:
+            return found
+        try:
+            header = (structure.parse_cif_header(path) if path.suffix.lower() in (".cif", ".mmcif")
+                      else structure.parse_header(structure.read_text_head(path)))
+        except (OSError, ValueError):
+            return found
+        seqres = (header.get("seqres") or {}).get(chain_id.strip())
+        return prediction.chain_sequence(chain, seqres, max_length=remote.ESMFOLD_MAX_LENGTH) if seqres else found
 
     # ------------------------------------------------------------------------------ job
     def handle(self, ctx: JobContext, p: dict) -> dict:
@@ -108,8 +129,11 @@ class PredictService:
         # il consenso si ricontrolla all'esecuzione: un job in coda non parte se nel frattempo è stato revocato
         req = self.request(p, settings)
         fingerprint = cache.content_hash(req["path"]) if req["path"] else None
-        warnings: list[str] = []
+        warnings: list[str] = [req["sequence_warning"]] if req.get("sequence_warning") else []
         label = prediction.PREDICTORS[req["predictor"]]["label"]
+        if req.get("sequence_origin") == "seqres":
+            ctx.log(f"Catena {req['chain']} interrotta: inviata la sequenza completa del file (SEQRES, "
+                    f"{len(req['sequence'])} residui), non i soli residui con le coordinate")
         if req["predictor"] == "esmfold":
             ctx.progress(0.05, "Predizione ESMFold (servizio esterno)")
             ctx.log(f"Invio della sequenza {req['name']} ({len(req['sequence'])} residui) a {req['service']}")
@@ -143,7 +167,9 @@ class PredictService:
         pl_map = prediction.residue_plddt(pred_model) if found else {}
         result = {
             "predictor": req["predictor"], "label": label, "origin": origin, "prediction_file": file,
-            "recognized_as": found, "sequence": {"name": req["name"], "length": len(req["sequence"] or "")},
+            "recognized_as": found, "sequence": {"name": req["name"], "length": len(req["sequence"] or ""),
+                                                 "origin": req.get("sequence_origin"), "gaps": req.get("gaps") or [],
+                                                 "modified": req.get("modified") or []},
             "plddt": plddt.summarize(list(pl_map.values())), "accession": req["accession"],
             "source": req["source"], "model_label": req["label"] or None, "chain": req["chain"],
             "source_sha256": fingerprint, "comparison": None, "plausibility": None, "warnings": warnings,
@@ -163,7 +189,8 @@ class PredictService:
             report = self._quality_report(req["source"], fingerprint)
             regions = prediction.consensus_regions(report) if report else None
             ctx.progress(0.92, "Esito del confronto")
-            plaus = prediction.assess(comp, pl_map, predictor=req["predictor"], consensus_regions=regions)
+            plaus = prediction.assess(comp, pl_map, predictor=req["predictor"], consensus_regions=regions,
+                                      junctions=req.get("junctions"))
             result.update({"comparison": comp, "plausibility": plaus})
             ctx.log(f"Confronto con {describe_source(req['source'])}: TM-score {comp.get('tm_score')}, lDDT "
                     f"{comp.get('lddt')}; esito: {plaus['status']}. {plaus['summary']}")

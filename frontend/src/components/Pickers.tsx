@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { JobSummary, ParsedFile, Sequence, StructureSource, TemplateAnalysis, TemplateItem, TemplateRef, UploadedStructure } from "../api/types";
-import { isAlphaFoldId, plddtLabel, plddtTone } from "../lib/alphafold";
+import { isAlphaFoldId, plddtLabel, plddtTone, predictorBadge, predictorTitle } from "../lib/alphafold";
 import { useProject, useToast } from "../lib/context";
 import { useAsync } from "../lib/hooks";
 import { defaultTransfer } from "../lib/ligands";
@@ -204,7 +204,7 @@ export function TemplatePicker({ value, onChange, max = 10, ligands = true, onAn
               {status[t.id] === "error" && <span className="badge badge-err">non disponibile</span>}
               {a?.meta.predicted && (
                 <>
-                  <Badge tone="warn" title="Modello predetto da AlphaFold, non struttura sperimentale">AlphaFold</Badge>
+                  <Badge tone="warn" title={predictorTitle({ ...a.meta, id: t.id })}>{predictorBadge({ ...a.meta, id: t.id })}</Badge>
                   <Badge tone={plddtTone(a.meta.plddt_mean)}>{plddtLabel(a.meta.plddt_mean)}</Badge>
                 </>
               )}

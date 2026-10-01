@@ -25,7 +25,7 @@ import { Viewer3D, type Viewer3DHandle } from "../components/Viewer3D";
 import { Alert, Badge, Card, Empty, Field, Grade, Modal, PageHead, Segmented, Stat } from "../components/ui";
 import { pirReference } from "../lib/alignConfidence";
 import { PlddtOption } from "../components/PlddtOption";
-import { hasPredictedTemplate, PLDDT_DEFAULT, removedRanges, trimSummary } from "../lib/alphafold";
+import { hasPredictedTemplate, PLDDT_DEFAULT, predictorBadge, predictorTitle, removedRanges, trimSummary } from "../lib/alphafold";
 import { compareTargets } from "../lib/compare";
 import { complexRequest, complexTemplateRefs, emptyComplex, STATUS_TONE as COMPLEX_TONE, symmetryOptions, type ComplexState } from "../lib/complex";
 import { useProject, useToast } from "../lib/context";
@@ -229,7 +229,7 @@ function Results({ jobId, result, kind }: { jobId: string; result: ModelResult |
             </div>
             {full.templates.filter((t) => t.predicted).map((t) => (
               <div key={t.code} className="small row" style={{ gap: 6 }}>
-                <Badge tone="warn" title="Modello predetto da AlphaFold, non struttura sperimentale">AlphaFold</Badge>
+                <Badge tone="warn" title={predictorTitle(t)}>{predictorBadge(t)}</Badge>
                 <span className="text-2">{t.code}: {trimSummary(t)}{removedRanges(t) && <span className="muted"> · tolti {removedRanges(t)}</span>}</span>
               </div>
             ))}

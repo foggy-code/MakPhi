@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { PackageSummary, RerunFile } from "../api/types";
 import {
   canExport, checksByLevel, contentText, EXPORTABLE_KINDS, fileDetail, fmtDelta, fmtValue, packageFallbackName, paramRows,
-  RERUNNABLE_KINDS, rerunPreflight, sortFiles, toleranceText, versionRows,
+  RERUNNABLE_KINDS, rerunPreflight, scientificLine, sortFiles, toleranceText, VERDICT_LABEL, VERDICT_TONE, versionRows,
 } from "./rerun";
 
 // Forme come le produce il backend (services/reproducibility.py, tests/test_reproducibility.py)
@@ -37,6 +37,21 @@ describe("tipi con un pacchetto", () => {
     expect(RERUNNABLE_KINDS).not.toContain("search");
     expect(RERUNNABLE_KINDS).not.toContain("qmean");
     expect(RERUNNABLE_KINDS).toEqual(expect.arrayContaining(["model", "loop", "align2d", "quality", "align", "analysis", "refine"]));
+    // mutagenesi e scansione si rieseguono (MODELLER con gli stessi semi); la predizione ha il pacchetto ma è remota
+    expect(canExport("mutate", "completed") && canExport("alascan", "completed") && canExport("predict", "completed")).toBe(true);
+    expect(RERUNNABLE_KINDS).toEqual(expect.arrayContaining(["mutate", "alascan"]));
+    expect(RERUNNABLE_KINDS).not.toContain("predict");
+  });
+});
+
+describe("esito compatibile (tolleranze scientifiche)", () => {
+  it("etichetta, tono e righe dei controlli", () => {
+    expect(VERDICT_LABEL.compatibile).toBe("Compatibile");
+    expect(VERDICT_TONE.compatibile).toBe("warn");
+    expect(scientificLine({ what: "Energia dopo (kJ/mol)", original: -12431.37, rerun: -12392.22, delta: 39.15, limit: 62.2, within: true }))
+      .toBe("Energia dopo (kJ/mol): Δ 39.15 (limite 62.2) entro");
+    expect(scientificLine({ what: "catena principale di m.pdb", original: null, rerun: null, delta: null, limit: 0.05, within: false, detail: "atomi diversi" }))
+      .toBe("catena principale di m.pdb: Δ — (limite 0.05) oltre; atomi diversi");
   });
 });
 

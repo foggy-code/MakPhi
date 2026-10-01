@@ -111,6 +111,102 @@ def confidence(plddt_mean: Optional[float]) -> Optional[str]:
     return "incerta" if plddt_mean >= PLDDT_VERY_LOW else "molto incerta"
 
 
+# ---------------------------------------------------------------------------------------------- sequenza dalla struttura
+STANDARD = frozenset("ACDEFGHIKLMNPQRSTVWY")
+# Residui della struttura entro questa distanza (in posizioni della sequenza inviata) da una giunzione fra due tratti
+# uniti: nella predizione i due tratti sono legati da un legame peptidico che nella proteina non c'è, e la geometria
+# locale lì è forzata. Scelta BioLoom: 5 posizioni per parte, circa un giro e mezzo d'elica o un filamento corto, come
+# la finestra delle regioni divergenti; oltre, il confronto torna informativo.
+JUNCTION_WINDOW = 5
+
+
+def _chain_letter(res) -> Optional[str]:
+    """Lettera del residuo della catena: amminoacidi (anche non standard, 'X') e residui modificati scritti come
+    HETATM con la lettera del residuo standard (MSE → M, SEP → S), se legati alla catena; None per il resto."""
+    from .ligands import is_modified_residue
+
+    if structure.is_amino_residue(res):
+        return structure.three_to_one(res.get_resname())
+    if res.id[0] in (" ", "W") or "CA" not in res:
+        return None
+    letter = structure.three_to_one(res.get_resname())
+    return letter if letter in STANDARD and is_modified_residue(res) else None
+
+
+def _clean_seqres(seqres: Optional[str]) -> str:
+    """SEQRES senza spazi e senza le estremità non standard (gruppi ACE, NH2: 'X' in testa o in coda)."""
+    return "".join((seqres or "").split()).upper().strip("X")
+
+
+def _segments_in_order(segments: list[str], full: str) -> bool:
+    """I tratti osservati compaiono nella sequenza completa, nello stesso ordine: SEQRES della stessa catena."""
+    pos = 0
+    for seg in segments:
+        k = full.find(seg, pos)
+        if k < 0:
+            return False
+        pos = k + len(seg)
+    return True
+
+
+def chain_sequence(chain, seqres: Optional[str] = None, max_length: Optional[int] = None) -> dict:
+    """Sequenza da predire ricavata da una catena della struttura (quando non se ne indica una).
+
+    I residui modificati della catena (HETATM legati, MSE → M) contano con la lettera del residuo standard. Le
+    interruzioni sono quelle fisiche (C–N oltre 2,0 Å, senza quegli atomi Cα–Cα oltre 4,2 Å, come la rifinitura e
+    `structure.chain_summaries`): un salto di numerazione fra residui legati non toglie residui; il salto serve solo a
+    contare i mancanti. Senza interruzioni la sequenza è quella osservata. Con interruzioni unire i tratti darebbe al
+    predittore una proteina che non esiste: si usa la sequenza completa della catena (`seqres`: SEQRES del PDB o
+    `_entity_poly` del mmCIF) se c'è, ha solo lettere standard, contiene i tratti osservati nell'ordine e sta in
+    `max_length`; altrimenti la sequenza osservata con l'avviso e i residui vicini alle giunzioni (`junctions`, da
+    escludere dalle divergenze in `assess`).
+
+    Restituisce {sequence, origin ("structure" | "seqres"), gaps [{after, before, missing}], modified, junctions
+    [(catena, residuo)], warning (None se la sequenza è completa)}."""
+    from .refinement import _linked
+
+    residues = [(r, letter) for r in chain if (letter := _chain_letter(r)) is not None]
+    name = chain.id.strip() or "_"
+    modified = [f"{r.get_resname().strip()} {name}{structure._resid(r)} → {letter}" for r, letter in residues
+                if r.id[0] != " "]
+    gaps, cuts = [], []
+    for k in range(1, len(residues)):
+        prev, cur = residues[k - 1][0], residues[k][0]
+        if _linked(prev, cur):
+            continue
+        jump = cur.id[1] - prev.id[1] - 1
+        gaps.append({"after": structure._resid(prev), "before": structure._resid(cur),
+                     "missing": jump if jump > 0 else None})
+        cuts.append(k)
+    observed = "".join(letter for _r, letter in residues)
+    out = {"sequence": observed, "origin": "structure", "gaps": gaps, "modified": modified, "junctions": [],
+           "warning": None}
+    if not gaps:
+        return out
+    bounds = [0, *cuts, len(residues)]
+    segments = [observed[a:b] for a, b in zip(bounds, bounds[1:])]
+    full = _clean_seqres(seqres)
+    usable = bool(full) and set(full) <= STANDARD and _segments_in_order(segments, full)
+    if usable and (max_length is None or len(full) <= max_length):
+        return {**out, "sequence": full, "origin": "seqres"}
+    where = "; ".join(f"fra {g['after']} e {g['before']}" + (f", {g['missing']} residui mancanti" if g["missing"] else "")
+                      for g in gaps[:6]) + ("…" if len(gaps) > 6 else "")
+    why = ("" if not full else
+           f" La sequenza completa del file (SEQRES) ha {len(full)} residui, oltre il limite di {max_length}."
+           if usable else " La sequenza completa del file (SEQRES) non corrisponde ai residui della catena.")
+    junctions: list[tuple[str, str]] = []
+    for k in cuts:
+        for r, _letter in residues[max(0, k - JUNCTION_WINDOW):k + JUNCTION_WINDOW]:
+            key = (chain.id, structure._resid(r))
+            if key not in junctions:
+                junctions.append(key)
+    warning = (f"La catena {name} è interrotta ({where}): la sequenza ricavata dalla struttura salta i residui mancanti "
+               f"e unisce i tratti, quindi la predizione è di una proteina che non esiste vicino alle giunzioni.{why} "
+               f"Indica la sequenza completa della catena (SEQRES o UniProt) nel campo Sequenza; i residui entro "
+               f"{JUNCTION_WINDOW} posizioni dalle giunzioni non contano come divergenze.")
+    return {**out, "junctions": junctions, "warning": warning}
+
+
 # ---------------------------------------------------------------------------------------------- file della predizione
 def plddt_scale(values: Iterable[float]) -> tuple[float, str]:
     """(fattore per portare i valori su 0–100, scala originale): massimo ≤ 1 → (100, "0-1"), altrimenti (1, "0-100").
@@ -207,25 +303,30 @@ def _span(chain: str, first: str, last: str) -> str:
 
 
 def assess(comparison: dict, plddt_map: dict, *, predictor: str = "esmfold",
-           consensus_regions: Optional[list[dict]] = None) -> dict:
+           consensus_regions: Optional[list[dict]] = None,
+           junctions: Optional[Iterable[tuple[str, str]]] = None) -> dict:
     """Esito motivato del confronto fra il modello (A, riferimento) e la predizione (B).
 
     `comparison`: risultato di `engines/align.structural` (pairs con il lDDT del residuo di A, tm_score, lddt,
     lengths). `plddt_map`: pLDDT della predizione per (catena, residuo) di B (`residue_plddt`). `consensus_regions`:
     regioni problematiche del consenso del modello come {chain, resnums, text} (None = consenso non disponibile).
+    `junctions`: residui del modello vicini alle giunzioni di una sequenza inviata senza i residui mancanti
+    (`chain_sequence`): lì la predizione è forzata e il confronto non è informativo, quindi non sono divergenti.
     """
     label = PREDICTORS.get(predictor, {}).get("label", predictor)
     pairs = [p for p in comparison.get("pairs") or [] if isinstance(p, dict)]
+    near_junction = {(str(c), str(r)) for c, r in junctions or []}
     rows = []
     for p in pairs:
         value = plddt_map.get((str(p.get("chain_b")), str(p.get("resnum_b"))))
         lddt = p.get("lddt")
+        junction = (str(p.get("chain_a")), str(p.get("resnum_a"))) in near_junction
         rows.append({"chain": str(p.get("chain_a")), "resnum": str(p.get("resnum_a")), "aa": p.get("aa_a"),
-                     "resnum_b": str(p.get("resnum_b")), "lddt": lddt, "plddt": value,
-                     "divergent": isinstance(lddt, (int, float)) and lddt < LDDT_DIVERGENT,
+                     "resnum_b": str(p.get("resnum_b")), "lddt": lddt, "plddt": value, "junction": junction,
+                     "divergent": isinstance(lddt, (int, float)) and lddt < LDDT_DIVERGENT and not junction,
                      "confident": isinstance(value, (int, float)) and value >= PLDDT_CONFIDENT})
     tm = comparison.get("tm_score")
-    confident_rows = [r for r in rows if r["confident"]]
+    confident_rows = [r for r in rows if r["confident"] and not r["junction"]]  # le giunzioni non informano
     lddt_confident = _mean(r["lddt"] for r in confident_rows)
     plddt_mean = _mean(r["plddt"] for r in rows)
     needed = min(MIN_CONFIDENT_RESIDUES, len(rows)) if rows else MIN_CONFIDENT_RESIDUES
@@ -237,6 +338,10 @@ def assess(comparison: dict, plddt_map: dict, *, predictor: str = "esmfold",
     if consensus_regions is None:
         notes.append("Regioni problematiche del consenso non disponibili (analisi di qualità non calcolata): le "
                      "divergenze non sono incrociate con il consenso.")
+    skipped = sum(1 for r in rows if r["junction"])
+    if skipped:
+        notes.append(f"{skipped} residui vicini alle giunzioni della sequenza inviata (catena interrotta, residui "
+                     "mancanti saltati): non contano come divergenze, il confronto lì non è informativo.")
     regions = []
     for g in _regions(rows):
         chunk = rows[g[0]:g[-1] + 1]
@@ -297,7 +402,8 @@ def assess(comparison: dict, plddt_map: dict, *, predictor: str = "esmfold",
         "rmsd": comparison.get("rmsd"), "pairs": len(rows), "plddt_mean": _round(plddt_mean, 1),
         "confident_residues": len(confident_rows), "lddt_confident": _round(lddt_confident, 4),
         "divergent_residues": sum(1 for r in rows if r["divergent"]), "regions": regions,
-        "residues": [{k: r[k] for k in ("chain", "resnum", "lddt", "plddt", "divergent", "confident")} for r in rows],
+        "residues": [{k: r[k] for k in ("chain", "resnum", "lddt", "plddt", "divergent", "confident", "junction")}
+                     for r in rows],
         "consensus_available": consensus_regions is not None, "notes": notes, "limits": LIMITS,
         "thresholds": {"tm_same_fold": TM_SAME_FOLD, "tm_random": TM_RANDOM, "lddt_divergent": LDDT_DIVERGENT,
                        "plddt_confident": PLDDT_CONFIDENT, "plddt_very_low": PLDDT_VERY_LOW,

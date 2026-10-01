@@ -184,8 +184,15 @@ class TemplateLibrary:
         return items
 
     def is_predicted(self, template_id: str) -> bool:
-        """Modello predetto (AlphaFold), dai metadati (completati alla prima lettura per i template precedenti)."""
+        """Modello predetto (AlphaFold, ESMFold), dai metadati (completati alla prima lettura per i template
+        precedenti)."""
         return bool(self._meta(normalize_id(template_id)).get("predicted"))
+
+    def predictor(self, template_id: str) -> Optional[str]:
+        """Predittore di un modello predetto riconosciuto da `plddt.predictor` ("alphafold", "esmfold"), dai
+        metadati; None per le strutture sperimentali e per i metadati che non lo registrano."""
+        meta = self._meta(normalize_id(template_id))
+        return meta.get("predictor") if meta.get("predicted") else None
 
     def fetch_alphafold(self, accession: str, *, check: Optional[Callable[[], None]] = None,
                         log: Optional[Callable[[str], None]] = None) -> dict:

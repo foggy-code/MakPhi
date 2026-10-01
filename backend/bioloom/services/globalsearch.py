@@ -53,13 +53,18 @@ FTS_CANDIDATES = 200
 LIKE_CANDIDATES = 2000
 FAVORITE_BONUS = 1.0  # a parità di corrispondenza vince l'elemento con la stella
 
-# Etichette italiane dei tipi di job (come KIND_LABEL del frontend): "modellazione" trova i job "model".
+# Etichette italiane dei tipi di job (come KIND_LABEL del frontend): "modellazione" trova i job "model". Ogni tipo
+# registrato nel JobManager deve averne una (test_global_search lo verifica). Entrano nell'indice FTS5 temporaneo,
+# ricostruito a ogni avvio con queste etichette, e nel ripiego LIKE: una nuova etichetta vale anche per i job vecchi.
 JOB_KIND_LABELS = {
     "search": "Ricerca template", "align": "Allineamento", "align2d": "Allineamento MODELLER", "model": "Modellazione",
     "loop": "Raffinamento loop", "quality": "Analisi qualità", "qmean": "QMEAN", "pipeline": "Pipeline batch",
     "selftest": "Verifica installazione", "db_update_pdbaa": "Aggiornamento pdbaa", "db_build_mmseqs": "Database MMseqs2",
     "db_index_mmseqs": "Indice MMseqs2", "db_convert_uniclust": "Conversione UniClust30",
     "db_local_uniclust": "Copia locale UniClust30", "analysis": "Analisi strutturale",
+    "pockets": "Tasche (fpocket)", "electrostatics": "Elettrostatica (APBS)", "refine": "Rifinitura energetica",
+    "rerun": "Riesecuzione da pacchetto", "mutate": "Mutagenesi", "alascan": "Scansione di alanina",
+    "predict": "Confronto con una predizione",
 }
 
 
@@ -179,7 +184,8 @@ class TemplateIndex:
             organism = meta.get("organism") or alphafold.get("organism") or self._file_organism(path)
             entries.append({"id": tid, "title": str(meta.get("title") or alphafold.get("description") or ""),
                             "organism": str(organism or ""), "source": str(meta.get("source") or ""),
-                            "added_at": meta.get("added_at"), "predicted": bool(meta.get("predicted"))})
+                            "added_at": meta.get("added_at"), "predicted": bool(meta.get("predicted")),
+                            "predictor": meta.get("predictor") if meta.get("predicted") else None})
         with self._lock:
             self._entries, self._signature = entries, signature
         return entries
@@ -352,7 +358,8 @@ class GlobalSearch:
                 continue
             sub = " · ".join(x for x in (entry["title"], entry["organism"]) if x)
             item = {"type": "template", "id": entry["id"], "title": entry["id"], "subtitle": sub[:160],
-                    "project_id": None, "project_name": None, "predicted": entry["predicted"]}
+                    "project_id": None, "project_name": None, "predicted": entry["predicted"],
+                    "predictor": entry.get("predictor")}
             candidates.append((item, points, entry.get("added_at")))
         return self._rank("template", candidates, limit)
 

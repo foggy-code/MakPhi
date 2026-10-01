@@ -23,7 +23,7 @@ from bioloom.engines import modeller, quality, remote
 from bioloom.engines.modeller import TemplateSpec
 from bioloom.services.predict import PredictService
 
-from .conftest import DATA, HUMAN_UB, wait_job
+from .conftest import DATA, HUMAN_UB, ubq_variant, wait_job
 from .test_alphafold import af_entry, af_pdb
 
 UBQ = {"type": "template", "id": "1UBQ", "chain": "A"}
@@ -350,6 +350,42 @@ def test_prediction_file_in_quality_library_and_preparation(client, tmp_path):
     assert info["plddt"]["removed"] == 7 and "ESMFOLD V1 PREDICTION" in head and "ALPHAFOLD" not in head
 
 
+def test_esmfold_template_is_named_esmfold_in_logs_notes_remarks_report_and_checks(client, tmp_path):
+    """Una predizione di ESMFold nella libreria usata come template: log della preparazione, note dei risultati, righe
+    REMARK del modello, report e controlli preventivi dicono ESMFold (il predittore riconosciuto da
+    plddt.predictor), mai AlphaFold; un template senza predittore noto né nome di AlphaFold DB resta «modello
+    predetto»."""
+    from types import SimpleNamespace
+
+    from bioloom.domain import preflight as rules
+
+    pdb, _info = prediction.normalize_pdb(ubq_prediction(value=lambda n: 0.4 if n in SEGMENT else 0.9), HUMAN_UB)
+    r = client.post("/api/templates/upload", files={"file": ("pred.pdb", pdb.encode())}, data={"template_id": "ESMUBQ"})
+    assert r.status_code == 200, r.text
+    core = client.app.state.core
+    assert core.compute.library.predictor("ESMUBQ") == "esmfold"
+    logs: list[str] = []
+    ctx = SimpleNamespace(check=lambda: None, log=logs.append)
+    [info] = core.compute._prepare_templates(ctx, [TemplateSpec(id="ESMUBQ", chains=["A"])], tmp_path, plddt_min=70.0)
+    assert info["predictor"] == "esmfold"
+    text = " ".join(logs)
+    assert "modello predetto (ESMFold), rimossi" in text and "AlphaFold" not in text
+    [note] = core.compute._predicted_notes([info])
+    assert note.startswith("ESMUBQ_A: modello predetto (ESMFold), non una struttura sperimentale")
+    assert plddt.predictor_tag("esmfold") == "ESMFOLD" and plddt.predictor_tag(None, "AF-P0CG48-F1") == "ALPHAFOLD"
+    assert plddt.predicted_text(None, "MIOMODELLO") == "modello predetto"
+    assert report.model_trims("REMARK 999 BIOLOOM TEMPLATE ESMUBQ_A ESMFOLD PLDDT<70 REMOVED 7\n") == {
+        "ESMUBQ_A": {"threshold": 70.0, "removed": 7}}
+    checks = rules.plddt_checks([{"template": "ESMUBQ", "threshold": None, "total": 76, "low": 7,
+                                  "predictor": "esmfold"}])
+    assert checks[0]["message"].startswith("ESMUBQ: modello ESMFold usato senza ritaglio")
+    html = report.render({"kind": "model", "job_id": "j", "tools": [], "warnings": [], "templates": [
+        {"id": "ESMUBQ", "code": "ESMUBQ_A", "chains": ["A"], "predicted": True, "predictor": "esmfold",
+         "trim": info["plddt"]}]})
+    assert "ESMUBQ_A: modello predetto (ESMFold), non una struttura sperimentale" in html
+    assert "Lin Z." in html and "Jumper J." not in html
+
+
 # ------------------------------------------------------------------------------------------ plausibilità
 def _comparison(tmp_path, **kw) -> tuple[dict, dict]:
     """Confronto integrato 1UBQ (A) contro la finta predizione (B) e il pLDDT della predizione."""
@@ -461,6 +497,37 @@ def test_plausibility_regions_tolerance_and_boundaries():
     comp, pl = _synthetic(lddt, [90.0] * len(lddt))
     comp["pairs"][40]["resnum_a"] = "45"  # interruzione della numerazione dentro 40–42
     assert spans(prediction.assess(comp, pl)) == [("11", "14", 3), ("24", "27", 4)]
+
+
+def test_sequence_of_a_broken_chain_with_a_selenomethionine(tmp_path):
+    """Senza i residui 35–37 e con la Met1 come MSE: la sequenza ricavata dalla catena conta la MSE (M), riconosce
+    l'interruzione e segna le giunzioni; con il SEQRES del file, che corrisponde, si invia la sequenza completa."""
+    path = ubq_variant(tmp_path / "gap.pdb", hetatm={1: "MSE"}, drop=range(35, 38))
+    chain = structure.first_model(structure.load_structure(path))["A"]
+    found = prediction.chain_sequence(chain)
+    assert found["sequence"] == HUMAN_UB[:34] + HUMAN_UB[37:] and found["origin"] == "structure"
+    assert found["gaps"] == [{"after": "34", "before": "38", "missing": 3}] and found["modified"] == ["MSE A1 → M"]
+    assert found["junctions"] == [("A", str(n)) for n in (*range(30, 35), *range(38, 43))]
+    assert "La catena A è interrotta (fra 34 e 38, 3 residui mancanti)" in found["warning"]
+    full = prediction.chain_sequence(chain, HUMAN_UB, max_length=400)
+    assert (full["sequence"], full["origin"], full["warning"], full["junctions"]) == (HUMAN_UB, "seqres", None, [])
+    assert "non corrisponde" in prediction.chain_sequence(chain, "W" * 76)["warning"]
+    assert "oltre il limite di 50" in prediction.chain_sequence(chain, HUMAN_UB, max_length=50)["warning"]
+    whole = prediction.chain_sequence(structure.first_model(structure.load_structure(DATA / "1UBQ.pdb"))["A"])
+    assert whole["sequence"] == HUMAN_UB and whole["gaps"] == [] and whole["warning"] is None
+    # numerazione che salta senza residui mancanti (legame C–N intatto): nessuna interruzione
+    renumbered = tmp_path / "salto.pdb"
+    renumbered.write_text("".join(ln[:22] + f"{int(ln[22:26]) + 10:4d}" + ln[26:] if ln.startswith("ATOM") and
+                                  int(ln[22:26]) > 40 else ln for ln in (DATA / "1UBQ.pdb").read_text().splitlines(True)))
+    assert prediction.chain_sequence(structure.first_model(structure.load_structure(renumbered))["A"])["gaps"] == []
+
+
+def test_junction_residues_never_count_as_divergent():
+    comp, pl = _synthetic([0.9] * 30 + [0.1] * 6 + [0.9] * 30, [90.0] * 66)
+    assert prediction.assess(comp, pl)["status"] == "divergenze locali"
+    res = prediction.assess(comp, pl, junctions=[("A", str(n)) for n in range(29, 39)])
+    assert res["status"] == "concordano" and res["regions"] == [] and res["confident_residues"] == 56
+    assert sum(r["junction"] for r in res["residues"]) == 10 and any("giunzioni" in n for n in res["notes"])
 
 
 def test_normalize_and_scale_errors():
@@ -579,6 +646,43 @@ def test_predict_job_end_to_end(client_with_ubq, services):
     # una seconda richiesta per la stessa sequenza viene dalla cache: nessuna richiesta al servizio
     again = _predict(c, {"source": UBQ})
     assert again["result"]["origin"]["cached"] is True and len(services.esm_calls()) == 1
+
+
+def _upload_template(client, path, template_id: str) -> None:
+    r = client.post("/api/templates/upload", files={"file": (path.name, path.read_bytes())},
+                    data={"template_id": template_id})
+    assert r.status_code == 200, r.text
+
+
+def test_predict_job_on_a_broken_chain_sends_seqres_or_warns(client, services, tmp_path):
+    """Catena senza i residui 35–37: con il SEQRES nel file va a ESMFold la sequenza completa (non 73 residui uniti);
+    senza SEQRES avviso nei controlli e nel risultato, e i residui vicini alla giunzione non contano come divergenze."""
+    c = client
+    _consent(c)
+    gap = ubq_variant(tmp_path / "gap.pdb", drop=range(35, 38))
+    _upload_template(c, gap, "UBQGAP")
+    src = {"type": "template", "id": "UBQGAP", "chain": "A"}
+    pre = _preflight(c, {"source": src})
+    assert "predict_sequence_seqres" in _codes(pre, "info") and "predict_sequence_gaps" not in _codes(pre, "warning")
+    done = _predict(c, {"source": src})
+    assert services.esm_calls()[0].content == HUMAN_UB.encode()
+    assert done["result"]["sequence"]["origin"] == "seqres" and done["result"]["warnings"] == []
+    bare = tmp_path / "gap_bare.pdb"
+    bare.write_text("".join(ln for ln in gap.read_text().splitlines(True) if not ln.startswith("SEQRES")))
+    _upload_template(c, bare, "UBQGAPB")
+    src = {"type": "template", "id": "UBQGAPB", "chain": "A"}
+    pre = _preflight(c, {"source": src})
+    assert _codes(pre, "warning") == ["predict_sequence_gaps"] and pre["ok"]
+    joined = HUMAN_UB[:34] + HUMAN_UB[37:]
+    services.esm = [(200, "\n".join(ln for ln in ubq_prediction().splitlines()
+                                    if not (ln.startswith("ATOM") and int(ln[22:26]) in range(35, 38))) + "\n")]
+    res = _predict(c, {"source": src})["result"]
+    assert services.esm_calls()[-1].content == joined.encode() and res["sequence"]["gaps"][0]["missing"] == 3
+    assert any("interrotta" in w for w in res["warnings"]) and res["sequence"]["origin"] == "structure"
+    rows = {r["resnum"]: r for r in res["plausibility"]["residues"]}
+    assert rows["34"]["junction"] and rows["38"]["junction"] and not rows["20"]["junction"]
+    assert not any(r["divergent"] for r in rows.values() if r["junction"])
+    assert any("giunzioni" in n for n in res["plausibility"]["notes"])
 
 
 def test_predict_job_with_alphafold_db(client_with_ubq, services):

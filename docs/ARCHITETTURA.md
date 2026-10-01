@@ -777,6 +777,7 @@ message, suggestion}` più `group: "coverage"` per gli avvisi di copertura e `te
 | `rerun_not_reproducible`, `rerun_unsupported`, `package_*`, `rerun_tool_unavailable` / `rerun_version_bioloom`, `rerun_version_image`, `rerun_version_tool`, `rerun_version_library`, `rerun_tool_missing`, `rerun_platform` / `rerun_remote_input`, `package_note` | error / warning / info | riesecuzione (`kind: "rerun"`): calcolo che dipende da servizi remoti o non rieseguibile, pacchetto non valido o scaduto, parametri che la rotta di avvio rifiuterebbe, strumento obbligatorio assente / versioni diverse da quelle del pacchetto / input remoti con la data e note del pacchetto; più licenza MODELLER, PROCHECK e ProSA, durata del calcolo originale, spazio e coda come gli altri calcoli | versioni diverse: avvisi, mai errori (F9.4) |
 | `esmfold_remote_disabled` / `sequence_too_long`, `invalid_sequence`, `accession_required`, `invalid_chain`, `predict_input_required` | error | predizione (F9.3): ESMFold senza il consenso all'invio; la stessa validazione della rotta `POST /api/predict` (sequenza oltre 400 residui o con lettere non standard, accessione mancante per AlphaFold DB, catena assente) | il consenso è un esito a sé, con il suggerimento |
 | `remote_esmfold`, `esmfold_cached`, `remote_alphafold`, `alphafold_in_library`, `predict_no_compare` | info | la sequenza andrà al servizio (rete); predizione già in cache (nessuna richiesta); a EBI va solo l'accessione, o il modello è già in libreria; nessuna struttura da confrontare | nessuna richiesta remota dai controlli: la cache si legge dal disco |
+| `predict_sequence_gaps` / `predict_sequence_seqres` | warning / info | ESMFold con la sequenza della catena: catena interrotta senza una sequenza completa utilizzabile nel file (i tratti si unirebbero; residui vicini alle giunzioni non informativi) / catena interrotta, si invia il SEQRES | suggerimento: incollare la sequenza completa nella finestra |
 | `queue_busy`, `single_model`, `identical_models`, `invalid_accession`, `check_skipped` | info | job attivi ≥ job in parallelo; un solo modello; più modelli con il raffinamento rapidissimo (`a.very_fast()` non perturba le coordinate iniziali: modelli identici, anche fra gli avvisi del risultato); accessione non valida (niente domini); controllo non eseguito | misura in [Prestazioni](#misure-per-i-controlli-preventivi) |
 | `invalid_mutation`, `invalid_scan` | error | notazione, catena, residuo originale o scelta dei residui rifiutati dalla rotta di avvio (stesso messaggio); oltre 50 residui (20 con l'energia) | mutagenesi (F9.2) |
 | `mutation_energy_unavailable` / `mutation_energy` | warning / info | energia chiesta senza OpenMM o PDBFixer (il job prosegue senza) / che cosa misura | |
@@ -885,6 +886,13 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
   | Confronto con una predizione | F9.3: il job `predict` indicato (`predict_job=`, con i controlli della rotta del consenso: un'altra struttura è un 400) oppure il confronto completato più recente sulla stessa struttura (stessa sorgente e impronta; uno che non vale più per il rapporto si tralascia). Sezione "Confronto con una predizione (ESMFold)" bilanciata con l'esito, TM-score, lDDT, GDT-TS, pLDDT, regioni divergenti con la confidenza e le regioni del consenso, note e limiti; consenso con l'accordo con la predizione (vedi [Confronto con un predittore esterno](#confronto-con-un-predittore-esterno-f93)). Senza confronto il report non cambia |
 
   Un modello senza rapporto di qualità ha il report dei soli risultati di MODELLER, con un avviso.
+- **Struttura del documento:** l'equilibrio delle sezioni è una proprietà di `_Doc`, non di ogni funzione: aprire una
+  sezione con un'altra ancora aperta, chiuderla senza averla aperta, ripetere un id o finire il documento con una sezione
+  aperta solleva `ReportStructureError`. Errore e non chiusura automatica: le sezioni dipendono solo dal codice, quindi
+  uno squilibrio è un errore di programmazione (è successo due volte in un'unione di rami) che il test parametrizzato su
+  ogni tipo di report (modello, loop, pipeline, qualità con e senza disordine, rifinitura, mutagenesi, scansione, con e
+  senza ligandi, complessi, predizione e analisi strutturale) ferma subito, controllando anche id univoci e HTML ben
+  formato con `html.parser`; chiuderle in silenzio nasconderebbe la svista.
 - **Grafici SVG** (generati dal backend, XML ben formato):
   - Ramachandran: un pannello per classe, come nell'interfaccia (generale con la pre-prolina, glicina, prolina), con i
     rettangoli favoriti/consentiti di `domain/ramachandran` e un cerchio per residuo con φ e ψ (74 su 76 in 1UBQ); gli
@@ -1329,7 +1337,10 @@ inserzione + residuo, 3 = tre lettere, 4 = inserzione + tre lettere), quindi non
 amminoacidi non distinguono maiuscole e minuscole, la catena sì. Errori chiari (`invalid_mutation`, 400 prima della coda):
 voce non valida, amminoacido non standard, sostituzione identica, catena inesistente o omessa con più catene, residuo
 assente o non amminoacido, **residuo originale diverso** ("A48 è LYS (K), non GLU (E): usa la numerazione della
-struttura"), residuo ripetuto. La rotta salva la forma canonica (`A:K48R`). Il frontend ripete la stessa sintassi
+struttura"), residuo ripetuto. La rotta salva nei parametri la forma canonica con la catena sempre scritta
+(`Mutation.code`: `A:K48R`, `_:K48R` per la catena senza identificativo), che si rilegge all'esecuzione anche su una
+struttura con una catena senza nome e altre catene; titolo, risultato e nomi dei file usano la forma dei testi
+(`label`: `K48R`). Anche la notazione delle varianti di UniProt è quella canonica. Il frontend ripete la stessa sintassi
 (`lib/mutations.parseMutations`) per un riscontro immediato.
 
 **Copia per MODELLER** (`modeller_input`): solo la proteina del primo modello (residui modificati come il residuo
@@ -1337,7 +1348,12 @@ standard: MSE → MET con SE → SD, SEP → SER…), prima altloc, niente idrog
 avviso; quelli entro 8 Å dai siti con un avviso proprio). Ogni tratto continuo (C–N ≤ 2,0 Å) è una catena per MODELLER:
 senza, `generate_topology` legherebbe i residui ai lati di un'interruzione. Il primo tratto di una catena con un nome di
 un carattere lo conserva, gli altri tratti e la catena senza nome prendono una lettera libera; `restore_chains` riporta i
-nomi originali nei modelli e toglie i TER fra i tratti della stessa catena.
+nomi originali nei modelli e toglie i TER fra i tratti della stessa catena. Una catena con un nome di più caratteri
+(`auth_asym_id` di un mmCIF, es. «AA») resta nei modelli con la lettera di MODELLER del suo tratto (il formato PDB ne
+ammette una), con l'avviso «Catene … rinominate»: indicatori, residui ottimizzati (RMSD fuori da essi) ed energia
+cercano i siti nei modelli con `model_site` (una lettera per tratto: la mappa è per residuo), mentre la riga
+d'interfaccia, il sito, l'etichetta e i partner delle interazioni restano con il nome originale (`AA:K48R`); il
+risultato porta `model_chain` per il 3D dei modelli.
 
 **Protocollo** (`MUTATE_SCRIPT`, da `mutate_model.py` della Sali lab; Feyfant, Sali & Fiser, Protein Sci. 16:2030,
 2007):
@@ -1394,10 +1410,13 @@ residuo esposto. Ogni risultato porta le motivazioni in italiano e l'avvertenza 
 | residuo nel nucleo (RSA < 20%, ASA massime di Tien et al. 2013) con BLOSUM62 < 0 | moderato | Henikoff & Henikoff 1992 |
 | carica introdotta nel nucleo | moderato | Isom et al. 2011 |
 | nuovi contatti sterici del residuo mutato (sovrapposizione > 0,4 Å) | moderato | Word et al. 1999 |
-| residuo d'interfaccia (ΔSASA > 1 Å², `domain/interfaces`) | effetto sul legame, a parte: hot spot *probabile* se sepolto nel complesso (RSA < 20%) e con contributo al legame (ΔDOPE fra le catene ≥ 0,5 residui equivalenti o interazioni fra catene perse), *possibile* con il solo contributo | Bogan & Thorn 1998; Kortemme & Baker 2002 |
+| residuo d'interfaccia (ΔSASA > 1 Å², `domain/interfaces`) | effetto sul legame, a parte: hot spot *probabile* se sepolto nel complesso (RSA < 20%, anche 0: un residuo coperto del tutto, il centro dell'«O-ring», è il più sepolto; RSA ignota non conta come sepolta) e con contributo al legame (ΔDOPE fra le catene ≥ 0,5 residui equivalenti o interazioni fra catene perse), *possibile* con il solo contributo | Bogan & Thorn 1998; Kortemme & Baker 2002 |
 
 **Scansione di alanina** (`alascan`): residui da un elenco (`A:30, A:43, A:45-48`, anche con la verifica `A:I30`),
-dall'interfaccia (tutte le catene o una) o da una tasca di un job `pockets` completato sulla stessa struttura. Glicina e
+dall'interfaccia (tutte le catene o una) o da una tasca di un job `pockets` completato sulla stessa struttura e sullo
+stesso file (impronta `source_sha256` del job delle tasche uguale a quella del file attuale; un template sostituito
+con lo stesso nome dà 400 `invalid_scan` «le tasche sono state calcolate su una versione precedente del file»,
+anche all'esecuzione di un job accodato prima della sostituzione; l'impronta va nella `selection` del risultato). Glicina e
 prolina escluse (la sostituzione cambia la flessibilità della catena principale e non misura la catena laterale, come in
 Kortemme & Baker 2002), alanina esclusa, residui non standard esclusi, tutti con il motivo. **Al più 50 residui** (6
 modelli di MODELLER ciascuno: circa 7 minuti stimati per una proteina di 300 residui con 3 processi insieme), **20 con
@@ -1459,8 +1478,11 @@ solo). Job `mutate` su 1UBQ: 10–15 s, 80 s con l'energia.
 - **Qualità**, scheda **Mutagenesi**: modulo (mutazioni con l'anteprima della notazione, oppure scansione per residui,
   interfaccia o tasca dell'ultimo calcolo di fpocket), varianti di UniProt (accessione → tabella con filtri Applicabili,
   Malattia, Mutagenesi, Tutte, ricerca, «Aggiungi» porta la notazione nel campo senza doppioni), energia facoltativa
-  (disattivata senza OpenMM), `PreflightPanel` e `LaunchButton`; cronologia dei calcoli sulla struttura; il job seguito
-  si conserva cambiando scheda.
+  (disattivata senza OpenMM), `PreflightPanel` e `LaunchButton`; cronologia dei calcoli sulla struttura (stato in
+  italiano, riletta a ogni cambio di stato del job seguito; un job eliminato altrove mostra «Job non trovato» e sparisce
+  dal menu); il job seguito si conserva cambiando scheda. Per la tasca il modulo segue anche un calcolo di fpocket in
+  corso («Calcolo delle tasche in corso…», poi la tendina compare da sola), e un errore di lettura è un avviso con
+  «Riprova», non «nessun calcolo».
 - **Modellazione**: «Mutagenesi» in ogni riga della tabella dei modelli e «Mutagenesi e scansione di alanina» per una
   struttura qualunque (stesso modulo in una finestra); il job si apre in `/modeling?job=<id>` (anche «Apri» nella pagina
   Job).
@@ -1519,7 +1541,15 @@ conservando il suo TITLE (`modeller._provenance_header`).
 
 **Job `predict`** (priorità 0, pool "io": quasi tutto il tempo è l'attesa del servizio):
 
-1. sequenza: quella indicata, oppure quella della catena del modello (`chain`, predefinita la prima con Cα);
+1. sequenza: quella indicata (campo «Sequenza» della finestra), oppure quella della catena del modello (`chain`,
+   predefinita la prima con Cα; `prediction.chain_sequence`): i residui modificati della catena contano con la lettera
+   del residuo standard (MSE → M), e una catena interrotta (C–N oltre 2,0 Å; un salto di numerazione fra residui legati
+   non toglie residui) non si invia a tratti uniti, che darebbero una proteina che non esiste: si usa la sequenza
+   completa del file (SEQRES del PDB, `_entity_poly` del mmCIF) se contiene i tratti osservati nell'ordine, ha solo
+   lettere standard e sta nel limite di ESMFold (informazione `predict_sequence_seqres`; il confronto abbina i residui
+   per sequenza). Altrimenti si inviano i tratti con l'avviso nei controlli preventivi (`predict_sequence_gaps`) e nel
+   risultato, e i residui entro 5 posizioni da una giunzione non contano come divergenti né come sicuri (nota
+   nell'esito);
 2. predizione: `prediction_esmfold.pdb`, oppure il modello di AlphaFold DB (dalla libreria, che lo scarica se manca)
    copiato come `prediction_AF-<ACC>-F<n>.pdb`;
 3. confronto (con il modello, `source`): `align.structural` con il percorso integrato, modello = A (riferimento),
@@ -1530,7 +1560,8 @@ conservando il suo TITLE (`modeller._provenance_header`).
    oppure l'analisi di qualità più recente della stessa struttura (stessa impronta del file).
 
 Risultato: `predictor`, `label`, `origin` (servizio, cache, scala originale; per AlphaFold DB l'id del modello),
-`prediction_file`, `recognized_as`, `plddt`, `sequence`, `source`, `chain`, `source_sha256`, `comparison` (formato
+`prediction_file`, `recognized_as`, `plddt`, `sequence` (nome, lunghezza, origine `input` | `structure` | `seqres`,
+interruzioni, residui modificati), `source`, `chain`, `source_sha256`, `comparison` (formato
 dell'allineamento strutturale, `mode: structural`, per StructuralComparison), `plausibility`, `warnings`, `limits`.
 
 **Esito** (`domain/prediction.py`):
@@ -1596,7 +1627,10 @@ preventivi](#controlli-preventivi-domainpreflightpy-servicespreflightpy)).
   confronto più recente della struttura (o quello in corso, anche dopo aver ricaricato la pagina) e il pulsante
   «Confronta con una predizione (ESMFold)». La finestra fa scegliere ESMFold o AlphaFold DB (accessione); con ESMFold e
   senza consenso spiega prima che cosa lascia il computer e verso dove e chiede «Acconsento e continua» (salva
-  `esmfold_remote`), poi mostra i controlli preventivi e `LaunchButton`.
+  `esmfold_remote`), poi mostra i controlli preventivi e `LaunchButton`. Con ESMFold c'è il campo facoltativo della
+  sequenza completa (FASTA o testo). Una sequenza nota oltre i 400 residui (quella incollata, altrimenti la catena) non
+  chiede il consenso per un invio impossibile: avviso con AlphaFold DB proposto e avvio nascosto (`esmfoldBlocked`).
+  Impostazioni non lette: errore con «Riprova» invece di una rotella infinita; AlphaFold DB non ne dipende.
 - Risultati: esito con il suo tono, TM-score, lDDT (anche dove la predizione è sicura), pLDDT, residui divergenti, regioni
   con la confidenza, origine (servizio, cache, scala riportata a 0–100), link a Qualità della predizione e a Confronto, PDB
   della predizione e il componente `StructuralComparison` sul PDB sovrapposto del job.
@@ -1800,7 +1834,12 @@ riferimento. È sempre segnato come **modello predetto, non struttura sperimenta
 
   Non contano le menzioni di AlphaFold altrove (per esempio `REMARK 200 STARTING MODEL: ALPHAFOLD` di una struttura
   risolta per sostituzione molecolare): i B-factor di una struttura sperimentale o di un modello MODELLER non vanno
-  mai presi per pLDDT. Un file di AlphaFold caricato dall'utente diventa `predicted` con lo stesso criterio. I
+  mai presi per pLDDT. Un file di AlphaFold caricato dall'utente diventa `predicted` con lo stesso criterio. Il
+  predittore riconosciuto (`predictor`: `alphafold` o `esmfold`) si salva nei metadati e dà il nome nei testi
+  (`plddt.predicted_text`: log della preparazione, note dei risultati, controlli preventivi del ritaglio, report,
+  distintivi dell'interfaccia; riga `REMARK 999 BIOLOOM TEMPLATE <codice> ALPHAFOLD|ESMFOLD|PREDICTED …` del
+  modello): una predizione di ESMFold usata come template non si chiama mai AlphaFold, e un modello predetto senza
+  predittore noto né nome di AlphaFold DB è «modello predetto». I
   metadati registrati prima di questi campi (senza `predicted`) si completano alla prima lettura (`_meta`: elenco,
   dettaglio e `is_predicted` passano di lì) con `predicted`, `plddt_mean` e `plddt_fractions`, e si riscrivono: la
   libreria e l'interfaccia (badge, opzione della soglia pLDDT) vedono quello che vede la modellazione.
@@ -2438,7 +2477,10 @@ l'id normalizzato della libreria, maiuscolo); un vincolo CHECK ammette solo i qu
   finisce in `bioloom.db`: una build senza FTS5 apre e scrive la stessa cartella dati, cosa impossibile con tabelle
   virtuali o trigger FTS5 salvati nello schema. Costo misurato: 0,04 s per 10 000 job all'avvio.
 - **Campi:** progetti (nome; descrizione), sequenze (nome; accessione, proteina e organismo dai metadati), documenti
-  (nome; tipo), job (titolo; tipo e sua etichetta italiana, "modellazione" trova i job `model`), template (id; titolo e
+  (nome; tipo), job (titolo; tipo e sua etichetta italiana, "modellazione" trova i job `model`, "rifinitura" i `refine`,
+  "tasche" i `pockets`: ogni tipo registrato nel `JobManager` ha la sua etichetta, uguale a `KIND_LABEL` del frontend,
+  verificato da un test; l'indice temporaneo si ricostruisce a ogni avvio, quindi un'etichetta nuova vale anche per i job
+  già nel database, e il ripiego LIKE usa la stessa espressione), template (id; titolo e
   organismo dai metadati o dall'intestazione del file: `SOURCE … ORGANISM_SCIENTIFIC` o la voce mmCIF), etichette. I
   template stanno su file: un indice in memoria si ricostruisce quando cambia la firma della cartella (nomi, date e
   dimensioni di strutture e metadati) o quando la libreria avvisa; l'organismo letto dal file resta in cache per data.
@@ -2482,6 +2524,7 @@ temporaneo dello scratch e inviato con `FileResponse` come gli altri archivi; ne
 | `inputs/alignment.ali` | `alignment` | PIR usato da MODELLER |
 | `inputs/uploads/<file>`, `inputs/jobs/<id>/<file>` | `structure` | strutture analizzate: file caricati, modelli di altri job |
 | `inputs/jobs/<id>/alignment.json` | `msa` | allineamento della conservazione preso da un job `align` (analisi strutturale) |
+| `inputs/jobs/<id>/pockets.json` | `job_result` | tasche di fpocket di un job `pockets` scelte per una scansione di alanina per tasca (impronta del file e residui): la riesecuzione le legge dal pacchetto (`PackagedMutations`), anche dopo l'eliminazione del job delle tasche |
 | `outputs/<percorso>` | `output` | tutti i file del job con lo stesso percorso, `result.json` compreso |
 | `scripts/<percorso>` | `script` | script MODELLER eseguiti (`model.py`, `align.py`, `loop.py`, `dope_eval.py`): solo documentazione |
 | `log/job.log` | `log` | log del calcolo, oscurato |
@@ -2498,13 +2541,15 @@ yeast_ub su 1UBQ con 5 modelli e la qualità estesa 36 file, 3,3 MB e 0,5 MB, es
   dell'installazione al momento dell'esportazione (`environment.detected`): i job non registrano l'ambiente a ogni
   esecuzione.
 - **Semi:** `modeller_rand_seed` delle opzioni (predefinito −8123, il seme di `Environ()` di MODELLER, che usano anche
-  loop e allineamenti); per la rifinitura `openmm_seed` (`refinement.MD_SEED`) e i thread usati; gli altri calcoli sono
-  deterministici.
+  loop e allineamenti); per la mutagenesi e la scansione i semi dei modelli di ogni variante (`mutations.seeds`) e, con
+  l'energia, `openmm_seed`; per la rifinitura `openmm_seed` (`refinement.MD_SEED`) e i thread usati; gli altri calcoli
+  sono deterministici.
 - **Impostazioni** (`RELEVANT_SETTINGS`): `compute_cache`, `keep_intermediates`, `job_timeout_minutes` (e per QMEAN
   modalità, fallback, consenso, nome del database). Non l'email, l'interprete di MODELLER, i processori o la
   conservazione degli upload: non cambiano il risultato e alcune sono dati personali o percorsi.
 - **Input remoti:** template scaricati da RCSB o AlphaFold DB (data di `added_at` nei metadati), ricerche RCSB, NCBI e
-  AlphaFold DB, metadati RCSB dei motori locali, QMEAN di SWISS-MODEL (con la pagina dei risultati). Un template
+  AlphaFold DB, metadati RCSB dei motori locali, QMEAN di SWISS-MODEL (con la pagina dei risultati), la predizione di
+  un job `predict` (servizio ESMFold con la data di ricezione, anche dalla cache, o modello di AlphaFold DB). Un template
   modificato in libreria dopo la fine del job (oltre 1 s: le date dei job sono al secondo; durante il job è il job stesso
   che lo scarica) e un file analizzato con un'impronta diversa da `source_sha256` del risultato sono annotati; il
   secondo rende la riesecuzione non disponibile (l'input non è più quello del job).
@@ -2527,7 +2572,9 @@ yeast_ub su 1UBQ con 5 modelli e la qualità estesa 36 file, 3,3 MB e 0,5 MB, es
 | `analysis` | sì | sì | legami H, ponti salini, disolfuri, π-stacking, catione-π, interfacce e area sepolta |
 | `refine` | sì | sì | energie prima e dopo, RMSD della catena principale, qualità dopo |
 | `pockets`, `electrostatics` | sì | sì | tasche e druggability; carica netta e potenziale |
-| `search`, `qmean` | sì | no: dipendono da servizi remoti (o dal servizio QMEAN con UniClust30); 400 `rerun_not_reproducible` | — |
+| `mutate` | sì | sì (MODELLER con gli stessi semi; con l'energia OpenMM e PDBFixer indispensabili) | classe stimata, punteggio, ΔDOPE (totale, residui equivalenti, locale, fra le catene), RMSD selvatico–mutante, ΔΔE e le energie delle quattro minimizzazioni |
+| `alascan` | sì (con le tasche del job `pockets` per la scansione di una tasca) | sì | classi (conteggi), ordine della tabella, per residuo classe, ΔDOPE e ΔΔE |
+| `search`, `qmean`, `predict` | sì | no: dipendono da servizi remoti (o dal servizio QMEAN con UniClust30; la predizione di ESMFold o di AlphaFold DB, registrata come input remoto datato, con la predizione ricevuta fra i risultati); 400 `rerun_not_reproducible` | — |
 | altri (`pipeline`, `selftest`, database, `rerun`) | no: 400 `package_unsupported` (per la pipeline l'archivio ZIP dei risultati) | — | — |
 
 **Pacchetto caricato: input non fidato** (`open_package`, `domain/reproducibility.check_archive`):
@@ -2540,7 +2587,7 @@ yeast_ub su 1UBQ con 5 modelli e la qualità estesa 36 file, 3,3 MB e 0,5 MB, es
 | cifratura, metodo diverso da stored e deflate | `package_encrypted`, `package_compression` |
 | oltre 256 MB compressi, 512 MB per file o 1 GB decompressi, oltre 5000 file; un file più lungo di quanto dichiara | `package_too_large` (413), `package_too_many_files`, `package_bomb` |
 | rapporto di compressione oltre 100:1 per un file oltre 1 MB (deflate arriva a 1032:1; i file di BioLoom fino a 35:1, misurato) | `package_bomb` |
-| manifest assente, non JSON, di un altro formato o di una versione più recente del formato; campi mancanti; percorsi o checksum non validi | `package_invalid`, `package_manifest_invalid`, `package_format` |
+| manifest assente, non JSON, di un altro formato o di una versione più recente del formato; campi mancanti; percorsi o checksum non validi; campi letti dopo di forma inattesa (`environment.tools`/`libraries` non oggetti, `python`/`machine` non testi, `notes`, `remote`, `databases` non elenchi, `seeds`, `settings`, `cache`, `rerun` non oggetti, `job.duration_seconds` non numerico, date e titolo non testi): l'impronta si ricalcola, quindi un manifest risigillato di forma inattesa è un rifiuto motivato in anteprima, controlli preventivi e avvio, mai un errore interno | `package_invalid`, `package_manifest_invalid`, `package_format` |
 | impronta del manifest diversa (SHA-256 del JSON canonico senza `manifest_sha256`): parametri, checksum o versioni modificati dopo l'esportazione | `package_manifest_altered` |
 | file non dichiarati o mancanti; SHA-256 o dimensione diversi (verificati a blocchi, di nuovo all'estrazione) | `package_undeclared`, `package_missing_file`, `package_checksum` |
 | parametri che la rotta di avvio rifiuterebbe (stesso modello Pydantic: `ModelIn`, `QualityIn`, …, e gli stessi controlli immediati) | `package_params_invalid` |
@@ -2578,8 +2625,9 @@ yeast_ub su 1UBQ con 5 modelli e la qualità estesa 36 file, 3,3 MB e 0,5 MB, es
 
 **Comando** `python bioloom.py rerun <pacchetto.zip> [--data <cartella>]` (anche `python -m bioloom rerun`): crea il job
 nella cartella dati indicata (predefinita: quella di BioLoom), ne mostra le fasi, stampa il rapporto ed esce con 0
-(identico o equivalente), 1 (diverso) o 2 (pacchetto non valido, calcolo non rieseguibile, job fallito, cartella dati in
-uso da un server: `DatabaseInUse`). Con `--data` scratch e cache locale stanno dentro quella cartella: il comando non
+(identico, equivalente o compatibile), 1 (diverso) o 2 (pacchetto non valido, calcolo non rieseguibile, job fallito o
+annullato, con il messaggio in italiano «Riesecuzione non riuscita: …», cartella dati in uso da un server:
+`DatabaseInUse`). Con `--data` scratch e cache locale stanno dentro quella cartella: il comando non
 tocca lo scratch di un server, che il `recover` all'avvio svuoterebbe. Senza chiave MODELLER nella cartella indicata si
 usa quella della cartella dati predefinita o di `MODELLER_KEY`.
 
@@ -2603,7 +2651,19 @@ usa quella della cartella dati predefinita o di `MODELLER_KEY`.
   differiscono al più di √3 · 0,001 ≈ 0,0017 Å); numeri |Δ| ≤ max(0,001; 10⁻⁶ · |valore|) (doppia precisione IEEE 754:
   le stesse somme in un altro ordine cambiano le ultime cifre; il DOPE di un modello di 1UBQ, circa −8000, ha così 0,008).
 - **Esito:** `diverso` se un file principale (non uno script né un intermedio di MODELLER) è diverso o mancante;
-  `identico` se ogni file confrontato è identico e non ce ne sono altri; altrimenti `equivalente`.
+  `identico` se ogni file confrontato è identico e non ce ne sono altri; altrimenti `equivalente`. Un esito `diverso`
+  diventa **`compatibile`** se il tipo di calcolo ha tolleranze scientifiche dichiarate (`SCIENTIFIC_TOLERANCES`,
+  `scientific_check`) e la riesecuzione le rispetta: nessun file principale mancante, ogni struttura principale con gli
+  stessi atomi e la catena principale (N, CA, C, O, senza sovrapposizione) entro 0,05 Å, le energie dichiarate entro
+  max(50 kJ/mol; 0,5%) e le grandezze `exact` uguali. Vale per la rifinitura (energie prima e dopo) e, solo con
+  l'energia, per mutagenesi e scansione (energie delle minimizzazioni; classe stimata, ΔDOPE e conteggi delle classi
+  devono restare uguali: se cambiano, il risultato è diverso). È il rumore di OpenMM su più thread, che somma le forze in
+  un ordine diverso a ogni esecuzione: misurato rieseguendo la rifinitura di 1UBQ con 3 thread (10 riesecuzioni),
+  catena principale 0,0035–0,020 Å (tutti gli atomi fino a 0,16 Å, catene laterali esposte fino a 1,2 Å), energia
+  finale 2,7–41 kJ/mol su circa −12 400 (≤ 0,33%), energia iniziale entro 2 kJ/mol; 0,05 Å è 2,5 volte lo scarto
+  massimo e resta sotto lo spostamento della rifinitura (0,08 Å). Rapporto e pagina mostrano i controlli con i limiti;
+  le altre differenze (diedri, DOPE, profili, che seguono le coordinate) restano elencate. Con un thread
+  (`OPENMM_CPU_THREADS=1`) l'esecuzione è identica.
 - **Metriche principali** per tipo (tabella sopra), dal `result.json` del pacchetto e della riesecuzione, con la
   differenza e l'esito entro la tolleranza.
 
@@ -2616,15 +2676,20 @@ usa quella della cartella dati predefinita o di `MODELLER_KEY`.
 | stesso pacchetto con il seme cambiato (manifest risigillato) | diverso: RMSD dei modelli oltre la tolleranza, DOPE diverso |
 | allineamento strutturale e analisi strutturale con le sorgenti eliminate dopo l'esportazione | identico (input dal pacchetto) |
 | rifinitura di 1UBQ, un thread di OpenMM | identico |
-| rifinitura di 1UBQ, più thread | diverso di poco (RMSD 0,016 Å, energia finale −12 396 e −12 433 kJ/mol): la piattaforma CPU di OpenMM non ripete le somme nello stesso ordine con più thread (vedi la rifinitura sopra) |
+| rifinitura di 1UBQ, più thread | compatibile (catena principale 0,0035–0,020 Å, energia finale fino a 41 kJ/mol): la piattaforma CPU di OpenMM non ripete le somme nello stesso ordine con più thread (vedi la rifinitura sopra) |
+| mutagenesi K48R su 1UBQ, scansione di alanina di una tasca | identico (stessi semi di MODELLER; le tasche dal pacchetto) |
+| confronto con ESMFold | pacchetto con la predizione come input remoto datato; riesecuzione rifiutata (`rerun_not_reproducible`) |
 
 **Interfaccia:** «Pacchetto riproducibile» (`components/ReproButton.tsx`) nel dettaglio della pagina Job e nel riquadro
 del job (`JobPanel`) delle pagine dei risultati, per i job completati dei tipi con un pacchetto; pagina «Riesegui da
 pacchetto» (`pages/Rerun.tsx`, `/rerun`, pulsante nella pagina Job; logica in `lib/rerun.ts`): caricamento con verifica,
 anteprima (calcolo, contenuto, semi, cache, impronta, versioni nel pacchetto e qui con le differenze evidenziate,
 parametri, input remoti, elenco dei file), `PreflightPanel` e `LaunchButton`, job seguito in tempo reale e rapporto
-(esito, strutture, metriche con le differenze, file non identici, tolleranze, rapporto e archivio da scaricare),
-riesecuzioni recenti. `/rerun?job=<id>` apre una riesecuzione («Apri risultati» nella pagina Job).
+(esito, controlli delle tolleranze scientifiche per l'esito compatibile, strutture con l'RMSD della catena principale,
+metriche con le differenze, file non identici, tolleranze, rapporto e archivio da scaricare), riesecuzioni recenti. Il
+job originale del pacchetto è un link solo se esiste in questa installazione (un pacchetto di un altro computer, o con
+il job eliminato, lo mostra come testo); la pagina Job mostra «Job non trovato in questa installazione» per un id che
+non c'è. `/rerun?job=<id>` apre una riesecuzione («Apri risultati» nella pagina Job).
 
 ## Frontend (`frontend/`)
 
@@ -2931,7 +2996,11 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     di UniProt simulate con la mappatura della numerazione (anche con le ripetizioni) e la cache, controlli preventivi,
     rotte e priorità. Con MODELLER: K48R su 1UBQ (Arg 48, resto invariato, neutra o incerta, report, cronologia),
     I30P (destabilizzante, elica), scansione di 3 residui ordinata, D58A sul dimero (DOPE fra le catene), catena senza
-    identificativo con un'interruzione, annullamento durante MODELLER; con OpenMM l'energia di K48R;
+    identificativo con un'interruzione, annullamento durante MODELLER; con OpenMM l'energia di K48R. Correzioni della
+    revisione: catena «AA» di un mmCIF (siti, partner, residui ottimizzati e frammenti con la lettera dei modelli, e con
+    MODELLER mutagenesi e scansione completate con le etichette «AA:…»), hot spot con RSA 0 nel complesso (probabile) e
+    RSA ignota (non sepolto), notazione canonica con la catena senza identificativo accanto alla catena B (parametri del
+    job, varianti di UniProt, rilettura all'esecuzione), tasche di un template sostituito rifiutate;
   - tasche, elettrostatica e rifinitura (`test_pockets.py`, `test_electrostatics.py`, `test_refine.py`): parser sulle
     uscite reali di fpocket (4 tasche di 1UBQ, ordine per druggability, sfere = sfere dichiarate, baricentro) e di
     PDB2PQR (carica netta 0, residui carichi per tipo, His68 con HD1); griglia come psize (97 × 97 × 129, le dimensioni
@@ -3010,7 +3079,10 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     riconosciuto dall'analisi di qualità, più recente, cache al secondo job), AlphaFold DB, tre job insieme con una cache
     valida; rotte del consenso e del report (sezione bilanciata, citazioni, struttura diversa 400, job non predict o senza
     confronto 400), markup della sezione con l'escape; controlli preventivi (consenso, lunghezza, accessione, cache,
-    tempi, nessuna richiesta remota);
+    tempi, nessuna richiesta remota); sequenza di una catena interrotta con una MSE (giunzioni, SEQRES che corrisponde,
+    che non corrisponde o troppo lungo, numerazione che salta senza residui mancanti), giunzioni mai divergenti, job con
+    il SEQRES (sequenza completa inviata) e senza (avviso nei controlli e nel risultato); template di ESMFold chiamato
+    ESMFold in log, note, REMARK, report e controlli preventivi;
   - ricerca globale (`test_global_search.py`, ogni test con FTS5 e con LIKE): parole e query FTS5/LIKE con escape,
     tabella dei punteggi, organismo dalle intestazioni PDB/mmCIF, ordine per pertinenza (Chinasi 13, «Chinasi di
     lievito» 7, descrizione 1,5), accenti e maiuscole, accessione, gruppi (documento per nome, job per tipo, template per
@@ -3018,6 +3090,8 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     (tabelle intatte, nessun risultato "tutto"), operatori come parole, indice allineato a modifiche, eliminazioni e
     cascate, template aggiunti e tolti a mano dalla cartella, gruppo delle etichette e filtro `tag`, preferiti in testa e
     senza testo, stessi risultati dai due motori, indice di 10 000 job, ripiego senza FTS5 e nessun oggetto FTS5 nel file;
+    ogni tipo di job registrato con un'etichetta uguale a quella del frontend, job dei tipi nuovi trovati per etichetta
+    («rifinitura», «tasche», «mutagenesi», …) con FTS5 e con LIKE;
   - riproducibilità (`test_reproducibility.py`): nomi pericolosi (`..`, assoluti, unità di Windows, barre rovesciate,
     nascosti, riservati, profondità), collegamenti simbolici, file speciali, duplicati anche per maiuscole, cifratura,
     bomba di decompressione (4 MB di zeri, circa 1000:1) e limiti di numero e dimensione; impronta del manifest
@@ -3037,7 +3111,17 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     validi in un manifest risigillato; pacchetto caricato eliminato dalla pulizia dopo 24 ore; comando `rerun` in un
     sottoprocesso con una cartella dati temporanea (codice 0 e rapporto; 2 con un checksum errato); con MODELLER
     modellazione (seme −8123, script, template preparati, PIR) rieseguita identica e, con un altro seme, diversa con
-    RMSD e DOPE quantificati, e align2d identico; con OpenMM rifinitura identica con un thread;
+    RMSD e DOPE quantificati, e align2d identico; con OpenMM rifinitura identica con un thread. Correzioni della
+    revisione: manifest risigillati di forma inattesa (`environment.libraries`/`tools` elenchi, `python` oggetto, `notes`
+    numero, `remote` di testi, durata testuale, `rerun` elenco) rifiutati con `package_manifest_invalid` in anteprima,
+    controlli preventivi e avvio, parametri liberi di una ricerca senza errore interno; codici 2 («Riesecuzione non
+    riuscita: …») e 1 del comando; esito «compatibile» con risultati simulati entro e oltre le tolleranze scientifiche
+    (catena principale, energia, file mancante, classe della mutagenesi cambiata); con MODELLER pacchetto e riesecuzione
+    di K48R e della scansione di una tasca (tasche dal pacchetto dopo l'eliminazione del job); pacchetto del confronto con
+    ESMFold rifiutato come non riproducibile, con la predizione come input remoto datato;
+  - report (`test_report.py`): ogni tipo di report e le sezioni facoltative con sezioni bilanciate e mai annidate, id
+    univoci e HTML ben formato (`html.parser`); `_Doc` rifiuta sezioni annidate, chiuse due volte, ripetute o aperte a
+    fine documento;
   - verifica dell'installazione.
 
   `pytest -m network` prova i servizi reali. Oltre a 1UBQ, `tests/data` contiene strutture sintetiche generate
@@ -3083,7 +3167,8 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - riproducibilità (`rerun.test.ts`): tipi con un pacchetto e rieseguibili, contenuto per ruolo, versioni nel pacchetto
     e qui (differenze, strumenti assenti o non usati), parametri leggibili, richiesta dei controlli preventivi solo per un
     pacchetto rieseguibile, valori e differenze formattati, ordine e dettaglio dei file del confronto (RMSD, numeri oltre
-    la tolleranza, testi, struttura), nota sulle tolleranze.
+    la tolleranza, testi, struttura), nota sulle tolleranze; mutagenesi e scansione rieseguibili, predizione solo
+    esportabile; esito «compatibile» con le righe dei controlli delle tolleranze scientifiche.
   - ligandi (`ligands.test.ts`): candidati delle catene scelte, additivi e ioni monovalenti deselezionati per
     default, residui modificati non selezionabili, scelte dell'utente conservate, analisi in cache precedenti, testi
     della coordinazione, linee metallo → donatore colorate per esito (con sfera per le acque) e residui evidenziati.
@@ -3099,8 +3184,10 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - mutagenesi (`mutations.test.ts`, `Mutagenesis.test.tsx`): notazione come il backend, aggiunta delle varianti senza
     doppioni, richieste di mutagenesi e scansione con i controlli preventivi, testi di DOPE, energia e sito, link a
     Qualità e Confronto (selvatico riottimizzato e originale come A), filtri e colorazione della scansione per classe con
-    gli esclusi, varianti di UniProt (applicabili prima, filtri, ricerca) e cronologia; markup dei risultati del mutante
-    (classe, segnali pesati, siti, link, avvertenza) e della scansione (ordine, esclusi, CSV).
+    gli esclusi, varianti di UniProt (applicabili prima, filtri, ricerca) e cronologia (stato in italiano); stato della
+    scelta delle tasche (in lettura, errore, nessun calcolo, in corso, non riuscito, pronto); siti nel 3D con la catena
+    dei modelli; markup dei risultati del mutante (classe, segnali pesati, siti, link, avvertenza) e della scansione
+    (ordine, esclusi, CSV).
   - tasche, elettrostatica e rifinitura (`pockets.test.ts`, `electrostatics.test.ts`, `refine.test.ts`): soglia di
     druggability, colori per posto, residuo condiviso fra due tasche, tasca scelta, sfere e centri, tasca di un residuo;
     scala ±5 kT/e saturata, kT/e in mV, colori per segno e residui sepolti, residui estremi e cariche per tipo;
@@ -3121,7 +3208,9 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     manca (anche con le impostazioni non ancora lette), testo del consenso, indirizzo effettivo del servizio, richiesta e
     controlli preventivi, limite di 400 residui come il backend, job seguito (scelto, in corso, più recente), esito,
     metriche e origine, link a Qualità e Confronto (modello come A), nota del consenso; markup dei risultati (esito con il
-    tono, regioni, link, escape, senza confronto).
+    tono, regioni, link, escape, senza confronto); oltre 400 residui nessun consenso né avvio (sequenza incollata o
+    catena), sequenza completa incollata (FASTA o testo) nella richiesta; markup della finestra di avvio (avviso oltre il
+    limite, campo della sequenza); distintivo del predittore dei template (ESMFold, AlphaFold, generico).
   - F8b: finestra della virtualizzazione (`virtual.test.ts`: soglia, posizioni con altezza fissa e per indice, righe
     visibili con margine e spaziatori, fondo e scorrimento oltre il fondo, blocchi dell'allineamento, riga selezionata
     portata in vista sotto l'intestazione fissa e nei limiti), scelta del tema (`theme.test.ts`: valori salvati vecchi e

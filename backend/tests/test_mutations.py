@@ -111,6 +111,47 @@ def test_resolve_checks_the_structure(tmp_path):
     assert mutations.resolve(mutations.parse("B:K48R"), dimer)[0].chain == "B"
 
 
+def _blank_dimer(dest):
+    """Dimero sintetico con la catena A senza identificativo (colonna 22 vuota) e la catena B."""
+    rows = [ln[:21] + " " + ln[22:] if ln.startswith(("ATOM", "HETATM", "TER")) and len(ln) > 21 and ln[21] == "A"
+            else ln for ln in (DATA / "ubq_dimer.pdb").read_text().splitlines()]
+    dest.write_text("\n".join(rows) + "\n")
+    return dest
+
+
+def test_canonical_notation_round_trip_with_a_blank_chain_and_another_chain(tmp_path, client_with_ubq, monkeypatch):
+    """Catena senza identificativo più la catena B: la notazione salvata nei parametri del job e quella delle varianti
+    di UniProt scrivono sempre la catena ('_'), così si rileggono all'esecuzione; il testo resta «K6R»."""
+    dimer = _model(_blank_dimer(tmp_path / "blank_dimer.pdb"))
+    muts = mutations.resolve(mutations.parse("_:K6R, B:K48R"), dimer)
+    assert [m.chain for m in muts] == [" ", "B"] and mutations.notation(muts) == "K6R, B:K48R"
+    saved = mutations.notation(muts, canonical=True)
+    assert saved == "_:K6R, B:K48R" and mutations.resolve(mutations.parse(saved), dimer) == muts
+    with pytest.raises(AppError):  # la forma dei testi non basta con più catene
+        mutations.resolve(mutations.parse(mutations.notation(muts)), dimer)
+    parsed = remote.parse_uniprot_variants(UNIPROT_JSON)
+    mapped = mutations.map_variants(parsed["variants"], parsed["sequence"], dimer, chain="_")
+    k48r = next(v for v in mapped["variants"] if v["position"] == 53)
+    assert k48r["notation"] == "_:K48R" and mutations.resolve(mutations.parse(k48r["notation"]), dimer)[0].chain == " "
+    # rotta di avvio: parametri del job in forma canonica, titolo con il testo
+    c = client_with_ubq
+    _upload(c, tmp_path / "blank_dimer.pdb", "BLANKDIMER")
+    captured = {}
+
+    def submit(kind, params, **kw):
+        captured.update(params=params, title=kw.get("title"))
+        return {"id": "x", "kind": kind, "params": params, "title": kw.get("title")}
+
+    monkeypatch.setattr(c.app.state.core.jobs, "submit", submit)
+    r = c.post("/api/mutate", json={"source": {"type": "template", "id": "BLANKDIMER"}, "mutations": "_:K6R"})
+    assert r.status_code == 200, r.text
+    assert captured["params"]["mutations"] == "_:K6R" and captured["title"].endswith("BLANKDIMER K6R")
+    from bioloom.services.mutations import MutationService
+
+    service = MutationService(c.app.state.core.jobs, c.app.state.core.compute)
+    assert service.validate_mutate(captured["params"])[0].chain == " "  # come all'esecuzione
+
+
 def test_resolve_chain_without_identifier(tmp_path):
     blank = _model(ubq_variant(tmp_path / "blank.pdb", blank_chain=True))
     for text in ("K48R", "_:K48R"):
@@ -165,6 +206,46 @@ def test_modeller_input_renames_a_chain_without_identifier(tmp_path):
     assert {ln[21] for ln in text.splitlines() if ln.startswith("ATOM")} == {"A"}
     restored, _renamed = mutations.restore_chains(text, info["chains"])
     assert {ln[21] for ln in restored.splitlines() if ln.startswith("ATOM")} == {" "}
+
+
+def _two_letter_chain(dest):
+    """1UBQ in mmCIF con la catena «AA» (auth_asym_id di due caratteri, come nei grandi complessi)."""
+    from Bio.PDB.mmcifio import MMCIFIO
+
+    st = structure.load_structure(DATA / "1UBQ.pdb", "x")
+    structure.first_model(st)["A"].id = "AA"
+    out = MMCIFIO()
+    out.set_structure(st)
+    out.save(str(dest))
+    return dest
+
+
+def test_sites_of_a_chain_with_a_two_character_name(tmp_path):
+    """Catena «AA»: MODELLER la chiama A e i modelli costruiti restano così (formato PDB). Indicatori, residui
+    ottimizzati ed energia cercano il sito con la lettera dei modelli; etichetta, sito e partner restano «AA»."""
+    from bioloom.services.mutations import MutationService
+
+    model = _model(_two_letter_chain(tmp_path / "ubq_aa.cif"))
+    (m,) = mutations.resolve(mutations.parse("AA:K48R"), model)
+    text, info = mutations.modeller_input(model)
+    restored, renamed = mutations.restore_chains(text, info["chains"])  # come i file scelti dopo MODELLER
+    assert renamed == ["AA→A"]
+    (tmp_path / "built.pdb").write_text(restored)
+    built = _model(tmp_path / "built.pdb")
+    assert [c.id for c in built] == ["A"] and mutations.model_site(info, "AA", "48") == ("A", "48")
+    assert mutations.model_site(info, "B", "48") == ("B", "48")  # catene di un carattere: nome originale
+    service = MutationService(None, None)
+    (row,) = service._site_indicators({"wt_model": built, "mut_model": built}, [m], {}, info)
+    assert row["label"] == "AA:K48R" and row["site"] == "AA:48" and row["rsa_wt"] == pytest.approx(0.40, abs=0.01)
+    partners = mutations._site_interactions(mutations.facts(built).interactions, ("A", "30"),
+                                            mutations.renamed_chains(info))
+    assert "VAL AA26" in {p["partner"] for p in partners.values()}  # legame idrogeno dell'elica, nome originale
+    moved = service._moved(model, [m], info)
+    assert ("A", "48") in moved and {c for c, _r in moved} == {"A"}
+    shift = mutations.backbone_shift(built, built, moved)
+    assert shift["outside_atoms"] == shift["atoms"] - 4 * len(moved)
+    assert mutations.fragment_windows(built, service._model_sites(info, [m])) == [[("A", "47"), ("A", "48"),
+                                                                                  ("A", "49")]]
 
 
 def test_neighbourhoods():
@@ -336,6 +417,14 @@ def test_binding_effect_and_hotspots():
     assert mutations.binding_effect([exposed], {"interchain_delta_eq": 0.8})["hotspot"] == "possibile"
     assert mutations.binding_effect([exposed], {"interchain_delta_eq": 0.1})["hotspot"] is None
     assert mutations.binding_effect([_ind()], {}) is None
+    # coperto del tutto nel complesso (SASA arrotondata a 0,0: RSA 0): il centro dell'"O-ring", sepolto
+    covered = _ind(interface={"delta": 80.0, "rsa_complex": 0.0, "lost_inter_chain": 1})
+    b = mutations.binding_effect([covered], {"interchain_delta_eq": 1.0})
+    assert b["hotspot"] == "probabile" and "residuo sepolto nel complesso" in b["text"]
+    # RSA ignota (ASA massima non nota): non sepolto
+    unknown = _ind(interface={"delta": 80.0, "rsa_complex": None, "lost_inter_chain": 1})
+    b = mutations.binding_effect([unknown], {"interchain_delta_eq": 1.0})
+    assert b["hotspot"] == "possibile" and "sepolto" not in b["text"]
 
 
 def test_fragments_for_the_energy_reference():
@@ -540,6 +629,34 @@ def test_routes_validate_before_queueing(client_with_ubq):
     assert r.status_code == 404
     assert c.get("/api/jobs?kind=mutate").json() == [] and c.get("/api/jobs?kind=alascan").json() == []
     assert c.get("/api/mutations/history", params=UBQ).json() == []
+
+
+def test_pocket_scan_refuses_pockets_of_a_replaced_file(client, monkeypatch, tmp_path):
+    """Tasche calcolate su un template poi sostituito con lo stesso nome (altro file): la scansione della tasca le
+    rifiuta invece di usare residui di un'altra struttura; con il file invariato la selezione registra l'impronta."""
+    from bioloom.services import structure_tools
+    from bioloom.services.mutations import MutationService
+
+    fake = {"summary": {"count": 1, "druggable": 1, "threshold": 0.5,
+                        "best": {"id": 1, "druggability": 0.8, "volume": 300.0}},
+            "pockets": [{"id": 1, "druggability": 0.8, "residues": [{"chain": "A", "resnum": "30"},
+                                                                   {"chain": "A", "resnum": "43"}]}],
+            "warnings": []}
+    monkeypatch.setattr(structure_tools.pockets, "run", lambda path, ctx, workdir: fake)
+    _upload(client, DATA / "1UBQ.pdb", "UBQP")
+    src = {"type": "template", "id": "UBQP"}
+    pockets = wait_job(client, client.post("/api/pockets", json={"source": src}).json()["id"])
+    assert pockets["status"] == "completed", pockets.get("error")
+    params = {"source": src, "selection": {"mode": "pocket", "pocket_job": pockets["id"], "pocket": 1}}
+    service = MutationService(client.app.state.core.jobs, client.app.state.core.compute)
+    muts, _skipped, selection = service.validate_scan(params)
+    assert [m.label for m in muts] == ["A:I30A", "A:L43A"]
+    assert selection["source_sha256"] == pockets["result"]["source_sha256"]
+    _upload(client, ubq_variant(tmp_path / "rinumerata.pdb", drop=range(28, 32)), "UBQP")  # stesso id, altro file
+    r = client.post("/api/alascan", json=params)
+    assert r.status_code == 400 and r.json()["error"]["code"] == "invalid_scan"
+    assert "versione precedente del file" in r.json()["error"]["message"]
+    assert client.get("/api/jobs?kind=alascan").json() == []
 
 
 @pytest.fixture
@@ -766,6 +883,33 @@ def test_chain_without_identifier_and_a_break(client, tmp_path):
     chain = mut[" "]
     assert chain[33].get_resname() == "ALA" and 35 not in chain
     assert chain[34]["C"] - chain[38]["N"] > 5.0
+
+
+@requires_modeller
+def test_mutate_and_scan_on_a_chain_with_a_two_character_name(client, tmp_path):
+    """mmCIF con la catena «AA»: mutagenesi e scansione arrivano in fondo (prima: KeyError 'AA' dopo MODELLER), con
+    le etichette della notazione, la catena dei modelli per il 3D e la catena principale ferma fuori dai residui
+    ottimizzati."""
+    _upload(client, _two_letter_chain(tmp_path / "ubq_aa.cif"), "UBQAA")
+    src = {"type": "template", "id": "UBQAA"}
+    job = wait_job(client, client.post("/api/mutate", json={"source": src, "mutations": "AA:K48R"}).json()["id"],
+                   timeout=600)
+    assert job["status"] == "completed", job.get("error")
+    res = job["result"]
+    assert res["notation"] == "AA:K48R" and res["sites"][0]["label"] == "AA:K48R" and res["sites"][0]["rsa_wt"] > 0.2
+    assert res["mutations"][0]["chain"] == "AA" and res["mutations"][0]["model_chain"] == "A"
+    assert any("AA→A" in w for w in res["warnings"])
+    assert res["rmsd"]["outside"] == pytest.approx(0.0, abs=0.002) and res["rmsd"]["outside_atoms"] < res["rmsd"]["atoms"]
+    mut = _model(client.app.state.core.jobs.file_path(job["id"], res["files"]["mutant"]))
+    assert mut["A"][48].get_resname() == "ARG"
+    scan = wait_job(client, client.post("/api/alascan", json={"source": src, "selection": {
+        "mode": "residues", "residues": "AA:48, AA:30"}}).json()["id"], timeout=900)
+    assert scan["status"] == "completed", scan.get("error")
+    rows = scan["result"]["rows"]
+    assert sorted(r["label"] for r in rows) == ["AA:I30A", "AA:K48A"] and scan["result"]["failed"] == []
+    assert all(r["site"]["rsa_wt"] is not None for r in rows) and any("AA→A" in w for w in scan["result"]["warnings"])
+    i30a = next(r for r in rows if r["label"] == "AA:I30A")
+    assert i30a["site"]["core"] and i30a["assessment"]["code"] == "destabilizing"
 
 
 @requires_modeller

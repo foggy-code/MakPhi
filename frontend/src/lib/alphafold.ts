@@ -1,5 +1,5 @@
 // AlphaFold DB: accessioni UniProt, identificativi dei modelli e fasce di pLDDT (come domain/plddt.py del backend).
-import type { PreparedTemplate, Sequence, TemplateItem, TemplateRef } from "../api/types";
+import type { PredictorName, PreparedTemplate, Sequence, TemplateItem, TemplateRef } from "../api/types";
 import { fmtNum } from "./format";
 
 /** Soglia predefinita del ritaglio: sotto 70 lo scheletro predetto non è affidabile (fasce di AlphaFold DB). */
@@ -19,6 +19,22 @@ export function isUniProtAccession(value: string): boolean {
 export function isAlphaFoldId(id: string): boolean {
   const m = AF_ID.exec(id.trim().toUpperCase());
   return !!m && UNIPROT.test(m[1]);
+}
+
+/** Nome del predittore di un modello predetto, come domain/plddt.predicted_source del backend: «ESMFold» o
+ *  «AlphaFold» dal predittore riconosciuto; senza predittore noto (metadati precedenti) «AlphaFold» per un
+ *  identificativo di AlphaFold DB, altrimenti «predetto». */
+export function predictorBadge(item: { predictor?: PredictorName | null; id?: string; code?: string } | null | undefined): string {
+  if (item?.predictor === "esmfold") return "ESMFold";
+  if (item?.predictor === "alphafold") return "AlphaFold";
+  const id = item?.id ?? item?.code?.replace(/_[^_]*$/, "") ?? "";
+  return isAlphaFoldId(id) ? "AlphaFold" : "predetto";
+}
+
+/** Suggerimento del distintivo: «Modello predetto da ESMFold, non struttura sperimentale». */
+export function predictorTitle(item: { predictor?: PredictorName | null; id?: string; code?: string } | null | undefined): string {
+  const name = predictorBadge(item);
+  return name === "predetto" ? "Modello predetto, non struttura sperimentale" : `Modello predetto da ${name}, non struttura sperimentale`;
 }
 
 /** Accessione UniProt di una sequenza del progetto importata da UniProt (meta.accession), se valida. */

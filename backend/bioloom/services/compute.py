@@ -15,8 +15,8 @@ from ..core.errors import AppError, Conflict, NotFound
 from ..core.jobs import QMEAN_LOCAL, JobCancelled, JobContext, JobManager
 from ..core.parallel import Steps
 from ..core.storage import atomic_write_json, atomic_write_text, read_json, safe_join
-from ..domain import (assembly, complexes, consensus, interactions, interfaces, ligands, multitemplate, sequences,
-                      structure, template_rank)
+from ..domain import (assembly, complexes, consensus, interactions, interfaces, ligands, multitemplate, plddt,
+                      sequences, structure, template_rank)
 from ..domain.preflight import IDENTICAL_MODELS
 from ..domain.sequences import SeqRecord
 from ..engines import align, modeller, qmean_local, quality, remote, search
@@ -397,12 +397,15 @@ class ComputeService:
                         + (f"; non trasferiti: {left}" if left else ""))
             if predicted:
                 info["predicted"] = True
+                # predittore riconosciuto (plddt.predictor, nei metadati): i testi non dicono AlphaFold per ESMFold
+                info["predictor"] = self.library.predictor(spec.id)
+                what = plddt.predicted_text(info["predictor"], spec.id)
                 trim = info.get("plddt")
                 if trim is None:
-                    ctx.log(f"Template {info['code']}: modello predetto (AlphaFold), usato senza ritaglio pLDDT")
+                    ctx.log(f"Template {info['code']}: {what}, usato senza ritaglio pLDDT")
                 else:
                     where = ", ".join(f"{a}–{b}:{c}" if a != b else f"{a}:{c}" for a, b, c in trim["removed_ranges"])
-                    ctx.log(f"Template {info['code']}: modello predetto (AlphaFold), rimossi {_removed_text(trim)}"
+                    ctx.log(f"Template {info['code']}: {what}, rimossi {_removed_text(trim)}"
                             + (f" ({where})" if where else "")
                             + f", restano {trim['kept']} di {trim['total']}; pLDDT medio {trim['mean_before']} → "
                               f"{trim['mean_after']}")
@@ -424,7 +427,8 @@ class ComputeService:
             if not t.get("predicted"):
                 continue
             trim = t.get("plddt")
-            text = f"{t['code']}: modello predetto (AlphaFold DB), non una struttura sperimentale"
+            text = (f"{t['code']}: {plddt.predicted_text(t.get('predictor'), str(t.get('id') or t['code']))}, non una "
+                    "struttura sperimentale")
             if trim is None:
                 text += "; nessun ritaglio dei residui a basso pLDDT."
             elif trim["removed"]:
@@ -665,7 +669,7 @@ class ComputeService:
             quality.inject_remarks(workdir / m["file"], [
                 f"MODEL {m['file']} TARGET {target_code}",
                 f"TEMPLATES {' '.join(t['code'] for t in templates)}",
-                *(f"TEMPLATE {t['code']} ALPHAFOLD "
+                *(f"TEMPLATE {t['code']} {plddt.predictor_tag(t.get('predictor'), str(t.get('id') or t['code']))} "
                   + (f"PLDDT<{t['plddt']['threshold']:g} REMOVED {t['plddt']['removed']}" if t.get("plddt")
                      else "PLDDT_TRIM OFF")
                   for t in templates if t.get("predicted")),

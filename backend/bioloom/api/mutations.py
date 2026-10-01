@@ -56,9 +56,10 @@ def _service(core: Core) -> MutationService:
 def submit_mutate(body: MutateIn, core: Core = Depends(get_core)) -> dict:
     params = body.model_dump()
     muts = _service(core).validate_mutate(params)  # errori subito, prima della coda
-    params["mutations"] = domain.notation(muts)
+    # forma canonica, con la catena sempre scritta: si rilegge anche su una struttura con una catena senza nome e altre
+    params["mutations"] = domain.notation(muts, canonical=True)
     return core.jobs.submit(MUTATE, params, project_id=_project(core, body.project_id),
-                            title=f"Mutagenesi · {_label(body.source)} {params['mutations']}"[:200])
+                            title=f"Mutagenesi · {_label(body.source)} {domain.notation(muts)}"[:200])
 
 
 @router.post("/alascan")

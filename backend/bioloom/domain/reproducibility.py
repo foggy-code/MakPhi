@@ -45,7 +45,7 @@ TOP_DIRS = frozenset({"inputs", "outputs", "scripts", "log"})
 # Ruoli dei file nel manifest. Quelli d'ingresso servono alla riesecuzione e si estraggono; gli altri si verificano
 # soltanto (checksum) e si confrontano con i file della riesecuzione.
 INPUT_ROLES = frozenset({"params", "sequences", "template", "template_meta", "template_prepared", "alignment",
-                         "structure", "msa"})
+                         "structure", "msa", "job_result"})  # job_result: risultato di un altro job (tasche)
 ROLES = INPUT_ROLES | {"output", "script", "log", "documentation"}
 # Ruoli confrontati con la riesecuzione (stesso `job_path` nella cartella del nuovo calcolo)
 COMPARED_ROLES = frozenset({"output", "template_prepared", "alignment", "script"})
@@ -57,11 +57,16 @@ KIND_LABEL = {
     "model": "modellazione", "loop": "raffinamento di loop", "align2d": "allineamento MODELLER",
     "quality": "analisi di qualità", "align": "allineamento", "analysis": "analisi strutturale",
     "refine": "rifinitura energetica", "pockets": "ricerca delle tasche (fpocket)",
-    "electrostatics": "elettrostatica (PDB2PQR + APBS)", "search": "ricerca di template", "qmean": "QMEAN",
+    "electrostatics": "elettrostatica (PDB2PQR + APBS)", "mutate": "mutagenesi in silico",
+    "alascan": "scansione di alanina", "search": "ricerca di template", "qmean": "QMEAN",
+    "predict": "confronto con una predizione",
 }
 EXPORTABLE = frozenset(KIND_LABEL)
+# mutagenesi e scansione: MODELLER con gli stessi semi (domain/mutations.seeds) dà gli stessi modelli; la predizione
+# viene da un servizio remoto (ESMFold) o da AlphaFold DB, come la ricerca e QMEAN: pacchetto sì, riesecuzione no
 RERUNNABLE = frozenset({"model", "loop", "align2d", "quality", "align", "analysis", "refine", "pockets",
-                        "electrostatics"})
+                        "electrostatics", "mutate", "alascan"})
+REMOTE_KINDS = frozenset({"search", "qmean", "predict"})
 
 # ------------------------------------------------------------------------------------------ limiti dell'archivio
 # Il pacchetto caricato è un input non fidato. Limiti:
@@ -117,11 +122,50 @@ RERUN_BASIS = ("Durata del calcolo originale registrata nel pacchetto (dall'avvi
                "su un altro computer, con un altro carico o altre versioni può cambiare; intervallo da metà al doppio "
                "come le altre stime.")
 
+# Tolleranze scientifiche per tipo di calcolo: l'esito «compatibile» distingue il rumore numerico atteso di un calcolo
+# non deterministico da un risultato davvero diverso. Si applicano alle grandezze principali dichiarate qui; le altre
+# differenze (grandezze derivate dalle coordinate: diedri, DOPE, profili) restano elencate nel rapporto.
+# - refine: con più thread la piattaforma CPU di OpenMM somma le forze in un ordine che cambia fra le esecuzioni.
+#   Misurato rieseguendo la rifinitura di 1UBQ con 3 thread (10 riesecuzioni, immagine bioloom:dev, ottobre 2026): RMSD
+#   della catena principale fra il modello originale e quello rieseguito 0,0035–0,020 Å (tutti gli atomi fino a
+#   0,16 Å: catene laterali esposte che cambiano rotamero, fino a 1,2 Å), energia finale diversa di 2,7–41 kJ/mol su
+#   circa −12 400 (≤ 0,33%), energia iniziale entro 2 kJ/mol. Le restrizioni (10 kcal·mol⁻¹·Å⁻² sulla catena
+#   principale) la tengono quasi ferma: 0,05 Å è 2,5 volte lo scarto massimo misurato e resta sotto lo spostamento della
+#   rifinitura stessa (0,08 Å su 1UBQ); per l'energia max(50 kJ/mol; 0,5%) copre il rumore misurato (41 kJ/mol, 0,33%)
+#   senza coprire un minimo diverso (centinaia di kJ/mol). Con un thread (OPENMM_CPU_THREADS=1) l'esecuzione è identica.
+# - mutate, alascan con l'energia di OpenMM (`energy`): le quattro minimizzazioni sono la stessa rifinitura, con lo
+#   stesso rumore; MODELLER no (stessi semi, modelli identici). Valgono le stesse tolleranze per le strutture e per le
+#   energie delle minimizzazioni, e devono restare uguali la classe stimata e il ΔDOPE (`exact`): se cambiano, il
+#   risultato scientifico è diverso, qualunque sia la causa. Senza l'energia il calcolo è deterministico: nessuna
+#   tolleranza scientifica.
+_OPENMM_BASIS = ("rumore misurato rieseguendo la rifinitura di 1UBQ con 3 thread: catena principale fino a 0,020 Å, "
+                 "energia finale fino a 41 kJ/mol (0,33%)")
+SCIENTIFIC_TOLERANCES = {
+    "refine": {
+        "what": "rifinitura con OpenMM su più thread (ordine delle somme non deterministico)",
+        "backbone_rmsd": 0.05, "energy_abs": 50.0, "energy_rel": 0.005, "energy_keys": ("before", "after"),
+        "exact": (), "requires": None, "basis": _OPENMM_BASIS,
+    },
+    "mutate": {
+        "what": "minimizzazione con OpenMM su più thread della mutagenesi con l'energia",
+        "backbone_rmsd": 0.05, "energy_abs": 50.0, "energy_rel": 0.005,
+        "energy_keys": ("e_wild_type", "e_mutant", "e_reference_wild_type", "e_reference_mutant"),
+        "exact": ("class", "delta_dope"), "requires": "energy", "basis": _OPENMM_BASIS,
+    },
+    "alascan": {
+        "what": "minimizzazione con OpenMM su più thread della scansione con l'energia",
+        "backbone_rmsd": 0.05, "energy_abs": 50.0, "energy_rel": 0.005, "energy_keys": (),
+        "exact": ("class", "delta_dope", "counts"), "requires": "energy", "basis": _OPENMM_BASIS,
+    },
+}
+
 VERDICT_TEXT = {
     "identico": "tutti i file confrontati sono uguali (a parte la data di MODELLER nella riga EXPDTA e i campi che non "
                 "dipendono dal calcolo: durata dei passi, thread, provenienza dalla cache)",
     "equivalente": "nessuna differenza oltre le tolleranze: valori uguali entro la tolleranza, formattazione o file "
                    "accessori diversi",
+    "compatibile": "differenze oltre l'arrotondamento ma entro le tolleranze scientifiche del tipo di calcolo (rumore "
+                   "numerico atteso, non un risultato diverso)",
     "diverso": "ci sono differenze oltre le tolleranze o file mancanti",
 }
 
@@ -266,6 +310,40 @@ def _need(cond: bool, message: str) -> None:
         raise _error("package_manifest_invalid", f"Manifest del pacchetto non valido: {message}.")
 
 
+def _optional(value: Any, kind: type) -> bool:
+    """Valore assente (None) o del tipo indicato (mai un booleano al posto di un numero)."""
+    if value is None:
+        return True
+    if kind in (int, float):
+        return _is_number(value)
+    return isinstance(value, kind)
+
+
+def _check_shapes(data: dict) -> None:
+    """Tipi dei campi che anteprima, controlli preventivi e riesecuzione leggono dopo la validazione: il manifest è un
+    input non fidato e l'impronta si ricalcola, quindi una forma inattesa è un rifiuto motivato, non un errore interno.
+    Ogni campo può mancare (pacchetti di versioni precedenti)."""
+    env = data["environment"]
+    for key in ("tools", "libraries"):
+        _need(_optional(env.get(key), dict), f"environment.{key} non è un oggetto")
+    for key in ("python", "machine"):
+        _need(_optional(env.get(key), str), f"environment.{key} non è un testo")
+    _need(all(_optional(v, str) for v in (env.get("libraries") or {}).values()),
+          "le versioni di environment.libraries non sono testi")
+    for key in ("seeds", "settings", "cache", "rerun"):
+        _need(_optional(data.get(key), dict), f"{key} non è un oggetto")
+    for key in ("remote", "databases"):
+        _need(_optional(data.get(key), list) and all(isinstance(x, dict) for x in data.get(key) or []),
+              f"{key} non è un elenco di oggetti")
+    _need(_optional(data.get("notes"), list) and all(isinstance(x, str) for x in data.get("notes") or []),
+          "notes non è un elenco di testi")
+    job = data["job"]
+    _need(_optional(job.get("duration_seconds"), float), "job.duration_seconds non è un numero")
+    for key in ("title", "status", "created_at", "started_at", "finished_at"):
+        _need(_optional(job.get(key), str), f"job.{key} non è un testo")
+    _need(_optional(data.get("created_at"), str), "created_at non è un testo")
+
+
 def validate_manifest(data: Any) -> dict:
     """Controlla forma, versione del formato e impronta del manifest; restituisce il manifest.
 
@@ -301,7 +379,9 @@ def validate_manifest(data: Any) -> dict:
     _need(isinstance(data.get("params"), dict), "mancano i parametri del job")
     _need(isinstance(data.get("bioloom"), dict) and isinstance(data["bioloom"].get("version"), str),
           "manca la versione di BioLoom")
+    _need(_optional(data["bioloom"].get("image"), str), "bioloom.image non è un testo")
     _need(isinstance(data.get("environment"), dict), "manca la sezione environment")
+    _check_shapes(data)
     files = data.get("files")
     _need(isinstance(files, list) and bool(files), "manca l'elenco dei file")
     seen: set[str] = set()
@@ -542,14 +622,18 @@ def pdb_atoms(text: str) -> dict[tuple, tuple[float, float, float]]:
     return atoms
 
 
+BACKBONE_ATOMS = frozenset({"N", "CA", "C", "O"})
+
+
 def compare_coordinates(a: str, b: str) -> dict:
-    """Atomi in comune, RMSD senza sovrapposizione e scarto massimo (con l'atomo) fra due PDB; `within` se gli atomi
-    sono gli stessi e lo scarto massimo è entro `COORD_TOLERANCE`."""
+    """Atomi in comune, RMSD senza sovrapposizione (di tutti gli atomi e della catena principale N, CA, C, O) e scarto
+    massimo (con l'atomo) fra due PDB; `within` se gli atomi sono gli stessi e lo scarto massimo è entro
+    `COORD_TOLERANCE`."""
     xa_map, xb_map = pdb_atoms(a), pdb_atoms(b)
     common = [k for k in xa_map if k in xb_map]
     out = {"atoms": len(xa_map), "rerun_atoms": len(xb_map), "common": len(common),
            "only_original": len(xa_map) - len(common), "only_rerun": len(xb_map) - len(common),
-           "rmsd": None, "max_deviation": None, "max_atom": None, "within": False}
+           "rmsd": None, "backbone_rmsd": None, "max_deviation": None, "max_atom": None, "within": False}
     if not common:
         return out
     xa = np.array([xa_map[k] for k in common])
@@ -557,6 +641,8 @@ def compare_coordinates(a: str, b: str) -> dict:
     dist = np.sqrt(((xa - xb) ** 2).sum(axis=1))
     worst = int(dist.argmax())
     chain, resid, resname, atom, _alt = common[worst]
+    backbone = [i for i, k in enumerate(common) if k[3] in BACKBONE_ATOMS]
+    out["backbone_rmsd"] = round(float(np.sqrt((dist[backbone] ** 2).mean())), 4) if backbone else None
     out.update(rmsd=round(float(np.sqrt((dist ** 2).mean())), 4), max_deviation=round(float(dist[worst]), 4),
                max_atom=f"{atom} {resname} {chain.strip() or '-'}{resid}",
                within=out["only_original"] == 0 and out["only_rerun"] == 0 and float(dist[worst]) <= COORD_TOLERANCE)
@@ -616,14 +702,65 @@ def compare_file(path: str, original: bytes, rerun: Optional[bytes]) -> dict:
     return {**out, "status": "equivalent" if diff.ok else "different", "diff": diff.to_dict()}
 
 
-def verdict(files: list[dict]) -> str:
+def verdict(files: list[dict], scientific: Optional[dict] = None) -> str:
     """Esito complessivo: `diverso` se un file principale è diverso o mancante, `identico` se ogni file confrontato è
-    identico (e la riesecuzione non ne ha prodotti altri), altrimenti `equivalente`."""
+    identico (e la riesecuzione non ne ha prodotti altri), altrimenti `equivalente`. Un esito `diverso` diventa
+    `compatibile` se il tipo di calcolo ha tolleranze scientifiche e la riesecuzione le rispetta (`scientific_check`)."""
     if any(f["status"] in ("different", "missing") and f.get("principal", True) for f in files):
-        return "diverso"
+        return "compatibile" if scientific and scientific.get("within") else "diverso"
     if all(f["status"] == "identical" for f in files):
         return "identico"
     return "equivalente"
+
+
+def scientific_check(kind: str, files: list[dict], metrics: list[dict],
+                     params: Optional[dict] = None) -> Optional[dict]:
+    """Confronto con le tolleranze scientifiche del tipo di calcolo (`SCIENTIFIC_TOLERANCES`), None se il tipo non ne
+    ha (o non con questi parametri, `requires`). `within` se nessun file principale manca, ogni struttura principale ha
+    gli stessi atomi e la catena principale entro la tolleranza (RMSD senza sovrapposizione), le energie dichiarate sono
+    entro max(assoluta; relativa) e le metriche `exact` (chiave, o «<sito>:<chiave>» per riga) sono uguali entro la
+    tolleranza numerica. Restituisce {within, checks [{what, original, rerun, delta, limit, within}], tolerance, text}."""
+    spec = SCIENTIFIC_TOLERANCES.get(kind)
+    if spec is None or (spec.get("requires") and not (params or {}).get(spec["requires"])):
+        return None
+    checks: list[dict] = []
+    missing = [f["path"] for f in files if f["status"] == "missing" and f.get("principal", True)]
+    if missing:
+        checks.append({"what": "file mancanti", "original": len(missing), "rerun": 0, "delta": None, "limit": 0,
+                       "within": False, "detail": ", ".join(missing[:5])})
+    structures = [f for f in files if f.get("principal", True) and f["status"] != "missing"
+                  and PurePosixPath(f["path"]).suffix.lower() in (".pdb", ".ent")]
+    for f in structures:
+        # identico: nessuno scarto; diverso senza coordinate (file grande, solo il checksum): non valutabile
+        c = f.get("coordinates") or ({"backbone_rmsd": 0.0} if f["status"] == "identical" else {"only_original": 1})
+        same_atoms = not c.get("only_original") and not c.get("only_rerun")
+        value = c.get("backbone_rmsd")
+        checks.append({"what": f"catena principale di {f['path']} (RMSD senza sovrapposizione, Å)", "original": None,
+                       "rerun": None, "delta": value, "limit": spec["backbone_rmsd"],
+                       "within": same_atoms and value is not None and value <= spec["backbone_rmsd"],
+                       **({} if same_atoms else {"detail": "atomi diversi o file confrontato solo per checksum"})})
+    rows = {row.get("key"): row for section in metrics for row in section.get("rows") or []}
+    for key in spec["energy_keys"]:
+        row = rows.get(key)
+        if row is None:
+            continue
+        a, b = row.get("original"), row.get("rerun")
+        ok = _is_number(a) and _is_number(b)
+        limit = max(spec["energy_abs"], spec["energy_rel"] * abs(float(a))) if ok else None
+        delta = float(f"{float(b) - float(a):.6g}") if ok else None
+        checks.append({"what": row.get("label") or key, "original": a, "rerun": b, "delta": delta,
+                       "limit": None if limit is None else round(limit, 1),
+                       "within": ok and abs(delta) <= limit})
+    for key, row in rows.items():  # risultato scientifico che deve restare lo stesso (classe, ΔDOPE)
+        if any(str(key) == e or str(key).endswith(f":{e}") for e in spec.get("exact") or ()):
+            checks.append({"what": row.get("label") or key, "original": row.get("original"), "rerun": row.get("rerun"),
+                           "delta": row.get("delta"), "limit": None, "within": bool(row.get("within"))})
+    within = bool(structures) and all(c["within"] for c in checks)
+    text = (f"Tolleranze scientifiche della {spec['what']}: catena principale entro {spec['backbone_rmsd']:g} Å, "
+            f"energia entro max({spec['energy_abs']:g} kJ/mol; {100 * spec['energy_rel']:g}%) ({spec['basis']}).")
+    return {"within": within, "checks": checks,
+            "tolerance": {k: v for k, v in spec.items() if k not in ("what", "basis")} | {"basis": spec["basis"]},
+            "text": text}
 
 
 def metric_rows(original: dict, rerun: dict, spec: Iterable[tuple[str, str]]) -> list[dict]:
@@ -772,6 +909,13 @@ def report_text(report: dict) -> str:
         "",
         f"Esito: {str(report.get('verdict', '')).upper()} — {VERDICT_TEXT.get(report.get('verdict'), '')}.",
     ]
+    scientific = report.get("scientific")
+    if scientific:
+        lines += ["", "Tolleranze scientifiche del calcolo", f"  {scientific.get('text')}"]
+        for c in scientific.get("checks") or []:
+            values = f"{_fmt(c.get('original'))} → {_fmt(c.get('rerun'))}, " if c.get("original") is not None else ""
+            lines.append(f"  {c.get('what')}: {values}Δ {_fmt(c.get('delta'))} (limite {_fmt(c.get('limit'))})"
+                         + (" — entro" if c.get("within") else " — OLTRE") + (f"; {c['detail']}" if c.get("detail") else ""))
     warnings = report.get("warnings") or []
     if warnings:
         lines += ["", "Avvisi"] + [f"  - {w}" for w in warnings]

@@ -12,6 +12,8 @@ import {
   plddtBand,
   plddtLabel,
   plddtTone,
+  predictorBadge,
+  predictorTitle,
   removedRanges,
   sequenceAccession,
   trimSummary,
@@ -135,5 +137,17 @@ describe("riepilogo del ritaglio", () => {
       .toBe("rimossi 20 residui con pLDDT < 70 e 4 in frammenti isolati (< 5 residui) (restano 52 di 76)");
     expect(removedRanges({ plddt: trim })).toBe("1–5:A, 71–76:A, 40:A");
     expect(removedRanges({})).toBe("");
+  });
+});
+
+describe("predittore dei modelli predetti", () => {
+  it("ESMFold e AlphaFold dal predittore riconosciuto, dal nome di AlphaFold DB per i metadati vecchi, altrimenti generico", () => {
+    expect(predictorBadge({ id: "ESMUBQ", predictor: "esmfold" })).toBe("ESMFold");
+    expect(predictorTitle({ id: "ESMUBQ", predictor: "esmfold" })).toBe("Modello predetto da ESMFold, non struttura sperimentale");
+    expect(predictorBadge({ id: "AF-P69905-F1", predictor: "alphafold" })).toBe("AlphaFold");
+    expect(predictorBadge({ id: "AF-P69905-F1" })).toBe("AlphaFold"); // metadati precedenti a F9.3
+    expect(predictorBadge({ code: "AF-P69905-F1_A" })).toBe("AlphaFold"); // template preparato del job
+    expect(predictorBadge({ id: "MIO_MODELLO" })).toBe("predetto");
+    expect(predictorTitle({ id: "MIO_MODELLO" })).toBe("Modello predetto, non struttura sperimentale");
   });
 });

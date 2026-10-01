@@ -28,9 +28,11 @@ manifest si validano con gli stessi modelli Pydantic delle rotte di avvio e gli 
 gira con gli handler di sempre (`PackagedCompute`: libreria privata con i template del pacchetto, strutture del
 pacchetto, nessun download), cache dei calcoli ignorata (`use_cache` False), nella sottocartella `riesecuzione/` con gli
 stessi percorsi del job originale. Poi ogni file si confronta con quello del pacchetto (domain/reproducibility.
-compare_file) e le metriche principali si mettono a confronto: esito `identico`, `equivalente` o `diverso`, rapporto
-leggibile `RAPPORTO_RIESECUZIONE.txt` e `confronto.json` nel job. Versioni diverse di BioLoom o degli strumenti sono
-avvisi, non errori.
+compare_file) e le metriche principali si mettono a confronto: esito `identico`, `equivalente`, `compatibile` (entro le
+tolleranze scientifiche del tipo di calcolo, `repro.scientific_check`: il rumore di OpenMM su più thread) o `diverso`,
+rapporto leggibile `RAPPORTO_RIESECUZIONE.txt` e `confronto.json` nel job. Versioni diverse di BioLoom o degli strumenti
+sono avvisi, non errori. Mutagenesi e scansione si rieseguono con `PackagedMutations` (tasche della scansione dal
+pacchetto); il confronto con una predizione ha il pacchetto, ma la riesecuzione è rifiutata (servizio remoto).
 """
 
 from __future__ import annotations
@@ -61,6 +63,7 @@ from ..domain import reproducibility as repro
 from ..engines import modeller, quality, search, versions
 from .analysis import AnalysisService
 from .compute import ComputeService, complex_templates
+from .mutations import MutationService
 from .refine import RefineService
 from .structure_tools import StructureToolsService
 from .templates import TemplateLibrary, normalize_id
@@ -73,6 +76,7 @@ PACKAGE_NAME = "package.zip"  # pacchetto originale, nella cartella del job di r
 RERUN_DIR = "riesecuzione"  # file del calcolo rieseguito, con gli stessi percorsi della cartella del job originale
 REPORT_JSON = "confronto.json"
 REPORT_TEXT = "RAPPORTO_RIESECUZIONE.txt"
+POCKETS_JSON = "pockets.json"  # tasche di un job `pockets` nel pacchetto di una scansione per tasca
 STAGE_PREFIX = "rerun_"  # pacchetti caricati in attesa dell'avvio, nello scratch (eliminati dopo 24 ore)
 INCOMING = ".rerun-incoming"  # copie in arrivo nella cartella dei job, spostate nel job alla creazione
 # File più grandi di così si copiano a blocchi senza oscuramento (solo il controllo dei segreti) e si confrontano con
@@ -102,17 +106,50 @@ STRUCTURAL_METRICS = (("tm_score", "TM-score"), ("rmsd", "RMSD (Å)"), ("aligned
                       ("lddt", "lDDT"))
 INTERACTION_METRICS = (("hbonds", "Legami idrogeno"), ("salt_bridges", "Ponti salini"), ("disulfides", "Ponti disolfuro"),
                        ("pi_stacking", "π-stacking"), ("cation_pi", "Catione-π"))
+# mutagenesi: classe (risultato), ΔDOPE (MODELLER, deterministico), RMSD selvatico–mutante, energia (OpenMM)
+SCAN_METRICS = (("class", "classe stimata"), ("delta_dope", "ΔDOPE"), ("delta_eq", "ΔDOPE (residui equivalenti)"),
+                ("ddE", "ΔΔE (kJ/mol)"))
+MUTATION_METRICS = (("class", "Classe stimata"), ("score", "Punteggio della classe"), ("delta_dope", "ΔDOPE"),
+                    ("delta_eq", "ΔDOPE (residui equivalenti)"), ("delta_local", "ΔDOPE locale"),
+                    ("interchain_delta", "ΔDOPE fra le catene"), ("rmsd_all", "RMSD selvatico–mutante (Å)"),
+                    ("rmsd_outside", "RMSD fuori dai residui ottimizzati (Å)"), ("ddE", "ΔΔE (kJ/mol)"),
+                    ("e_wild_type", "Energia del selvatico minimizzato (kJ/mol)"),
+                    ("e_mutant", "Energia del mutante minimizzato (kJ/mol)"),
+                    ("e_reference_wild_type", "Energia del riferimento del selvatico (kJ/mol)"),
+                    ("e_reference_mutant", "Energia del riferimento del mutante (kJ/mol)"))
+
+
+def _mutation_values(result: dict) -> dict:
+    """Valori confrontati di un job `mutate` o di una riga della scansione di alanina."""
+    if not isinstance(result, dict):
+        return {}
+    assessment = result.get("assessment") if isinstance(result.get("assessment"), dict) else {}
+    dope = result.get("dope") if isinstance(result.get("dope"), dict) else {}
+    rmsd = result.get("rmsd") if isinstance(result.get("rmsd"), dict) else {}
+    energy = result.get("energy") if isinstance(result.get("energy"), dict) else {}
+    return {"class": assessment.get("code"), "score": assessment.get("score"), "delta_dope": dope.get("delta"),
+            "delta_eq": dope.get("delta_eq"), "delta_local": dope.get("delta_local"),
+            "interchain_delta": dope.get("interchain_delta"), "rmsd_all": rmsd.get("all"),
+            "rmsd_outside": rmsd.get("outside"), "ddE": energy.get("ddE"), "e_wild_type": energy.get("wild_type"),
+            "e_mutant": energy.get("mutant"), "e_reference_wild_type": energy.get("reference_wild_type"),
+            "e_reference_mutant": energy.get("reference_mutant")}
+
+
+def _counts_text(counts: dict) -> str:
+    return " / ".join(str(counts.get(k, 0)) for k in ("destabilizing", "uncertain", "neutral"))
 
 
 def _start_models() -> dict:
     """Modelli Pydantic delle rotte di avvio, per tipo (import ritardato: le rotte importano i servizi)."""
     from ..api.analysis import AnalysisIn
     from ..api.compute import Align2dIn, AlignIn, LoopIn, ModelIn, QmeanIn, QualityIn, SearchIn
+    from ..api.mutations import AlaScanIn, MutateIn
+    from ..api.predict import PredictIn
     from ..api.structure_tools import ElectrostaticsIn, PocketsIn, RefineIn
 
     return {"model": ModelIn, "loop": LoopIn, "align2d": Align2dIn, "quality": QualityIn, "align": AlignIn,
             "analysis": AnalysisIn, "refine": RefineIn, "pockets": PocketsIn, "electrostatics": ElectrostaticsIn,
-            "search": SearchIn, "qmean": QmeanIn}
+            "mutate": MutateIn, "alascan": AlaScanIn, "search": SearchIn, "qmean": QmeanIn, "predict": PredictIn}
 
 
 def _utc(value: Optional[str]) -> Optional[datetime]:
@@ -303,6 +340,25 @@ class PackagedAnalysis(AnalysisService):
             f"job di allineamento {job_id}: {data.get('method') or data.get('mode') or 'allineamento'}"
 
 
+class PackagedMutations(MutationService):
+    """Mutagenesi e scansione con la struttura del pacchetto e, per la scansione di una tasca, il job `pockets` del
+    pacchetto (`inputs/jobs/<id>/pockets.json`) invece di quello della cartella dati."""
+
+    def __init__(self, jobs: JobManager, compute: PackagedCompute) -> None:
+        super().__init__(jobs, compute)
+        self.packaged = compute
+
+    def _pockets_job(self, job_id: str) -> dict:
+        path = safe_join(self.packaged.job_files, validate_identifier(job_id, "job_id"), POCKETS_JSON)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raise AppError(f"Il pacchetto non contiene le tasche del job {job_id}.", code="package_missing_input")
+        if not isinstance(data, dict):
+            raise AppError(f"Tasche del job {job_id} non valide nel pacchetto.", code="package_missing_input")
+        return data
+
+
 # ------------------------------------------------------------------------------------------ costruzione dell'archivio
 class _Builder:
     """File del pacchetto in scrittura: oscuramento, controllo dei segreti, checksum, voci del manifest."""
@@ -435,8 +491,9 @@ class ReproducibilityService:
         if kind not in repro.EXPORTABLE:
             raise AppError(f"Il pacchetto di riproducibilità non è disponibile per i job di tipo {kind}: è previsto per "
                            "modellazione, loop, allineamenti, qualità, analisi strutturale, rifinitura, tasche, "
-                           "elettrostatica, ricerca di template e QMEAN. Per una pipeline usa l'archivio ZIP dei "
-                           "risultati.", code="package_unsupported")
+                           "elettrostatica, mutagenesi, scansione di alanina, ricerca di template, QMEAN e confronto "
+                           "con una predizione. Per una pipeline usa l'archivio ZIP dei risultati.",
+                           code="package_unsupported")
         if job["status"] != "completed":
             raise Conflict("Il pacchetto si crea da un job completato: contiene i risultati con cui confrontare la "
                            "riesecuzione.")
@@ -531,11 +588,33 @@ class ReproducibilityService:
                             "velocità. Con più thread la piattaforma CPU di OpenMM somma le forze in un ordine che "
                             "cambia fra le esecuzioni: differenze piccole oltre la tolleranza sono attese; con un "
                             "thread (OPENMM_CPU_THREADS=1) le esecuzioni sono identiche."}
+        if kind in ("mutate", "alascan"):
+            from ..domain import mutations
+
+            seed = params.get("seed") if isinstance(params.get("seed"), int) else mutations.SEED
+            try:
+                used = mutations.seeds(seed)
+            except AppError:
+                used = []
+            energy = bool(params.get("energy"))
+            return {"modeller_rand_seed": used, **({"openmm_seed": refinement.MD_SEED} if energy else {}),
+                    "note": f"semi di MODELLER dei {mutations.MODELS} modelli di ogni variante (Environ(rand_seed=…)): "
+                            "stessi semi, stessa versione e stesso processore danno gli stessi modelli."
+                            + (" L'energia passa da OpenMM: con più thread le minimizzazioni cambiano di poco fra le "
+                               "esecuzioni (esito «compatibile» entro le tolleranze scientifiche)." if energy else "")}
+        if kind == "predict":
+            return {"note": "nessun seme locale: la predizione viene dal servizio remoto (vedi «remote») e il confronto "
+                            "con il modello è deterministico."}
         return {"note": "calcolo deterministico: nessun seme casuale."}
 
     @staticmethod
     def _tool_keys(kind: str, params: dict) -> list[str]:
-        """Strumenti che il calcolo usa (le loro versioni vanno nel manifest)."""
+        """Strumenti che il calcolo usa (le loro versioni vanno nel manifest). I parametri di un pacchetto caricato
+        sono liberi (si validano con il modello della rotta solo per i tipi rieseguibili): i campi che non sono testi
+        valgono come assenti."""
+        def text(value) -> str:
+            return value if isinstance(value, str) else ""
+
         if kind == "model":
             extended = bool(params.get("extended_quality")) and params.get("quality") != "none"
             return ["modeller", "dssp", *(["procheck", "prosa"] if extended else [])]
@@ -554,7 +633,7 @@ class ReproducibilityService:
         if kind == "electrostatics":
             return ["pdb2pqr", "apbs"]
         if kind == "align":
-            tool = params.get("tool") or "auto"
+            tool = text(params.get("tool")) or "auto"
             if params.get("mode") == "structural":
                 return [tool] if tool in ("tmalign", "usalign") else ["usalign", "tmalign"]
             if params.get("mode") == "multiple":
@@ -563,17 +642,20 @@ class ReproducibilityService:
         if kind == "analysis":
             msa = params.get("msa") if isinstance(params.get("msa"), dict) else {}
             if msa.get("text"):
-                tool = msa.get("tool") or "auto"
+                tool = text(msa.get("tool")) or "auto"
                 return [tool] if tool in ("clustalo", "mafft", "muscle") else ["clustalo", "mafft", "muscle"]
             return []
         if kind == "search":
-            return {"local": ["blastp"], "mmseqs": ["mmseqs"]}.get(params.get("engine") or "", [])
+            return {"local": ["blastp"], "mmseqs": ["mmseqs"]}.get(text(params.get("engine")), [])
+        if kind in ("mutate", "alascan"):  # modelli e DOPE con MODELLER, qualità con DSSP, energia con OpenMM
+            return ["modeller", "dssp", *(["openmm", "pdbfixer"] if params.get("energy") is True else [])]
         return []
 
     @staticmethod
     def _required_tools(kind: str, params: dict) -> list[str]:
         """Strumenti senza i quali la riesecuzione fallirebbe (MODELLER, PROCHECK e ProSA a parte: licenze)."""
-        if kind == "refine":
+        if kind == "refine" or (kind in ("mutate", "alascan") and params.get("energy") is True):
+            # senza OpenMM la mutagenesi salterebbe l'energia: un risultato diverso, non una riesecuzione
             return ["openmm", "pdbfixer"]
         if kind == "pockets":
             return ["fpocket"]
@@ -597,6 +679,13 @@ class ReproducibilityService:
             return (f"Il QMEAN locale usa il servizio QMEAN e il database UniClust30/UniRef30{database}: la "
                     "riesecuzione da pacchetto non è supportata per questo calcolo. Rilancia QMEAN dalla pagina "
                     "Qualità.")
+        if kind == "predict":
+            # il confronto in sé è deterministico, ma rieseguirlo da solo non verificherebbe la parte che conta (la
+            # predizione, che non si può riottenere identica): il pacchetto lo documenta, e i due file bastano per
+            # ripeterlo dalla pagina Confronto
+            return (f"La predizione viene da un servizio remoto ({when}): non è riproducibile localmente. Il pacchetto "
+                    "contiene la predizione ricevuta (outputs/prediction_*.pdb), la struttura confrontata e il "
+                    "risultato del confronto, che si può ripetere dalla pagina Confronto caricando i due file.")
         if kind not in repro.RERUNNABLE:
             return "Tipo di calcolo non supportato dalla riesecuzione."
         if facts["missing"]:
@@ -650,15 +739,22 @@ class ReproducibilityService:
             target = params.get("target") if isinstance(params.get("target"), dict) else {}
             if target.get("sequence"):
                 records.append((str(target.get("name") or "TARGET"), str(target["sequence"])))
-        elif kind in ("quality", "qmean", "analysis", "refine", "loop", "pockets", "electrostatics"):
+        elif kind in ("quality", "qmean", "analysis", "refine", "loop", "pockets", "electrostatics", "mutate", "alascan",
+                      "predict"):
             source = params.get("source") if isinstance(params.get("source"), dict) else {}
-            self._add_source(b, source, result.get("source_sha256"), job, facts)
+            if source or kind != "predict":  # una predizione senza confronto non ha una struttura
+                self._add_source(b, source, result.get("source_sha256"), job, facts)
             msa = params.get("msa") if isinstance(params.get("msa"), dict) else {}
             if kind == "analysis" and msa.get("job_id"):
                 self._add_msa_job(b, str(msa["job_id"]), facts)
             if kind == "qmean" and result.get("source") == "swissmodel":
                 facts["remote"].append({"service": "SWISS-MODEL QMEAN", "what": "punteggi QMEAN della struttura",
                                         "date": job.get("finished_at"), "url": result.get("url")})
+            selection = params.get("selection") if isinstance(params.get("selection"), dict) else {}
+            if kind == "alascan" and selection.get("mode") == "pocket" and selection.get("pocket_job"):
+                self._add_pockets_job(b, str(selection["pocket_job"]), facts)
+            if kind == "predict":
+                records += self._add_prediction_facts(job, params, result, facts)
         elif kind == "align":
             if params.get("mode") == "structural":
                 for s in params.get("structures") or []:
@@ -762,6 +858,42 @@ class ReproducibilityService:
                     "diverso da quello registrato nel risultato): il pacchetto non contiene più l'input del job e la "
                     "riesecuzione non sarebbe confrontabile.")
 
+    def _add_pockets_job(self, b: _Builder, job_id: str, facts: dict) -> None:
+        """Tasche di fpocket scelte per la scansione (`inputs/jobs/<id>/pockets.json`): la riesecuzione le legge dal
+        pacchetto (`PackagedMutations`), non dal job della cartella dati, che altrove non c'è."""
+        try:
+            validate_identifier(job_id, "job_id")
+            pockets_job = self.jobs.get(job_id)
+        except AppError:
+            facts["missing"].append(f"tasche del job {job_id} (job eliminato)")
+            return
+        result = pockets_job.get("result") if isinstance(pockets_job.get("result"), dict) else {}
+        payload = {"id": job_id, "kind": pockets_job.get("kind"), "status": pockets_job.get("status"),
+                   "params": {"source": (pockets_job.get("params") or {}).get("source")},
+                   "result": {"source_sha256": result.get("source_sha256"), "pockets": result.get("pockets") or []}}
+        b.add_bytes(f"inputs/jobs/{job_id}/{POCKETS_JSON}",
+                    json.dumps(payload, indent=1, ensure_ascii=False).encode("utf-8"), "job_result")
+
+    @staticmethod
+    def _add_prediction_facts(job: dict, params: dict, result: dict, facts: dict) -> list[tuple[str, str]]:
+        """Predizione come input remoto datato (servizio, data di ricezione, cache) e sequenza indicata, se c'è."""
+        origin = result.get("origin") if isinstance(result.get("origin"), dict) else {}
+        seq = result.get("sequence") if isinstance(result.get("sequence"), dict) else {}
+        if result.get("predictor") == "alphafold":
+            entry = origin.get("entry") or result.get("accession") or "?"
+            facts["remote"].append({"service": "AlphaFold DB (EBI)",
+                                    "what": f"modello {entry} (a EBI va solo l'accessione)",
+                                    "date": job.get("finished_at")})
+        else:
+            cached = " dalla cache di questo computer" if origin.get("cached") else ""
+            facts["remote"].append({"service": f"ESMFold ({origin.get('service') or 'servizio esterno'})",
+                                    "what": f"predizione della sequenza {seq.get('name') or ''} "
+                                            f"({seq.get('length') or '?'} residui){cached}",
+                                    "date": origin.get("received") or job.get("finished_at"),
+                                    "url": origin.get("service")})
+        raw = params.get("sequence") if isinstance(params.get("sequence"), dict) else {}
+        return [(str(raw.get("name") or "sequenza"), str(raw["sequence"]))] if raw.get("sequence") else []
+
     def _add_msa_job(self, b: _Builder, job_id: str, facts: dict) -> None:
         try:
             validate_identifier(job_id, "job_id")
@@ -807,7 +939,7 @@ class ReproducibilityService:
         kind = pkg.kind
         rerun = pkg.manifest.get("rerun") if isinstance(pkg.manifest.get("rerun"), dict) else {}
         if kind not in repro.RERUNNABLE:
-            remote = kind in ("search", "qmean")
+            remote = kind in repro.REMOTE_KINDS
             reason = str(rerun.get("reason") or "") or f"I job di tipo {kind} non si possono rieseguire da pacchetto."
             return ("rerun_not_reproducible" if remote else "rerun_unsupported"), reason
         if rerun.get("supported") is False:
@@ -899,7 +1031,8 @@ class ReproducibilityService:
         kind = pkg.kind
         params = pkg.manifest.get("params") or {}
         keys = self._tool_keys(kind, params)
-        needs = {"modeller": "modeller" in keys, "modeller_required": kind in ("model", "loop", "align2d"),
+        needs = {"modeller": "modeller" in keys,
+                 "modeller_required": kind in ("model", "loop", "align2d", "mutate", "alascan"),
                  "procheck": "procheck" in keys, "prosa": "prosa" in keys,
                  "tools": self._required_tools(kind, params)}
         roles = info["files"]["by_role"]
@@ -990,7 +1123,7 @@ class ReproducibilityService:
                 f"{counts['equivalent']} equivalenti, {counts['different']} diversi, {counts['missing']} mancanti); "
                 f"rapporto in {REPORT_TEXT}")
         return {key: report[key] for key in ("verdict", "summary", "original", "counts", "structures", "metrics",
-                                             "warnings", "tolerance", "bioloom", "image", "created_at",
+                                             "warnings", "tolerance", "scientific", "bioloom", "image", "created_at",
                                              "duration_seconds")} | {
             "kind": kind, "report_file": REPORT_TEXT, "report_json": REPORT_JSON, "folder": RERUN_DIR,
             "files": [f for f in report["files"] if f["status"] != "identical"][:200]}
@@ -1020,6 +1153,14 @@ class ReproducibilityService:
             tools_service = StructureToolsService(self.jobs, sandbox)
             tools_service.validate(kind, params)
             return getattr(tools_service, f"handle_{kind}")(ctx, params)
+        if kind == "mutate":
+            mutagenesis = PackagedMutations(self.jobs, sandbox)
+            mutagenesis.validate_mutate(params)
+            return mutagenesis.handle_mutate(ctx, params)
+        if kind == "alascan":
+            mutagenesis = PackagedMutations(self.jobs, sandbox)
+            mutagenesis.validate_scan(params)
+            return mutagenesis.handle_scan(ctx, params)
         raise AppError(f"I job di tipo {kind} non si possono rieseguire da pacchetto.", code="rerun_unsupported")
 
     # ------------------------------------------------------------------------------ confronto
@@ -1051,12 +1192,14 @@ class ReproducibilityService:
                     or is_intermediate(path.name):
                 continue
             files.append({"path": rel, "status": "extra", "role": "output", "principal": False})
-        verdict = repro.verdict(files)
         statuses = ("identical", "equivalent", "different", "missing", "extra")
         counts = {s: sum(1 for f in files if f["status"] == s) for s in statuses}
         m = pkg.manifest
         job = m["job"]
         metrics = self._metrics(pkg.kind, pkg.result(), inner)
+        # rumore numerico atteso del tipo di calcolo (rifinitura su più thread): «compatibile», non «diverso»
+        scientific = repro.scientific_check(pkg.kind, files, metrics, m.get("params") or {})
+        verdict = repro.verdict(files, scientific)
         structures = [{"path": f["path"], "coordinates": f["coordinates"]} for f in files if f.get("coordinates")]
         beyond = sum(1 for section in metrics for row in section["rows"] if not row.get("within"))
         summary = (f"{repro.VERDICT_TEXT[verdict][0].upper()}{repro.VERDICT_TEXT[verdict][1:]}: "
@@ -1068,7 +1211,7 @@ class ReproducibilityService:
                    + (f"; {beyond} metriche principali oltre la tolleranza" if beyond else "") + ".")
         return {
             "verdict": verdict, "summary": summary, "counts": counts, "files": files, "structures": structures,
-            "metrics": metrics, "warnings": warnings,
+            "metrics": metrics, "warnings": warnings, "scientific": scientific,
             "tolerance": {"coordinates_angstrom": repro.COORD_TOLERANCE, "score_abs": repro.SCORE_ABS,
                           "score_rel": repro.SCORE_REL, "ignored": sorted(repro.IGNORED_KEYS)},
             "original": {"job_id": job.get("id"), "kind": pkg.kind, "title": job.get("title"),
@@ -1157,6 +1300,22 @@ class ReproducibilityService:
                                       (("min", "Potenziale minimo (kT/e)"), ("max", "Potenziale massimo (kT/e)"),
                                        ("mean", "Potenziale medio (kT/e)")))
             sections.append({"title": "Elettrostatica", "rows": rows})
+        elif kind == "mutate":
+            sections.append({"title": f"Mutagenesi {a.get('notation') or ''}".strip(),
+                             "rows": repro.metric_rows(_mutation_values(a), _mutation_values(b), MUTATION_METRICS)})
+        elif kind == "alascan":
+            ra = {r.get("label"): r for r in a.get("rows") or [] if isinstance(r, dict)}
+            rb = {r.get("label"): r for r in b.get("rows") or [] if isinstance(r, dict)}
+            ca, cb = ((x.get("summary") or {}).get("counts") or {} for x in (a, b))
+            rows = [{"key": "counts", "label": "Classi (destabilizzanti / incerte / neutre)",
+                     "original": _counts_text(ca), "rerun": _counts_text(cb), "delta": None, "within": ca == cb}]
+            rows += repro.metric_rows({"order": " ".join(ra)}, {"order": " ".join(rb)},
+                                      (("order", "Ordine della tabella"),))
+            for label, row in ra.items():
+                other = rb.get(label) or {}
+                rows += [{**r, "key": f"{label}:{r['key']}", "label": f"{label}: {r['label']}"}
+                         for r in repro.metric_rows(_mutation_values(row), _mutation_values(other), SCAN_METRICS)]
+            sections.append({"title": "Scansione di alanina", "rows": rows})
         return [s for s in sections if s["rows"]]
 
 

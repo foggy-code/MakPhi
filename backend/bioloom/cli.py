@@ -4,7 +4,8 @@
 (services/reproducibility.py), senza server. Crea un job `rerun` nella cartella dati indicata, ne mostra le fasi,
 stampa il rapporto del confronto e termina con il codice:
 
-    0  identico o equivalente (entro le tolleranze)
+    0  identico, equivalente (entro le tolleranze numeriche) o compatibile (entro le tolleranze scientifiche del tipo
+       di calcolo, per esempio la rifinitura con OpenMM su più thread)
     1  diverso
     2  pacchetto non valido, calcolo non rieseguibile, job fallito o cartella dati in uso
 
@@ -25,6 +26,14 @@ from typing import Optional
 
 EXIT_SAME, EXIT_DIFFERENT, EXIT_ERROR = 0, 1, 2
 POLL_SECONDS = 0.5
+# stato finale di un job non completato, nei messaggi (come STATUS_LABEL dell'interfaccia)
+STATUS_TEXT = {"failed": "non riuscita", "cancelled": "annullata"}
+
+
+def failure_text(job: dict) -> str:
+    """Messaggio di una riesecuzione terminata senza risultato: «Riesecuzione non riuscita: <errore>»."""
+    error = str(job.get("error") or "").strip()
+    return f"Riesecuzione {STATUS_TEXT.get(job.get('status'), job.get('status'))}" + (f": {error}" if error else ".")
 
 
 def rerun_main(argv: Optional[list[str]] = None) -> int:
@@ -80,7 +89,7 @@ def rerun_main(argv: Optional[list[str]] = None) -> int:
             time.sleep(POLL_SECONDS)
         done = core.jobs.get(job["id"])
         if done["status"] != "completed":
-            print(f"Riesecuzione {done['status']}: {done.get('error') or ''}", file=sys.stderr)
+            print(failure_text(done), file=sys.stderr)
             return EXIT_ERROR
         report = core.jobs.workdir(job["id"]) / REPORT_TEXT
         print()

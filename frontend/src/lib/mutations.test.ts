@@ -3,8 +3,9 @@ import type { AlaScanResult, AlaScanRow, MappedVariant, MutationClass, MutationH
 import { decodeSource, linkedSources } from "./compare";
 import { coloringMap } from "./residueColoring";
 import {
-  addNotation, CLASS_COLOR, dopeText, energyText, formatMutation, historyText, modelQualityLink, mutateRequest, mutationCompareLinks, mutationPreflight,
-  OUTSIDE_COLOR, parseMutations, scanColoring, scanRequest, scanRowOf, scanRows, siteSummary, sitesFocus, variantRows, variantText,
+  addNotation, CLASS_COLOR, dopeText, energyText, formatMutation, historyOption, historyText, modelQualityLink, mutateRequest, mutationCompareLinks,
+  mutationPreflight, OUTSIDE_COLOR, parseMutations, pocketsView, scanColoring, scanRequest, scanRowOf, scanRows, siteSummary, sitesFocus, variantRows,
+  variantText,
 } from "./mutations";
 
 const UBQ = { type: "template" as const, id: "1UBQ" };
@@ -79,6 +80,8 @@ describe("risultati", () => {
     expect(wt.b).toEqual(decodeSource("job:j1:1UBQ_K48R.pdb"));
     expect(linkedSources(new URLSearchParams(links.original.split("?")[1])).a).toEqual(UBQ);
     expect(sitesFocus([{ chain: "A", resnum: "52A" }])).toEqual([{ chain: "A", resi: 52 }]);
+    // catena «AA» (mmCIF): nei modelli costruiti resta la lettera di MODELLER
+    expect(sitesFocus([{ chain: "AA", resnum: "48", model_chain: "A" }])).toEqual([{ chain: "A", resi: 48 }]);
   });
 
   const scanRow = (label: string, chain: string, resnum: string, code: MutationClass, hotspot: "probabile" | null = null): AlaScanRow => ({
@@ -133,5 +136,22 @@ describe("varianti di UniProt", () => {
     const item = { id: "j", kind: "mutate", title: "Mutagenesi · 1UBQ A:K48R", status: "completed", created_at: "", finished_at: "", mutations: "A:K48R", energy: true } as MutationHistoryItem;
     expect(historyText(item)).toBe("Mutagenesi A:K48R (con energia)");
     expect(historyText({ ...item, kind: "alascan", title: "Scansione di alanina · 1UBQ (3 residui)", mutations: null, energy: false })).toBe("Scansione di alanina (3 residui)");
+    // stato in italiano, come StatusBadge; completato: quando
+    expect(historyOption({ ...item, status: "queued" }, () => "ieri")).toBe("Mutagenesi A:K48R (con energia) · In coda");
+    expect(historyOption({ ...item, status: "failed" }, () => "ieri")).toBe("Mutagenesi A:K48R (con energia) · Fallito");
+    expect(historyOption({ ...item, status: "cancelled" }, () => "ieri")).toContain("· Annullato");
+    expect(historyOption(item, () => "2 min fa")).toBe("Mutagenesi A:K48R (con energia) · 2 min fa");
+  });
+
+  it("tasche per la scansione: calcolo in corso seguito, errore, nessun calcolo", () => {
+    const base = { loading: false, error: null, jobId: null, status: null, ready: false };
+    expect(pocketsView({ ...base, loading: true })).toBe("loading");
+    expect(pocketsView(base)).toBe("none");
+    expect(pocketsView({ ...base, error: "rete" })).toBe("error"); // non «nessun calcolo»
+    expect(pocketsView({ ...base, jobId: "p1", status: "running" })).toBe("running");
+    expect(pocketsView({ ...base, jobId: "p1", status: "queued" })).toBe("running");
+    expect(pocketsView({ ...base, jobId: "p1", status: "completed" })).toBe("loading"); // risultato in lettura
+    expect(pocketsView({ ...base, jobId: "p1", status: "completed", ready: true })).toBe("ready");
+    expect(pocketsView({ ...base, jobId: "p1", status: "failed" })).toBe("failed");
   });
 });

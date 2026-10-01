@@ -271,6 +271,39 @@ def test_both_engines_agree(tmp_path):
     db.close()
 
 
+def test_every_registered_job_kind_has_an_italian_label(client):
+    """Un tipo di job nuovo non resta fuori dalla ricerca per tipo: ogni tipo registrato ha la sua etichetta, uguale a
+    quella dell'interfaccia (KIND_LABEL in frontend/src/lib/format.ts)."""
+    registered = set(client.app.state.core.jobs._handlers)
+    assert registered - set(globalsearch.JOB_KIND_LABELS) == set()
+    frontend = (DATA.parents[2] / "frontend" / "src" / "lib" / "format.ts").read_text(encoding="utf-8")
+    for kind, label in globalsearch.JOB_KIND_LABELS.items():
+        assert f'{kind}: "{label}"' in frontend, kind
+
+
+@pytest.mark.parametrize("use_fts", [True, False], ids=["fts5", "like"])
+def test_new_job_kinds_are_found_by_their_label(tmp_path, use_fts):
+    """Job dei tipi aggiunti dopo F8b con titoli che non contengono l'etichetta: si trovano per tipo con FTS5 (indice
+    ricostruito con le etichette nuove, anche per righe già nel database) e con LIKE."""
+    db = Database(tmp_path / "x.db")
+    now = "2026-01-01T00:00:00+00:00"
+    rows = [("jr", "refine", "1UBQ (OpenMM)"), ("jp", "pockets", "fpocket 1UBQ"), ("jm", "mutate", "1UBQ A:K48R"),
+            ("ja", "alascan", "1UBQ (3 residui)"), ("jx", "predict", "ESMFold · 1UBQ"), ("je", "electrostatics", "1UBQ"),
+            ("jq", "rerun", "pacchetto 1UBQ")]
+    db.executemany("INSERT INTO jobs(id, kind, title, status, created_at, updated_at) VALUES (?,?,?,?,?,?)",
+                   [(i, k, t, "completed", now, now) for i, k, t in rows])
+    library = TemplateLibrary(tmp_path / "templates")
+    gs = GlobalSearch(db, library, LabelService(db, library), use_fts=use_fts)
+    assert gs.engine == ("fts5" if use_fts else "like")
+    expected = {"rifinitura": "jr", "tasche": "jp", "mutagenesi": "jm", "scansione alanina": "ja",
+                "predizione": "jx", "elettrostatica": "je", "riesecuzione": "jq"}
+    for query, job_id in expected.items():
+        groups = {g["type"]: g for g in gs.search(query, types=["job"])["groups"]}
+        assert [i["id"] for i in groups["job"]["items"]] == [job_id], query
+    assert gs.search("rifinitura", types=["job"])["groups"][0]["items"][0]["subtitle"] == "Rifinitura energetica"
+    db.close()
+
+
 def test_index_build_time(tmp_path):
     """Costruzione dell'indice FTS5 all'avvio su 10 000 righe (job): lineare e breve."""
     db = Database(tmp_path / "big.db")

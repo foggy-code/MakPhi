@@ -148,6 +148,13 @@ class Mutation:
         return site if not self.chain.strip() else f"{self.chain}:{site}"
 
     @property
+    def code(self) -> str:
+        """Notazione canonica con la catena sempre scritta ("_:K48R" per quella senza identificativo): `parse` e
+        `resolve` la rileggono anche su una struttura con più catene. È quella dei parametri dei job e delle varianti
+        di UniProt; `label` resta per i testi e i nomi dei file."""
+        return f"{chain_name(self.chain)}:{self.wt}{self.resnum}{self.mut}"
+
+    @property
     def site(self) -> str:
         return f"{self.chain.strip() or BLANK}:{self.resnum}"
 
@@ -282,8 +289,9 @@ def resolve(parsed: list[dict], model) -> list[Mutation]:
     return out
 
 
-def notation(mutations: Iterable[Mutation]) -> str:
-    return ", ".join(m.label for m in mutations)
+def notation(mutations: Iterable[Mutation], canonical: bool = False) -> str:
+    """Notazione della variante: per i testi (`label`) o canonica (`code`, sempre con la catena), da salvare."""
+    return ", ".join(m.code if canonical else m.label for m in mutations)
 
 
 def file_tag(mutations: list[Mutation], multichain: bool) -> str:
@@ -538,17 +546,20 @@ def _ss_positions(model) -> dict[tuple[str, str], dict]:
     return out
 
 
-def _site_interactions(data: dict, site: tuple[str, str]) -> dict[str, dict]:
+def _site_interactions(data: dict, site: tuple[str, str], names: Optional[dict[str, str]] = None) -> dict[str, dict]:
     """Interazioni con un'estremità nel residuo `site`, per chiave confrontabile fra selvatico e mutante: tipo, residuo
-    partner e, per i legami idrogeno, se l'estremità nel sito è della catena principale o laterale."""
+    partner e, per i legami idrogeno, se l'estremità nel sito è della catena principale o laterale. `names`: nomi
+    originali delle catene rinominate nei modelli (lettera di MODELLER → nome), per i testi."""
     from .interactions import BACKBONE
 
     out: dict[str, dict] = {}
+    names = names or {}
 
     def add(kind: str, here: dict, there: dict, entry: dict, role: str = "") -> None:
         key = f"{kind}|{there['chain']}:{there['resnum']}|{role}"
         if key not in out:
-            out[key] = {"type": kind, "partner": f"{there['resname']} {_chain_name(there['chain'])}{there['resnum']}",
+            partner_chain = names.get(there["chain"], there["chain"])
+            out[key] = {"type": kind, "partner": f"{there['resname']} {_chain_name(partner_chain)}{there['resnum']}",
                         "role": role, "atom": here.get("atom"), "inter_chain": bool(entry.get("inter_chain")),
                         "distance": entry.get("distance")}
 
@@ -599,13 +610,30 @@ def _rsa(sasa: float, letter: str, max_asa: dict) -> Optional[float]:
     return round(min(1.5, sasa / ref), 3) if ref else None
 
 
+def model_site(info: dict, chain: str, resnum: str) -> tuple[str, str]:
+    """Residuo (catena, numero) della struttura nei modelli costruiti da MODELLER dopo `restore_chains`: le catene con un
+    identificativo di un carattere (o senza) tornano al nome originale, quelle con un nome di più caratteri restano con
+    la lettera di MODELLER del tratto del residuo (una catena interrotta ne ha una per tratto)."""
+    if len(chain) > 1:
+        return info["residues"].get((chain, resnum), chain), resnum
+    return chain, resnum
+
+
+def renamed_chains(info: dict) -> dict[str, str]:
+    """Lettere di MODELLER rimaste nei modelli → nome originale (solo le catene con un nome di più caratteri)."""
+    return {new: orig for new, orig in info["chains"].items() if len(orig) > 1}
+
+
 def site_indicators(mutation: Mutation, wt: ModelFacts, mut: ModelFacts, max_asa: dict,
-                    interface: Optional[dict] = None) -> dict:
+                    interface: Optional[dict] = None, at: Optional[tuple[str, str]] = None,
+                    chain_names: Optional[dict[str, str]] = None) -> dict:
     """Indicatori strutturali di una sostituzione (selvatico ottimizzato contro mutante, stessi residui).
 
     `max_asa`: ASA massime per la RSA (Tien et al. 2013, `engines/quality.MAX_ASA`); `interface`: riga del residuo
-    nelle interfacce della struttura (`domain/interfaces.analyze`, campi delta e sasa) o None."""
-    site = (mutation.chain, mutation.resnum)
+    nelle interfacce della struttura (`domain/interfaces.analyze`, campi delta e sasa) o None; `at`: il residuo nei
+    modelli se ha un'altra catena (`model_site`), `chain_names` i nomi originali di quelle catene (`renamed_chains`).
+    Sito ed etichetta del risultato restano quelli della notazione."""
+    site = at or (mutation.chain, mutation.resnum)
     w_total, w_apolar = wt.sasa.get(site, (0.0, 0.0))
     m_total, m_apolar = mut.sasa.get(site, (0.0, 0.0))
     rw_total, rw_apolar = _reference_sasa(wt.model, *site)
@@ -614,8 +642,8 @@ def site_indicators(mutation: Mutation, wt: ModelFacts, mut: ModelFacts, max_asa
     buried_mut = {"total": round(rm_total - m_total, 1), "apolar": round(rm_apolar - m_apolar, 1)}
     rsa_wt = _rsa(w_total, mutation.wt, max_asa)
     rsa_mut = _rsa(m_total, mutation.mut, max_asa)
-    before = _site_interactions(wt.interactions, site)
-    after = _site_interactions(mut.interactions, site)
+    before = _site_interactions(wt.interactions, site, chain_names)
+    after = _site_interactions(mut.interactions, site, chain_names)
     lost = [v for k, v in before.items() if k not in after]
     gained = [v for k, v in after.items() if k not in before]
     clash_wt = _clashes_at(wt.clashes, site)
@@ -838,7 +866,9 @@ def binding_effect(sites: list[dict], dope: Optional[dict] = None) -> Optional[d
     inter_eq = (dope or {}).get("interchain_delta_eq")
     lost = sum(s["interface"]["lost_inter_chain"] for s in at)
     contributes = (inter_eq is not None and inter_eq >= HOTSPOT_DOPE) or lost > 0
-    buried = any((s["interface"].get("rsa_complex") or 1.0) < CORE_RSA for s in at)
+    # RSA 0 (residuo coperto del tutto nel complesso, il centro dell'"O-ring") è sepolto; None (ASA massima ignota) no
+    buried = any(s["interface"].get("rsa_complex") is not None and s["interface"]["rsa_complex"] < CORE_RSA
+                 for s in at)
     reasons = []
     if inter_eq is not None:
         reasons.append(f"ΔDOPE fra le catene {'+' if inter_eq > 0 else ''}{_n(inter_eq, 2)} residui equivalenti")
@@ -1157,7 +1187,7 @@ def map_variants(variants: list[dict], uniprot_sequence: str, model, chain: Opti
                 row["reason"] = "sostituzione non standard"
             else:
                 row["applicable"] = True
-                row["notation"] = Mutation(c.id, _resid(res), letter, v["variation"]).label
+                row["notation"] = Mutation(c.id, _resid(res), letter, v["variation"]).code
         rows.append(row)
     shift = None
     offsets = {pos - residues[k].id[1] for k, pos in found[0][0].items()}

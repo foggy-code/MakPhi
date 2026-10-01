@@ -269,6 +269,10 @@ Un controllo di plausibilità del modello per omologia con una predizione indipe
 - **ESMFold** (servizio pubblico di ESM Atlas, fino a 400 residui) oppure, con l'accessione UniProt, il modello di
   **AlphaFold DB**. La predizione si salva tra i file del job e la pagina Qualità la apre con il pLDDT (confidenza della
   predizione; il servizio ESMFold lo scrive su 0–1 e BioLoom lo riporta su 0–100).
+- **Sequenza:** quella della catena del modello (selenometionine e altri residui modificati compresi) oppure quella
+  incollata nella finestra. Se alla catena mancano dei residui, BioLoom invia la sequenza completa del file (SEQRES)
+  quando c'è; altrimenti avvisa (unire i tratti darebbe una proteina che non esiste) e non conta come divergenze i
+  residui vicini alle giunzioni: incolla la sequenza completa per un confronto pulito.
 - **Esito motivato:** TM-score (da 0,5 stesso ripiegamento), lDDT per residuo e regioni in cui il modello diverge dalla
   predizione, incrociate con la confidenza della predizione e con le regioni problematiche del consenso: «le due
   strutture concordano», «divergono in 40-52, dove la predizione è sicura: controlla l'allineamento», oppure «divergono
@@ -416,20 +420,23 @@ sperimentale**, con il pLDDT medio (confidenza della predizione, 0–100).
   SHA-256 di ogni file), gli input (sequenze, template della libreria e copie preparate, allineamento PIR, strutture
   analizzate), i risultati, gli script MODELLER eseguiti e un LEGGIMI. Non contiene mai la chiave di MODELLER, i codici
   di ProSA, la tua email, la chiave d'accesso del server né percorsi del tuo computer. Per modellazione, loop,
-  allineamenti, qualità, analisi strutturale, rifinitura, tasche, elettrostatica; anche ricerca di template e QMEAN, ma
-  questi dipendono da servizi remoti e non si possono rieseguire in locale.
+  allineamenti, qualità, analisi strutturale, rifinitura, tasche, elettrostatica, mutagenesi e scansione di alanina;
+  anche ricerca di template, QMEAN e confronto con una predizione, ma questi dipendono da servizi remoti e non si
+  possono rieseguire in locale (la predizione ricevuta, con la data, è nel pacchetto).
 - **Riesegui da pacchetto** (pulsante nella pagina Job, `/rerun`): carica il pacchetto; BioLoom ne verifica manifest e
   checksum e ne mostra l'anteprima (versioni nel pacchetto e qui, parametri, input remoti) con i controlli preventivi.
   Il calcolo si ripete con gli stessi parametri, la cache dei calcoli ignorata, i template e le strutture del pacchetto
   (nessun download), poi si confronta con i risultati del pacchetto: **identico**, **equivalente** (entro le
-  tolleranze) o **diverso**, con RMSD delle coordinate, differenze di DOPE, GA341 e delle metriche principali. Versioni
+  tolleranze numeriche), **compatibile** (differenze entro le tolleranze scientifiche del calcolo: il rumore di OpenMM
+  su più thread nella rifinitura e nell'energia della mutagenesi, catena principale entro 0,05 Å ed energia entro
+  max(50 kJ/mol; 0,5%)) o **diverso**, con RMSD delle coordinate, differenze di DOPE, GA341 e delle metriche principali. Versioni
   diverse di BioLoom o degli strumenti sono avvisi, non errori. Il rapporto (`RAPPORTO_RIESECUZIONE.txt`) resta nel job.
 - **Da riga di comando:** `python bioloom.py rerun <pacchetto.zip> --data <cartella>` (nel container: `docker compose -p
   bioloom exec bioloom python3 -m bioloom rerun /data/<pacchetto.zip> --data /scratch/riesecuzione`). Con il server
-  attivo la cartella dati è in uso: serve un'altra cartella. Codice d'uscita 0 se identico o equivalente, 1 se diverso,
-  2 se il pacchetto non è valido o il calcolo non riesce.
+  attivo la cartella dati è in uso: serve un'altra cartella. Codice d'uscita 0 se identico, equivalente o compatibile,
+  1 se diverso, 2 se il pacchetto non è valido o il calcolo non riesce.
 - MODELLER con lo stesso seme ripete gli stessi modelli; la rifinitura con OpenMM su più thread dà differenze piccole
-  (ordine delle somme fra i thread), che il confronto quantifica.
+  (ordine delle somme fra i thread): il confronto le quantifica e, entro le tolleranze dichiarate, le dice compatibili.
 
 ## Cosa contiene
 
