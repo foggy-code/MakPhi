@@ -101,15 +101,17 @@ data/
 | Pacchetto | Contenuto |
 |---|---|
 | `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo, migrazioni versionate), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `dispatch` (coda con priorità di ogni pool), `budget` (budget di CPU condiviso fra i job), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi), `eta` (stima del tempo residuo), `events` (notifiche in-process dei cambiamenti dei job), `parallel` (passi indipendenti di un calcolo su un pool locale di thread, vedi [Prestazioni](#prestazioni)) |
-| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG), `template_rank` (punteggio motivato dei template e selezione dei complementari), `multitemplate` (scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template), `ligands` (classificazione dei gruppi eteroatomici, colonne '.' del PIR, verifica di contatti, scontri e coordinazione dei metalli), `disorder` (disordine FoldIndex, bassa complessità SEG, domini e copertura del bersaglio), `interactions`, `interfaces`, `conservation` (analisi strutturale, vedi [Analisi strutturale](#analisi-strutturale)), `pockets` (uscita di fpocket), `electrostatics` (PQR, griglia e input di APBS, mappe OpenDX, potenziale di superficie), `refinement` (protocollo della rifinitura, copia pulita, confronto prima/dopo; vedi [Tasche, elettrostatica e rifinitura energetica](#tasche-elettrostatica-e-rifinitura-energetica-f7b-f91)), assembly` (assemblaggi biologici dal mmCIF e dal REMARK 350), `complexes` (bersagli a più catene, simmetria, confronto delle interfacce con il template; vedi [Complessi e omo-oligomeri](#complessi-e-omo-oligomeri-domainassemblypy-domaincomplexespy)), `preflight` (regole dei controlli preventivi, vedi [Controlli preventivi](#controlli-preventivi-domainpreflightpy-servicespreflightpy)), `labels` (normalizzazione delle etichette), `textsearch` (parole, corrispondenza e pertinenza della ricerca globale, escape per FTS5 e LIKE) |
-| `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB), `remote` (client HTTP), `tools` (rilevamento strumenti e librerie Python di calcolo, preambolo di licenza), `pockets` (fpocket), `electrostatics` (PDB2PQR + APBS), `refine` e `refine_worker` (OpenMM e PDBFixer in un processo separato) |
-| `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job), `reports` (dati del report di un modello o di un'analisi), `coverage` (copertura del bersaglio da parte dei template, avvisi su disordine e domini), `analysis` (job dell'analisi strutturale), `structure_tools` (job `pockets` ed `electrostatics`), `refine` (job `refine`), `preflight` (fatti per i controlli preventivi), `labels` (etichette e preferiti), `globalsearch` (ricerca globale; vedi [Etichette, preferiti e ricerca globale](#etichette-preferiti-e-ricerca-globale-f8b)) |
-| `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases`, `analysis`, `structure_tools`, `labels` oltre a sistema, progetti, calcoli — compresi i controlli preventivi — e job) |
+| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG), `template_rank` (punteggio motivato dei template e selezione dei complementari), `multitemplate` (scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template), `ligands` (classificazione dei gruppi eteroatomici, colonne '.' del PIR, verifica di contatti, scontri e coordinazione dei metalli), `disorder` (disordine FoldIndex, bassa complessità SEG, domini e copertura del bersaglio), `interactions`, `interfaces`, `conservation` (analisi strutturale, vedi [Analisi strutturale](#analisi-strutturale)), `pockets` (uscita di fpocket), `electrostatics` (PQR, griglia e input di APBS, mappe OpenDX, potenziale di superficie), `refinement` (protocollo della rifinitura, copia pulita, confronto prima/dopo; vedi [Tasche, elettrostatica e rifinitura energetica](#tasche-elettrostatica-e-rifinitura-energetica-f7b-f91)), assembly` (assemblaggi biologici dal mmCIF e dal REMARK 350), `complexes` (bersagli a più catene, simmetria, confronto delle interfacce con il template; vedi [Complessi e omo-oligomeri](#complessi-e-omo-oligomeri-domainassemblypy-domaincomplexespy)), `preflight` (regole dei controlli preventivi, vedi [Controlli preventivi](#controlli-preventivi-domainpreflightpy-servicespreflightpy)), `labels` (normalizzazione delle etichette), `textsearch` (parole, corrispondenza e pertinenza della ricerca globale, escape per FTS5 e LIKE), `reproducibility` (controlli dell'archivio caricato, impronta del manifest, oscuramento dei segreti, confronto con le tolleranze; vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione-f94)) |
+| `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB), `remote` (client HTTP), `tools` (rilevamento strumenti e librerie Python di calcolo, preambolo di licenza), `pockets` (fpocket), `electrostatics` (PDB2PQR + APBS), `refine` e `refine_worker` (OpenMM e PDBFixer in un processo separato), `versions` (versioni degli strumenti per i pacchetti di riproducibilità) |
+| `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job), `reports` (dati del report di un modello o di un'analisi), `coverage` (copertura del bersaglio da parte dei template, avvisi su disordine e domini), `analysis` (job dell'analisi strutturale), `structure_tools` (job `pockets` ed `electrostatics`), `refine` (job `refine`), `preflight` (fatti per i controlli preventivi), `labels` (etichette e preferiti), `globalsearch` (ricerca globale; vedi [Etichette, preferiti e ricerca globale](#etichette-preferiti-e-ricerca-globale-f8b)), `reproducibility` (pacchetti dei job e job `rerun`) |
+| `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases`, `analysis`, `structure_tools`, `labels`, `reproducibility` oltre a sistema, progetti, calcoli — compresi i controlli preventivi — e job) |
+
+Fuori dai pacchetti: `cli.py`, i comandi da riga di comando oltre al server (`python bioloom.py rerun`).
 
 ### Job
 
 Tutti i calcoli (`search`, `align`, `align2d`, `model`, `loop`, `quality`, `qmean`, `analysis`, `pockets`,
-`electrostatics`, `refine`, `pipeline`) passano dal `JobManager`:
+`electrostatics`, `refine`, `pipeline`, `rerun`) passano dal `JobManager`:
 
 - stato `queued → running → completed | failed | cancelled` (più `cancelling`) salvato su SQLite;
 - coda con priorità per tipo di job e budget di CPU condiviso dai processi esterni di tutti i job (vedi [Coda con
@@ -704,7 +706,8 @@ spazio, servizio QMEAN, job attivi) li raccoglie `services/preflight.PreflightSe
 
 **Rotta** `POST /api/compute/preflight` con `{kind, params, context}`:
 
-- `kind`: `model`, `loop`, `align2d`, `pipeline`, `quality`, `qmean`, `search`, `analysis`;
+- `kind`: `model`, `loop`, `align2d`, `pipeline`, `quality`, `qmean`, `search`, `analysis`, `rerun` (riesecuzione di un
+  pacchetto caricato, `params` = `{package_id}`: vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione-f94));
 - `params`: lo stesso corpo della rotta di avvio, validato con lo stesso modello Pydantic (`ModelIn`, `PipelineIn`, …):
   un campo non valido è un esito `error` (`validation_error`), come il 422 dell'avvio, non un 422 dei controlli;
 - `context` (facoltativo): `accession` (domini InterPro, come `/api/bio/coverage`), `search_job` (ricerca da cui vengono i
@@ -756,6 +759,7 @@ message, suggestion}` più `group: "coverage"` per gli avvisi di copertura e `te
 | `mmseqs_no_index`, `remote_ncbi`, `ncbi_email`, `alphafold_blast`, `remote_alphafold` | info | ricerca più lenta senza l'indice (12 s invece di 2,3); dati che vanno a NCBI o EBI | misure di MMseqs2 (sopra) |
 | `ncbi_many_searches` / `ncbi_parallel` | warning / info | pipeline con oltre 50 ricerche NCBI (motore NCBI, o AlphaFold DB senza accessione) / più ricerche NCBI insieme | linee guida di NCBI per l'interfaccia URL di BLAST: oltre 50 ricerche di sera o nel fine settimana, una richiesta ogni 10 s |
 | `pipeline_too_long` / `pipeline_alphafold`, `pipeline_disorder` | warning / info | sequenze oltre 5000 residui; sequenze con e senza accessione; sequenze con regioni disordinate lunghe (FoldIndex, fino a 500 000 residui in tutto) | |
+| `rerun_not_reproducible`, `rerun_unsupported`, `package_*`, `rerun_tool_unavailable` / `rerun_version_bioloom`, `rerun_version_image`, `rerun_version_tool`, `rerun_version_library`, `rerun_tool_missing`, `rerun_platform` / `rerun_remote_input`, `package_note` | error / warning / info | riesecuzione (`kind: "rerun"`): calcolo che dipende da servizi remoti o non rieseguibile, pacchetto non valido o scaduto, parametri che la rotta di avvio rifiuterebbe, strumento obbligatorio assente / versioni diverse da quelle del pacchetto / input remoti con la data e note del pacchetto; più licenza MODELLER, PROCHECK e ProSA, durata del calcolo originale, spazio e coda come gli altri calcoli | versioni diverse: avvisi, mai errori (F9.4) |
 | `queue_busy`, `single_model`, `identical_models`, `invalid_accession`, `check_skipped` | info | job attivi ≥ job in parallelo; un solo modello; più modelli con il raffinamento rapidissimo (`a.very_fast()` non perturba le coordinate iniziali: modelli identici, anche fra gli avvisi del risultato); accessione non valida (niente domini); controllo non eseguito | misura in [Prestazioni](#misure-per-i-controlli-preventivi) |
 
 **Stima del tempo** (secondi; costanti misurate, vedi [Prestazioni](#misure-per-i-controlli-preventivi)):
@@ -1211,9 +1215,16 @@ senza questi strumenti, continua a funzionare.
 - **Energie:** potenziale del campo di forza senza il termine delle restrizioni (riportato a parte), con le componenti
   (legami, angoli, torsioni, non legate, solvatazione), prima della minimizzazione (struttura completata da PDBFixer)
   e alla fine. Servono al confronto sulla stessa struttura, non fra strutture. L'energia iniziale dipende dalle
-  posizioni degli idrogeni scelte da PDBFixer (`Modeller.addHydrogens`, che le ottimizza con una breve minimizzazione),
-  che non sono identiche fra un'esecuzione e l'altra: su 1UBQ l'energia iniziale è variata fra −191 e +987 kJ/mol,
-  quella finale solo fra −12 448 e −12 437 kJ/mol.
+  posizioni degli idrogeni scelte da PDBFixer (`Modeller.addHydrogens` di OpenMM le mette in posizioni casuali, con il
+  modulo `random`, e le ottimizza con una breve minimizzazione; PDBFixer minimizza gli atomi pesanti aggiunti con un
+  integratore a seme casuale): senza seme su 1UBQ l'energia iniziale variava fra −191 e +987 kJ/mol e la riesecuzione dello
+  stesso job dava catene laterali diverse (RMSD 0,109 Å, Gln62 spostata di 1,7 Å). Dalla F9.4 il processo usa il seme
+  della dinamica (`random.seed(MD_SEED)` e `addMissingAtoms(seed=MD_SEED)`): con un thread della piattaforma CPU due
+  esecuzioni sono identiche byte per byte; con più thread restano differenze piccole (misurate su 1UBQ: energia iniziale
+  −395,3 e −395,6 kJ/mol, RMSD fra i due modelli rifiniti 0,016 Å): con più thread la piattaforma CPU di OpenMM non
+  ripete le somme in virgola mobile nello stesso ordine, e la minimizzazione amplifica le differenze dell'ultima cifra
+  (con `OPENMM_CPU_THREADS=1` e un thread le esecuzioni coincidono; vedi
+  [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione-f94)).
 - **Confronto prima/dopo:** `quality.analyze` (DOPE con MODELLER, senza PROCHECK e ProSA) in parallelo sulla copia
   pulita (prima: stessi residui, senza ligandi né idrogeni) e sul rifinito (dopo); righe di `refinement.compare` (voto,
   Ramachandran favorite e outlier, clashscore, DOPE, zDOPE; "invariato" entro l'arrotondamento dei rapporti); RMSD della
@@ -2128,6 +2139,172 @@ l'id normalizzato della libreria, maiuscolo); un vincolo CHECK ammette solo i qu
   spariscono, mai operatori; nei LIKE `%`, `_` e `\` sono protetti con `ESCAPE`; tutto passa come parametro. Richiesta al
   più 200 caratteri e 8 parole.
 
+### Riproducibilità: pacchetti e riesecuzione (F9.4)
+
+Un job completato si esporta in un **pacchetto di riproducibilità** (ZIP) che lo documenta per intero e che BioLoom sa
+**rieseguire**, confrontando poi i risultati con quelli del pacchetto. Regole pure in `domain/reproducibility.py`
+(limiti e controlli dell'archivio, impronta del manifest, oscuramento, confronto, testi), versioni degli strumenti in
+`engines/versions.py`, pacchetti e job `rerun` in `services/reproducibility.py`, rotte in `api/reproducibility.py`,
+comando in `cli.py`.
+
+**Contenuto del pacchetto** (`GET /api/jobs/{id}/package`, solo job completati: 409 altrimenti). Scritto su un file
+temporaneo dello scratch e inviato con `FileResponse` come gli altri archivi; nessun file passa dalla memoria oltre
+64 MB (i file più grandi si copiano a blocchi).
+
+| Percorso | Ruolo | Contenuto |
+|---|---|---|
+| `manifest.json` | — | formato e versione del formato; versione di BioLoom e dell'immagine (`BIOLOOM_IMAGE_VERSION`); Python, sistema, architettura, Biopython e NumPy; versioni degli strumenti usati dal calcolo; job (tipo, titolo, date, durata); **parametri completi**; semi casuali; impostazioni che influiscono sul risultato; provenienza dalla cache dei calcoli; input remoti con la data; timbro dei database locali (ricerca); possibilità di riesecuzione con il motivo; note; elenco dei file con ruolo, SHA-256, dimensione e percorso nel job; `manifest_sha256` |
+| `LEGGIMI.txt` | `documentation` | contenuto e istruzioni per rieseguire (interfaccia, comando, API), tolleranze, input remoti, note |
+| `inputs/params.json`, `inputs/sequences.fasta` | `params`, `sequences` | parametri e sequenze (bersaglio, catene del complesso, sequenze dell'allineamento, query) |
+| `inputs/library/<ID>.pdb\|cif`, `<ID>.meta.json` | `template`, `template_meta` | file originale del template nella libreria e metadati (sorgente, data, modello predetto); se il template non è più in libreria, la copia preparata del job, con una nota |
+| `inputs/templates/<file>` | `template_prepared` | copie preparate del job (catene, ligandi, ritaglio pLDDT), con il percorso nel job per il confronto |
+| `inputs/alignment.ali` | `alignment` | PIR usato da MODELLER |
+| `inputs/uploads/<file>`, `inputs/jobs/<id>/<file>` | `structure` | strutture analizzate: file caricati, modelli di altri job |
+| `inputs/jobs/<id>/alignment.json` | `msa` | allineamento della conservazione preso da un job `align` (analisi strutturale) |
+| `outputs/<percorso>` | `output` | tutti i file del job con lo stesso percorso, `result.json` compreso |
+| `scripts/<percorso>` | `script` | script MODELLER eseguiti (`model.py`, `align.py`, `loop.py`, `dope_eval.py`): solo documentazione |
+| `log/job.log` | `log` | log del calcolo, oscurato |
+
+Misurati: analisi di qualità di 1UBQ con PROCHECK 19 file, 2,8 MB decompressi, 0,4 MB compressi; modellazione di
+yeast_ub su 1UBQ con 5 modelli e la qualità estesa 36 file, 3,3 MB e 0,5 MB, esportata in 0,8 s.
+
+- **Versioni** (`engines/versions.py`): come la verifica dell'installazione gli strumenti si trovano con `tools.find`, e
+  ognuno dice la sua versione con l'opzione apposita (`mkdssp --version`, `blastp -version`, `TMalign -v`,
+  `USalign -h`, `mmseqs version`, `apbs --version`, `pdb2pqr --version`, …), in un processo breve con timeout e la
+  versione in memoria per eseguibile (percorso, dimensione, data). MODELLER da `tools.detect_modeller`, PROCHECK dallo
+  script (`PROCHECK v.3.5.4`), OpenMM, PDBFixer, Biopython e NumPy dai metadati dei pacchetti, senza importarli. Solo gli
+  strumenti del tipo di job (e delle opzioni: PROCHECK e ProSA solo con la qualità estesa). Le versioni sono quelle
+  dell'installazione al momento dell'esportazione (`environment.detected`): i job non registrano l'ambiente a ogni
+  esecuzione.
+- **Semi:** `modeller_rand_seed` delle opzioni (predefinito −8123, il seme di `Environ()` di MODELLER, che usano anche
+  loop e allineamenti); per la rifinitura `openmm_seed` (`refinement.MD_SEED`) e i thread usati; gli altri calcoli sono
+  deterministici.
+- **Impostazioni** (`RELEVANT_SETTINGS`): `compute_cache`, `keep_intermediates`, `job_timeout_minutes` (e per QMEAN
+  modalità, fallback, consenso, nome del database). Non l'email, l'interprete di MODELLER, i processori o la
+  conservazione degli upload: non cambiano il risultato e alcune sono dati personali o percorsi.
+- **Input remoti:** template scaricati da RCSB o AlphaFold DB (data di `added_at` nei metadati), ricerche RCSB, NCBI e
+  AlphaFold DB, metadati RCSB dei motori locali, QMEAN di SWISS-MODEL (con la pagina dei risultati). Un template
+  modificato in libreria dopo la fine del job (oltre 1 s: le date dei job sono al secondo; durante il job è il job stesso
+  che lo scarica) e un file analizzato con un'impronta diversa da `source_sha256` del risultato sono annotati; il
+  secondo rende la riesecuzione non disponibile (l'input non è più quello del job).
+- **Segreti** (`Redactor`): chiave MODELLER (file, `MODELLER_KEY`, chiave attiva dei sottoprocessi), codici delle licenze
+  ProSA, email di contatto e chiave d'accesso del server (impostazione, `BIOLOOM_ACCESS_KEY`, `data/access_key`, quella
+  attiva) diventano «[rimosso]» in ogni file testuale e nel manifest, senza distinguere le maiuscole; cartella dati,
+  scratch, cache locale, installazione e home diventano segnaposti (`<cartella dati>/jobs/…`), solo all'inizio di un
+  percorso: «https://data.rcsb.org» non contiene «/data». Ogni file oscurato è segnato (`redacted`) e ricontrollato: un
+  file non testuale con un segreto resta fuori dal pacchetto, con una nota. Gli script non contengono mai la chiave
+  (il preambolo la legge dall'ambiente).
+
+**Tipi di job.**
+
+| Tipo | Pacchetto | Riesecuzione | Confronto delle metriche |
+|---|---|---|---|
+| `model`, `loop` | sì | sì | per modello DOPE, zDOPE, GA341, molpdf, voto, Ramachandran, clashscore; modello migliore; PIR usato |
+| `align2d` | sì | sì | PIR |
+| `quality` | sì | sì | voto, punteggio, Ramachandran, clashscore, struttura secondaria, DOPE, ProSA, PROCHECK |
+| `align` (pairwise, multiplo, strutturale) | sì | sì | programma e righe allineate; TM-score, RMSD, GDT, lDDT |
+| `analysis` | sì | sì | legami H, ponti salini, disolfuri, π-stacking, catione-π, interfacce e area sepolta |
+| `refine` | sì | sì | energie prima e dopo, RMSD della catena principale, qualità dopo |
+| `pockets`, `electrostatics` | sì | sì | tasche e druggability; carica netta e potenziale |
+| `search`, `qmean` | sì | no: dipendono da servizi remoti (o dal servizio QMEAN con UniClust30); 400 `rerun_not_reproducible` | — |
+| altri (`pipeline`, `selftest`, database, `rerun`) | no: 400 `package_unsupported` (per la pipeline l'archivio ZIP dei risultati) | — | — |
+
+**Pacchetto caricato: input non fidato** (`open_package`, `domain/reproducibility.check_archive`):
+
+| Controllo | Errore |
+|---|---|
+| nome: percorso assoluto, unità di Windows, barra rovesciata, componenti vuote, `.` o `..`, nascoste o riservate (CON, NUL…), caratteri di controllo, oltre 240 caratteri o 12 livelli, fuori da `inputs/ outputs/ scripts/ log/` (salvo manifest e LEGGIMI) | `package_unsafe_path` |
+| collegamento simbolico o file speciale (modo Unix negli attributi esterni) | `package_symlink`, `package_special_file` |
+| stesso nome due volte, anche solo per maiuscole o forma Unicode (all'estrazione su Windows o macOS uno coprirebbe l'altro) | `package_duplicate` |
+| cifratura, metodo diverso da stored e deflate | `package_encrypted`, `package_compression` |
+| oltre 256 MB compressi, 512 MB per file o 1 GB decompressi, oltre 5000 file; un file più lungo di quanto dichiara | `package_too_large` (413), `package_too_many_files`, `package_bomb` |
+| rapporto di compressione oltre 100:1 per un file oltre 1 MB (deflate arriva a 1032:1; i file di BioLoom fino a 35:1, misurato) | `package_bomb` |
+| manifest assente, non JSON, di un altro formato o di una versione più recente del formato; campi mancanti; percorsi o checksum non validi | `package_invalid`, `package_manifest_invalid`, `package_format` |
+| impronta del manifest diversa (SHA-256 del JSON canonico senza `manifest_sha256`): parametri, checksum o versioni modificati dopo l'esportazione | `package_manifest_altered` |
+| file non dichiarati o mancanti; SHA-256 o dimensione diversi (verificati a blocchi, di nuovo all'estrazione) | `package_undeclared`, `package_missing_file`, `package_checksum` |
+| parametri che la rotta di avvio rifiuterebbe (stesso modello Pydantic: `ModelIn`, `QualityIn`, …, e gli stessi controlli immediati) | `package_params_invalid` |
+
+- **Nessun codice del pacchetto:** si estraggono solo gli ingressi (mai `scripts/` né `log/`), nella cartella
+  temporanea del job (`.tmp/pacchetto`, eliminata a fine job). Gli script si rigenerano dai parametri validati, come
+  per un calcolo nuovo; i valori finiscono negli script con le stesse regole (regex, `repr()`).
+- **Versioni diverse** (`environment_warnings`): BioLoom, immagine, strumenti, Python, Biopython, NumPy, architettura
+  diversi da quelli del pacchetto sono **avvisi** (anteprima, controlli preventivi, log e risultato della riesecuzione),
+  mai errori; uno strumento usato dal calcolo e assente qui è un avviso, e se è indispensabile (OpenMM, fpocket,
+  APBS…) un errore dei controlli preventivi.
+
+**Riesecuzione** (job `rerun`, priorità 1, pool "cpu"):
+
+1. `POST /api/jobs/rerun/inspect` (multipart, `file`): il pacchetto si salva a blocchi in
+   `scratch/tmp/rerun_<id>.zip` (eliminato dalla pulizia dopo 24 ore, o con `DELETE /api/jobs/rerun/{id}`), si verifica
+   e risponde l'anteprima con `package_id`: manifest, versioni nel pacchetto e qui, esiti. Un pacchetto rifiutato non
+   resta nello scratch.
+2. Controlli preventivi `kind: "rerun"`, `params: {package_id}`: gli esiti dell'anteprima più licenza MODELLER
+   (obbligatoria per model, loop, align2d; avviso per il DOPE), PROCHECK e ProSA, strumenti indispensabili, durata del
+   calcolo originale come stima (da metà al doppio), spazio (pacchetto più risultati nei dati; ingressi più il doppio dei
+   risultati nello scratch), coda.
+3. `POST /api/jobs/rerun` (multipart: `file` oppure `package_id`; `project_id`): stesse verifiche, poi il pacchetto si
+   copia in `data/jobs/.rerun-incoming/` e alla creazione del job si sposta (rinomina, stessa cartella) in
+   `data/jobs/<id>/package.zip`: dopo l'inserimento del job non resta nulla che possa fallire per lo spazio. Lo stesso
+   `package_id` si può lanciare più volte, anche insieme (provato con due avvii concorrenti).
+4. Il job riapre e riverifica il pacchetto, estrae gli ingressi ed esegue **gli handler di sempre** su un
+   `PackagedCompute`: un `ComputeService` senza registrazione (`register=False`) con una libreria privata
+   (`inputs/library`), i file caricati e i file di altri job del pacchetto e `auto_fetch` spento (un template assente è
+   un errore, mai un download); l'analisi strutturale legge l'allineamento dal pacchetto (`PackagedAnalysis`). Parametri
+   validati, `use_cache` False (anche nell'allineamento della conservazione), nessun progetto. I file si scrivono in
+   `riesecuzione/`, con gli stessi percorsi del job originale, e il risultato in `riesecuzione/result.json`.
+5. Confronto e rapporto: `confronto.json` e `RAPPORTO_RIESECUZIONE.txt` nella cartella del job; il risultato del job
+   ha esito, conteggi, strutture, metriche, avvisi, tolleranze e i file non identici.
+
+**Comando** `python bioloom.py rerun <pacchetto.zip> [--data <cartella>]` (anche `python -m bioloom rerun`): crea il job
+nella cartella dati indicata (predefinita: quella di BioLoom), ne mostra le fasi, stampa il rapporto ed esce con 0
+(identico o equivalente), 1 (diverso) o 2 (pacchetto non valido, calcolo non rieseguibile, job fallito, cartella dati in
+uso da un server: `DatabaseInUse`). Con `--data` scratch e cache locale stanno dentro quella cartella: il comando non
+tocca lo scratch di un server, che il `recover` all'avvio svuoterebbe. Senza chiave MODELLER nella cartella indicata si
+usa quella della cartella dati predefinita o di `MODELLER_KEY`.
+
+**Confronto** (`compare_file`, `verdict`):
+
+- **File:** ogni file del pacchetto con un percorso nel job (risultati, template preparati, PIR, script) si confronta con
+  quello della riesecuzione: `identical` (byte uguali, oppure uguali senza le parti che non dipendono dal calcolo),
+  `equivalent` (valori uguali entro le tolleranze), `different` (con le differenze quantificate), `missing`; i file
+  prodotti solo dalla riesecuzione sono `extra` (intermedi di MODELLER esclusi).
+  - **PDB:** coordinate dei record ATOM/HETATM per catena, residuo, nome e altloc, **senza sovrapposizione** (un modello
+    riprodotto ha le stesse coordinate assolute; una sovrapposizione nasconderebbe una rototraslazione): atomi in comune
+    e solo in uno dei due, RMSD, scarto massimo con l'atomo; gli altri record parola per parola.
+  - **JSON:** stessa struttura (campi ed elementi), stessi testi, numeri entro la tolleranza; differenza massima e dove,
+    primi esempi.
+  - **Altri testi** (PIR, profili DOPE, `.sum` di PROCHECK…): riga per riga e parola per parola, numeri con la tolleranza.
+- **Non dipendono dal calcolo** e non si confrontano: la data e l'ora che MODELLER scrive nella riga EXPDTA dei modelli
+  (riprese dal rapporto di qualità nel metodo della struttura), `cached`, `cached_at`, `timings` e `threads`. Misurato
+  rieseguendo gli stessi job (qualità con PROCHECK, modellazione con la qualità estesa): data di MODELLER e log a parte,
+  tutti i file sono identici byte per byte.
+- **Tolleranze:** coordinate 0,002 Å per atomo (il formato PDB scrive tre decimali: due arrotondamenti dell'ultima cifra
+  differiscono al più di √3 · 0,001 ≈ 0,0017 Å); numeri |Δ| ≤ max(0,001; 10⁻⁶ · |valore|) (doppia precisione IEEE 754:
+  le stesse somme in un altro ordine cambiano le ultime cifre; il DOPE di un modello di 1UBQ, circa −8000, ha così 0,008).
+- **Esito:** `diverso` se un file principale (non uno script né un intermedio di MODELLER) è diverso o mancante;
+  `identico` se ogni file confrontato è identico e non ce ne sono altri; altrimenti `equivalente`.
+- **Metriche principali** per tipo (tabella sopra), dal `result.json` del pacchetto e della riesecuzione, con la
+  differenza e l'esito entro la tolleranza.
+
+**Misure** (test, MODELLER 10.8, immagine 4.1.0 e di sviluppo):
+
+| Calcolo | Esito |
+|---|---|
+| qualità di 1UBQ | identico |
+| modellazione di yeast_ub su 1UBQ, 2–5 modelli, raffinamento `fast`, seme −8123 | identico (29 file su 29 con 5 modelli e la qualità estesa; riesecuzione in 14,3 s, originale 13,8 s) |
+| stesso pacchetto con il seme cambiato (manifest risigillato) | diverso: RMSD dei modelli oltre la tolleranza, DOPE diverso |
+| allineamento strutturale e analisi strutturale con le sorgenti eliminate dopo l'esportazione | identico (input dal pacchetto) |
+| rifinitura di 1UBQ, un thread di OpenMM | identico |
+| rifinitura di 1UBQ, più thread | diverso di poco (RMSD 0,016 Å, energia finale −12 396 e −12 433 kJ/mol): la piattaforma CPU di OpenMM non ripete le somme nello stesso ordine con più thread (vedi la rifinitura sopra) |
+
+**Interfaccia:** «Pacchetto riproducibile» (`components/ReproButton.tsx`) nel dettaglio della pagina Job e nel riquadro
+del job (`JobPanel`) delle pagine dei risultati, per i job completati dei tipi con un pacchetto; pagina «Riesegui da
+pacchetto» (`pages/Rerun.tsx`, `/rerun`, pulsante nella pagina Job; logica in `lib/rerun.ts`): caricamento con verifica,
+anteprima (calcolo, contenuto, semi, cache, impronta, versioni nel pacchetto e qui con le differenze evidenziate,
+parametri, input remoti, elenco dei file), `PreflightPanel` e `LaunchButton`, job seguito in tempo reale e rapporto
+(esito, strutture, metriche con le differenze, file non identici, tolleranze, rapporto e archivio da scaricare),
+riesecuzioni recenti. `/rerun?job=<id>` apre una riesecuzione («Apri risultati» nella pagina Job).
+
 ## Frontend (`frontend/`)
 
 React 19 + TypeScript + Vite, nessuna libreria UI esterna: componenti propri (`components/ui.tsx`), grafici SVG
@@ -2242,7 +2419,8 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 | Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche, disordine predetto come segnale informativo), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura; sezione Ligandi e metalli (esiti, coordinazione, confronto con il sito del template): il clic su un gruppo lo mostra nel 3D con i residui coordinanti e le linee di coordinazione (`LigandsPanel`, `lib/ligands.ts`; ioni metallici sempre a sfere); scheda Interazioni (analisi strutturale: legami H, ponti salini, disolfuri, aromatiche, interfacce, conservazione; `?ajob=`); schede Tasche (fpocket, `?pjob=`) ed Elettrostatica (PDB2PQR + APBS, `?ejob=`) |
 | Confronto | `/compare?a=&ca=&b=&cb=&job=`: B sovrapposta ad A (riferimento), metriche (TM-score su A e su B, RMSD, RMSD entro 5 Å, GDT-TS, GDT-HA, lDDT, lunghezza allineata), 3D con B colorata per distanza (0 → ≥ 5 Å) o lDDT e A in grigio chiaro, grafico di distanza e lDDT per posizione, tratti che deviano, tabella per coppia; clic ovunque → coppia evidenziata nel 3D |
 | Pipeline batch | multi-FASTA → modelli validati, template da ricerca automatica, «Più template complementari» (N da 2 a 5) o fissi (casella «Ligandi» del template solo se la scelta predefinita trasferisce qualcosa dalle catene scelte, con i gruppi esclusi nel suggerimento: `lib/ligands.defaultTransfer`); filtro zona crepuscolare, tabella paginata (template usati elencati, motivazioni nel suggerimento), CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
-| Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione e la posizione di quelli in coda ("2° in coda"); stella, etichette e filtro per etichetta o preferiti (`?tag=`) |
+| Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione e la posizione di quelli in coda ("2° in coda"); stella, etichette e filtro per etichetta o preferiti (`?tag=`); «Pacchetto riproducibile» e «Riesegui da pacchetto» |
+| Riesegui da pacchetto | `/rerun`: caricamento e verifica di un pacchetto, anteprima del manifest con le versioni, controlli preventivi, avvio, rapporto del confronto; `?job=` apre una riesecuzione (vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione-f94)) |
 | Impostazioni | schede Generale (esecuzione, QMEAN, email), Licenze (MODELLER, ProSA, PROCHECK), Database (pdbaa, MMseqs2, UniClust30), Strumenti (verifica dell'installazione), Spazio e file temporanei (con la cache dei calcoli) |
 | Login | solo in modalità server, quando l'API risponde 401 |
 
@@ -2275,6 +2453,10 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   un'accessione UniProt, a UniProt e InterPro (EBI) va l'accessione, mai la sequenza.
 - **File caricati:** sequenze e allineamenti (`/api/files/sequences`) vengono solo letti e non salvati. Le
   strutture (`/api/files/structure`) vanno tra gli upload, validate e soggette alla pulizia automatica.
+- **Pacchetti di riproducibilità:** nell'esportazione chiavi di licenza, email, chiave d'accesso e percorsi locali
+  vengono sostituiti e ogni file è ricontrollato; il pacchetto caricato è un input non fidato (percorsi, collegamenti,
+  duplicati, bombe di decompressione, impronta del manifest, checksum, parametri validati come all'avvio) e nessuno
+  script del pacchetto si estrae né si esegue (vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione-f94)).
 
 ## Test
 
@@ -2480,6 +2662,26 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     (tabelle intatte, nessun risultato "tutto"), operatori come parole, indice allineato a modifiche, eliminazioni e
     cascate, template aggiunti e tolti a mano dalla cartella, gruppo delle etichette e filtro `tag`, preferiti in testa e
     senza testo, stessi risultati dai due motori, indice di 10 000 job, ripiego senza FTS5 e nessun oggetto FTS5 nel file;
+  - riproducibilità (`test_reproducibility.py`): nomi pericolosi (`..`, assoluti, unità di Windows, barre rovesciate,
+    nascosti, riservati, profondità), collegamenti simbolici, file speciali, duplicati anche per maiuscole, cifratura,
+    bomba di decompressione (4 MB di zeri, circa 1000:1) e limiti di numero e dimensione; impronta del manifest
+    (parametri cambiati, formato più recente, percorsi non validi); oscuramento (segreti senza maiuscole, percorsi solo
+    all'inizio, «https://data.rcsb.org» intatto); confronto delle coordinate di 1UBQ senza sovrapposizione (660 atomi,
+    traslazione di 0,5 Å → RMSD 0,5; un atomo spostato di 0,66 Å → RMSD 0,66/√660 e scarto massimo con l'atomo; 0,001 Å
+    entro la tolleranza; acque mancanti), data di MODELLER ignorata, JSON e testi con la tolleranza, esito, avvisi sulle
+    versioni, versioni lette dai programmi; pacchetto di un'analisi di qualità (manifest, checksum di ogni file, input,
+    LEGGIMI), nessun segreto in nessun file con chiave MODELLER, email e chiave d'accesso del test scritte anche nel log
+    (controllo programmatico che elenca solo i file), file grande comprimibile salvato senza compressione, errori (job
+    in esecuzione 409, tipo non supportato, inesistente); ricerca RCSB simulata: input remoti con la data e riesecuzione
+    rifiutata; manifest alterato, checksum errato, file non dichiarati o mancanti, ZIP non valido, path traversal,
+    collegamento simbolico e bomba rifiutati senza scrivere nulla né creare job; script del pacchetto mai estratti;
+    riesecuzione identica di qualità, allineamento strutturale (file caricato poi eliminato) e analisi strutturale
+    (job di allineamento eliminato), con anteprima, controlli preventivi (stima, pacchetto scaduto, corpo non valido) e
+    due avvii concorrenti dello stesso pacchetto; versione diversa come avviso; tipo non rieseguibile e parametri non
+    validi in un manifest risigillato; pacchetto caricato eliminato dalla pulizia dopo 24 ore; comando `rerun` in un
+    sottoprocesso con una cartella dati temporanea (codice 0 e rapporto; 2 con un checksum errato); con MODELLER
+    modellazione (seme −8123, script, template preparati, PIR) rieseguita identica e, con un altro seme, diversa con
+    RMSD e DOPE quantificati, e align2d identico; con OpenMM rifinitura identica con un thread;
   - verifica dell'installazione.
 
   `pytest -m network` prova i servizi reali. Oltre a 1UBQ, `tests/data` contiene strutture sintetiche generate
@@ -2522,6 +2724,10 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   - scelta dei template (`templateRank.test.ts`): fasce come nel backend, righe e ordine delle motivazioni, tooltip,
     ruoli dei consigliati (anche per i risultati precedenti, dal solo `best`), collegamento alla Modellazione con un
     template per `t`, numero di template della modalità multi, template e suggerimento di un elemento di pipeline.
+  - riproducibilità (`rerun.test.ts`): tipi con un pacchetto e rieseguibili, contenuto per ruolo, versioni nel pacchetto
+    e qui (differenze, strumenti assenti o non usati), parametri leggibili, richiesta dei controlli preventivi solo per un
+    pacchetto rieseguibile, valori e differenze formattati, ordine e dettaglio dei file del confronto (RMSD, numeri oltre
+    la tolleranza, testi, struttura), nota sulle tolleranze.
   - ligandi (`ligands.test.ts`): candidati delle catene scelte, additivi e ioni monovalenti deselezionati per
     default, residui modificati non selezionabili, scelte dell'utente conservate, analisi in cache precedenti, testi
     della coordinazione, linee metallo → donatore colorate per esito (con sfera per le acque) e residui evidenziati.

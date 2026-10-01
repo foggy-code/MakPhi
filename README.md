@@ -360,6 +360,29 @@ sperimentale**, con il pLDDT medio (confidenza della predizione, 0–100).
 - **Liste lunghe:** la tabella dei residui in Qualità, le coppie in Confronto e gli allineamenti con molte sequenze
   disegnano solo le righe visibili, e restano fluidi anche con migliaia di righe.
 
+## Pacchetti riproducibili e riesecuzione
+
+- **Pacchetto riproducibile** (dettaglio del job nella pagina Job e riquadro del job nelle pagine dei risultati): un file
+  ZIP con il manifest (versione di BioLoom e dell'immagine, versioni di MODELLER e degli altri strumenti usati,
+  parametri completi, semi casuali, impostazioni che contano, input scaricati da servizi remoti con la data, checksum
+  SHA-256 di ogni file), gli input (sequenze, template della libreria e copie preparate, allineamento PIR, strutture
+  analizzate), i risultati, gli script MODELLER eseguiti e un LEGGIMI. Non contiene mai la chiave di MODELLER, i codici
+  di ProSA, la tua email, la chiave d'accesso del server né percorsi del tuo computer. Per modellazione, loop,
+  allineamenti, qualità, analisi strutturale, rifinitura, tasche, elettrostatica; anche ricerca di template e QMEAN, ma
+  questi dipendono da servizi remoti e non si possono rieseguire in locale.
+- **Riesegui da pacchetto** (pulsante nella pagina Job, `/rerun`): carica il pacchetto; BioLoom ne verifica manifest e
+  checksum e ne mostra l'anteprima (versioni nel pacchetto e qui, parametri, input remoti) con i controlli preventivi.
+  Il calcolo si ripete con gli stessi parametri, la cache dei calcoli ignorata, i template e le strutture del pacchetto
+  (nessun download), poi si confronta con i risultati del pacchetto: **identico**, **equivalente** (entro le
+  tolleranze) o **diverso**, con RMSD delle coordinate, differenze di DOPE, GA341 e delle metriche principali. Versioni
+  diverse di BioLoom o degli strumenti sono avvisi, non errori. Il rapporto (`RAPPORTO_RIESECUZIONE.txt`) resta nel job.
+- **Da riga di comando:** `python bioloom.py rerun <pacchetto.zip> --data <cartella>` (nel container: `docker compose -p
+  bioloom exec bioloom python3 -m bioloom rerun /data/<pacchetto.zip> --data /scratch/riesecuzione`). Con il server
+  attivo la cartella dati è in uso: serve un'altra cartella. Codice d'uscita 0 se identico o equivalente, 1 se diverso,
+  2 se il pacchetto non è valido o il calcolo non riesce.
+- MODELLER con lo stesso seme ripete gli stessi modelli; la rifinitura con OpenMM su più thread dà differenze piccole
+  (ordine delle somme fra i thread), che il confronto quantifica.
+
 ## Cosa contiene
 
 | Area | Strumenti |
@@ -371,6 +394,7 @@ sperimentale**, con il pLDDT medio (confidenza della predizione, 0–100).
 | Analisi strutturale | legami idrogeno, ponti salini, ponti disolfuro, interazioni aromatiche, interfacce fra catene (superficie sepolta, plausibilità), conservazione da un allineamento multiplo mappata sulla struttura; tasche con **fpocket** (druggability), potenziale elettrostatico con **PDB2PQR** (PROPKA) e **APBS** |
 | Rifinitura | **OpenMM** e **PDBFixer**: minimizzazione con restrizioni sulla catena principale e dinamica breve facoltativa, confronto prima/dopo |
 | Automazione | pipeline batch da multi-FASTA, riprendibili dopo un annullamento, un errore o un riavvio ("Riprendi" o "Riprova solo i falliti": le sequenze già modellate non si rifanno) e, se completate con sequenze fallite, "Riprova i falliti"; avanzamento, log e tabella dei risultati aggiornati in tempo reale, con la stima del tempo residuo ("circa 3 min rimanenti"); un template usato da più sequenze si prepara una volta sola per pipeline; verifica dell'installazione (Impostazioni → Strumenti) |
+| Riproducibilità | pacchetto ZIP di un job (versioni, parametri, semi, checksum, input, risultati, script) e riesecuzione con il confronto dei risultati, dall'interfaccia o con `python bioloom.py rerun` |
 
 ## Dove stanno i dati
 

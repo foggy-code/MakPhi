@@ -166,6 +166,18 @@ class LicenseService:
             "mac_ok": bool(required and current and required == current),
         }
 
+    # ------------------------------------------------------------------ segreti
+    def secrets(self) -> list[str]:
+        """Valori da non esportare mai (pacchetti di riproducibilità, F9.4): chiave MODELLER (file e ambiente) e
+        codici delle licenze di ProSA. Solo per il codice che li oscura: mai in una risposta né nel log."""
+        out = [self.modeller_key()[0], os.environ.get("MODELLER_KEY", "").strip()]
+        try:
+            text = self._prosa_file.read_text(encoding="ascii", errors="replace")
+        except OSError:
+            text = ""
+        out += [fields[3] for fields in (line.split() for line in text.splitlines()) if len(fields) >= 4]
+        return [s for s in dict.fromkeys(out) if s]
+
     # ------------------------------------------------------------------ riepilogo
     def status(self) -> dict:
         key, source = self.modeller_key()

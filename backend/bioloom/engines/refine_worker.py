@@ -42,6 +42,8 @@ def main() -> int:
     timings: dict[str, float] = {}
     t0 = time.perf_counter()
 
+    import random
+
     import openmm
     from openmm import app, unit
     from openmm.app.internal.customgbforces import GBSAOBC2Force
@@ -49,6 +51,11 @@ def main() -> int:
 
     # ------------------------------------------------------------------ PDBFixer
     say(0.02, "Atomi mancanti e idrogeni (PDBFixer)")
+    # Riproducibilità (F9.4): Modeller.addHydrogens di OpenMM mette gli idrogeni in posizioni casuali (modulo random)
+    # prima di minimizzarli, e PDBFixer minimizza gli atomi aggiunti con un integratore con seme casuale. Senza seme due
+    # esecuzioni dello stesso job davano energie iniziali diverse (misurato su 1UBQ: 850 e −201 kJ/mol) e catene laterali
+    # diverse; con lo stesso seme della dinamica (`md_seed`) il risultato dipende solo dall'ingresso e dalla piattaforma.
+    random.seed(int(p["md_seed"]))
     fixer = PDBFixer(filename=p["input"])
     fixer.findMissingResidues()
     fixer.missingResidues = {}  # nessun residuo mancante ricostruito: le interruzioni restano
@@ -58,7 +65,10 @@ def main() -> int:
     fixer.findMissingAtoms()
     heavy_added = sum(len(v) for v in fixer.missingAtoms.values())
     terminal_added = sum(len(v) for v in fixer.missingTerminals.values())
-    fixer.addMissingAtoms()
+    try:
+        fixer.addMissingAtoms(seed=int(p["md_seed"]))
+    except TypeError:  # PDBFixer precedente alla 1.8, senza il parametro
+        fixer.addMissingAtoms()
     before_h = fixer.topology.getNumAtoms()
     fixer.addMissingHydrogens(float(p["ph"]))
     topology, positions = fixer.topology, fixer.positions

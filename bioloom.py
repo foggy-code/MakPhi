@@ -1,4 +1,6 @@
-"""Avvio di BioLoom v4 dalla cartella di installazione: `python bioloom.py [--port 8765] [--no-browser]`."""
+"""Avvio di BioLoom v4 dalla cartella di installazione: `python bioloom.py [--port 8765] [--no-browser]`.
+
+Riesecuzione di un pacchetto di riproducibilità: `python bioloom.py rerun <pacchetto.zip> [--data <cartella>]`."""
 
 import os
 import sys

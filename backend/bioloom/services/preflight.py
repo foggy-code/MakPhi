@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 from ..core.errors import AppError
 from ..domain import complexes, disorder, plddt, report, sequences, structure
 from ..domain import preflight as rules
+from ..domain import reproducibility as repro
 from ..engines import modeller, qmean_local, remote, search, tools
 from .analysis import AnalysisService
 from .compute import MAX_SEQUENCE, _apply_ligand_options, _record, _template_specs, complex_templates
@@ -38,7 +39,8 @@ from .templates import normalize_id
 if TYPE_CHECKING:
     from ..core.container import Core
 
-KINDS = ("model", "loop", "align2d", "pipeline", "quality", "qmean", "search", "analysis")
+KINDS = ("model", "loop", "align2d", "pipeline", "quality", "qmean", "search", "analysis",
+         "rerun")  # rerun: riesecuzione da pacchetto (F9.4)
 
 
 def disk_free(path: Path) -> Optional[int]:
@@ -477,3 +479,32 @@ class PreflightService:
             AnalysisService(self.core.jobs, self.core.compute).validate(p)
         except AppError as exc:
             out["checks"].append(rules.invalid(exc.code, exc.message))
+
+    # ------------------------------------------------------------------------------ riesecuzione (F9.4)
+    def _rerun(self, p: dict, context: dict, out: dict) -> None:
+        """Riesecuzione di un pacchetto caricato (services/reproducibility.py): esiti del pacchetto (tipo non
+        rieseguibile, parametri non validi, versioni diverse, input remoti), licenze e strumenti del calcolo, durata del
+        calcolo originale, spazio, coda."""
+        try:
+            facts = self.core.repro.preflight_facts(str(p.get("package_id") or ""))
+        except AppError as exc:
+            out["checks"].append(rules.invalid(exc.code, exc.message, "Carica di nuovo il pacchetto."))
+            return
+        out["checks"] += [rules.check(c["level"], c["code"], c["message"]) for c in facts["checks"]]
+        needs = facts["needs"]
+        if needs["modeller"]:
+            self._modeller(out, required=needs["modeller_required"], purpose=f"la riesecuzione ({facts['label']})")
+        self._optional_tools(out, procheck=needs["procheck"], prosa=needs["prosa"])
+        missing = tools.missing_message(needs["tools"], f"La riesecuzione ({facts['label']})")
+        if missing:
+            out["checks"].append(rules.check("error", "rerun_tool_unavailable", missing))
+        if facts["duration"] is not None:  # date al secondo: un calcolo breve può durare "0 s"
+            seconds = float(facts["duration"])
+            out["estimate"] = rules.estimate(max(1.0, seconds), detail="come il calcolo originale",
+                                             basis=repro.RERUN_BASIS)
+            out["checks"] += rules.runtime_checks(
+                out["estimate"], what="La riesecuzione",
+                process_seconds=seconds if facts["kind"] in ("model", "loop") else None,
+                timeout_seconds=self.settings.job_timeout_minutes * 60)
+        self._disk(out, facts["data_bytes"], facts["scratch_bytes"])
+        self._queue(out)

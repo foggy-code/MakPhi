@@ -234,11 +234,14 @@ def _apply_plddt_trim(entry: sequences.PirEntry, fields: list[str], t: dict) -> 
 class ComputeService:
     """Registra gli handler dei job e contiene la logica condivisa (anche dalla pipeline)."""
 
-    def __init__(self, jobs: JobManager, library: TemplateLibrary, uploads_dir: Path, databases_dir: Path) -> None:
+    def __init__(self, jobs: JobManager, library: TemplateLibrary, uploads_dir: Path, databases_dir: Path,
+                 register: bool = True) -> None:
         self.jobs = jobs
         self.library = library
         self.uploads_dir = uploads_dir
         self.databases_dir = databases_dir
+        if not register:  # stessi handler su un'altra libreria e altri file (riesecuzione da pacchetto, F9.4)
+            return
         jobs.register("search", self.handle_search, pool="io")
         jobs.register("align", self.handle_align)
         jobs.register("align2d", self.handle_align2d)
