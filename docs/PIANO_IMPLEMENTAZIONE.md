@@ -277,4 +277,4 @@ Le prime cinque tappe danno il beneficio più visibile con il rischio più basso
 | F5.3 | fatto | Assemblaggi (mmCIF, REMARK 350), modalità Complesso con simmetria, confronto delle interfacce con DockQ |
 | F7b, F9.1 | fatto | fpocket, PDB2PQR+APBS, OpenMM/PDBFixer nell'immagine (verificati in `bioloom:dev`; `bioloom:4.1.0` va ricostruita dall'avviatore per averli) |
 | F8 | fatto | Controlli preventivi, procedura guidata `/wizard`, migrazioni SQLite con backup, etichette e preferiti, ricerca globale (Ctrl+K), tema Sistema, virtualizzazione. Il tema scuro esisteva già |
-| F9.2, F9.3, F9.4 | da fare | Specifiche pronte: mutagenesi e scansione di alanina, confronto con ESMFold (opt-in), pacchetti riproducibili e riesecuzione |
+| F9.2, F9.3, F9.4 | fatto | Mutagenesi (protocollo mutate_model, stima qualitativa, non un ΔΔG) e scansione di alanina; confronto con ESMFold (consenso esplicito, URL configurabile) o AlphaFold DB; pacchetti riproducibili, `python bioloom.py rerun` e confronto con stato «equivalente» per il rumore numerico di OpenMM |
