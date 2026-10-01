@@ -274,3 +274,7 @@ Le prime cinque tappe danno il beneficio più visibile con il rischio più basso
 | F5.4 | fatto | Trasferimento selettivo (l'opzione `hetatm` precedente non trasferiva nulla), un solo ligando per sito con più template, verifica di contatti e coordinazione con le distanze di Harding 2006 verificate |
 | F5.5 | fatto | `domain/disorder.py` (FoldIndex, SEG), domini InterPro, avvisi di copertura prima del lancio, regioni `expected` nel consenso |
 | F7 | fatto (parte interna) | `interactions`, `interfaces`, `conservation`; job `analysis`, scheda Interazioni. fpocket ed elettrostatica nella tappa 6 (immagine di sviluppo) |
+| F5.3 | fatto | Assemblaggi (mmCIF, REMARK 350), modalità Complesso con simmetria, confronto delle interfacce con DockQ |
+| F7b, F9.1 | fatto | fpocket, PDB2PQR+APBS, OpenMM/PDBFixer nell'immagine (verificati in `bioloom:dev`; `bioloom:4.1.0` va ricostruita dall'avviatore per averli) |
+| F8 | fatto | Controlli preventivi, procedura guidata `/wizard`, migrazioni SQLite con backup, etichette e preferiti, ricerca globale (Ctrl+K), tema Sistema, virtualizzazione. Il tema scuro esisteva già |
+| F9.2, F9.3, F9.4 | da fare | Specifiche pronte: mutagenesi e scansione di alanina, confronto con ESMFold (opt-in), pacchetti riproducibili e riesecuzione |
