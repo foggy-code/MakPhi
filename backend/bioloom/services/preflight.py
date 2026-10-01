@@ -38,7 +38,7 @@ from .templates import normalize_id
 if TYPE_CHECKING:
     from ..core.container import Core
 
-KINDS = ("model", "loop", "align2d", "pipeline", "quality", "qmean", "search", "analysis")
+KINDS = ("model", "loop", "align2d", "pipeline", "quality", "qmean", "search", "analysis", "predict")
 
 
 def disk_free(path: Path) -> Optional[int]:
@@ -477,3 +477,43 @@ class PreflightService:
             AnalysisService(self.core.jobs, self.core.compute).validate(p)
         except AppError as exc:
             out["checks"].append(rules.invalid(exc.code, exc.message))
+
+    # ------------------------------------------------------------------------------ predizione esterna (F9.3)
+    def _predict(self, p: dict, context: dict, out: dict) -> None:
+        """Consenso all'invio (con la stessa validazione della rotta, salvo il consenso, che è un esito proprio),
+        lunghezza e alfabeto per ESMFold, accessione per AlphaFold DB, rete o cache, tempo e spazio. Nessuna richiesta
+        remota: la cache delle predizioni si legge dal disco."""
+        from .predict import PredictService  # services/predict importa services/compute come questo modulo
+
+        checks = out["checks"]
+        settings = self.settings
+        predictor = p.get("predictor") or "esmfold"
+        try:
+            req = PredictService(self.core.jobs, self.core.compute).request(p, settings, require_consent=False)
+        except AppError as exc:
+            checks.append(rules.invalid(exc.code, exc.message))
+            req = None
+        length = len((req or {}).get("sequence") or "")
+        cached = None
+        if req and predictor == "esmfold":
+            hit = remote.esmfold_cached(req["sequence"], req["service"])
+            cached = str(hit.get("received") or "?") if hit else None
+        in_library = False
+        if req and req.get("accession"):
+            try:
+                in_library = self.library.exists(req["accession"] if req["accession"].startswith("AF-")
+                                                 else f"AF-{req['accession']}-F1")
+            except AppError:
+                in_library = False
+        checks += rules.predict_checks(predictor=predictor, consent=settings.esmfold_remote,
+                                       service=(req or {}).get("service"), length=length, cached=cached,
+                                       compare=bool(p.get("source")), accession=(req or {}).get("accession"),
+                                       in_library=in_library)
+        if req:
+            out["estimate"] = rules.predict_estimate(predictor, cached=bool(cached or in_library),
+                                                     compare=bool(p.get("source")), length=length)
+            checks += rules.runtime_checks(out["estimate"], what="Il confronto con la predizione"
+                                           if p.get("source") else "La predizione")
+            need = rules.predict_bytes(length)
+            self._disk(out, need, need)
+        self._queue(out)

@@ -640,6 +640,14 @@ REFERENCES = {
              "Program. 45:503–528.",
     "kabsch": "Kabsch W. (1976) A solution for the best rotation to relate two sets of vectors. Acta Cryst. "
               "A32:922–923.",
+    # confronto con una predizione esterna (F9.3)
+    "esmfold": "Lin Z., Akin H., Rao R., Hie B., Zhu Z., Lu W., Smetanin N., Verkuil R., Kabeli O., Shmueli Y., dos "
+               "Santos Costa A., Fazel-Zarandi M., Sercu T., Candido S., Rives A. (2023) Evolutionary-scale prediction "
+               "of atomic-level protein structure with a language model. Science 379:1123–1130.",
+    "tmscore": "Zhang Y., Skolnick J. (2004) Scoring function for automated assessment of protein structure template "
+               "quality. Proteins 57:702–710.",
+    "xu_zhang": "Xu J., Zhang Y. (2010) How significant is a protein structure similarity with TM-score = 0.5? "
+                "Bioinformatics 26:889–895.",
 }
 
 LEGEND = {
@@ -738,6 +746,17 @@ LEGEND = {
                        "OpenMM (stessi residui, senza ligandi né idrogeni) e sul modello rifinito; «invariato» per "
                        "differenze entro l'arrotondamento dei rapporti. La rifinitura migliora soprattutto clash e "
                        "rotameri; non corregge errori di allineamento né di ripiegamento."),
+    "prediction": ("Confronto con una predizione", "il modello (riferimento) e la predizione di ESMFold (Lin et al. "
+                   "2023) o di AlphaFold DB della stessa sequenza, con i residui abbinati per sequenza. TM-score "
+                   "normalizzato sul modello: da 0,5 stesso ripiegamento (Xu & Zhang 2010; due strutture casuali circa "
+                   "0,17, Zhang & Skolnick 2004). lDDT-Cα di ogni residuo del modello rispetto alla predizione (Mariani "
+                   "et al. 2013): sotto 0,5 il residuo diverge; regioni di almeno 3 residui divergenti (uno non "
+                   "divergente tollerato). La predizione è sicura in una regione se il suo pLDDT medio è almeno 70 "
+                   "(fasce di AlphaFold DB, Tunyasuvunakool et al. 2021): lì una divergenza indica più probabilmente un "
+                   "errore del modello (allineamento, template); dove la predizione è incerta il confronto non è "
+                   "informativo. Con meno di 30 residui a predizione sicura l'esito è non conclusivo. Nel consenso, "
+                   "accordo = lDDT medio sui residui a predizione sicura, scala 0,5 → 40 e 0,7 → 70, peso 0,25 (il più "
+                   "basso). Una predizione non è una misura sperimentale."),
 }
 
 
@@ -1225,6 +1244,11 @@ def _consensus_block(doc: _Doc, cons: Optional[dict]) -> None:
         doc.add(_note(_e(dis.get("text")), "warn"))
         doc.explain("disorder")
         doc.cite("foldindex", "uversky", "kyte", "ward")
+    pred = cons.get("predictor") if isinstance(cons.get("predictor"), dict) else {}
+    if pred:  # accordo con una predizione esterna (F9.3), solo se il confronto è stato eseguito
+        doc.add(_note(_e(pred.get("text")), _lookup(PREDICTION_TONE, pred.get("status"), "")))
+        doc.explain("prediction")
+        doc.cite("lddt", "afdb")
     signals = ((cons.get("per_residue") or {}).get("signals")) or []
     if signals:
         doc.add(_table([("Segnale per residuo", False), ("Regola", False), ("Residui segnalati", True)],
@@ -1404,10 +1428,11 @@ def _quality(doc: _Doc, data: dict) -> None:
         doc.end()
         return
     if (quality.get("structure") or {}).get("bfactor_kind") == "plddt":
-        doc.add(_note("Modello AlphaFold: la colonna B-factor contiene il pLDDT (confidenza locale), non un fattore di "
-                      "temperatura."))
+        esm = (quality.get("structure") or {}).get("predictor") == "esmfold"  # F9.3: predizione di ESMFold
+        doc.add(_note(("Predizione di ESMFold" if esm else "Modello AlphaFold") + ": la colonna B-factor contiene il "
+                      "pLDDT (confidenza locale), non un fattore di temperatura."))
         doc.explain("plddt")
-        doc.cite("alphafold", "afdb", "lddt")
+        doc.cite("esmfold" if esm else "alphafold", "afdb", "lddt")
     _grade_block(doc, quality)
     _consensus_block(doc, data.get("consensus"))
     _rama_block(doc, quality)
@@ -1743,6 +1768,59 @@ def _refinement(doc: _Doc, data: dict) -> None:
     doc.end()
 
 
+PREDICTION_TONE = {"concordano": "ok", "divergenze locali": "warn", "ripiegamento diverso": "err",
+                   "non conclusivo": "", "sicura": "warn", "incerta": "info", "molto incerta": "info"}
+
+
+def _prediction(doc: _Doc, data: dict) -> None:
+    """Confronto con una predizione esterna (F9.3): esito motivato, metriche, regioni divergenti con il pLDDT della
+    predizione e le regioni del consenso, origine della predizione e limiti. Solo se il confronto è stato eseguito."""
+    info = _dict(data.get("prediction"))
+    plaus = _dict(info.get("plausibility"))
+    if not plaus:
+        return
+    label = info.get("label") or plaus.get("label") or "predizione"
+    doc.section("predizione", f"Confronto con una predizione ({label})")
+    origin, comp, pl = _dict(info.get("origin")), _dict(info.get("comparison")), _dict(info.get("plddt"))
+    if info.get("predictor") == "esmfold":
+        where = (f"servizio {_e(origin.get('service'))}" + (" (dalla cache)" if origin.get("cached") else "")
+                 + (", pLDDT riportato da 0–1 a 0–100" if origin.get("scale") == "0-1" else ""))
+    else:
+        where = f"AlphaFold DB, {_e(origin.get('entry') or info.get('accession'))}"
+    doc.add(f'<p class="small muted">Dal confronto {_e(info.get("job_id"))} del {_date(info.get("finished_at"))}: '
+            f"{_e(label)} ({where}); catena {_e(info.get('chain') or '—')} del modello, "
+            f"{_e((info.get('sequence') or {}).get('length'))} residui predetti.</p>")
+    status = plaus.get("status")
+    doc.add(_note(f"<b>{_e(status)}</b>: {_e(plaus.get('summary'))}", _lookup(PREDICTION_TONE, status, "")))
+    doc.add('<div class="cards">',
+            _card("TM-score (sul modello)", _num(comp.get("tm_score"), 3), "da 0,5 stesso ripiegamento"),
+            _card("lDDT", _num(comp.get("lddt"), 3), f"sui residui sicuri {_num(plaus.get('lddt_confident'), 3)}"),
+            _card("GDT-TS", _num(comp.get("gdt_ts"), 1), f"RMSD {_num(comp.get('rmsd'), 2, ' Å')}"),
+            _card("pLDDT della predizione", _num(pl.get("mean"), 1),
+                  f"{_e(plaus.get('confident_residues'))} su {_e(plaus.get('pairs'))} residui ≥ 70"), "</div>")
+    regions = [r for r in plaus.get("regions") or [] if isinstance(r, dict)]
+    if regions:
+        rows = ["<tr>" + _td(f"{_e(r.get('start'))}–{_e(r.get('end'))} ({_e(r.get('chain'))})")
+                + _td(f"{_e(r.get('divergent'))}/{_e(r.get('length'))}", True) + _td(_num(r.get("lddt_mean"), 2), True)
+                + _td(_num(r.get("plddt_mean"), 0), True)
+                + _td(f'<span class="tag {_lookup(PREDICTION_TONE, r.get("confidence"), "")}">'
+                      f'{_e(r.get("confidence") or "—")}</span>')
+                + _td(_e("; ".join(str(c) for c in r.get("consensus") or [])) or '<span class="muted">—</span>')
+                + "</tr>" for r in regions]
+        doc.add("<h3>Regioni divergenti</h3>",
+                _table([("Regione", False), ("Divergenti", True), ("lDDT medio", True), ("pLDDT medio", True),
+                        ("Predizione", False), ("Consenso", False)], rows))
+    else:
+        doc.add('<p class="small muted">Nessuna regione di almeno 3 residui con lDDT sotto 0,5.</p>')
+    for note in plaus.get("notes") or []:
+        doc.add(f'<p class="small muted">{_e(note)}</p>')
+    if plaus.get("limits"):
+        doc.add(_note(_e(plaus["limits"]), "warn"))
+    doc.explain("prediction", "plddt")
+    doc.cite("esmfold" if info.get("predictor") == "esmfold" else "alphafold", "afdb", "lddt", "tmscore", "xu_zhang")
+    doc.end()
+
+
 def _warnings(doc: _Doc, data: dict) -> None:
     items: list[str] = []
     for w in [*(data.get("warnings") or []), *(((data.get("quality") or {}).get("warnings")) or [])]:
@@ -1784,6 +1862,8 @@ def render(data: dict) -> str:
     refine (solo kind "refine", F9.1: dal risultato del job di services/refine.py: label, protocol, openmm, added, input,
     energy, rmsd, quality {before, after}, comparison); con "refine" niente template, allineamento, parametri di
     MODELLER e tabella dei modelli.
+    prediction (F9.3, services/predict.prediction_summary: job_id, finished_at, predictor, label, origin, plddt, chain,
+    sequence, accession, comparison, plausibility di domain/prediction.assess) o None.
     """
     doc = _Doc()
     kind = data.get("kind")
@@ -1805,6 +1885,7 @@ def render(data: dict) -> str:
     _ligands(doc, data)
     _complex(doc, data)
     _structural(doc, data)
+    _prediction(doc, data)
     _warnings(doc, data)
     _legend_and_refs(doc)
     subject = data.get("title") or data.get("model") or ""

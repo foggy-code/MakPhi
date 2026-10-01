@@ -26,6 +26,7 @@ import type {
   PirReport,
   PreflightRequest,
   PreflightResult,
+  PredictRequest,
   Project,
   QualityReport,
   ReportFile,
@@ -257,17 +258,19 @@ export const api = {
     `/api/jobs/${id}/files/${path.split("/").map(enc).join("/")}${download ? "?download=true" : ""}`,
   jobFileText: (id: string, path: string) => get<string>(`/api/jobs/${id}/files/${path.split("/").map(enc).join("/")}`),
   modelQuality: (id: string, model: string) => get<QualityReport>(`/api/jobs/${id}/quality/${model.split("/").map(enc).join("/")}`),
-  /** consenso di un'analisi di qualità (senza `model`) o di un modello; `qmeanJob` = job qmean sulla stessa struttura */
-  consensus: (id: string, model?: string | null, qmeanJob?: string | null) =>
-    get<ConsensusResult>(`/api/jobs/${id}/consensus${model ? `/${model.split("/").map(enc).join("/")}` : ""}${qmeanJob ? `?qmean_job=${enc(qmeanJob)}` : ""}`),
+  /** consenso di un'analisi di qualità (senza `model`) o di un modello; `qmeanJob` = job qmean sulla stessa struttura;
+   *  `predictJob` = confronto con una predizione esterna sulla stessa struttura (F9.3) */
+  consensus: (id: string, model?: string | null, qmeanJob?: string | null, predictJob?: string | null) =>
+    get<ConsensusResult>(`/api/jobs/${id}/consensus${model ? `/${model.split("/").map(enc).join("/")}` : ""}${queryString({ qmean_job: qmeanJob, predict_job: predictJob })}`),
   pymolUrl: (id: string, model: string, scheme = "ss") => `/api/jobs/${id}/pymol/${model.split("/").map(enc).join("/")}?scheme=${scheme}`,
   /** report HTML autonomo (stampabile in PDF) di un modello (job model, loop, pipeline) o, senza `model`, di
-   * un'analisi di qualità; `qmeanJob` = job qmean sulla stessa struttura da includere */
-  reportUrl: (id: string, model?: string | null, qmeanJob?: string | null) =>
-    `/api/jobs/${id}/report${model ? `/${model.split("/").map(enc).join("/")}` : ""}${qmeanJob ? `?qmean_job=${enc(qmeanJob)}` : ""}`,
+   * un'analisi di qualità; `qmeanJob` = job qmean sulla stessa struttura da includere; `predictJob` = confronto con
+   * una predizione (F9.3; senza, il server include il più recente sulla stessa struttura) */
+  reportUrl: (id: string, model?: string | null, qmeanJob?: string | null, predictJob?: string | null) =>
+    `/api/jobs/${id}/report${model ? `/${model.split("/").map(enc).join("/")}` : ""}${queryString({ qmean_job: qmeanJob, predict_job: predictJob })}`,
   /** genera il report, con la vista 3D se `body.image_png_base64` c'è, e lo restituisce come file da salvare */
-  report: (id: string, model: string | null, body: ReportRequest = {}, qmeanJob?: string | null): Promise<ReportFile> =>
-    requestFile(api.reportUrl(id, model, qmeanJob), body, reportFallbackName(model, id)),
+  report: (id: string, model: string | null, body: ReportRequest = {}, qmeanJob?: string | null, predictJob?: string | null): Promise<ReportFile> =>
+    requestFile(api.reportUrl(id, model, qmeanJob, predictJob), body, reportFallbackName(model, id)),
   archiveUrl: (id: string) => `/api/jobs/${id}/archive`,
   /** flusso SSE di un job (status, log dal byte `offset`, end); `offset` null = senza righe di log */
   jobEventsUrl: (id: string, offset: number | null) =>
@@ -346,6 +349,16 @@ export const api = {
     const params = new URLSearchParams({ type: source.type });
     for (const key of ["id", "job_id", "file"] as const) if (source[key]) params.set(key, String(source[key]));
     return get<LatestToolJob>(`/api/${kind}/latest?${params}`);
+  },
+
+  // confronto con un predittore esterno (F9.3): job `predict`; risultato in api.job
+  /** predizione (ESMFold: la sequenza lascia il computer, serve il consenso esmfold_remote) e confronto con il modello */
+  predict: (body: PredictRequest) => post<JobSummary>("/api/predict", body),
+  /** confronto con una predizione completato più recente sulla struttura, e quello in coda o in corso */
+  latestPrediction: (source: StructureSource) => {
+    const params = new URLSearchParams({ type: source.type });
+    for (const key of ["id", "job_id", "file"] as const) if (source[key]) params.set(key, String(source[key]));
+    return get<LatestToolJob>(`/api/predict/latest?${params}`);
   },
 };
 

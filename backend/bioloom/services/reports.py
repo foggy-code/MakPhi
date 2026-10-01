@@ -16,6 +16,9 @@ rotta del consenso (`ComputeService.consensus`), che controlla che QMEAN riguard
   del job); la qualità è il rapporto del modello rifinito.
 * **analisi strutturale (F7):** in ogni report, i ponti disolfuro e le interfacce dell'analisi `analysis` completata
   più recente sulla stessa struttura (stessa sorgente e stessa impronta del file), se ce ne sono.
+* **confronto con una predizione (F9.3):** il job `predict` indicato (`predict_job`, con i controlli della rotta del
+  consenso) oppure, senza, il confronto completato più recente sulla stessa struttura: sezione con l'esito e consenso
+  con l'accordo con la predizione. Senza confronto il report non cambia.
 """
 
 from __future__ import annotations
@@ -75,9 +78,10 @@ class ReportService:
 
     # ------------------------------------------------------------------------------ ingressi
     def build(self, job_id: str, model: Optional[str] = None, *, qmean_job: Optional[str] = None,
-              image_png: Optional[bytes] = None) -> tuple[str, str]:
+              image_png: Optional[bytes] = None, predict_job: Optional[str] = None) -> tuple[str, str]:
         """(HTML del report, nome del file da scaricare). `model` per i job model, loop e pipeline; nessun modello
-        per un'analisi di qualità. `image_png`: byte già verificati da `report.decode_png`."""
+        per un'analisi di qualità. `image_png`: byte già verificati da `report.decode_png`. `predict_job`: confronto
+        con una predizione da includere (senza: il più recente sulla stessa struttura, se c'è)."""
         job = self.jobs.get(job_id)
         kind = job["kind"]
         if not model:
@@ -99,6 +103,12 @@ class ReportService:
                            code="report_unsupported")
         data["image_png"] = image_png
         data["analysis"] = self._analysis(job, _rel(model) if model else None)
+        found = self._prediction(job, _rel(model) if model else None, predict_job)
+        if found is not None:  # F9.3: sezione del confronto e consenso con l'accordo con la predizione
+            data["prediction"] = found
+            if data.get("quality") is not None:
+                data["consensus"] = self.compute.consensus(job_id, _rel(model) if model else None, qmean_job,
+                                                           found["job_id"])
         return report.render(data), report.safe_filename(stem)
 
     def pipeline_item(self, job: dict, row: dict) -> str:
@@ -124,6 +134,35 @@ class ReportService:
             fingerprint = None
         found = AnalysisService(self.jobs, self.compute).latest(source, fingerprint)
         return report_summary(found) if found else None
+
+    def _prediction(self, job: dict, model: Optional[str], predict_job: Optional[str]) -> Optional[dict]:
+        """Confronto con una predizione (F9.3) della stessa struttura: quello indicato, con gli stessi controlli della
+        rotta del consenso (errore se è di un'altra struttura), oppure il più recente; uno che non vale più (file
+        cambiato dopo l'analisi di qualità) si tralascia invece di far fallire il report."""
+        from .predict import PredictService, prediction_summary  # services/predict importa services/compute
+
+        source = ({"type": "job", "job_id": job["id"], "file": model} if model
+                  else (job.get("params") or {}).get("source"))
+        if not isinstance(source, dict):
+            return None
+        service = PredictService(self.jobs, self.compute)
+        if predict_job:
+            service.plausibility_for(predict_job, source)
+            return prediction_summary(self.jobs.get(predict_job))
+        try:
+            path, _label = self.compute.resolve_structure(source)
+            fingerprint: Optional[str] = cache.content_hash(path)
+        except (AppError, OSError):
+            fingerprint = None
+        found = service.latest(source, fingerprint)
+        if found is None:
+            return None
+        try:  # anche il consenso deve poterlo includere (impronta del rapporto di qualità)
+            quality = job.get("result") if job["kind"] == "quality" else None
+            service.plausibility_for(found["id"], source, (quality or {}).get("source_sha256"))
+        except AppError:
+            return None
+        return prediction_summary(found)
 
     # ------------------------------------------------------------------------------ parti comuni
     def _base(self, job: dict, kind: str) -> dict:

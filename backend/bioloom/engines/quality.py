@@ -328,15 +328,18 @@ def analyze(path: Path, ctx: Optional[JobContext] = None, *, with_dope: bool = T
             warnings.append(f"Profilo DOPE ({len(profile)} residui) non allineabile alla struttura "
                             f"({len(residues)} residui): mostrato per indice.")
     bvals = [r["bfactor"] for r in residues if r["bfactor"] is not None]
-    # pLDDT di AlphaFold nella colonna B-factor? (stesso criterio della libreria: domain/plddt.is_alphafold_model)
-    bfactor_kind = perresidue.bfactor_kind(path.name, head, plddt.atom_values(model))
+    # pLDDT di AlphaFold o ESMFold nella colonna B-factor? (stesso criterio della libreria: domain/plddt.predictor)
+    atom_bfactors = plddt.atom_values(model)
+    bfactor_kind = perresidue.bfactor_kind(path.name, head, atom_bfactors)
+    predicted_by = plddt.predictor(path.name, head, atom_bfactors) if bfactor_kind == "plddt" else None
     zdope = dope.get("zdope") if dope else None
     grade = grading.grade(rama["summary"]["outlier_pct"], clash["clashscore"], zdope)
     rsa_values = [r["rsa"] for r in residues if r["rsa"] is not None]
     report = {
         "structure": {"file": path.name, "title": header.get("title", ""), "method": header.get("method", ""),
                       "resolution": header.get("resolution"), **stats,
-                      "chains_detail": structure.chain_summaries(model), "bfactor_kind": bfactor_kind},
+                      "chains_detail": structure.chain_summaries(model), "bfactor_kind": bfactor_kind,
+                      **({"predictor": predicted_by} if predicted_by else {})},
         "grade": grade,
         "ramachandran": {"summary": rama["summary"], "points": rama["points"], "regions": rama["regions"]},
         "clashes": clash,

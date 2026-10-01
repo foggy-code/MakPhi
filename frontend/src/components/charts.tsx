@@ -261,6 +261,7 @@ export function ResidueStrip({ residues, coloring, selected, onSelect }: { resid
 // ---------------------------------------------------------------------------------- consenso per residuo
 const SIGNAL_COLOR: Record<string, string> = { rama: "#ef4444", clash: "#f59e0b", dope: "#a78bfa", qmean: "#38bdf8", prosa: "#34d399" };
 const DISORDER_COLOR = "#94a3b8";
+const PREDICTOR_COLOR = "#f472b6"; // F9.3: diverge da una predizione sicura (informativo)
 
 /** Segnalazioni dei metodi sovrapposte sullo stesso asse dei residui, numero di metodi e regioni problematiche. */
 export function ConsensusTracks({ residues, consensus, selected, onSelect, onRegion }: {
@@ -281,9 +282,12 @@ export function ConsensusTracks({ residues, consensus, selected, onSelect, onReg
   const signals = per.signals;
   // disordine predetto (F5.5): riga informativa in più, fuori dal conteggio dei metodi
   const dis = consensus.disorder && consensus.disorder.flags.length === n ? consensus.disorder : null;
+  // accordo con una predizione esterna (F9.3): riga informativa, solo con il confronto incluso
+  const pred = consensus.predictor && consensus.predictor.flags.length === n ? consensus.predictor : null;
   const top = 4;
   const disTop = top + signals.length * (rowH + 3);
-  const barsTop = top + (signals.length + (dis ? 1 : 0)) * (rowH + 3) + 6;
+  const predTop = disTop + (dis ? rowH + 3 : 0);
+  const barsTop = top + (signals.length + (dis ? 1 : 0) + (pred ? 1 : 0)) * (rowH + 3) + 6;
   const regionsTop = barsTop + barsH + 4;
   const H = regionsTop + 12 + 16;
   const cw = (W - label - 10) / n;
@@ -309,6 +313,7 @@ export function ConsensusTracks({ residues, consensus, selected, onSelect, onReg
               <b>{r.resname} {r.chain}{r.resnum}</b>
               <div>{per.flags[i].length ? per.flags[i].map((k) => signals.find((s) => s.key === k)?.label ?? k).join(", ") : "nessuna segnalazione"}</div>
               {dis?.flags[i] && <div className="muted">disordine predetto: atteso poco affidabile</div>}
+              {pred?.lddt[i] != null && <div className="muted">lDDT rispetto alla predizione {pred.lddt[i]!.toFixed(2)}{pred.plddt[i] != null ? ` · pLDDT ${pred.plddt[i]!.toFixed(0)}` : ""}</div>}
             </>
           ));
         }}
@@ -338,6 +343,13 @@ export function ConsensusTracks({ residues, consensus, selected, onSelect, onReg
                 <title>{`Disordine predetto ${r.text}: atteso poco affidabile (non entra nel consenso)`}</title>
               </rect>
             ))}
+          </g>
+        )}
+        {pred && (
+          <g>
+            <text x={label - 8} y={predTop + rowH - 3} textAnchor="end">predizione (info)</text>
+            <rect x={label} y={predTop} width={W - label - 10} height={rowH} fill="var(--panel-3)" rx={2} />
+            {pred.flags.map((f, i) => (f ? <rect key={i} x={x(i)} y={predTop} width={Math.max(1, cw)} height={rowH} fill={PREDICTOR_COLOR} /> : null))}
           </g>
         )}
         <text x={label - 8} y={barsTop + barsH / 2 + 3} textAnchor="end">metodi</text>
@@ -371,6 +383,7 @@ export function ConsensusTracks({ residues, consensus, selected, onSelect, onReg
       <div className="legend">
         {signals.map((s) => <span key={s.key} title={s.rule}><i style={{ background: SIGNAL_COLOR[s.key] }} />{s.label}: {s.rule}</span>)}
         {dis && <span title={dis.rule}><i style={{ background: DISORDER_COLOR }} />{dis.label}: {dis.rule}</span>}
+        {pred && <span title={pred.rule}><i style={{ background: PREDICTOR_COLOR }} />{pred.label}: {pred.rule}</span>}
       </div>
       {tip.node}
     </div>

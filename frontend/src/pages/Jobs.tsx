@@ -31,6 +31,7 @@ const OPEN_IN: Record<JobKind, (id: string) => string> = {
   pockets: (id) => `/quality?pjob=${id}`,
   electrostatics: (id) => `/quality?ejob=${id}`,
   refine: (id) => `/modeling?job=${id}`,
+  predict: (id) => `/quality?prjob=${id}`,
 };
 
 function Detail({ id, labels, onDeleted, onChanged, onLabels }: { id: string; labels?: ItemLabels; onDeleted: () => void; onChanged: () => void; onLabels: (l: EntityLabels) => void }) {

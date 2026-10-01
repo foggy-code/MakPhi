@@ -32,6 +32,7 @@ export const KIND_LABEL: Record<JobKind, string> = {
   pockets: "Tasche (fpocket)",
   electrostatics: "Elettrostatica (APBS)",
   refine: "Rifinitura energetica",
+  predict: "Confronto con una predizione",
 };
 
 export const ACTIVE_STATUSES: JobStatus[] = ["queued", "running", "cancelling"];

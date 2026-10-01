@@ -5,7 +5,8 @@ export type JobKind =
   | "search" | "align" | "align2d" | "model" | "loop" | "quality" | "qmean" | "pipeline"
   | "selftest" | "db_update_pdbaa" | "db_build_mmseqs" | "db_index_mmseqs" | "db_convert_uniclust" | "db_local_uniclust"
   | "analysis"
-  | "pockets" | "electrostatics" | "refine";
+  | "pockets" | "electrostatics" | "refine"
+  | "predict";
 
 export type SearchEngine = "rcsb" | "ncbi" | "local" | "mmseqs" | "alphafold";
 
@@ -122,7 +123,8 @@ export interface SystemInfo {
     attempts: { python: string; error: string }[];
   };
   tools: Record<string, ToolStatus>;
-  services: { qmean_remote: boolean; contact_email: boolean };
+  /** `esmfold_remote`: consenso all'invio delle sequenze a ESMFold (F9.3) */
+  services: { qmean_remote: boolean; contact_email: boolean; esmfold_remote?: boolean };
   runtime?: {
     container: boolean;
     image: string;
@@ -269,6 +271,10 @@ export interface Settings {
   uploads_retention_days: number;
   /** riusa i risultati di ricerche e allineamenti già calcolati (cache dei calcoli) */
   compute_cache: boolean;
+  /** F9.3: consenso all'invio delle sequenze al servizio ESMFold (spento per default) */
+  esmfold_remote: boolean;
+  /** F9.3: indirizzo del servizio ESMFold; vuoto = API pubblica di ESM Atlas */
+  esmfold_url: string;
 }
 
 export interface Example {
@@ -977,6 +983,8 @@ export interface QualityReport {
     chains_detail: ChainSummary[];
     /** "plddt" = modello AlphaFold: la colonna B-factor contiene il pLDDT (0–100); assente nei rapporti precedenti */
     bfactor_kind?: BfactorKind;
+    /** con il pLDDT: chi ha scritto la predizione (F9.3: anche ESMFold) */
+    predictor?: PredictorName;
   };
   grade: { score: number; grade: string; penalties: { ramachandran: number; clashes: number; dope: number } };
   ramachandran: {
@@ -1034,7 +1042,8 @@ export interface QualityReport {
 export type BfactorKind = "plddt" | "bfactor";
 
 // ---------------------------------------------------------------------------------- consenso (domain/consensus.py)
-export type ConsensusMethodKey = "grade" | "zdope" | "ga341" | "qmean" | "prosa" | "procheck";
+/** "predictor": accordo con una predizione esterna, solo se il confronto è stato eseguito (F9.3) */
+export type ConsensusMethodKey = "grade" | "zdope" | "ga341" | "qmean" | "prosa" | "procheck" | "predictor";
 export type ConsensusSignalKey = "rama" | "clash" | "dope" | "qmean" | "prosa";
 export type ConsensusBand = "buona" | "intermedia" | "scarsa";
 
@@ -1066,6 +1075,8 @@ export interface ConsensusRegion {
   /** cade in una regione disordinata predetta (almeno metà dei residui): attesa poco affidabile (versione 2) */
   expected?: boolean;
   disorder_overlap?: number;
+  /** F9.3, solo con il confronto: residui in cui il modello diverge anche da una predizione sicura */
+  predictor_overlap?: number;
 }
 
 /** Disordine predetto dalla sequenza della struttura: segnale informativo, fuori dal punteggio (versione 2). */
@@ -1106,6 +1117,8 @@ export interface ConsensusResult {
   regions: ConsensusRegion[];
   /** assente nei consensi della versione 1 (rapporti salvati prima di F5.5) */
   disorder?: ConsensusDisorder | null;
+  /** F9.3: accordo con una predizione esterna, solo se il confronto è stato chiesto (`predict_job`) */
+  predictor?: ConsensusPredictor;
   thresholds: Record<string, number>;
   warnings: string[];
   /** solo dalla rotta del consenso */
@@ -1113,7 +1126,30 @@ export interface ConsensusResult {
     source: StructureSource;
     modeller: { ga341: number | null; zdope: number | null } | null;
     qmean: { job_id: string; source: string | null; method: string | null } | null;
+    predictor?: { job_id: string; predictor: PredictorName; label: string; status: PlausibilityStatus };
   };
+}
+
+/** Accordo con una predizione per residuo (domain/consensus.predictor_signal): informativo, fuori dalle regioni. */
+export interface ConsensusPredictor {
+  key: "predictor";
+  label: string;
+  predictor: PredictorName;
+  job_id: string | null;
+  informative: true;
+  status: PlausibilityStatus;
+  tone: PlausibilityTone;
+  text: string;
+  rule: string;
+  /** per residuo (ordine di QualityReport.residues): lDDT rispetto alla predizione e pLDDT della predizione */
+  lddt: (number | null)[];
+  plddt: (number | null)[];
+  /** residuo che diverge dove la predizione è sicura */
+  flags: boolean[];
+  flagged: number;
+  regions: (PlausibilityRegion & { start_index: number; end_index: number })[];
+  tm_score: number | null;
+  lddt_confident: number | null;
 }
 
 export interface ProcheckResult {
@@ -1714,7 +1750,7 @@ export interface ComplexResult {
 }
 
 // ---------------------------------------------------------------------------------- controlli preventivi (F8a)
-export type PreflightKind = "model" | "loop" | "align2d" | "pipeline" | "quality" | "qmean" | "search" | "analysis";
+export type PreflightKind = "model" | "loop" | "align2d" | "pipeline" | "quality" | "qmean" | "search" | "analysis" | "predict";
 /** error = l'avvio fallirebbe (pulsante disattivato); warning = conferma richiesta; info = da sapere */
 export type PreflightLevel = "error" | "warning" | "info";
 
@@ -1835,4 +1871,95 @@ export interface SearchResponse {
   favorites: boolean;
   engine: "fts5" | "like";
   groups: SearchGroup[];
+}
+
+// ------------------------------------------------------------- confronto con un predittore esterno (F9.3)
+
+/** Predittore esterno: ESMFold (servizio ESM Atlas, la sequenza lascia il computer) o AlphaFold DB (l'accessione). */
+export type PredictorName = "esmfold" | "alphafold";
+export type PlausibilityStatus = "concordano" | "divergenze locali" | "ripiegamento diverso" | "non conclusivo";
+export type PlausibilityTone = "ok" | "warn" | "err" | "info";
+/** pLDDT medio della regione nella predizione: ≥ 70 sicura, 50–70 incerta, < 50 molto incerta */
+export type PredictionConfidence = "sicura" | "incerta" | "molto incerta";
+
+/** Corpo di POST /api/predict (anche `params` dei controlli preventivi `predict`). */
+export interface PredictRequest {
+  project_id?: string;
+  predictor: PredictorName;
+  /** modello da confrontare con la predizione (A, riferimento) */
+  source?: StructureSource | null;
+  chain?: string | null;
+  /** sequenza da predire; vuota = quella della catena del modello */
+  sequence?: { name: string; sequence: string } | null;
+  /** solo alphafold: accessione UniProt o AF-<ACC>-F<n> */
+  accession?: string | null;
+}
+
+/** Regione in cui modello e predizione divergono (domain/prediction.assess). */
+export interface PlausibilityRegion {
+  chain: string;
+  start: string;
+  end: string;
+  /** indici nelle coppie del confronto (nel consenso: nei residui del rapporto) */
+  start_index: number;
+  end_index: number;
+  length: number;
+  divergent: number;
+  lddt_mean: number | null;
+  plddt_mean: number | null;
+  confidence: PredictionConfidence | null;
+  /** testi delle regioni problematiche del consenso che vi cadono */
+  consensus: string[];
+  where: string;
+  text: string;
+  tone: PlausibilityTone;
+}
+
+/** Esito motivato del confronto fra il modello e la predizione. */
+export interface Plausibility {
+  version: number;
+  predictor: PredictorName;
+  label: string;
+  status: PlausibilityStatus;
+  tone: PlausibilityTone;
+  summary: string;
+  tm_score: number | null;
+  lddt: number | null;
+  gdt_ts: number | null;
+  rmsd: number | null;
+  pairs: number;
+  plddt_mean: number | null;
+  confident_residues: number;
+  /** lDDT medio sui residui a predizione sicura: il valore del metodo nel consenso */
+  lddt_confident: number | null;
+  divergent_residues: number;
+  regions: PlausibilityRegion[];
+  /** per coppia del confronto, nell'ordine del modello */
+  residues: { chain: string; resnum: string; lddt: number | null; plddt: number | null; divergent: boolean; confident: boolean }[];
+  consensus_available: boolean;
+  notes: string[];
+  limits: string;
+  thresholds: Record<string, number>;
+}
+
+/** Risultato di un job `predict`. */
+export interface PredictResult {
+  predictor: PredictorName;
+  label: string;
+  origin: { service: string; cached: boolean; received?: string | null; scale?: "0-1" | "0-100"; entry?: string; version?: number | null };
+  /** file della predizione tra i file del job (riconosciuto come modello predetto, pLDDT su 0–100) */
+  prediction_file: string;
+  recognized_as: PredictorName | null;
+  sequence: { name: string; length: number };
+  plddt: { mean: number | null; residues: number; fractions: Record<string, number> };
+  accession: string | null;
+  source: StructureSource | null;
+  model_label: string | null;
+  chain: string | null;
+  source_sha256: string | null;
+  /** confronto nel formato dell'allineamento strutturale (A = modello, B = predizione), per StructuralComparison */
+  comparison: AlignResult | null;
+  plausibility: Plausibility | null;
+  warnings: string[];
+  limits: string;
 }
