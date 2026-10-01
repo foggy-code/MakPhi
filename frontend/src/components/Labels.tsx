@@ -2,7 +2,7 @@ import { useEffect, useState, type MouseEvent } from "react";
 import { api } from "../api/client";
 import type { EntityLabels, EntityType, TagCount } from "../api/types";
 import { useToast } from "../lib/context";
-import { filterOptions, filterValue, MAX_TAGS_PER_ENTITY, normalizeTag, parseFilterValue, type LabelFilter } from "../lib/tags";
+import { filterOptions, filterValue, labelsKey, MAX_TAGS_PER_ENTITY, normalizeTag, parseFilterValue, type ItemLabels, type LabelFilter } from "../lib/tags";
 import { Icon } from "./Icon";
 
 /** Etichette e stella (F8b): componenti condivisi da elenchi e dettagli. */
@@ -83,13 +83,18 @@ function forgetSuggestions() {
 /**
  * Stella ed etichette di un elemento, modificabili: chip con la ×, campo per aggiungerne una (Invio) con l'etichetta
  * normalizzata mostrata mentre si scrive e i suggerimenti delle etichette già usate.
+ *
+ * `initial`: stella ed etichette dell'elemento nell'elenco della pagina (`itemLabels`), che è la fonte dei dati: quando
+ * cambiano (stella cliccata nella riga, dialogo dei progetti) il dettaglio si riallinea. Senza `initial` (elemento fuori
+ * dall'elenco) le legge dal server.
  */
-export function LabelEditor({ type, id, initial, onChange, compact = false }: { type: EntityType; id: string; initial?: Pick<EntityLabels, "tags" | "favorite"> | null; onChange?: (labels: EntityLabels) => void; compact?: boolean }) {
+export function LabelEditor({ type, id, initial, onChange, compact = false }: { type: EntityType; id: string; initial?: ItemLabels | null; onChange?: (labels: EntityLabels) => void; compact?: boolean }) {
   const toast = useToast();
-  const [labels, setLabels] = useState<Pick<EntityLabels, "tags" | "favorite"> | null>(initial ?? null);
+  const [labels, setLabels] = useState<ItemLabels | null>(initial ?? null);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const suggestions = useTagSuggestions();
+  const initialKey = labelsKey(initial);
   useEffect(() => {
     if (initial) {
       setLabels(initial);
@@ -101,8 +106,9 @@ export function LabelEditor({ type, id, initial, onChange, compact = false }: { 
     return () => {
       alive = false;
     };
+    // `initial` cambia oggetto a ogni disegno della pagina: conta solo il suo valore (initialKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [type, id]);
+  }, [type, id, initialKey]);
   const update = (l: EntityLabels) => {
     setLabels(l);
     forgetSuggestions();

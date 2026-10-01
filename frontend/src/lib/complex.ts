@@ -235,13 +235,24 @@ export function complexColoring(assessment: ComplexAssessment | null | undefined
   const labels = Object.fromEntries(INTERFACE_CATEGORIES.categories.map((k) => [k.key, k.label]));
   return {
     key: "interface",
-    title: pair === null ? "Catene e interfacce del complesso" : `Interfaccia ${comparisons[0]?.model_chains.join("–") ?? ""}`,
+    title: pair === null ? "Catene e interfacce del complesso" : `Interfaccia ${comparisons[0]?.model_chains.map((m) => m ?? "?").join("–") ?? ""}`,
     values: [...values.values()],
     scale: INTERFACE_CATEGORIES,
     describe: (v) => (typeof v === "string" ? labels[v] ?? v : "fuori dall'interfaccia"),
     chainColors: colors,
     legendExtra: chains.map((c) => ({ color: colors[c], label: `catena ${c}` })),
   };
+}
+
+/**
+ * Avviso quando manca il confronto delle interfacce del modello mostrato. Il risultato del job contiene sempre quello del
+ * modello migliore: se manca, l'analisi non è riuscita (riga nel log del job). Per gli altri modelli c'è solo con
+ * l'analisi di qualità su tutti i modelli.
+ */
+export function missingAssessment(selected: string, best: string): { tone: "warn" | "info"; text: string } {
+  return selected === best
+    ? { tone: "warn", text: `Analisi delle interfacce non riuscita per il modello migliore (${selected}): vedi il log del job.` }
+    : { tone: "info", text: `Interfacce non analizzate per ${selected}: sono nel risultato per il modello migliore e nel rapporto dei modelli con l'analisi di qualità.` };
 }
 
 /** Residui d'interfaccia del modello di un confronto, da evidenziare e centrare nel 3D. */

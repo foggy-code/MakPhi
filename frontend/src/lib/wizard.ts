@@ -195,10 +195,11 @@ export function optionNotes(o: WizardOptions, ctx: OptionContext): Record<"model
     : o.models < DEFAULT_MODELS
       ? "Pochi modelli: meno scelta per DOPE, ma più rapido (ogni modello circa 2,3 s per 76 residui, misurato)."
       : "Più modelli: più scelta per DOPE, il tempo cresce in proporzione (circa 2,3 s a modello per 76 residui, misurato).";
+  // livelli di engines/modeller.REFINEMENT_SCRIPT, rapporti di tempo di domain/preflight.REFINEMENT_FACTOR (misurati)
   const refinement = {
-    very_fast: "Rapidissimo: ottimizzazione minima (circa un quarto del tempo di Rapido, misurato), per prove.",
-    fast: "Rapido: il predefinito; in MODELLER 10.8 coincide con Standard (stesso livello di dinamica molecolare, misurato).",
-    normal: "Standard: le impostazioni predefinite di MODELLER, che in MODELLER 10.8 coincidono con Rapido.",
+    very_fast: `Rapidissimo: ottimizzazione minima senza dinamica (circa un quarto del tempo di Rapido, misurato), per prove. MODELLER non perturba le coordinate iniziali: ${o.models > 1 ? `i ${o.models} modelli saranno identici, ne basta uno` : "più modelli sarebbero identici"}.`,
+    fast: "Rapido: il predefinito, con le impostazioni predefinite di MODELLER (ricottura breve, refine.very_fast).",
+    normal: "Standard: come Rapido con una dinamica di raffinamento più lunga (refine.fast), circa 1,4 volte il tempo di Rapido (misurato).",
     thorough: "Accurato: ottimizzazione ripetuta e dinamica lenta, circa 4 volte il tempo di Rapido (misurato): per il modello finale.",
   }[o.refinement];
   const tools = [ctx.procheck && "PROCHECK", ctx.prosa && "ProSA"].filter(Boolean).join(" e ");
@@ -284,6 +285,18 @@ export interface JobsDone {
   align: boolean;
   /** modellazione completata */
   model: boolean;
+}
+
+/**
+ * Passo 5 senza lo stato del job di modellazione: perché (testo dell'avviso), oppure null se lo stato c'è o si sta ancora
+ * leggendo (rotella). Una bozza nel browser o un link `?model=` può puntare a un job eliminato o ripulito (404, `gone`):
+ * senza questo avviso la rotella girava all'infinito e l'errore non si vedeva.
+ */
+export function missingModelJob(hasSummary: boolean, error: string | null | undefined, gone: boolean): string | null {
+  if (hasSummary || !error) return null;
+  return gone
+    ? `Il job di modellazione non è più disponibile (eliminato o ripulito): ${error}`
+    : `Lo stato del job di modellazione non si legge: ${error}`;
 }
 
 /** Il passo più avanzato che si può aprire con lo stato attuale. */

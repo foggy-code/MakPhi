@@ -1644,7 +1644,8 @@ export type InterfaceStatus = "alta" | "media" | "accettabile" | "non riprodotta
 export interface InterfaceComparison {
   /** null per un'interfaccia che il template non ha */
   template_chains: [string, string] | null;
-  model_chains: string[];
+  /** null per una catena del template allineata solo a gap (nessuna catena del modello) */
+  model_chains: (string | null)[];
   status: InterfaceStatus;
   tone: "ok" | "warn" | "err";
   area_template: number;

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import type { ComplexAssessment, ComplexResult } from "../api/types";
-import { comparisonHighlight, complexColoring, STATUS_TONE } from "../lib/complex";
+import { comparisonHighlight, complexColoring, missingAssessment, STATUS_TONE } from "../lib/complex";
 import { fmtNum } from "../lib/format";
 import type { ResidueColoring } from "../lib/residueColoring";
 import { Alert, Badge, Card, Spinner } from "./ui";
@@ -49,6 +49,7 @@ export function ComplexResults({ jobId, complex, selected, best, onView }: { job
   useEffect(() => () => onView(null), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sym = complex.symmetry;
+  const missing = missingAssessment(selected, best);
   const current = pair === null ? null : assessment?.comparison[pair] ?? null;
   return (
     <Card title={`Complesso · ${complex.chains.length} catene`} sub={`interfacce di ${selected}${complex.template ? ` confrontate con il template ${complex.template}` : ""}`}
@@ -64,7 +65,7 @@ export function ComplexResults({ jobId, complex, selected, best, onView }: { job
             : sym.requested ? "Simmetria richiesta ma non applicata: nessuna coppia di catene con la stessa sequenza." : "Senza restrizioni di simmetria."}
         </div>
         {loadingOther ? <Spinner /> : !assessment ? (
-          <Alert tone="info">Interfacce non analizzate per {selected}: sono nel risultato per il modello migliore e nel rapporto dei modelli con l'analisi di qualità.</Alert>
+          <Alert tone={missing.tone}>{missing.text}</Alert>
         ) : (
           <>
             {assessment.comparison.length > 0 ? (
@@ -85,7 +86,7 @@ export function ComplexResults({ jobId, complex, selected, best, onView }: { job
                   <tbody>
                     {assessment.comparison.map((c, i) => (
                       <tr key={i} className={`clickable ${pair === i ? "selected" : ""}`} onClick={() => { setPair(pair === i ? null : i); setCenter((n) => n + 1); }}>
-                        <td className="nowrap"><b>{c.model_chains.join("–")}</b><div className="tiny muted">{c.template_chains ? `template ${c.template_chains.join("–")}` : "assente nel template"}</div></td>
+                        <td className="nowrap"><b>{c.model_chains.map((m) => m ?? "?").join("–")}</b><div className="tiny muted">{c.template_chains ? `template ${c.template_chains.join("–")}` : "assente nel template"}</div></td>
                         <td className="num">{fmtNum(c.area_model, 0)} ({fmtNum(c.area_template, 0)})</td>
                         <td className="num">{c.conserved_percent === null ? "—" : `${fmtNum(c.conserved_percent, 0)}% (${c.conserved}/${c.template_residues})`}</td>
                         <td className="num">{fmtNum(c.fnat, 2)}</td>

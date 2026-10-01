@@ -13,12 +13,13 @@ import numpy as np
 import pytest
 
 from bioloom.core.errors import ToolUnavailable
-from bioloom.core.jobs import PRIORITY, JobManager
+from bioloom.core.jobs import PRIORITY, JobManager, ProcessResult
 from bioloom.domain import electrostatics as es
+from bioloom.domain import structure
 from bioloom.engines import electrostatics as engine
 from bioloom.engines import tools
 
-from .conftest import DATA, wait_job
+from .conftest import DATA, ubq_variant, wait_job
 
 UBQ = {"type": "template", "id": "1UBQ"}
 PQR = DATA / "pdb2pqr_1ubq_parse.pqr"
@@ -167,6 +168,82 @@ def test_residue_potentials_average_exposed_atoms_on_the_1ubq_surface():
     assert s["residues"] == len(exposed) and s["min"] < s["mean"] < s["max"]
 
 
+# ------------------------------------------------------------------------------------------ catene e residui modificati
+class _FakeTools:
+    """Contesto di job finto, per provare `engine.run` senza i programmi: «PDB2PQR» scrive il PQR reale di 1UBQ salvato
+    (catena A: PDB2PQR con --keep-chain chiama A anche una catena senza identificativo), tenendo le righe per cui
+    `keep(riga)` è vero; «APBS» una mappa φ = x / 10 che copre la molecola."""
+
+    def __init__(self, keep=lambda line: True) -> None:
+        self.keep = keep
+        self.inputs: list[str] = []
+
+    def sub(self, _name, _workdir):
+        return self
+
+    def log(self, _message) -> None:
+        pass
+
+    def run(self, cmd, *, cwd, **_kwargs) -> ProcessResult:
+        if cmd[0] == "pdb2pqr":
+            self.inputs.append((cwd / cmd[-2]).read_text())
+            rows = [ln for ln in PQR.read_text().splitlines() if self.keep(ln)]
+            (cwd / cmd[-1]).write_text("\n".join(rows) + "\n")
+        else:
+            xyz = np.array([a.xyz for a in es.parse_pqr((cwd / engine.PQR).read_text())])
+            lo, hi = xyz.min(axis=0) - 8, xyz.max(axis=0) + 8
+            counts = tuple(int(n) for n in np.ceil((hi - lo) / 2.0) + 1)
+            (cwd / f"{engine.DX_STEM}.dx").write_text(_dx_text(tuple(lo), (2.0, 2.0, 2.0), counts,
+                                                               lambda x, y, z: x / 10))
+        return ProcessResult(0, "")
+
+
+@pytest.fixture
+def fake_tools(monkeypatch):
+    monkeypatch.setattr(tools, "missing_message", lambda *_a, **_k: None)
+    monkeypatch.setattr(tools, "find", lambda key: key)
+
+
+def test_chain_without_identifier_keeps_charges_and_potentials(tmp_path, fake_tools):
+    """Colonna 22 vuota: la copia dà alla catena una lettera libera (A), così le chiavi coincidono con quelle del PQR;
+    il risultato torna alla catena originale. Prima nessun residuo aveva carica o potenziale."""
+    src = ubq_variant(tmp_path / "blank.pdb", blank_chain=True)
+    fake = _FakeTools()
+    res = engine.run(src, fake, tmp_path / "work")
+    assert {ln[21] for ln in fake.inputs[0].splitlines() if ln.startswith("ATOM")} == {"A"}
+    rows = res["residues"]
+    assert len(rows) == 76 and {r["chain"] for r in rows} == {" "}
+    assert all(r["charge"] is not None for r in rows)
+    assert sum(r["potential"] is not None for r in rows) > 60 and res["summary"]["residues"] > 60
+    assert {c["chain"] for c in res["charges"]["charged"]} == {" "} and res["charges"]["positive"] == 12
+    assert [c["chain"] for c in res["structure"]["chains_detail"]] == [" "]
+
+
+def test_blank_chain_takes_a_letter_not_used_by_the_other_chains():
+    """Catena A e catena senza identificativo: la seconda prende B, non la A già usata (le due catene si
+    confonderebbero nel PQR)."""
+    model = structure.first_model(structure.load_structure(DATA / "ubq_dimer.pdb", "d"))
+    model["B"].id = " "
+    assert structure.name_blank_chains(model) == {"B": " "}
+    assert [c.id for c in model] == ["A", "B"] and len(model["B"]) == len(model["A"])
+    assert structure.name_blank_chains(model) == {}  # già tutte con un nome
+
+
+def test_modified_residues_are_kept_and_reported(tmp_path, fake_tools):
+    """MSE (HETATM, come nei file di RCSB) entra nel calcolo come MET; SEP resta nella copia, ma PDB2PQR non ha i suoi
+    parametri e la toglie dal PQR (qui simulato): un avviso proprio, non «gruppo eteroatomico escluso»."""
+    src = ubq_variant(tmp_path / "mod.pdb", hetatm={1: "MSE", 20: "SEP"})
+    fake = _FakeTools(keep=lambda ln: not (ln.startswith("ATOM") and ln[22:26].strip() == "20"))
+    res = engine.run(src, fake, tmp_path / "work")
+    sent = fake.inputs[0].splitlines()
+    assert {ln[17:20] for ln in sent if ln[22:26].strip() == "1"} == {"MET"} and not any("MSE" in ln for ln in sent)
+    rows = {r["resnum"]: r for r in res["residues"]}
+    assert rows["1"]["resname"] == "MET" and rows["1"]["charge"] is not None and "20" not in rows
+    assert not any("eteroatomici esclusi" in w for w in res["warnings"])
+    assert [w for w in res["warnings"] if "SEP A20" in w and "PDB2PQR" in w]
+    assert res["structure"]["residues"] == 75
+
+
 # ------------------------------------------------------------------------------------------ degradazione e rotte
 def test_engine_without_tools_explains_what_is_missing(monkeypatch, ubq_path, tmp_path):
     monkeypatch.setattr(tools, "find", lambda key: None)
@@ -239,6 +316,27 @@ def test_hetero_groups_are_excluded_with_a_warning(client):
     assert job["status"] == "completed", job.get("error")
     assert any("ZN" in w and "PDB2PQR non ha parametri" in w for w in job["result"]["warnings"])
     assert abs(job["result"]["net_charge"]) <= 1.0  # la sola proteina, come 1UBQ
+
+
+@requires_apbs
+def test_real_tools_on_a_blank_chain_with_a_selenomethionine(client, tmp_path):
+    """PDB2PQR e APBS reali su 1UBQ con la colonna 22 vuota e MET1 scritta come HETATM MSE: cariche e potenziali per
+    residuo come per 1UBQ (prima tutti None), la MSE calcolata come metionina, nessun gruppo escluso."""
+    src = ubq_variant(tmp_path / "ubq_blank_mse.pdb", hetatm={1: "MSE"}, blank_chain=True)
+    with open(src, "rb") as fh:
+        r = client.post("/api/templates/upload", files={"file": ("ubq_blank_mse.pdb", fh, "chemical/x-pdb")},
+                        data={"template_id": "UBQBLANK"})
+    assert r.status_code == 200, r.text
+    job = wait_job(client, client.post("/api/electrostatics",
+                                       json={"source": {"type": "template", "id": "UBQBLANK"}}).json()["id"])
+    assert job["status"] == "completed", job.get("error")
+    res = job["result"]
+    rows = {r["resnum"]: r for r in res["residues"]}
+    assert len(rows) == 76 and {r["chain"] for r in rows.values()} == {" "}
+    assert all(r["charge"] is not None for r in rows.values()) and rows["48"]["charge"] == 1.0
+    assert sum(r["potential"] is not None for r in rows.values()) > 60 and res["summary"]["residues"] > 60
+    assert rows["1"]["resname"] == "MET" and rows["1"]["charge"] is not None
+    assert res["warnings"] == [] and abs(res["net_charge"]) <= 1.0
 
 
 @requires_apbs

@@ -267,7 +267,7 @@ export function useJob<R = unknown>(jobId: string | null | undefined, opts: { wi
     if (jobId) await resumeAndSync(sync, () => api.resumeJob(jobId, scope));
   }, [jobId, sync]);
 
-  return { job, summary: summary ?? job, log, error, active, cancel, resume, reload: loadFull };
+  return { job, summary: summary ?? job, log, error, gone, active, cancel, resume, reload: loadFull };
 }
 
 export function useLocalStorage<T>(key: string, initial: T) {

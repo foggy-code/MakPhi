@@ -7,6 +7,7 @@ i metadati li segnano come modelli predetti (`predicted`), con versione, pLDDT m
 
 from __future__ import annotations
 
+import hashlib
 import re
 import threading
 from datetime import datetime, timezone
@@ -30,12 +31,33 @@ ALPHAFOLD_META = ("entry_id", "accession", "fragment", "version", "uniprot_start
                   "gene", "description", "organism", "tax_id", "created", "tool", "pae_url")
 
 
-def normalize_id(raw: str) -> str:
+MAX_ID = 40
+
+
+def _clean_id(raw: str) -> str:
     clean = re.sub(r"[^A-Za-z0-9_-]", "_", (raw or "").strip()).strip("_-").upper()
-    clean = re.sub(r"_+", "_", clean)[:40]
+    return re.sub(r"_+", "_", clean)
+
+
+def normalize_id(raw: str) -> str:
+    clean = _clean_id(raw)[:MAX_ID]
     if not clean:
         raise AppError("Identificativo del template non valido.")
     return clean
+
+
+def assembly_template_id(template_id: str, assembly_id: str) -> str:
+    """Id del template di un assemblaggio: `<ID>_ASM<n>`, senza troncamenti che farebbero coincidere assemblaggi
+    diversi (con `normalize_id` gli assemblaggi 1 e 10 di un id di 35 caratteri diventavano lo stesso template). Se
+    supera `MAX_ID` caratteri, l'id d'origine si accorcia e prende un'impronta di 6 cifre esadecimali (SHA-1 dell'id
+    intero): `<inizio>_<impronta>_ASM<n>`, uguale a ogni richiesta e diverso per ogni id d'origine."""
+    suffix = _clean_id(f"ASM{assembly_id}")
+    full = _clean_id(f"{template_id}_{suffix}")
+    if len(full) <= MAX_ID:
+        return full
+    digest = hashlib.sha1(template_id.encode("utf-8")).hexdigest()[:6].upper()
+    keep = MAX_ID - len(f"_{digest}_{suffix}")
+    return _clean_id(f"{template_id[:max(1, keep)]}_{digest}_{suffix}")[:MAX_ID]
 
 
 class TemplateLibrary:
@@ -344,9 +366,12 @@ class TemplateLibrary:
         return out
 
     def import_assembly(self, template_id: str, assembly_id: str) -> dict:
-        """Assemblaggio biologico come nuovo template `<ID>_ASM<n>`: coordinate generate con gli operatori del file
-        (domain/assembly.pdb_text), catene rinominate in modo univoco, metadati con l'origine di ogni catena. Già in
-        libreria e generato dallo stesso file d'origine (impronta SHA-256): si riusa."""
+        """Assemblaggio biologico come nuovo template `<ID>_ASM<n>` (`assembly_template_id`): coordinate generate con
+        gli operatori del file (domain/assembly.pdb_text), catene rinominate in modo univoco, metadati con l'origine di
+        ogni catena. L'assemblaggio chiesto si verifica prima di tutto (404 se il file non lo dichiara). Già in libreria,
+        come lo stesso assemblaggio dello stesso template e generato dallo stesso file d'origine (impronta SHA-256): si
+        riusa. Un template con quel nome che non è questo assemblaggio (un altro assemblaggio, un altro template, un
+        file dell'utente) non si restituisce né si sovrascrive: Conflict."""
         from ..core.cache import content_hash
 
         tid = normalize_id(template_id)
@@ -354,19 +379,19 @@ class TemplateLibrary:
         if self._meta(tid, path).get("assembly"):
             raise AppError(f"{tid} è già un assemblaggio biologico.", code="invalid_assembly")
         aid = str(assembly_id or "").strip()
-        new_id = normalize_id(f"{tid}_ASM{aid}")
+        info = assembly_mod.read(path)
+        chosen = assembly_mod.find(info, aid)
+        new_id = assembly_template_id(tid, chosen.id)
         fingerprint = content_hash(path)
         lock = self._fetch_lock(new_id)
         with lock:
             if self.exists(new_id):
                 existing = self._meta(new_id).get("assembly") or {}
-                if existing.get("source_id") != tid:  # un template dell'utente con lo stesso nome non si sovrascrive
-                    raise Conflict(f"In libreria c'è già un template {new_id} che non è l'assemblaggio {aid} di {tid}: "
-                                   "eliminalo o rinominalo prima di importare l'assemblaggio.")
+                if existing.get("source_id") != tid or existing.get("assembly_id") != chosen.id:
+                    raise Conflict(f"In libreria c'è già un template {new_id} che non è l'assemblaggio {chosen.id} di "
+                                   f"{tid}: eliminalo o rinominalo prima di importare l'assemblaggio.")
                 if existing.get("source_sha256") == fingerprint:
                     return {**self.describe(new_id), "cached": True}
-            info = assembly_mod.read(path)
-            chosen = assembly_mod.find(info, aid)
             model = structure.first_model(structure.load_structure(path, tid))
             analysis = self.analyze(tid)
             text, chains = assembly_mod.pdb_text(model, info, chosen, source_id=tid, header=analysis["header"])

@@ -205,13 +205,17 @@ def test_optional_tool_checks():
 
 def test_runtime_model_matches_the_measurements():
     """Stime contro le misure (ARCHITETTURA.md, Prestazioni): job model di 5 modelli con la qualità estesa sul migliore
-    13,89 s; elemento di pipeline (3 modelli, qualità senza PROCHECK e ProSA) 9,13 s; costruzione di 2 modelli
-    "thorough" 20,63 s e di 1 modello su 304 residui 11,25 s (`test_preflight_calibration`)."""
+    13,89 s; elemento di pipeline (3 modelli, qualità senza PROCHECK e ProSA) 9,13 s; costruzione di 2 modelli per
+    livello di raffinamento (very_fast 1,84 s, fast 5,31, normal 7,26, thorough 19,87) e di 1 modello su 304 residui
+    11,25 s (`test_preflight_calibration`)."""
     assert rules.modeling_seconds(76, 5, "fast", "best", True) == pytest.approx(13.89, rel=0.05)
     assert rules.modeling_seconds(76, 3, "fast", "best", False) == pytest.approx(9.13, rel=0.05)
-    assert rules.building_seconds(76, 2, "thorough") == pytest.approx(20.63, rel=0.1)
+    for level, measured in (("very_fast", 1.84), ("fast", 5.31), ("normal", 7.26), ("thorough", 19.87)):
+        assert rules.building_seconds(76, 2, level) == pytest.approx(measured, rel=0.05), level
     assert rules.building_seconds(304, 1, "fast") == pytest.approx(11.25, rel=0.05)
-    assert rules.building_seconds(76, 1, "normal") == rules.building_seconds(76, 1, "fast")  # stesso md_level
+    # quattro livelli distinti, nell'ordine (prima "normal" e "fast" erano la stessa ottimizzazione)
+    times = [rules.building_seconds(76, 5, level) for level in ("very_fast", "fast", "normal", "thorough")]
+    assert times == sorted(times) and len(set(times)) == 4
     # qualità su tutti i modelli: 3 insieme, quindi 2 turni per 5 modelli
     assert rules.modeling_seconds(76, 5, quality="all", workers=4) - rules.modeling_seconds(76, 5, quality="none") \
         == pytest.approx(2 * rules.T_QUALITY)
@@ -339,6 +343,10 @@ def test_other_rules():
     assert rules.queue_checks(2, 3) == []
     assert [c["code"] for c in rules.single_model_checks(1)] == ["single_model"]
     assert rules.single_model_checks(5) == []
+    # a.very_fast() non perturba le coordinate iniziali: più modelli sono identici (misurato: stesso DOPE, RMSD 0)
+    (same,) = rules.identical_models_checks(5, "very_fast")
+    assert same["code"] == "identical_models" and same["level"] == "info" and "i 5 modelli sono identici" in same["message"]
+    assert rules.identical_models_checks(1, "very_fast") == [] and rules.identical_models_checks(5, "fast") == []
     assert rules.template_availability("1UBQ", in_library=True, downloadable="RCSB") == []
     assert [c["code"] for c in rules.template_availability("9ZZZ", in_library=False, downloadable="RCSB")] == \
         ["template_download"]

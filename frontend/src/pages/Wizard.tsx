@@ -29,7 +29,7 @@ import { parsePir } from "../lib/pir";
 import { rankTone, rankTooltip } from "../lib/templateRank";
 import {
   accessionFor, accessionValid, align2dRequest, applyUrl, cleanSequence, encodeWizardParams, engineChoices, fillFromJobs, hitRole, initialState,
-  isChosen, MAX_TEMPLATES, modelRequest, nextEngineHint, optionNotes, optionsIssues, preflightFor, preselect, rankedHits, reachable,
+  isChosen, MAX_TEMPLATES, missingModelJob, modelRequest, nextEngineHint, optionNotes, optionsIssues, preflightFor, preselect, rankedHits, reachable,
   reasonedOptions, restoreState, resultSummary, searchRequest, sequenceIssues, STEPS, templatesIssues, toggleTemplate, withAccession,
   withAlignJob, withModelJob, withOptions, withPirDoc, withSearchJob, withTarget, withTemplates, type OptionContext, type WizardState,
   type WizardStep,
@@ -138,6 +138,7 @@ export default function Wizard() {
     model: model.job?.id === state.modelJob && model.job?.status === "completed",
   };
   const loaded = (!state.alignJob || !!align.job || !!align.error) && (!state.modelJob || !!model.job || !!model.error);
+  const modelMissing = missingModelJob(!!model.summary, model.error, model.gone);
   const max = reachable(state, done);
   const step: WizardStep = loaded ? (Math.min(state.step, max) as WizardStep) : state.step;
   // modellazione finita mentre si guarda l'avanzamento: ai risultati. Solo se il job era in corso: tornando al passo
@@ -180,7 +181,16 @@ export default function Wizard() {
       {step === 5 && (
         <Card title="5. Costruzione dei modelli" sub="avanzamento in tempo reale; il calcolo prosegue anche chiudendo la pagina">
           <div className="stack">
-            {model.summary ? <JobPanel summary={model.summary} log={model.log} onCancel={model.cancel} defaultLogOpen /> : <Spinner />}
+            {model.summary ? <JobPanel summary={model.summary} log={model.log} onCancel={model.cancel} defaultLogOpen />
+              : modelMissing ? (
+                <>
+                  <Alert tone="err">{modelMissing}</Alert>
+                  <div className="row">
+                    <span className="small text-2">Rilancia la modellazione dalle opzioni: sequenza, template e allineamento restano.</span>
+                    <button className="btn btn-sm right" onClick={() => go(4, (s) => withModelJob(s, null))}><Icon name="chevron" size={13} /> Torna alle opzioni</button>
+                  </div>
+                </>
+              ) : <Spinner />}
             {done.model && (
               <div className="row">
                 <span className="small text-2">Modellazione completata.</span>

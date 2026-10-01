@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Align2dResult, DatabaseStatus, Job, ModelResult, SearchHit, SearchResult } from "../api/types";
 import {
   accessionFor, align2dRequest, applyUrl, cleanSequence, decodeWizardParams, defaultOptions, encodeWizardParams, engineChoices, fillFromJobs, hitRole,
-  initialState, isChosen, MAX_TEMPLATES, modelRequest, nextEngineHint, optionNotes, optionsIssues, preflightFor, preselect, rankedHits, reachable,
+  initialState, isChosen, MAX_TEMPLATES, missingModelJob, modelRequest, nextEngineHint, optionNotes, optionsIssues, preflightFor, preselect, rankedHits, reachable,
   reasonedOptions, restoreState, resultSummary, sanitizeDraft, searchRequest, sequenceIssues, templatesIssues, toggleTemplate, withAccession,
   withAlignJob, withModelJob, withOptions, withPirDoc, withSearchJob, withTarget, withTemplates, type WizardState,
 } from "./wizard";
@@ -156,7 +156,13 @@ describe("passo 4: opzioni", () => {
     expect(reasonedOptions({ ...ctx, ligandNames: ["ZN"] }).ligands).toBe(true);
     const notes = optionNotes(o, { ...ctx, ligandNames: ["ZN"] });
     expect(notes.models).toContain("tutorial di MODELLER");
-    expect(notes.refinement).toContain("coincide con Standard");
+    expect(notes.refinement).toContain("impostazioni predefinite di MODELLER");
+    // quattro livelli distinti (prima Rapido e Standard coincidevano)
+    const levels = (["very_fast", "fast", "normal", "thorough"] as const).map((r) => optionNotes({ ...o, refinement: r }, ctx).refinement);
+    expect(new Set(levels).size).toBe(4);
+    expect(levels[2]).toContain("refine.fast");
+    expect(levels[0]).toContain("i 5 modelli saranno identici");
+    expect(optionNotes({ ...o, refinement: "very_fast", models: 1 }, ctx).refinement).not.toContain("saranno identici");
     expect(notes.quality).toContain("PROCHECK");
     expect(notes.ligands).toContain("ZN");
     expect(notes.plddt).toContain("Nessun template AlphaFold");
@@ -212,6 +218,16 @@ describe("passi raggiungibili", () => {
     expect(reachable(launched, { align: true, model: false })).toBe(5);
     expect(reachable(launched, { align: true, model: true })).toBe(6);
     expect(reachable(withOptions(launched, { models: 0 }, false), { align: true, model: true })).toBe(4);
+  });
+
+  it("passo 5 con un job di modellazione che non c'è più: avviso invece della rotella", () => {
+    // bozza con modelJob di un job eliminato: il passo 5 resta raggiungibile, l'errore 404 va mostrato
+    const launched = withModelJob(withAlignJob(withTemplates(withTarget(initialState(), { name: "y", sequence: YEAST_UB }), [{ id: "1UBQ", chains: ["A"] }]), "a1"), "m1");
+    expect(reachable(launched, { align: true, model: false })).toBe(5);
+    expect(missingModelJob(false, "Job m1 non trovato.", true)).toBe("Il job di modellazione non è più disponibile (eliminato o ripulito): Job m1 non trovato.");
+    expect(missingModelJob(false, "Failed to fetch", false)).toContain("non si legge: Failed to fetch");
+    expect(missingModelJob(false, null, false)).toBeNull(); // si sta ancora leggendo: rotella
+    expect(missingModelJob(true, "errore passato", false)).toBeNull(); // lo stato c'è: il pannello del job
   });
 
   it("nuovo allineamento o documento: il modello va rifatto", () => {

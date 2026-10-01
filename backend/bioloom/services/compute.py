@@ -17,6 +17,7 @@ from ..core.parallel import Steps
 from ..core.storage import atomic_write_json, atomic_write_text, read_json, safe_join
 from ..domain import (assembly, complexes, consensus, interactions, interfaces, ligands, multitemplate, sequences,
                       structure, template_rank)
+from ..domain.preflight import IDENTICAL_MODELS
 from ..domain.sequences import SeqRecord
 from ..engines import align, modeller, qmean_local, quality, remote, search
 from ..engines.modeller import TemplateSpec
@@ -602,6 +603,8 @@ class ComputeService:
         # bersaglio a più catene (F5.3): catene coerenti con il template, nomi del template, simmetria
         multi = self._complex_plan(entries, templates, opts, complex_target)
         warnings = [*warnings, *multi["warnings"]]
+        if opts.refinement == "very_fast" and opts.models > 1:  # a.very_fast() non perturba le coordinate iniziali
+            warnings.append(IDENTICAL_MODELS.format(n=opts.models))
         for w in warnings:
             ctx.log(f"Avviso: {w}")
         if multi["chains"]:
@@ -805,7 +808,9 @@ class ComputeService:
                                                                                 template["code"]))
                 template_ifaces = interfaces.analyze(template_model, interactions.analyze(template_model),
                                                      check=ctx.check)
-            except (AppError, ValueError, KeyError) as exc:
+            except JobCancelled:
+                raise
+            except Exception as exc:  # anche un errore inatteso: si analizzano solo le interfacce del modello
                 ctx.log(f"Interfacce del template {template['code']} non calcolate: {exc}")
                 template = None
             else:
@@ -826,8 +831,13 @@ class ComputeService:
                 else:
                     out = complexes.assess(model, template_model, entries, template, template_ifaces=template_ifaces,
                                            check=cancel)
+            except JobCancelled:
+                raise
             except (AppError, ValueError, KeyError, IndexError) as exc:
                 log(f"Analisi delle interfacce di {model_file} non riuscita: {exc}")
+                return None
+            except Exception as exc:  # un errore inatteso dell'analisi non fa fallire la modellazione
+                log(f"Analisi delle interfacce di {model_file} non riuscita (errore inatteso): {exc!r}")
                 return None
             pairs = out["interfaces"].get("pairs") or []
             log(f"Interfacce di {model_file}: "

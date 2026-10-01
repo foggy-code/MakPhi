@@ -4,8 +4,10 @@ Parametri, griglia e campionamento con le loro fonti sono in `domain/electrostat
 da `JobContext.run` (uno slot del budget di CPU ciascuno: PDB2PQR è Python a un thread, il binario di APBS 3.4.1 non usa
 OpenMP; annullamento e timeout), ognuno con il proprio contesto figlio per il prefisso del log.
 
-**File conservati** nella cartella del passo: `structure.pdb` (copia pulita: primo modello, prima altloc, solo la
-proteina), `structure.pqr` (cariche e raggi), `apbs.in` (input completo, per ripetere il calcolo), `potential.dx`
+**File conservati** nella cartella del passo: `structure.pdb` (copia pulita di `pockets.clean_copy`: primo modello,
+prima altloc, solo la proteina con i residui modificati della catena, MSE come MET; una catena senza identificativo vi
+prende una lettera libera, che il risultato riporta al nome originale), `structure.pqr` (cariche e raggi), `apbs.in`
+(input completo, per ripetere il calcolo), `potential.dx`
 (mappa del potenziale in kT/e, scaricabile e leggibile da PyMOL, Chimera, VMD; circa 13 byte per punto: 16 MB per 1UBQ,
 al massimo circa 30 MB con il tetto della griglia) e i log dei due programmi.
 """
@@ -54,6 +56,15 @@ def run(pdb_path: Path, ctx: JobContext, workdir: Path, *, forcefield: str = es.
     stats, warnings = pockets.clean_copy(Path(pdb_path), workdir / INPUT, HETERO_NOTE)
     st = structure.load_structure(workdir / INPUT, "clean")
     model = structure.first_model(st)
+    # catena senza identificativo: PDB2PQR (--keep-chain) la scrive come A e i residui del PQR non si ritroverebbero.
+    # La copia la nomina con una lettera libera; il risultato riporta il nome originale (`original`).
+    original = structure.name_blank_chains(model)
+    if original:
+        structure.write_pdb(st, workdir / INPUT, keep_hetero=True)
+
+    def chain_of(chain: str) -> str:
+        return original.get(chain, chain)
+
     names = {(c.id, structure._resid(r)): r.get_resname().strip() for c in model for r in c}
 
     step(0.05, f"Cariche e raggi ({forcefield}) e protonazione a pH {ph:g} con PROPKA (PDB2PQR)")
@@ -70,7 +81,18 @@ def run(pdb_path: Path, ctx: JobContext, workdir: Path, *, forcefield: str = es.
     if not atoms:
         raise AppError("PDB2PQR non ha scritto atomi nel file PQR.", code="pdb2pqr_error")
     charges = es.charge_summary(atoms, names)
+    for row in charges["charged"]:
+        row["chain"] = chain_of(row["chain"])
     ctx.log(f"PDB2PQR: {len(atoms)} atomi, carica netta {charges['net_charge']:+.2f} a pH {ph:g}")
+    # residui modificati della catena tenuti nella copia (SEP, TPO…; le MSE sono già MET): PDB2PQR non ha i loro
+    # parametri e li toglie dal PQR senza errore
+    in_pqr = {(a.chain, a.resnum) for a in atoms}
+    dropped = [f"{r.get_resname().strip()} {chain_of(c.id)}{structure._resid(r)}" for c in model for r in c
+               if r.id[0] != " " and (c.id, structure._resid(r)) not in in_pqr]
+    if dropped:
+        warnings.append(f"Residui modificati della catena senza parametri in PDB2PQR ({', '.join(dropped[:12])}"
+                        + (f" e altri {len(dropped) - 12}" if len(dropped) > 12 else "")
+                        + "): le loro cariche mancano dal potenziale e non hanno un valore per residuo.")
     timings["pdb2pqr"] = time.perf_counter() - t
 
     grid = es.grid_parameters(atoms)
@@ -105,7 +127,7 @@ def run(pdb_path: Path, ctx: JobContext, workdir: Path, *, forcefield: str = es.
                 continue
             key = (chain.id, structure._resid(res))
             s = sampled.get(key) or {"potential": None, "exposed": 0, "points": 0}
-            residues.append({"chain": chain.id, "resnum": key[1], "resname": res.get_resname().strip(),
+            residues.append({"chain": chain_of(chain.id), "resnum": key[1], "resname": res.get_resname().strip(),
                              "potential": s["potential"], "exposed_atoms": s["exposed"], "points": s["points"],
                              "charge": qres.get(key)})
     timings["superficie"] = time.perf_counter() - t

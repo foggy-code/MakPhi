@@ -194,7 +194,8 @@ def test_render_has_every_section(ubq_quality):
     assert "Ubiquitine" in text and "MODELLER 10.8" in text and "30/09/2026 15:53 UTC" in text
     assert "     1  MQIFVKTLTG KTITLEVESS" in text and "96,1%" in text and "100,0%" in text
     assert text.count('<pre class="aln blk">') == 2  # 76 colonne: blocchi di 60 + 16
-    assert '<tr class="best chosen">' in text and "rapido (md_level = refine.very_fast)" in text
+    assert '<tr class="best chosen">' in text
+    assert "rapido (predefiniti di AutoModel: autosched.normal, refine.very_fast)" in text
     # voto con penalità e consenso (voto 98,9; zDOPE −2,73 → 100; GA341 1 → 100, peso 0,5)
     assert "98,9" in text and "99,6/100" in text
     assert '<span class="tag ok">buona</span>' in text
@@ -383,6 +384,105 @@ def test_loop_report(client_with_ubq):
     assert 'id="parametri"' in text and "DOPELoopModel" in text and "7:A – 12:A" in text
     assert 'id="allineamento"' not in text and 'id="template"' not in text
     assert "MQIFVKTLTG" in text and rama_points(text) == 74
+
+
+# ---------------------------------------------------------------------------------------------- job refine (simulato)
+REFINED = "1UBQ_refined.pdb"
+REFINE_SECTIONS = ("riepilogo", "bersaglio", "rifinitura", "qualita", "voto", "ramachandran", "clash", "avvisi",
+                   "legenda", "riferimenti")
+
+
+def _energies(total: float) -> dict:
+    return {"bonds": 120.5, "angles": 400.2, "torsions": 2300.0, "nonbonded": total - 2820.7, "solvation": -2000.0,
+            "total": total}
+
+
+def fake_refine_job(client) -> dict:
+    """Job "refine" con i file e il risultato che salverebbe services/refine.py (OpenMM simulato: coordinate di 1UBQ,
+    energie e tempi plausibili)."""
+    from bioloom.domain import refinement
+
+    core = client.app.state.core
+
+    def handler(ctx, p):
+        modeller_like(ctx.workdir / "input.pdb", header="")
+        modeller_like(ctx.workdir / REFINED, header="REMARK 999 BIOLOOM REFINED FROM 1UBQ OPENMM 8.2 AMBER ff14SB OBC2\n")
+        before = quality.analyze(ctx.workdir / "input.pdb", None, with_dope=False)
+        after = quality_with_dope(ctx.workdir / REFINED)
+        (ctx.workdir / f"{REFINED}.quality.json").write_text(json.dumps(after))
+        mb, ma = quality.summary_metrics(before), quality.summary_metrics(after)
+        raw = {"before": _energies(71160.0), "after_minimization": _energies(-5500.0), "after_md": _energies(-4800.0),
+               "final": _energies(-6000.0), "restraint_final": 12.5}
+        return {"source": p["source"], "label": "1UBQ", "source_sha256": "0" * 64, "refined_file": REFINED,
+                "input_file": "input.pdb", "protocol": refinement.protocol(0.5, False),
+                "openmm": {"openmm": "8.2", "platform": "CPU", "threads": 3, "atoms": 1231, "nonbonded": "NoCutoff",
+                           "restrained_atoms": 304, "md_steps": 250, "timings": {"pdbfixer": 0.5}},
+                "added": {"heavy_atoms": 0, "terminal_atoms": 1, "hydrogens": 629, "nonstandard": []},
+                "input": {"excluded": ["ZN A101"], "modified": ["MSE A1"],
+                          "breaks": [{"chain": "A", "after": "34", "before": "38"}], "hydrogens_removed": 0,
+                          "residues": 76},
+                "energy": {**refinement.energy_change(raw), "components": raw},
+                "rmsd": {"atoms": 304, "rmsd": 0.214, "rmsd_no_fit": 0.25, "max_displacement": 0.81,
+                         "max_atom": "CA A40"},
+                "quality": {"before": mb, "after": ma}, "comparison": refinement.compare(mb, ma),
+                "warnings": ["Avviso della rifinitura di prova"]}
+
+    core.jobs.register("refine", handler)
+    job = client.post("/api/refine", json={"source": {"type": "template", "id": "1UBQ"}, "md_ps": 0.5}).json()
+    done = wait_job(client, job["id"])
+    assert done["status"] == "completed", done["error"]
+    return done
+
+
+def test_refine_report(client_with_ubq):
+    """Report del modello rifinito (prima rispondeva 400 report_unsupported): al posto di template, allineamento e
+    parametri di MODELLER, la rifinitura con il confronto prima/dopo, l'energia per componente, l'RMSD, il protocollo
+    di OpenMM e le fonti; la qualità è quella del modello rifinito."""
+    c = client_with_ubq
+    job = fake_refine_job(c)
+    r = c.get(f"/api/jobs/{job['id']}/report/{REFINED}")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-disposition"] == 'attachment; filename="report_1UBQ_refined.html"'
+    text = r.text
+    for sid in REFINE_SECTIONS:
+        assert f'id="{sid}"' in text, sid
+    for absent in ("template", "allineamento", "parametri", "modelli"):
+        assert f'id="{absent}"' not in text, absent
+    assert "Report del modello rifinito" in text and "Rifinitura energetica" in text and "Struttura rifinita" in text
+    assert "1UBQ (rifinito)" in text and "OpenMM 8.2" in text and "PDBFixer" in text
+    # confronto prima/dopo, energia (iniziale, dopo la minimizzazione, dopo la dinamica, finale) e RMSD
+    assert "<th>Metrica</th>" in text and "Clashscore" in text and "Ramachandran favorite (%)" in text
+    assert "Da 71160,0 a −6000,0 kJ/mol (Δ −77160,0 kJ/mol, diminuita)" in text
+    assert "Dopo la dinamica" in text and "Solvatazione (OBC2)" in text and "12,50 kJ/mol" in text
+    assert "RMSD 0,214 Å dopo la sovrapposizione" in text and "(CA A40)" in text
+    # protocollo e preparazione
+    assert "AMBER ff14SB" in text and "k = 10,0 kcal·mol⁻¹·Å⁻²" in text and "0,5 ps a 300 K" in text
+    assert "629 idrogeni" in text and "ZN A101" in text and "MSE A1" in text and "A34/38" in text
+    assert "Avviso della rifinitura di prova" in text and rama_points(text) == 74
+    for ref in ("Eastman P. et al. (2017)", "Maier J.A.", "Onufriev A., Bashford D., Case D.A. (2004)",
+                "Liu D.C., Nocedal J. (1989)", "Kabsch W. (1976)"):
+        assert ref in text, ref
+    assert "<dt>Energia del campo di forza</dt>" in text and "<dt>RMSD della catena principale</dt>" in text
+    # solo il modello rifinito ha un report; il file va indicato
+    assert c.get(f"/api/jobs/{job['id']}/report/input.pdb").status_code == 404
+    r = c.get(f"/api/jobs/{job['id']}/report")
+    assert r.status_code == 400 and r.json()["error"]["code"] == "report_model_required"
+
+
+def test_refine_report_without_quality_and_dynamics(ubq_quality):
+    """Dati di render senza rapporto di qualità né dinamica: avviso senza «MODELLER», «nessuna» dinamica."""
+    from bioloom.domain import refinement
+
+    data = {"kind": "refine", "title": "Rifinitura · x", "job_id": "r1", "model": "x_refined.pdb",
+            "tools": [("BioLoom", "4.1.0"), ("OpenMM", "8.2")], "target": {"name": "x (rifinito)", "sequence": "MQ"},
+            "quality": None, "consensus": None, "warnings": [],
+            "refine": {"protocol": refinement.protocol(0.0, False), "energy": {"before": 10.0, "after": 5.0,
+                                                                              "delta": -5.0, "decreased": True},
+                       "rmsd": {"atoms": 8, "rmsd": 0.1}, "comparison": [], "input": {"residues": 2}}}
+    text = report.render(data)
+    assert "il report riporta solo i risultati della rifinitura" in text and "di MODELLER" not in text
+    assert "nessuna (solo minimizzazione)" in text and "nessun gruppo escluso" in text
+    assert "<title>Report rifinitura · Rifinitura · x</title>" in text
 
 
 # ---------------------------------------------------------------------------------------------- job quality

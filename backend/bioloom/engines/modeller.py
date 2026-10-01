@@ -26,6 +26,32 @@ MARKER = "@@BIOLOOM"
 _RESIDUE_ID = re.compile(r"^-?\d+[A-Za-z]?:[A-Za-z0-9]$")
 _ATOM_ID = re.compile(r"^[A-Za-z0-9']{1,4}:-?\d+[A-Za-z]?:[A-Za-z0-9]$")
 REFINEMENTS = ("very_fast", "fast", "normal", "thorough")
+# Livelli di raffinamento: impostazioni di AutoModel (manuale di MODELLER, «Changing the default optimization and
+# refinement protocol»; predefiniti letti nel sorgente di MODELLER 10.8, modeller/automodel/automodel.py:
+# library_schedule = autosched.normal, max_var_iterations = 200, md_level = refine.very_fast, repeat_optimization = 1,
+# max_molpdf = 1e7). Un modello passa per due fasi: l'ottimizzazione con funzione obiettivo variabile (VTFM, gradienti
+# coniugati, programma `library_schedule`) e la dinamica molecolare con ricottura simulata (MD&SA, `md_level`).
+# Misurato su 1UBQ (ARCHITETTURA.md, Prestazioni): la dinamica occupa quasi tutto il tempo di un modello, mentre il
+# programma VTFM conta poco (autosched.fast 2,32 s per modello contro 2,20 di autosched.normal, autosched.slow con 300
+# iterazioni 2,52): per questo i livelli intermedi si distinguono per `md_level`.
+# - very_fast: `a.very_fast()` di MODELLER: VTFM `autosched.fastest` con 50 iterazioni, nessuna dinamica, distanze di
+#   taglio delle restrizioni più corte e coordinate iniziali non perturbate (`rand_method = None`), quindi tutti i
+#   modelli sono identici (BioLoom lo avvisa); per prove e screening.
+# - fast: i predefiniti di AutoModel, scritti per esteso (MD&SA `refine.very_fast`: equilibratura 50 passi a 3
+#   temperature, campionamento 300 passi a 4). È il livello proposto dall'interfaccia.
+# - normal: come fast con la dinamica `refine.fast` (equilibratura 100 passi a 4 temperature, campionamento 400 a 4):
+#   ricottura più lunga, circa 1,4 volte il tempo di fast (media di 2 modelli; 1,6 sul solo modello successivo).
+# - thorough: l'esempio di ottimizzazione accurata del manuale: VTFM `autosched.slow` con 300 iterazioni, MD&SA
+#   `refine.slow` (200 passi a 5 temperature, 600 a 6), ciclo VTFM + MD&SA ripetuto 2 volte. `max_molpdf` resta il
+#   predefinito di MODELLER 10.8 (1e7): il valore 1e6 dell'esempio è più basso e interromperebbe prima dei livelli più
+#   rapidi un modello con funzione obiettivo alta.
+REFINEMENT_SCRIPT = {
+    "very_fast": ["a.very_fast()"],
+    "fast": ["a.library_schedule = autosched.normal", "a.max_var_iterations = 200", "a.md_level = refine.very_fast"],
+    "normal": ["a.library_schedule = autosched.normal", "a.max_var_iterations = 200", "a.md_level = refine.fast"],
+    "thorough": ["a.library_schedule = autosched.slow", "a.max_var_iterations = 300", "a.md_level = refine.slow",
+                 "a.repeat_optimization = 2"],
+}
 LOOP_LEVELS = {"very_fast": "refine.very_fast", "fast": "refine.fast", "slow": "refine.slow"}
 # Gruppo eteroatomico nelle opzioni: catena (anche di più caratteri nei mmCIF), numero con codice di inserzione,
 # nome del componente chimico (fino a 5 caratteri nei mmCIF)
@@ -65,7 +91,7 @@ class Restraint:
 @dataclass
 class ModelOptions:
     models: int = 5
-    refinement: str = "normal"
+    refinement: str = "fast"  # i predefiniti di AutoModel (REFINEMENT_SCRIPT)
     loop_refinement: bool = False
     loop_models: int = 4
     loop_level: str = "fast"
@@ -235,17 +261,9 @@ def _provenance_header(source: Path, model, template_id: str) -> tuple[list[str]
 
 
 def _convert_selenomethionine(path: Path) -> None:
-    lines = []
-    changed = False
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.startswith("HETATM") and line[17:20] == "MSE":
-            changed = True
-            line = "ATOM  " + line[6:17] + "MET" + line[20:]
-            if line[12:16] == "SE  ":
-                line = line[:12] + " SD " + line[16:76] + " S" + line[78:]
-        lines.append(line)
+    text, changed = structure.selenomethionine_as_methionine(path.read_text(encoding="utf-8"))
     if changed:
-        atomic_write_text(path, "\n".join(lines) + "\n")
+        atomic_write_text(path, text)
 
 
 # --------------------------------------------------------------------------------- generazione script
@@ -418,13 +436,7 @@ def build_model_script(knowns: list[str], target_code: str, opts: ModelOptions,
         "a.starting_model = 1",
         f"a.ending_model = {int(opts.models)}",
     ]
-    if opts.refinement == "very_fast":
-        lines.append("a.very_fast()")
-    elif opts.refinement == "fast":
-        lines.append("a.md_level = refine.very_fast")
-    elif opts.refinement == "thorough":
-        lines += ["a.library_schedule = autosched.slow", "a.max_var_iterations = 300",
-                  "a.md_level = refine.slow", "a.repeat_optimization = 2", "a.max_molpdf = 1e6"]
+    lines += REFINEMENT_SCRIPT.get(opts.refinement, REFINEMENT_SCRIPT["fast"])
     if opts.loop_refinement:
         lines += ["a.loop.starting_model = 1", f"a.loop.ending_model = {int(opts.loop_models)}",
                   f"a.loop.md_level = {LOOP_LEVELS.get(opts.loop_level, 'refine.fast')}",
@@ -505,7 +517,7 @@ def parse_options(raw: dict) -> ModelOptions:
     opts.models = int(raw.get("models", 5))
     if not 1 <= opts.models <= 100:
         raise AppError("Il numero di modelli deve essere compreso tra 1 e 100.")
-    opts.refinement = raw.get("refinement", "normal")
+    opts.refinement = raw.get("refinement", "fast")
     if opts.refinement not in REFINEMENTS:
         raise AppError(f"Livello di raffinamento non valido: {opts.refinement}")
     opts.hetatm = bool(raw.get("hetatm", False))

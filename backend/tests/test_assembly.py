@@ -349,6 +349,56 @@ def test_assembly_route_errors(client, tmp_path):
     assert client.get("/api/templates/C2UBQ_ASM2").json()["meta"]["source"] == "caricamento utente"
 
 
+def test_assembly_template_ids_are_never_truncated():
+    """`<ID>_ASM<n>` senza troncamento: con un id lungo gli assemblaggi 1 e 10 restano distinti (normalize_id li
+    tagliava a 40 caratteri e li faceva coincidere) e l'id non coincide con quello d'origine."""
+    from bioloom.services.templates import MAX_ID, assembly_template_id
+
+    assert assembly_template_id("C2UBQ", "1") == "C2UBQ_ASM1"
+    tid35 = "A" * 35
+    ids = {assembly_template_id(tid35, n) for n in ("1", "10", "11", "2")}
+    assert len(ids) == 4 and all(len(i) <= MAX_ID for i in ids)
+    tid40 = "B" * 40
+    long_id = assembly_template_id(tid40, "1")
+    assert long_id != tid40 and long_id.endswith("_ASM1") and len(long_id) <= MAX_ID
+    assert assembly_template_id(tid40, "1") == long_id  # stessa richiesta, stesso id
+    assert assembly_template_id("B" * 39 + "C", "1") != long_id  # stesso inizio, id d'origine diverso
+    assert len(assembly_template_id(tid40, "ABCDEFGHIJ12")) <= MAX_ID  # id dell'assemblaggio lungo (12, la rotta)
+
+
+def test_long_template_ids_give_distinct_assemblies(client, tmp_path):
+    """Template caricato con un nome di 37 caratteri: gli assemblaggi 1 (dimero), 2 (monomero) e 3 sono tre template
+    distinti, ognuno con il suo assemblaggio; prima il 2 restituiva il dimero 1 come «già in libreria»."""
+    tid = _upload(client, _c2_cif(tmp_path), "KINASE_DOMAIN_DIMER_FROM_COLLAB_V2_XX.cif")
+    assert tid == "KINASE_DOMAIN_DIMER_FROM_COLLAB_V2_XX" and len(tid) == 37
+    got = {}
+    for aid in ("1", "2", "3"):
+        r = client.post(f"/api/templates/{tid}/assemblies/{aid}")
+        assert r.status_code == 200, r.text
+        got[aid] = r.json()
+        assert not got[aid]["cached"] and got[aid]["assembly"]["assembly_id"] == aid
+    assert len({g["id"] for g in got.values()}) == 3
+    assert got["2"]["assembly"]["oligomeric_details"] == "monomeric" and got["2"]["chains"] == ["A"]
+    again = client.post(f"/api/templates/{tid}/assemblies/2").json()
+    assert again["cached"] and again["id"] == got["2"]["id"] and again["assembly"]["assembly_id"] == "2"
+
+
+def test_a_different_assembly_with_the_same_name_is_a_conflict(client, tmp_path):
+    """Un template con il nome dell'assemblaggio che però è un altro assemblaggio dello stesso file non si restituisce
+    come «già in libreria»: 409."""
+    import json
+
+    tid = _upload(client, _c2_cif(tmp_path), "C2UBQ.cif")
+    assert client.post(f"/api/templates/{tid}/assemblies/1").status_code == 200
+    library = client.app.state.core.library
+    meta_path = library._meta_path("C2UBQ_ASM1")
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["assembly"]["assembly_id"] = "3"
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    r = client.post(f"/api/templates/{tid}/assemblies/1")
+    assert r.status_code == 409 and "non è l'assemblaggio 1 di C2UBQ" in r.json()["error"]["message"]
+
+
 def test_concurrent_imports_give_one_template(client, tmp_path):
     tid = _upload(client, _c2_cif(tmp_path), "C2UBQ.cif")
     library = client.app.state.core.library

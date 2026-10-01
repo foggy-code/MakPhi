@@ -13,6 +13,7 @@ import { disorderSummary, featureTracks, lowComplexitySummary } from "../lib/dis
 import { fmtInt, fmtNum, relTime, wrapSequence } from "../lib/format";
 import { recordsToFasta } from "../lib/files";
 import { useAsync } from "../lib/hooks";
+import { itemLabels } from "../lib/tags";
 
 const FEATURE_GROUPS: { label: string; types: string[]; color: string }[] = [
   { label: "Catena / peptide", types: ["Chain", "Peptide", "Propeptide", "Signal", "Transit peptide"], color: "#60a5fa" },
@@ -73,7 +74,7 @@ function SequenceDetail({ seq, onLabels }: { seq: Sequence; onLabels: (l: Entity
           </>
         }
       >
-        <div style={{ marginBottom: 10 }}><LabelEditor key={seq.id} type="sequence" id={seq.id} onChange={onLabels} /></div>
+        <div style={{ marginBottom: 10 }}><LabelEditor key={seq.id} type="sequence" id={seq.id} initial={itemLabels(seq)} onChange={onLabels} /></div>
         <pre className="seq-block">{wrapSequence(seq.sequence, 60)}</pre>
       </Card>
       {error && <Alert tone="err">{error.message}</Alert>}

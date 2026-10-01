@@ -13,7 +13,7 @@ import { useToast } from "../lib/context";
 import { fmtBytes, fmtNum, relTime } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { CLASS_LABEL, CLASS_TONE, groupClass } from "../lib/ligands";
-import { favoritesFirst, filterParams, filterValue, matchesFilter, parseFilterValue, type LabelFilter } from "../lib/tags";
+import { favoritesFirst, filterParams, filterValue, itemLabels, matchesFilter, parseFilterValue, type ItemLabels, type LabelFilter } from "../lib/tags";
 
 /** Avviso e dettagli di un modello predetto (AlphaFold): versione, intervallo UniProt, fasce di pLDDT. */
 function PredictedNote({ meta }: { meta: TemplateItem }) {
@@ -45,7 +45,7 @@ function PredictedNote({ meta }: { meta: TemplateItem }) {
   );
 }
 
-function TemplateDetail({ id, onDeleted, onAdded, onLabels }: { id: string; onDeleted: () => void; onAdded: (id: string) => void; onLabels: (l: EntityLabels) => void }) {
+function TemplateDetail({ id, labels, onDeleted, onAdded, onLabels }: { id: string; labels?: ItemLabels; onDeleted: () => void; onAdded: (id: string) => void; onLabels: (l: EntityLabels) => void }) {
   const navigate = useNavigate();
   const toast = useToast();
   const { data: a, error, loading } = useAsync<TemplateAnalysis>(() => api.template(id), [id]);
@@ -72,7 +72,7 @@ function TemplateDetail({ id, onDeleted, onAdded, onLabels }: { id: string; onDe
           </>
         }
       >
-        <div style={{ marginBottom: 12 }}><LabelEditor type="template" id={a.id} onChange={onLabels} /></div>
+        <div style={{ marginBottom: 12 }}><LabelEditor type="template" id={a.id} initial={labels} onChange={onLabels} /></div>
         <div className="grid grid-4">
           <Stat label="Metodo" value={<span style={{ fontSize: 14 }}>{a.header.method || a.meta.method || "—"}</span>} />
           {predicted
@@ -268,7 +268,7 @@ export default function Templates() {
             )}
           </Card>
         </div>
-        <div>{selected ? <TemplateDetail key={selected} id={selected} onDeleted={() => { setParams(labelKey ? { tag: labelKey } : {}); reload(); }} onAdded={(id) => { reload(); setParams({ id }); }} onLabels={patchLabels} /> : <Card><Empty icon="library" title="Seleziona un template" /></Card>}</div>
+        <div>{selected ? <TemplateDetail key={selected} id={selected} labels={itemLabels(list?.find((t) => t.id === selected))} onDeleted={() => { setParams(labelKey ? { tag: labelKey } : {}); reload(); }} onAdded={(id) => { reload(); setParams({ id }); }} onLabels={patchLabels} /> : <Card><Empty icon="library" title="Seleziona un template" /></Card>}</div>
       </div>
     </div>
   );

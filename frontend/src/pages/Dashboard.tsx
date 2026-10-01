@@ -8,6 +8,7 @@ import { Badge, Card, Empty, PageHead, Progress, Stat, StatusBadge } from "../co
 import { useProject, useToast } from "../lib/context";
 import { fmtBytes, fmtCpuSlots, KIND_LABEL, relTime } from "../lib/format";
 import { useAsync, useInterval, useLiveJobList } from "../lib/hooks";
+import { itemLabels } from "../lib/tags";
 
 const FLOW = [
   { to: "/sequences", icon: "dna", title: "Sequenza", text: "Importa la proteina bersaglio da UniProt o FASTA." },
@@ -71,7 +72,7 @@ export default function Dashboard() {
         }
       />
       {/* stella ed etichette del progetto attivo (F8b) */}
-      {projectId && <LabelEditor key={projectId} type="project" id={projectId} onChange={() => reloadProjects().catch(() => undefined)} />}
+      {projectId && <LabelEditor key={projectId} type="project" id={projectId} initial={itemLabels(project)} onChange={() => reloadProjects().catch(() => undefined)} />}
 
       <div className="grid grid-4" style={{ gridTemplateColumns: "repeat(5, minmax(0,1fr))" }}>
         {FLOW.map((f, i) => (

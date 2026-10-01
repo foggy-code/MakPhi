@@ -29,6 +29,7 @@ import pytest
 
 from bioloom.core import jobs as jobs_module
 from bioloom.domain import clashes, consensus, ramachandran, secondary, structure
+from bioloom.domain import preflight as preflight_rules
 from bioloom.engines import modeller, procheck, prosa, quality, search
 from bioloom.services import compute as compute_module
 from tests.conftest import DATA, YEAST_UB, requires_modeller, wait_job
@@ -431,9 +432,14 @@ def test_preflight_calibration(client_with_ubq, timer, tmp_path):
             levels[f"{level}: modello successivo"].append(sum(rows["  model.py: modello successivo"]))
     _print_pair(f"raffinamento, {rounds} giri alternati", levels)
     fast = statistics.median(levels["fast: modello successivo"])
+    # REFINEMENT_FACTOR: media dei 2 modelli (model.py meno avvio e restrizioni), più stabile del solo modello successivo
+    overhead = preflight_rules.T_STARTUP + preflight_rules.T_RESTRAINTS
+    whole = {level: statistics.median(levels[f"{level}: model.py (2 modelli)"]) - overhead
+             for level in ("very_fast", "fast", "normal", "thorough")}
     for level in ("very_fast", "normal", "thorough"):
         ratio = statistics.median(levels[f"{level}: modello successivo"]) / fast
-        print(f"rapporto {level}/fast (modello successivo): {ratio:.2f}")
+        print(f"rapporto {level}/fast: modello successivo {ratio:.2f}, media dei 2 modelli "
+              f"{whole[level] / whole['fast']:.2f} (REFINEMENT_FACTOR)")
 
     # 2. lunghezza del bersaglio
     lengths: dict[str, list[float]] = defaultdict(list)

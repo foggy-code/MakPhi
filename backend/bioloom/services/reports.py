@@ -1,4 +1,4 @@
-"""Report HTML dei modelli (domain/report.py): raccolta dei dati di un job model, loop, pipeline o quality.
+"""Report HTML dei modelli (domain/report.py): raccolta dei dati di un job model, loop, pipeline, refine o quality.
 
 Il report si genera al volo dai file già salvati del job, senza ricalcoli: rapporto di qualità del modello
 (`<modello>.quality.json`), risultati di MODELLER (`models.json` o risultato del job), allineamento, parametri e
@@ -10,6 +10,10 @@ rotta del consenso (`ComputeService.consensus`), che controlla che QMEAN riguard
   ricerca e metriche vengono dalla riga dell'elemento, allineamento e modelli dalla sua cartella. Lo ZIP della
   pipeline usa `pipeline_item` per il modello migliore di ogni elemento, un report alla volta.
 * **quality:** report ridotto della struttura analizzata (niente template, allineamento e parametri).
+* **refine (F9.1):** il file è il modello rifinito del job (`refined_file`); al posto di template, allineamento e
+  parametri di MODELLER, la rifinitura: protocollo e parametri di OpenMM, atomi aggiunti da PDBFixer, energia prima e
+  dopo con le componenti, RMSD della catena principale e confronto prima/dopo delle metriche di qualità (dal risultato
+  del job); la qualità è il rapporto del modello rifinito.
 * **analisi strutturale (F7):** in ogni report, i ponti disolfuro e le interfacce dell'analisi `analysis` completata
   più recente sulla stessa struttura (stessa sorgente e stessa impronta del file), se ce ne sono.
 """
@@ -33,7 +37,7 @@ from ..engines import modeller
 from .analysis import AnalysisService, report_summary
 from .compute import ComputeService, describe_source, load_quality_report
 
-MODEL_KINDS = ("model", "loop", "pipeline")
+MODEL_KINDS = ("model", "loop", "pipeline", "refine")
 # modello di un elemento di pipeline: items/<idx>_<nome>/<file>
 ITEM_MODEL = re.compile(r"^items/(\d+)_([^/]+)/([^/]+)$")
 HEAD_BYTES = 20_000  # intestazione dei PDB: EXPDTA di MODELLER e righe REMARK 999 BIOLOOM
@@ -84,12 +88,15 @@ class ReportService:
             data, stem = self._model_data(job, _rel(model), qmean_job)
         elif kind == "pipeline":
             data, stem = self._pipeline_data(job, _rel(model), qmean_job)
+        elif kind == "refine":
+            data, stem = self._refine_data(job, _rel(model), qmean_job)
         elif kind == "quality":
             raise AppError("Il report di un'analisi di qualità riguarda la struttura analizzata: non indicare un file.",
                            code="report_unsupported")
         else:
-            raise AppError(f"Il report è disponibile per i modelli dei job di modellazione, loop e pipeline e per le "
-                           f"analisi di qualità, non per i job di tipo '{kind}'.", code="report_unsupported")
+            raise AppError(f"Il report è disponibile per i modelli dei job di modellazione, loop, pipeline e "
+                           f"rifinitura e per le analisi di qualità, non per i job di tipo '{kind}'.",
+                           code="report_unsupported")
         data["image_png"] = image_png
         data["analysis"] = self._analysis(job, _rel(model) if model else None)
         return report.render(data), report.safe_filename(stem)
@@ -412,6 +419,30 @@ class ReportService:
             warnings.append("Template in zona crepuscolare (identità o copertura sotto le soglie della pipeline): il "
                             "modello va verificato con attenzione.")
         return warnings
+
+    # ------------------------------------------------------------------------------ job refine (F9.1)
+    def _refine_data(self, job: dict, rel: str, qmean_job: Optional[str]) -> tuple[dict, str]:
+        res = self._completed(job)
+        if rel != res.get("refined_file"):
+            raise NotFound(f"{rel} non è il modello rifinito del job {job['id']} ({res.get('refined_file')}).")
+        path = self.jobs.file_path(job["id"], rel)
+        quality = load_quality_report(self.jobs, job["id"], rel)
+        cons, qmean = self._quality(job["id"], rel, quality, None, qmean_job)
+        openmm = res.get("openmm") if isinstance(res.get("openmm"), dict) else {}
+        tools = self._tools(_head(path), quality, qmean)
+        tools[1:1] = [("OpenMM", str(openmm.get("openmm") or "")), ("PDBFixer", "")]
+        seq, chains = self._structure_sequence(path, quality)
+        label = res.get("label") or describe_source(res.get("source"))
+        data = self._base(job, "refine")
+        data.update({
+            "model": rel, "quality": quality, "consensus": cons, "tools": tools,
+            "target": {"name": f"{label} (rifinito)", "sequence": seq, "chains": chains},
+            "source": describe_source(res.get("source")),
+            "refine": {k: res.get(k) for k in ("label", "protocol", "openmm", "added", "input", "energy", "rmsd",
+                                               "quality", "comparison", "input_file")},
+            "warnings": [str(w) for w in res.get("warnings") or []],
+        })
+        return data, f"report_{PurePosixPath(rel).stem}"
 
     # ------------------------------------------------------------------------------ job quality
     def _quality_data(self, job: dict, qmean_job: Optional[str]) -> tuple[dict, str]:

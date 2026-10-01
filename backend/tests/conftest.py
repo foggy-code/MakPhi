@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
+from typing import Iterable, Optional
 
 import pytest
 from fastapi.testclient import TestClient
@@ -59,6 +60,29 @@ def client_with_ubq(client, ubq_path):
         r = client.post("/api/templates/upload", files={"file": ("1UBQ.pdb", fh, "chemical/x-pdb")})
     assert r.status_code == 200, r.text
     return client
+
+
+def ubq_variant(dest: Path, *, hetatm: Optional[dict[int, str]] = None, blank_chain: bool = False,
+                drop: Iterable[int] = ()) -> Path:
+    """Copia di 1UBQ modificata come i file reali: `hetatm` riscrive i residui indicati come HETATM con un altro nome
+    (es. {1: "MSE"}: selenometionina, con SD → SE come nei file di RCSB; {20: "SEP"}), `blank_chain` svuota la colonna
+    22 (catena senza identificativo, come nei file di dinamica molecolare), `drop` toglie dei residui (interruzione)."""
+    hetatm = hetatm or {}
+    dropped = set(drop)
+    rows = []
+    for ln in (DATA / "1UBQ.pdb").read_text().splitlines():
+        if ln.startswith("ATOM") and int(ln[22:26]) in dropped:
+            continue
+        if ln.startswith("ATOM") and int(ln[22:26]) in hetatm:
+            name = hetatm[int(ln[22:26])]
+            ln = "HETATM" + ln[6:17] + name + ln[20:]
+            if name == "MSE" and ln[12:16] == " SD ":
+                ln = ln[:12] + "SE  " + ln[16:76] + "SE" + ln[78:]
+        if blank_chain and ln.startswith(("ATOM", "HETATM", "TER")) and len(ln) > 21:
+            ln = ln[:21] + " " + ln[22:]
+        rows.append(ln)
+    dest.write_text("\n".join(rows) + "\n")
+    return dest
 
 
 def wait_job(client, job_id: str, timeout: float = 300) -> dict:

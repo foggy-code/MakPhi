@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { jobChoices, modelChoices, modelFiles } from "./picker";
+import { jobChoices, modelChoices, modelFiles, parsePastedSequence, pastedTextMatches, type PastedSequence } from "./picker";
 
 const listed = [
   { id: "aaaaaaaaaaaaaaaa", title: "Modello di ubiquitina" },
@@ -31,5 +31,47 @@ describe("selettore della struttura di un job", () => {
     expect(modelChoices(modelFiles({ counts: {} }), item)).toEqual([item]);
     expect(modelChoices(["m1.pdb", "m2.pdb"], "m2.pdb")).toEqual(["m1.pdb", "m2.pdb"]);
     expect(modelChoices(["m1.pdb"], null)).toEqual(["m1.pdb"]);
+  });
+});
+
+describe("sequenza incollata o digitata nel selettore", () => {
+  const empty: PastedSequence = { name: "target", sequence: "" };
+  const lines = (...rows: string[]) => rows.join("\n");
+
+  /** Digitazione carattere per carattere come in una textarea controllata dal testo grezzo. */
+  const type = (text: string, start: PastedSequence = empty) => {
+    let value = start;
+    for (let i = 1; i <= text.length; i++) value = parsePastedSequence(text.slice(0, i), value);
+    return value;
+  };
+
+  it("un'intestazione FASTA scritta a mano non cancella nulla: si analizza dopo l'a capo", () => {
+    // prima: al primo '>' la sequenza diventava vuota e il campo, che mostrava la sequenza, perdeva il testo
+    expect(parsePastedSequence(">", empty)).toEqual(empty);
+    expect(parsePastedSequence(">ubq_lie", empty)).toEqual(empty);
+    expect(pastedTextMatches(">ubq_lie", empty)).toBe(true); // il campo conserva il testo grezzo
+    expect(parsePastedSequence(lines(">ubq_lievito descrizione", ""), empty)).toEqual({ name: "ubq_lievito", sequence: "" });
+    expect(type(lines(">ubq_lievito descrizione", "MQIF VKTL", "TGK"))).toEqual({ name: "ubq_lievito", sequence: "MQIFVKTLTGK" });
+  });
+
+  it("incollare un FASTA intero dà nome e sequenza; con più voci vale la prima", () => {
+    const pasted = ">sp|P0CG63|UBI4 Ubiquitin\nmqifvktltg\r\nktitlevess 20\n";
+    expect(parsePastedSequence(pasted, empty)).toEqual({ name: "sp|P0CG63|UBI4", sequence: "MQIFVKTLTGKTITLEVESS" });
+    expect(parsePastedSequence(lines(">a", "MQ", ">b", "KK", ""), empty)).toEqual({ name: "a", sequence: "MQ" });
+    expect(parsePastedSequence(lines(">", "MQ"), empty)).toEqual({ name: "target", sequence: "MQ" }); // senza nome resta quello di prima
+  });
+
+  it("una sequenza semplice resta com'è; un '>' aggiunto davanti non la perde", () => {
+    expect(parsePastedSequence("mqif vktl", empty)).toEqual({ name: "target", sequence: "mqif vktl" });
+    const plain = { name: "target", sequence: "MQIFVKTL" };
+    expect(parsePastedSequence(">MQIFVKTL", plain)).toEqual(plain);
+    expect(parsePastedSequence(lines(">nuovo", "MQIFVKTL"), plain)).toEqual({ name: "nuovo", sequence: "MQIFVKTL" });
+  });
+
+  it("un valore cambiato da fuori (progetto, file) sostituisce il testo grezzo; il solo nome no", () => {
+    expect(pastedTextMatches(lines(">a", "MQ"), { name: "a", sequence: "MQ" })).toBe(true);
+    expect(pastedTextMatches(lines(">a", "MQ"), { name: "rinominato", sequence: "MQ" })).toBe(true);
+    expect(pastedTextMatches(lines(">a", "MQ"), { name: "b", sequence: "KKK" })).toBe(false);
+    expect(pastedTextMatches("MQ", { name: "x", sequence: "" })).toBe(false); // nuovo bersaglio vuoto
   });
 });

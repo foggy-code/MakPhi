@@ -10,7 +10,7 @@ import { useProject, useToast } from "../lib/context";
 import { fmtBytes, fmtDate, fmtDuration, fmtEta, isActive, KIND_LABEL, queueLabel } from "../lib/format";
 import { useAsync, useInterval, useJob, useLiveJobList } from "../lib/hooks";
 import { listPollInterval } from "../lib/live";
-import { filterParams, filterValue, matchesFilter, parseFilterValue, type LabelFilter } from "../lib/tags";
+import { filterParams, filterValue, itemLabels, matchesFilter, parseFilterValue, type ItemLabels, type LabelFilter } from "../lib/tags";
 
 const OPEN_IN: Record<JobKind, (id: string) => string> = {
   search: (id) => `/search?job=${id}`,
@@ -33,7 +33,7 @@ const OPEN_IN: Record<JobKind, (id: string) => string> = {
   refine: (id) => `/modeling?job=${id}`,
 };
 
-function Detail({ id, onDeleted, onChanged, onLabels }: { id: string; onDeleted: () => void; onChanged: () => void; onLabels: (l: EntityLabels) => void }) {
+function Detail({ id, labels, onDeleted, onChanged, onLabels }: { id: string; labels?: ItemLabels; onDeleted: () => void; onChanged: () => void; onLabels: (l: EntityLabels) => void }) {
   const toast = useToast();
   const { job, summary, log, cancel, resume } = useJob(id, { withLog: true });
   const [confirm, setConfirm] = useState(false);
@@ -62,7 +62,7 @@ function Detail({ id, onDeleted, onChanged, onLabels }: { id: string; onDeleted:
         }
       >
         <dl className="kv">
-          <dt>Etichette</dt><dd><LabelEditor type="job" id={id} onChange={onLabels} /></dd>
+          <dt>Etichette</dt><dd><LabelEditor type="job" id={id} initial={labels} onChange={onLabels} /></dd>
           <dt>Tipo</dt><dd>{KIND_LABEL[summary.kind]}</dd>
           <dt>Creato</dt><dd>{fmtDate(summary.created_at)}</dd>
           <dt>Durata</dt><dd>{fmtDuration(summary.started_at, summary.finished_at)}</dd>
@@ -166,7 +166,7 @@ export default function Jobs() {
             </div>
           )}
         </Card>
-        <div>{selected ? <Detail key={selected} id={selected} onDeleted={() => { setParams(labelKey ? { tag: labelKey } : {}); reload(); }} onChanged={reload} onLabels={patchLabels} /> : <Card><Empty icon="activity" title="Seleziona un job per i dettagli" /></Card>}</div>
+        <div>{selected ? <Detail key={selected} id={selected} labels={itemLabels(jobs?.find((j) => j.id === selected))} onDeleted={() => { setParams(labelKey ? { tag: labelKey } : {}); reload(); }} onChanged={reload} onLabels={patchLabels} /> : <Card><Empty icon="activity" title="Seleziona un job per i dettagli" /></Card>}</div>
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SearchGroup, SearchItem } from "../api/types";
-import { flattenResults, highlightParts, moveSelection, parseSearchQuery, queryForTag, queryKey, resultTarget } from "./search";
+import { enterAction, flattenResults, highlightParts, moveSelection, parseSearchQuery, queryForTag, queryKey, resultTarget, TYPE_LABEL } from "./search";
 
 const item = (type: SearchItem["type"], id: string, extra: Partial<SearchItem> = {}): SearchItem => ({
   type, id, title: id, subtitle: "", score: 1, project_id: null, project_name: null, ...extra,
@@ -80,6 +80,30 @@ describe("destinazione dei risultati", () => {
   it("un'etichetta scelta diventa il filtro della ricerca", () => {
     expect(queryForTag("urgente", parseSearchQuery("urg"))).toBe("#urgente ");
     expect(queryForTag("urgente", parseSearchQuery("urg tipo:job"))).toBe("#urgente tipo:job ");
+    // tipi con il nome italiano, che si rilegge uguale
+    const written = queryForTag("urgente", parseSearchQuery("x type:sequence,projects"));
+    expect(written).toBe("#urgente tipo:sequenze,progetti ");
+    expect(parseSearchQuery(written).types).toEqual(["sequence", "project"]);
+  });
+
+  it("i filtri di tipo hanno etichette italiane, rilette come alias", () => {
+    expect(parseSearchQuery("tipo:sequenze,progetti,documenti").types.map((t) => TYPE_LABEL[t])).toEqual(["sequenze", "progetti", "documenti"]);
+    for (const [type, label] of Object.entries(TYPE_LABEL)) expect(parseSearchQuery(`tipo:${label}`).types).toEqual([type]);
+  });
+});
+
+describe("Invio nella ricerca", () => {
+  it("con i risultati del testo attuale apre la voce attiva", () => {
+    expect(enterAction("k", "k", 3, 2)).toEqual({ kind: "open", index: 2 });
+    expect(enterAction("k", "k", 3, -1)).toEqual({ kind: "open", index: 0 });
+    expect(enterAction("k", "k", 0, 0)).toEqual({ kind: "none" });
+  });
+
+  it("con i risultati di un testo precedente (preferiti, «1ub» invece di «1ubq») aspetta la risposta giusta", () => {
+    const favorites = queryKey(parseSearchQuery(""));
+    const now = queryKey(parseSearchQuery("1ubq"));
+    expect(enterAction(favorites, now, 4, 0)).toEqual({ kind: "wait" });
+    expect(enterAction(null, now, 0, 0)).toEqual({ kind: "wait" });
   });
 });
 

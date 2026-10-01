@@ -13,7 +13,7 @@ from bioloom.domain import pockets
 from bioloom.engines import pockets as engine
 from bioloom.engines import tools
 
-from .conftest import DATA, wait_job
+from .conftest import DATA, ubq_variant, wait_job
 
 OUT = DATA / "fpocket_1ubq_out"
 UBQ = {"type": "template", "id": "1UBQ"}
@@ -67,6 +67,28 @@ def test_empty_output_gives_an_empty_summary(tmp_path):
     (tmp_path / "x_info.txt").write_text("", encoding="utf-8")
     out = pockets.read_output(tmp_path, "x")
     assert out["pockets"] == [] and out["summary"]["count"] == 0 and out["summary"]["best"] is None
+
+
+# ------------------------------------------------------------------------------------------ copia pulita
+def test_clean_copy_keeps_modified_residues_of_the_chain(tmp_path):
+    """MSE e SEP scritte come HETATM (come nei file di RCSB) sono residui della catena, non ligandi: restano nella copia
+    (toglierli lasciava nella proteina un buco che fpocket riportava come tasca) e non compaiono fra i gruppi esclusi;
+    la selenometionina diventa metionina (ATOM MET, SE → SD), che PDB2PQR sa parametrizzare."""
+    src = ubq_variant(tmp_path / "semet.pdb", hetatm={1: "MSE", 20: "SEP"})
+    stats, warnings = engine.clean_copy(src, tmp_path / "clean.pdb")
+    assert warnings == []
+    by_res: dict[int, list[str]] = {}
+    for ln in (tmp_path / "clean.pdb").read_text().splitlines():
+        if ln.startswith(("ATOM", "HETATM")):
+            by_res.setdefault(int(ln[22:26]), []).append(ln)
+    assert sorted(by_res) == list(range(1, 77))
+    assert all(ln.startswith("ATOM  ") and ln[17:20] == "MET" for ln in by_res[1])
+    assert [ln[76:78] for ln in by_res[1] if ln[12:16] == " SD "] == [" S"]
+    assert {ln[:6] + ln[17:20] for ln in by_res[20]} == {"HETATMSEP"}
+    assert stats["residues"] == 75  # conteggi della copia: la MSE convertita conta, la SEP resta HETATM
+    # un ligando vero resta fuori, con l'avviso
+    _stats, zn = engine.clean_copy(DATA / "ubq_zn.pdb", tmp_path / "zn.pdb")
+    assert len(zn) == 1 and "(ZN A101)" in zn[0] and "HETATM" not in (tmp_path / "zn.pdb").read_text()
 
 
 # ------------------------------------------------------------------------------------------ degradazione
@@ -142,3 +164,20 @@ def test_pockets_exclude_hetero_groups_with_a_warning(client):
     assert any("eteroatomici esclusi" in w and "ZN" in w for w in job["result"]["warnings"])
     clean = (client.app.state.core.jobs.file_path(job["id"], "structure.pdb")).read_text()
     assert "HETATM" not in clean
+
+
+@requires_fpocket
+def test_pockets_keep_a_selenomethionine_in_the_chain(client, tmp_path):
+    """1UBQ con MET1 scritta come HETATM MSE: 76 residui analizzati e nessun avviso di gruppi esclusi."""
+    src = ubq_variant(tmp_path / "ubq_mse.pdb", hetatm={1: "MSE"})
+    with open(src, "rb") as fh:
+        r = client.post("/api/templates/upload", files={"file": ("ubq_mse.pdb", fh, "chemical/x-pdb")},
+                        data={"template_id": "UBQMSE"})
+    assert r.status_code == 200, r.text
+    job = wait_job(client, client.post("/api/pockets", json={"source": {"type": "template", "id": "UBQMSE"}})
+                   .json()["id"])
+    assert job["status"] == "completed", job.get("error")
+    res = job["result"]
+    assert res["warnings"] == [] and res["structure"]["residues"] == 76
+    clean = client.app.state.core.jobs.file_path(job["id"], "structure.pdb").read_text()
+    assert "MSE" not in clean and clean.count(" CA ") == 76

@@ -18,7 +18,7 @@ from bioloom.domain import clashes, refinement, structure
 from bioloom.engines import refine as engine
 from bioloom.engines import tools
 
-from .conftest import DATA, wait_job
+from .conftest import DATA, ubq_variant, wait_job
 
 UBQ = {"type": "template", "id": "1UBQ"}
 requires_openmm = pytest.mark.skipif(not (tools.find_module("openmm") and tools.find_module("pdbfixer")),
@@ -87,6 +87,43 @@ def test_clean_input_splits_chains_at_breaks(tmp_path):
     first_38 = next(i for i, ln in enumerate(rows) if ln.startswith("ATOM") and ln[22:26].strip() == "38")
     assert rows[first_38 - 1] == "TER" and sum(1 for ln in rows if ln.startswith("TER")) == 2
     assert refinement.split_chain_breaks(text, set()) == text
+
+
+def _blank_chain_gap(tmp_path):
+    """1UBQ con la colonna 22 vuota (catena senza identificativo) e senza i residui 30–34: C29 e N35 distano 7,2 Å."""
+    return ubq_variant(tmp_path / "blank_gap.pdb", blank_chain=True, drop=range(30, 35))
+
+
+def test_clean_input_splits_a_chain_without_identifier_at_breaks(tmp_path):
+    """Catena ' ' per Biopython e '' nel testo: il TER prima del 35 c'è lo stesso (prima mancava e OpenMM legava 29 e
+    35 con un legame peptidico, avvicinandoli da 7,2 a 1,5 Å)."""
+    model = _model(_blank_chain_gap(tmp_path))
+    assert [c.id for c in model] == [" "]
+    text, info = refinement.clean_input(model)
+    assert info["breaks"] == [{"chain": " ", "after": "29", "before": "35"}]
+    rows = text.splitlines()
+    first_35 = next(i for i, ln in enumerate(rows) if ln.startswith("ATOM") and ln[22:26].strip() == "35")
+    assert rows[first_35 - 1] == "TER" and sum(1 for ln in rows if ln.startswith("TER")) == 2
+    # le chiavi con la catena di Biopython (' ') o del testo ('') danno lo stesso TER
+    assert refinement.split_chain_breaks(text.replace("TER\n", "", 1), {(" ", "35")}).count("TER") == 2
+
+
+@requires_openmm
+def test_pdbfixer_does_not_bond_across_a_break_of_a_chain_without_identifier(tmp_path):
+    """La copia pulita letta da PDBFixer, come in refine_worker: due catene e nessun legame fra C29 e N35."""
+    from pdbfixer import PDBFixer
+
+    text, _info = refinement.clean_input(_model(_blank_chain_gap(tmp_path)))
+    clean = tmp_path / "input.pdb"
+    clean.write_text(text)
+    fixer = PDBFixer(filename=str(clean))
+    assert len(list(fixer.topology.chains())) == 2
+    across = [(a.residue.id, b.residue.id) for a, b in fixer.topology.bonds()
+              if {a.residue.id, b.residue.id} == {"29", "35"}]
+    assert across == []
+    linked = [(a.residue.id, b.residue.id) for a, b in fixer.topology.bonds()
+              if {a.name, b.name} == {"C", "N"} and {a.residue.id, b.residue.id} == {"28", "29"}]
+    assert linked  # i residui consecutivi restano legati
 
 
 def test_compare_rows_and_backbone_rmsd(tmp_path):
@@ -187,6 +224,10 @@ def test_refine_fixes_a_wrong_rotamer_of_1ubq(client, tmp_path):
     assert len([r for r in refined.get_residues() if structure.is_amino_residue(r)]) == 76
     report = client.get(f"/api/jobs/{job['id']}/quality/UBQROT_refined.pdb").json()
     assert report["clashes"]["clashscore"] == q["after"]["clashscore"]
+    # report HTML del modello rifinito, dal risultato reale del job
+    html = client.get(f"/api/jobs/{job['id']}/report/UBQROT_refined.pdb")
+    assert html.status_code == 200 and "Rifinitura energetica (OpenMM)" in html.text
+    assert f"OpenMM {res['openmm']['openmm']}" in html.text and "Prima e dopo" in html.text
 
 
 @requires_openmm

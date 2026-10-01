@@ -270,7 +270,8 @@ def residue_map(entries: list[PirEntry], template: dict, template_model, model) 
     """Corrispondenza residuo del template → residuo del modello dalle colonne del PIR usato da MODELLER.
 
     Restituisce {"residues": {(catena, numero) del template: (catena, numero) del modello}, "chains": {catena del
-    template: catena del modello}}; ValueError se il PIR non corrisponde alla copia preparata o al modello."""
+    template: catena del modello}, "span": catene del template nell'intervallo della sua voce del PIR, anche se
+    allineate solo a gap}; ValueError se il PIR non corrisponde alla copia preparata o al modello."""
     target = next((e for e in entries if e.kind == "sequence"), None)
     entry = next((e for e in entries if e.is_template and e.code == template["code"]), None)
     if target is None or entry is None:
@@ -293,7 +294,8 @@ def residue_map(entries: list[PirEntry], template: dict, template_model, model) 
         count = votes.setdefault(tkey[0], {})
         count[mkey[0]] = count.get(mkey[0], 0) + 1
     chains = {tc: max(c, key=c.get) for tc, c in votes.items()}
-    return {"residues": residues, "chains": chains}
+    span = list(dict.fromkeys(res.get_parent().id for res in tmap.values()))
+    return {"residues": residues, "chains": chains, "span": span}
 
 
 # ---------------------------------------------------------------------------------------------- DockQ
@@ -421,13 +423,20 @@ def _fmt(value: Optional[float], digits: int = 2) -> str:
 def compare(template_model, model, template_ifaces: dict, model_ifaces: dict, rmap: dict) -> list[dict]:
     """Confronto di ogni interfaccia del template con quella corrispondente del modello, più le interfacce del modello
     che il template non ha. Ogni voce: catene del template e del modello, aree, residui conservati, DockQ, esito e
-    motivazione."""
+    motivazione.
+
+    Si confrontano solo le coppie del template con le due catene nell'intervallo della sua voce del PIR
+    (`rmap["span"]`): la copia preparata può avere altre catene scelte (es. A, B e C con un PIR da A a B), che non
+    sono modellate. Una catena dell'intervallo allineata solo a gap non ha una catena del modello (None)."""
     residues = rmap["residues"]
     chains = rmap["chains"]
+    span = set(rmap.get("span") or chains)
     out: list[dict] = []
     matched: set[frozenset] = set()
     for tp in template_ifaces.get("pairs") or []:
         a, b = tp["chains"]
+        if a not in span or b not in span:
+            continue
         ma, mb = chains.get(a), chains.get(b)
         mp = _pair_of(model_ifaces, ma, mb)
         if mp is not None:
@@ -518,16 +527,23 @@ def assess(model, template_model, entries: list[PirEntry], template: dict, *, te
                 "summary": notes[0], "notes": notes}
     comparison = compare(template_model, model, template_ifaces, model_ifaces, rmap)
     chains = [{"template": tc, "model": mc} for tc, mc in rmap["chains"].items()]
-    if not template_ifaces.get("pairs"):
+    span = set(rmap.get("span") or rmap["chains"])
+    pairs = template_ifaces.get("pairs") or []
+    outside = [p for p in pairs if not set(p["chains"]) <= span]
+    if len(outside) == len(pairs):
         notes.append("Il template non ha interfacce fra le catene scelte (nessun residuo con ΔSASA > 1 Å²): le catene "
                      "del modello sono indipendenti anche nel template.")
+    if outside:
+        notes.append("Interfacce del template con catene fuori dall'intervallo del PIR non confrontate ("
+                     + ", ".join("–".join(p["chains"]) for p in outside) + "): quelle catene non sono nel modello.")
     ranked = [c for c in comparison if c["template_chains"]]
     order = ["non riprodotta", "non valutabile", "accettabile", "media", "alta"]
     worst = min((c["status"] for c in ranked), key=order.index) if ranked else "non valutabile"
     new = [c for c in comparison if not c["template_chains"]]
     if ranked:
         summary = (f"{len(ranked)} {'interfaccia' if len(ranked) == 1 else 'interfacce'} del template: esito peggiore "
-                   f"«{worst}». " + " ".join(f"{'–'.join(c['model_chains'])}: {c['text']}" for c in ranked))
+                   f"«{worst}». " + " ".join(f"{'–'.join(x or '?' for x in c['model_chains'])}: {c['text']}"
+                                             for c in ranked))
     else:
         summary = notes[0] if notes else "Nessuna interfaccia da confrontare."
     if new:

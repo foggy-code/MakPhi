@@ -371,8 +371,11 @@ indicare un altro interprete (`BIOLOOM_MODELLER_PYTHON`). Flusso di un job `mode
    template: vedi [Più template](#più-template-salign-o-align2d-uniti-sul-bersaglio)). Il PIR fornito dall'utente
    viene validato (lunghezze, catene, caratteri) e riallineato ai codici/file dei template preparati. In entrambi i casi le colonne
    '.' dei ligandi si riscrivono secondo la scelta delle opzioni.
-3. **AutoModel / DOPELoopModel** con raffinamento (`very_fast`/`fast`/`normal`/`thorough`), vincoli di
-   struttura secondaria e di distanza, regioni di loop, seme casuale. I risultati (`molpdf`, DOPE, GA341,
+3. **AutoModel / DOPELoopModel** con raffinamento (`very_fast`/`fast`/`normal`/`thorough`, impostazioni in
+   `modeller.REFINEMENT_SCRIPT`: `a.very_fast()`; predefiniti di AutoModel con la dinamica `refine.very_fast`; dinamica
+   `refine.fast`; VTFM `autosched.slow` con 300 iterazioni, dinamica `refine.slow` e ciclo ripetuto 2 volte; motivi e
+   misure in [Prestazioni](#misure-per-i-controlli-preventivi)), vincoli di struttura secondaria e di distanza, regioni
+   di loop, seme casuale. I risultati (`molpdf`, DOPE, GA341,
    zDOPE) sono scritti in `models.json` direttamente da `a.outputs`.
 4. **Selezione e qualità**: modello migliore = DOPE minimo; analisi completa sul migliore (o su tutti, fino a 3
    modelli insieme), con righe `REMARK 999 BIOLOOM` di tracciabilità nel PDB.
@@ -753,11 +756,11 @@ message, suggestion}` più `group: "coverage"` per gli avvisi di copertura e `te
 | `mmseqs_no_index`, `remote_ncbi`, `ncbi_email`, `alphafold_blast`, `remote_alphafold` | info | ricerca più lenta senza l'indice (12 s invece di 2,3); dati che vanno a NCBI o EBI | misure di MMseqs2 (sopra) |
 | `ncbi_many_searches` / `ncbi_parallel` | warning / info | pipeline con oltre 50 ricerche NCBI (motore NCBI, o AlphaFold DB senza accessione) / più ricerche NCBI insieme | linee guida di NCBI per l'interfaccia URL di BLAST: oltre 50 ricerche di sera o nel fine settimana, una richiesta ogni 10 s |
 | `pipeline_too_long` / `pipeline_alphafold`, `pipeline_disorder` | warning / info | sequenze oltre 5000 residui; sequenze con e senza accessione; sequenze con regioni disordinate lunghe (FoldIndex, fino a 500 000 residui in tutto) | |
-| `queue_busy`, `single_model`, `invalid_accession`, `check_skipped` | info | job attivi ≥ job in parallelo; un solo modello; accessione non valida (niente domini); controllo non eseguito | |
+| `queue_busy`, `single_model`, `identical_models`, `invalid_accession`, `check_skipped` | info | job attivi ≥ job in parallelo; un solo modello; più modelli con il raffinamento rapidissimo (`a.very_fast()` non perturba le coordinate iniziali: modelli identici, anche fra gli avvisi del risultato); accessione non valida (niente domini); controllo non eseguito | misura in [Prestazioni](#misure-per-i-controlli-preventivi) |
 
 **Stima del tempo** (secondi; costanti misurate, vedi [Prestazioni](#misure-per-i-controlli-preventivi)):
 preparazione 0,02 + allineamento 0,34 · s + avvio di MODELLER 0,26 + s · (restrizioni 0,46 + M · 2,29 · f) + qualità,
-con s = residui / 76, M modelli, f il fattore del raffinamento (very_fast 0,23, fast e normal 1, thorough 4,05) e la
+con s = residui / 76, M modelli, f il fattore del raffinamento (very_fast 0,24, fast 1, normal 1,42, thorough 4,17) e la
 qualità 1,22 · s sul migliore (1,23 senza PROCHECK e ProSA), su tutti i modelli a gruppi di 3. Intervallo: da metà al
 doppio (altri processori, emulazione x86, carico). Pipeline: ⌈elementi / parallelo effettivo⌉ × (modellazione + ricerca
 media), con le ricerche da 1 a 5 minuti per NCBI, 2,3–12 s per MMseqs2, pochi secondi per gli altri. Su 1UBQ (test): 13,9 s
@@ -799,8 +802,8 @@ la logica dei passi è in `lib/wizard.ts` (pura, testata).
 | 1 Sequenza | incollata, dal progetto, da file o da UniProt (accessione); anteprima di disordine, bassa complessità e domini (`/api/bio/coverage`); «Aggiungi al progetto» | sequenza proteica di 1–5000 residui |
 | 2 Template | motore consigliato (`engineChoices`: RCSB, oppure il motore locale delle Impostazioni se è pronto) con le alternative spiegate e la disponibilità; risultati per punteggio, consigliati preselezionati una volta per ricerca; suggerimento di un altro motore se non ci sono template o il migliore è in zona crepuscolare | almeno un template, una catena per voce PDB |
 | 3 Allineamento | job `align2d` sui template scelti; «Apri nell'Editor PIR» (`/pir?fromjob=`) oppure un documento PIR del progetto (con i template del documento) | allineamento completato o documento scelto |
-| 4 Opzioni | 5 modelli (esempio di base del tutorial di MODELLER), raffinamento Rapido (in MODELLER 10.8 uguale a Standard, misurato), analisi estesa se PROCHECK o ProSA sono utilizzabili, ligandi se la scelta predefinita trasferisce qualcosa, ritaglio pLDDT a 70 con un template AlphaFold; ogni opzione con la spiegazione (`optionNotes`); i predefiniti si ricalcolano finché l'utente non cambia nulla | controlli preventivi senza errori |
-| 5 Avvio | `JobPanel` del job `model`; a fine calcolo, se lo si stava guardando, ai risultati | modellazione completata |
+| 4 Opzioni | 5 modelli (esempio di base del tutorial di MODELLER), raffinamento Rapido (le impostazioni predefinite di MODELLER; Standard ha la dinamica più lunga `refine.fast`, circa 1,4 volte il tempo, misurato), analisi estesa se PROCHECK o ProSA sono utilizzabili, ligandi se la scelta predefinita trasferisce qualcosa, ritaglio pLDDT a 70 con un template AlphaFold; ogni opzione con la spiegazione (`optionNotes`); i predefiniti si ricalcolano finché l'utente non cambia nulla | controlli preventivi senza errori |
+| 5 Avvio | `JobPanel` del job `model`; a fine calcolo, se lo si stava guardando, ai risultati; un job che non c'è più (bozza o link a un job eliminato o ripulito) mostra l'errore con «Torna alle opzioni» (`missingModelJob`) | modellazione completata |
 | 6 Risultati | modello migliore (DOPE minimo), voto, consenso (dal rapporto di qualità), DOPE, zDOPE, GA341, 3D; Qualità, Confronta con il template, Report, Tutti i modelli | |
 
 - **Stato:** passo e job nell'URL (`?step=&search=&align=&doc=&model=`), il resto (bersaglio, accessione, motore, template,
@@ -821,15 +824,17 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
 
 - **Rotte:**
   - `GET /api/jobs/{id}/report/{modello}` per i job `model`, `loop` e `pipeline` (per la pipeline
-    `items/<idx>_<nome>/<modello>` di un elemento completato);
+    `items/<idx>_<nome>/<modello>` di un elemento completato) e per il modello rifinito di un job `refine`
+    (`refined_file`);
   - `GET /api/jobs/{id}/report` per un job `quality`: report ridotto, senza template, allineamento e parametri;
   - le varianti `POST`, con corpo `{"image_png_base64"}`, incorporano la vista 3D;
   - `qmean_job=` aggiunge QMEAN con gli stessi controlli della rotta del consenso; `download=false` restituisce il
     file `inline` invece che `attachment`.
 
   Nome del file: `report_<modello>.html` o `report_qualita_<struttura>.html`, solo `[A-Za-z0-9_.-]`.
-- **Errori:** modello non tra quelli riusciti del job, file che non è un modello, elemento con un altro nome → 404; job
-  o elemento non completato → 409; nessun modello per un job model/loop/pipeline → 400 `report_model_required`; job di
+- **Errori:** modello non tra quelli riusciti del job, file che non è un modello (per `refine`: non è il modello
+  rifinito), elemento con un altro nome → 404; job o elemento non completato → 409; nessun modello per un job
+  model/loop/pipeline/refine → 400 `report_model_required`; job di
   altro tipo, o un file per un'analisi di qualità → 400 `report_unsupported`; immagine non PNG → 400
   `report_image_invalid`; oltre 3 MB → 413 `report_image_too_large`.
 - **Dati:**
@@ -1129,8 +1134,13 @@ senza questi strumenti, continua a funzionare.
 
 **Tasche (fpocket 4.2.3, `pockets`, priorità 0).**
 
-- Copia pulita della struttura (`structure.pdb`: primo modello, prima altloc, sola proteina, catene e numerazione
-  originali); i gruppi eteroatomici esclusi sono elencati in un avviso e i siti che occupano risultano tasche vuote.
+- Copia pulita della struttura (`pockets.clean_copy`, `structure.pdb`: primo modello, prima altloc, sola proteina,
+  catene e numerazione originali); i gruppi eteroatomici esclusi sono elencati in un avviso e i siti che occupano
+  risultano tasche vuote. I residui modificati della catena scritti come HETATM (MSE, SEP, TPO…: N, CA e C con un legame
+  peptidico a un vicino, `ligands.is_modified_residue`) restano nella copia e non sono «gruppi esclusi»: toglierli
+  lasciava nella proteina un buco che fpocket riportava come tasca (le selenometionine delle strutture SeMet). Le MSE
+  diventano MET (ATOM, SE → SD, come nella preparazione dei template), così l'elettrostatica, che usa la stessa copia, le
+  calcola; un amminoacido libero legato come substrato (senza legame peptidico) resta escluso come ligando.
 - fpocket con i parametri predefiniti (sfere alfa da 3,4 a 6,2 Å, almeno 15 per tasca; Le Guilloux et al., BMC
   Bioinformatics 10:168, 2009) da `ctx.run` (uno slot). Si conserva `structure_out/` (PDB con le sfere STP, script
   PyMOL/VMD, file per tasca).
@@ -1146,7 +1156,7 @@ senza questi strumenti, continua a funzionare.
 
 | Passo | Scelta | Fonte |
 |---|---|---|
-| Cariche e raggi | PDB2PQR, campo di forza PARSE (predefinito, parametrizzato per Poisson-Boltzmann) o AMBER; `--drop-water --keep-chain` | Dolinsky et al. 2007; Jurrus et al. 2018; Sitkoff, Sharp & Honig 1994 |
+| Cariche e raggi | PDB2PQR, campo di forza PARSE (predefinito, parametrizzato per Poisson-Boltzmann) o AMBER; `--drop-water --keep-chain`. Una catena senza identificativo (colonna 22 vuota) prende nella copia una lettera libera, perché PDB2PQR la scriverebbe come A e i residui del PQR non si ritroverebbero; il risultato riporta il nome originale. Gli altri residui modificati della catena (SEP, TPO…) restano nella copia ma PDB2PQR non ha i loro parametri e li toglie dal PQR: un avviso proprio lo dice | Dolinsky et al. 2007; Jurrus et al. 2018; Sitkoff, Sharp & Honig 1994 |
 | Protonazione | PROPKA a pH 7 (modificabile, 0–14) | Olsson et al. 2011 |
 | Equazione | Poisson-Boltzmann linearizzata, `mg-auto`, `bcfl sdh`, `srfm smol`, `chgm spl2`, `sdens 10`, `swin 0,3` | Baker et al. 2001 |
 | Mezzo | dielettrico 2 (proteina) e 78,54 (acqua a 25 °C), 150 mM di ioni ±1 di raggio 2,0 Å, sonda 1,4 Å, 298,15 K | input generato da PDB2PQR |
@@ -1173,8 +1183,9 @@ senza questi strumenti, continua a funzionare.
 1. Copia pulita (`input.pdb`): primo modello, prima altloc, residui amminoacidici (anche modificati, che PDBFixer
    sostituisce), senza acque, ligandi, ioni (esclusi con avviso: il campo di forza non ha parametri per loro) e senza
    idrogeni. Alle interruzioni della catena (C–N > 2,0 Å) un `TER`: senza, OpenMM legherebbe i due residui lontani e la
-   minimizzazione li avvicinerebbe. Nessun residuo mancante viene ricostruito; le estremità dell'interruzione diventano
-   cariche (avviso).
+   minimizzazione li avvicinerebbe. Il `TER` c'è anche per una catena senza identificativo (colonna 22 vuota, comune nei
+   file di dinamica molecolare): le catene si confrontano senza spazi. Nessun residuo mancante viene ricostruito; le
+   estremità dell'interruzione diventano cariche (avviso).
 2. PDBFixer: atomi pesanti mancanti e idrogeni a pH 7.
 3. AMBER ff14SB (`amber14-all.xml`) con solvente implicito **OBC2** nella forza nativa `GBSAOBCForce` (raggi mbondi2 e
    fattori di scala di `implicit/obc2.xml`, dielettrici 1/78,5, termine ACE, nessun sale). **Perché non GBn2** (più
@@ -1242,7 +1253,16 @@ La mappa si scarica da `/api/jobs/{id}/files/potential.dx?download=true`.
   e «Rifinitura energetica (OpenMM)» per una struttura qualunque (riquadro dei loop). La finestra spiega il protocollo e
   propone dinamica (0,5–50 ps) e idrogeni; il job si apre in `/modeling?job=<id>` con voto, energia, RMSD, clashscore, la
   tabella prima/dopo con l'esito di ogni metrica, il 3D del rifinito, «Qualità del rifinito», «Confronta con
-  l'originale» (pagina Confronto con l'originale come riferimento A) e il PDB.
+  l'originale» (pagina Confronto con l'originale come riferimento A), il PDB e «Report» (anche dalla pagina Qualità del
+  rifinito).
+- **Report del modello rifinito** (`services/reports._refine_data`, sezione `rifinitura` di `domain/report.py`): al posto
+  di template, allineamento, parametri e tabella dei modelli di MODELLER, una sezione bilanciata con il confronto
+  prima/dopo (voto, Ramachandran, clashscore, DOPE, zDOPE con l'esito), l'energia del campo di forza con le componenti
+  (iniziale, dopo la minimizzazione, dopo la dinamica, finale) e l'energia delle restrizioni, l'RMSD della catena
+  principale con lo spostamento massimo, il protocollo (campo di forza, solvente, protonazione, restrizioni,
+  minimizzazione, dinamica, interazioni non legate, piattaforma e thread di OpenMM, atomi aggiunti da PDBFixer, copia
+  data a OpenMM con esclusioni, residui modificati e interruzioni) e le fonti (OpenMM 7, ff14SB, OBC, L-BFGS, Kabsch);
+  il resto (qualità, ligandi, analisi strutturale, avvisi, legenda) come negli altri report, sul modello rifinito.
 
 **Immagine Docker** (`docker/Dockerfile`):
 
@@ -1686,9 +1706,13 @@ seguono una regola nota (quelli di RCSB, "A-2", non sono identificativi PDB di u
 - **Libreria** (`TemplateLibrary.assemblies`, `import_assembly`): `GET /api/templates/{id}/assemblies` (stato oligomerico,
   catene generate con l'origine, `buildable`, `identity_only`) e `POST /api/templates/{id}/assemblies/{n}` → template
   `<ID>_ASM<n>` in PDB, con titolo, metodo e risoluzione del file d'origine e `assembly` nei metadati (template d'origine,
-  catene, impronta SHA-256 del file d'origine). Un'importazione già fatta dallo stesso file si riusa (`cached`); se il file
-  d'origine cambia, si rigenera. Importazioni concorrenti dello stesso assemblaggio: un lock per template, una sola
-  costruzione. Un assemblaggio non ha assemblaggi propri; i modelli AlphaFold non ne hanno.
+  assemblaggio, catene, impronta SHA-256 del file d'origine). L'id non si tronca: oltre i 40 caratteri l'id d'origine si
+  accorcia e prende un'impronta (`<inizio>_<6 cifre di SHA-1 dell'id>_ASM<n>`, `assembly_template_id`), così gli
+  assemblaggi 1, 2 e 10 di un id lungo restano template distinti. L'assemblaggio chiesto si verifica prima (404 se il file
+  non lo dichiara). Un'importazione già fatta dello stesso assemblaggio dallo stesso file si riusa (`cached`); se il file
+  d'origine cambia, si rigenera; un template con quel nome che non è lo stesso assemblaggio dello stesso template dà 409.
+  Importazioni concorrenti dello stesso assemblaggio: un lock per template, una sola costruzione. Un assemblaggio non ha
+  assemblaggi propri; i modelli AlphaFold non ne hanno.
 
 **Bersaglio a più catene** (`complexes.parse_target`, opzione `complex` di `POST /api/model` e `/api/align2d`):
 `{name, chains: [{template_chain, sequence | same_as, name}]}` su un solo template (o assemblaggio), le cui catene
@@ -1749,6 +1773,12 @@ anche senza analisi di qualità, nel risultato `complex.assessment`; `models[].c
 | LRMS | RMSD dello scheletro della catena più corta dopo la sovrapposizione della più lunga (ricettore) | idem |
 | DockQ | (Fnat + 1/(1 + (iRMS/1,5)²) + 1/(1 + (LRMS/8,5)²)) / 3; ≥ 0,80 alta, ≥ 0,49 media, ≥ 0,23 accettabile, sotto non riprodotta | Basu & Wallner, PLoS ONE 11:e0161879, 2016 |
 
+- **Coppie confrontate:** solo quelle del template con le due catene nell'intervallo della sua voce del PIR
+  (`residue_map` → `span`): la copia preparata può avere altre catene scelte (es. A, B e C con un PIR da A a B), che non
+  sono modellate; una nota le elenca. Una catena dell'intervallo allineata solo a gap non ha una catena del modello (`?`
+  nel testo). Un errore inatteso dell'analisi diventa una riga del log e il modello resta senza confronto: non fa fallire
+  la modellazione (l'annullamento del job invece passa); nei risultati il modello migliore senza confronto lo dice
+  («Analisi delle interfacce non riuscita…: vedi il log del job»).
 - **Esito motivato:** classe di DockQ con il testo ("Interfaccia del template riprodotta: DockQ 0,97 (alta; Fnat 1,00, iRMS
   0,35 Å, LRMS 1,66 Å); residui d'interfaccia del template conservati 75% (6 su 8); area 117 Å² contro 123 Å² del template
   (95%)"); "non sono più a contatto" se le catene corrispondenti del modello non si toccano; un'interfaccia del modello che
@@ -1967,15 +1997,30 @@ ed `Environ()` 0,21 s; più le librerie di DOPE 0,28 s; DOPE completa di 1UBQ 0,
 di sopra, con altri container di test attivi: i tempi assoluti sono circa il 3% più alti della tabella, per questo le stime
 usano i rapporti con i valori della tabella). Mediana di 3 giri, varianti alternate nello stesso processo.
 
-| Raffinamento (2 modelli, 76 residui) | Restrizioni + modello 1 | Modello successivo | Rapporto con fast |
-|---|---|---|---|
-| very_fast (`a.very_fast()`) | 0,96 | 0,55 | 0,23 |
-| fast (`md_level = refine.very_fast`) | 2,90 | 2,37 | 1 |
-| normal (predefiniti di MODELLER) | 2,85 | 2,32 | 0,98 |
-| thorough (`autosched.slow`, `refine.slow`, ottimizzazione ripetuta) | 10,36 | 9,60 | 4,05 |
+| Raffinamento (2 modelli, 76 residui) | `model.py` | Restrizioni + modello 1 | Modello successivo | Rapporto con fast (media dei 2 modelli) |
+|---|---|---|---|---|
+| very_fast (`a.very_fast()`) | 1,84 | 0,95 | 0,58 | 0,24 |
+| fast (predefiniti di AutoModel: `autosched.normal`, 200 iterazioni, `refine.very_fast`) | 5,31 | 2,73 | 2,31 | 1 |
+| normal (come fast, dinamica `refine.fast`) | 7,26 | 3,38 | 3,69 | 1,42 |
+| thorough (`autosched.slow`, 300 iterazioni, `refine.slow`, ciclo ripetuto 2 volte) | 19,87 | 9,88 | 9,65 | 4,17 |
 
-"normal" e "fast" sono la stessa ottimizzazione: in MODELLER 10.8 il predefinito di AutoModel è già `md_level =
-refine.very_fast`.
+Il rapporto (`REFINEMENT_FACTOR`) è il tempo di `model.py` meno avvio e restrizioni (0,72 s), diviso per quello di fast:
+la media dei due modelli. Sul solo modello successivo vale 0,25, 1,60 e 4,18; con la dinamica `refine.fast` il tempo
+cambia di più da un modello all'altro (3,38 s il primo, restrizioni comprese, 3,69 il secondo).
+
+**Perché questi livelli.** Fino alla versione precedente "normal" (nessuna impostazione) e "fast" (`md_level =
+refine.very_fast`) erano la stessa ottimizzazione: in MODELLER 10.8 `refine.very_fast` è già il predefinito di AutoModel
+(sorgente di `modeller/automodel/automodel.py`, `set_defaults`). Una prova con MODELLER reale (1UBQ, 76 residui, 3
+modelli, 2 giri) ha misurato per modello: predefiniti 2,20 s; programma VTFM `autosched.fast` 2,32 s; `autosched.fast`
+con 100 iterazioni 2,24 s; `autosched.slow` con 300 iterazioni 2,52 s; dinamica `refine.fast` 3,63 s. Il programma
+dell'ottimizzazione VTFM non cambia il tempo in modo misurabile, la dinamica sì: per questo "fast" resta il predefinito di
+MODELLER (il livello proposto dall'interfaccia, che quindi non cambia) e "normal" ha la ricottura più lunga
+`refine.fast`. "very_fast" è `a.very_fast()`, che non perturba le coordinate iniziali (`rand_method = None`): nella
+stessa prova i modelli erano identici (stesso DOPE, RMSD 0 Å), e con la perturbazione rimessa erano diversi ma molto
+peggiori (DOPE −6853 contro −7621) perché 50 iterazioni non bastano a recuperarla; BioLoom lascia il metodo di MODELLER
+e avvisa (controlli preventivi e risultato) che i modelli sono uguali. "thorough" segue l'esempio del manuale senza
+`max_molpdf = 1e6`, più basso del predefinito di MODELLER 10.8 (1e7). Tutti i livelli scrivono le impostazioni per
+esteso nello script (`REFINEMENT_SCRIPT`), così non dipendono dai predefiniti di una versione futura.
 
 | Bersaglio (1 modello fast) | `model.py` | Secondi per residuo |
 |---|---|---|
@@ -2153,14 +2198,19 @@ Il client API (`api/client.ts`) e i tipi (`api/types.ts`) sono l'unico punto di 
 
 - **Ricerca globale** (`components/GlobalSearch.tsx`, `lib/search.ts`): campo «Cerca…» nella barra in alto, Ctrl+K / ⌘K
   o `/`. Risultati raggruppati come li ordina il server, con le parole trovate evidenziate (`highlightParts`, stessa
-  regola del backend); ↑/↓ (Ctrl+Home/End, PagSu/PagGiù) scelgono, Invio apre, Esc chiude. `#etichetta` cerca solo fra
-  gli elementi con quell'etichetta, `tipo:job` (o `in:`, nomi italiani e inglesi, anche più tipi) limita i gruppi; scelta
-  un'etichetta, la ricerca diventa `#etichetta`. Senza testo mostra i preferiti. Aprire un risultato di un altro progetto
+  regola del backend); ↑/↓ (Ctrl+Home/End, PagSu/PagGiù) scelgono, Invio apre, Esc chiude. Finché la risposta per il
+  testo attuale non arriva (150 ms di attesa più la richiesta) le voci di prima restano attenuate e Invio aspetta la
+  risposta giusta per aprirne la prima voce (`enterAction`), invece di aprire una voce della ricerca precedente.
+  `#etichetta` cerca solo fra gli elementi con quell'etichetta, `tipo:job` (o `in:`, nomi italiani e inglesi, anche più
+  tipi) limita i gruppi, mostrati con il nome italiano (`TYPE_LABEL`: «sequenze», «progetti»…); scelta un'etichetta, la
+  ricerca diventa `#etichetta` (con `tipo:` in italiano). Senza testo mostra i preferiti. Aprire un risultato di un altro progetto
   lo rende prima il progetto attivo (`resultTarget`); `/sequences?id=` e `/templates?id=&tag=` scelgono l'elemento.
 - **Etichette e stella** (`components/Labels.tsx`, `lib/tags.ts`): stella e chip negli elenchi di job, template e
   sequenze e nel dialogo «Progetti» della barra in alto (preferiti in cima, filtro); `LabelEditor` (stella, chip con la ×,
   campo con l'etichetta normalizzata mostrata mentre si scrive e i suggerimenti di quelle già usate) nei dettagli e,
-  per il progetto attivo, nella Panoramica. Filtro per etichetta o preferiti (`LabelFilterSelect`) negli elenchi di job e
+  per il progetto attivo, nella Panoramica. L'elenco della pagina è la fonte dei dati: il dettaglio riceve stella ed
+  etichette dell'elemento (`itemLabels`) e si riallinea quando cambiano (stella cliccata nella riga, dialogo
+  «Progetti»); un elemento fuori dall'elenco (filtro, limite dei job) le legge dal server. Filtro per etichetta o preferiti (`LabelFilterSelect`) negli elenchi di job e
   template, nell'URL (`?tag=`), così un link lo conserva; un clic su un chip filtra per quell'etichetta.
 - **Tema** (`lib/theme.ts`): Scuro, Chiaro o Sistema nella barra laterale. "Sistema" segue `prefers-color-scheme` e
   cambia con il sistema operativo (evento `change` della media query); il tema si applica prima del primo render
@@ -2367,8 +2417,13 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     PDB2PQR (carica netta 0, residui carichi per tipo, His68 con HD1); griglia come psize (97 × 97 × 129, le dimensioni
     usate da APBS), passo allargato oltre il tetto, input di APBS con ogni parametro; mappe OpenDX sintetiche nel formato
     di APBS e interpolazione esatta su un campo lineare; punti di Shrake-Rupley (atomo isolato, sovrapposti, sepolto);
-    potenziale per residuo su 1UBQ con una mappa lineare; costanti e unità del protocollo, copia pulita (Zn escluso,
-    TER all'interruzione 34/38), confronto prima/dopo e RMSD (spostamento noto di un Cα); rilevamento delle librerie
+    potenziale per residuo su 1UBQ con una mappa lineare; copia pulita di tasche ed elettrostatica con MSE e SEP scritte
+    come HETATM (tenute, MSE → MET, nessun avviso di gruppi esclusi); elettrostatica con PDB2PQR e APBS simulati su una
+    catena senza identificativo (cariche e potenziali per residuo, catena originale nel risultato), lettera libera per la
+    catena senza nome accanto a una catena A, SEP tolta da PDB2PQR con il suo avviso; costanti e unità del protocollo,
+    copia pulita della rifinitura (Zn escluso, TER all'interruzione 34/38, anche con la catena senza identificativo e
+    nessun legame 29–35 nella topologia di PDBFixer), confronto prima/dopo e RMSD (spostamento noto di un Cα); report del
+    modello rifinito (sezioni, energia per componente, protocollo, fonti; solo il file rifinito); rilevamento delle librerie
     senza importarle e messaggi degli strumenti mancanti; job falliti con il motivo senza gli strumenti, validazione
     delle rotte prima della coda, priorità. Con gli strumenti (immagine di sviluppo): fpocket su 1UBQ (stesse tasche
     dell'uscita salvata, file conservati, `/latest`) e su `ubq_zn.pdb` (Zn escluso con avviso); PDB2PQR + APBS su 1UBQ
@@ -2389,13 +2444,16 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     di un PIR (errore nella modalità Complesso, avviso altrimenti), script con simmetria e nomi delle catene, peso validato,
     copia preparata nell'ordine del bersaglio, nomi e simmetria del piano del modello; confronto delle interfacce (dimero
     contro sé stesso con catene rinominate e numeri spostati, moto rigido, catena spostata di 3 Å con DockQ dalla formula,
-    catene non più a contatto, interfaccia nuova, PIR che non corrisponde), sezione del report bilanciata con l'escape;
+    catene non più a contatto, interfaccia nuova, PIR che non corrisponde, template a tre catene con un PIR da A a B,
+    catena allineata solo a gap, errore inatteso dell'analisi che non fa fallire il job), sezione del report bilanciata
+    con l'escape; id degli assemblaggi senza troncamento (assemblaggi 1, 2 e 3 di un template di 37 caratteri distinti,
+    409 per un omonimo che è un altro assemblaggio);
     rotte con complessi non validi (nessun job accodato); con MODELLER l'anteprima per catena e l'omodimero dell'ubiquitina
     di lievito con e senza simmetria (catene, numerazione, RMSD fra le catene, DockQ, REMARK, report) e dallo stesso PIR;
   - controlli preventivi (`test_preflight.py`, licenze, strumenti, spazio e worker QMEAN simulati): ogni codice con un caso
     che lo produce e uno che non lo produce; curva di Rost (33,2% a 76 residui, 20,0% a 300) e soglia di Baker & Šali;
-    stime contro le misure (job model 13,89 s, elemento di pipeline 9,13 s, thorough, 304 residui, byte dei risultati e
-    degli intermedi); ubiquitina di lievito su 1UBQ senza errori né avvisi (identità 96,1%, copertura 100%) e nessun job
+    stime contro le misure (job model 13,89 s, elemento di pipeline 9,13 s, i quattro livelli di raffinamento distinti
+    e in ordine, 304 residui, byte dei risultati e degli intermedi); modelli identici con «rapidissimo»; ubiquitina di lievito su 1UBQ senza errori né avvisi (identità 96,1%, copertura 100%) e nessun job
     avviato; 1UBQ al 25% di identità (zona crepuscolare), bersaglio con una coda disordinata (copertura e disordine), PIR a
     una e a due catene, template assenti, scaricabili o con una catena sbagliata (nessun download), ritaglio pLDDT
     (11 residui, 25 rimasti, più della metà, ritaglio spento), timeout, spazio, PROCHECK e ProSA (licenza, MAC), coda,

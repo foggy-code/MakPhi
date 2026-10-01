@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import type { ComplexResult } from "../api/types";
+import { missingAssessment } from "../lib/complex";
 import { ToastProvider } from "../lib/context";
 import { ComplexResults } from "./ComplexResults";
 
@@ -43,9 +44,26 @@ describe("risultati di un complesso", () => {
     expect(html).toContain("Il template non è la struttura vera del complesso.");
   });
 
-  it("modello senza analisi delle interfacce", () => {
+  it("modello migliore senza analisi delle interfacce: analisi non riuscita, non «nel risultato del migliore»", () => {
     const html = render(<ComplexResults jobId="j" complex={{ ...COMPLEX, assessment: null, symmetry: { ...COMPLEX.symmetry, applied: false } }} selected="m1.pdb" best="m1.pdb" onView={() => undefined} />);
-    expect(html).toContain("Interfacce non analizzate per m1.pdb");
+    expect(html).toContain("Analisi delle interfacce non riuscita per il modello migliore (m1.pdb): vedi il log del job.");
+    expect(html).not.toContain("sono nel risultato per il modello migliore");
     expect(html).toContain("Simmetria richiesta ma non applicata");
+  });
+
+  it("altro modello senza confronto nel rapporto di qualità: non analizzato, non «non riuscito»", () => {
+    expect(missingAssessment("m2.pdb", "m1.pdb")).toEqual({
+      tone: "info",
+      text: "Interfacce non analizzate per m2.pdb: sono nel risultato per il modello migliore e nel rapporto dei modelli con l'analisi di qualità.",
+    });
+    expect(missingAssessment("m1.pdb", "m1.pdb")).toEqual({
+      tone: "warn", text: "Analisi delle interfacce non riuscita per il modello migliore (m1.pdb): vedi il log del job.",
+    });
+  });
+
+  it("catena del template allineata solo a gap: «?» al posto della catena del modello", () => {
+    const comparison = [{ ...COMPLEX.assessment!.comparison[0], model_chains: ["A", null], dockq: null }];
+    const html = render(<ComplexResults jobId="j" complex={{ ...COMPLEX, assessment: { ...COMPLEX.assessment!, comparison } }} selected="m1.pdb" best="m1.pdb" onView={() => undefined} />);
+    expect(html).toContain("<b>A–?</b>");
   });
 });

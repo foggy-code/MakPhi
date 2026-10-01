@@ -286,6 +286,75 @@ def test_new_interface_absent_from_the_template(tmp_path):
     assert any("non ha interfacce" in n for n in out["notes"]) and out["status"] == "non valutabile"
 
 
+def _trimer(tmp_path: Path) -> Path:
+    """ubq_dimer.pdb più una copia della catena B spostata di 6 Å come catena C, a contatto con le altre due."""
+    rows = [ln for ln in (DATA / "ubq_dimer.pdb").read_text(encoding="utf-8").splitlines() if ln.startswith("ATOM")]
+    extra = [f"{ln[:21]}C{ln[22:30]}{float(ln[30:38]) + 6.0:8.3f}{ln[38:]}" for ln in rows if ln[21] == "B"]
+    path = tmp_path / "trimer.pdb"
+    path.write_text("\n".join(rows + extra) + "\nEND\n", encoding="utf-8")
+    return path
+
+
+def test_template_chains_outside_the_pir_are_not_compared(tmp_path):
+    """Copia preparata con le catene A, B e C (C a contatto) e un PIR da A a B, come con un template scelto con tre
+    catene e un PIR dell'utente per due: le coppie con C non sono modellate e non si confrontano (prima la catena del
+    modello di C era None e il riepilogo sollevava TypeError, facendo fallire il job)."""
+    template = _load(_trimer(tmp_path), "t")
+    model = _load(DATA / "ubq_dimer.pdb", "m")
+    out = complexes.assess(model, template, _entries(), {"code": "D_AB", "chains": ["A", "B", "C"]})
+    with_c = ", ".join("–".join(p["chains"]) for p in out["template_interfaces"]["pairs"] if "C" in p["chains"])
+    assert with_c  # C tocca A o B nel template
+    assert [c["template_chains"] for c in out["comparison"]] == [["A", "B"]]
+    assert out["comparison"][0]["model_chains"] == ["A", "B"] and out["status"] == "alta"
+    assert out["chains"] == [{"template": "A", "model": "A"}, {"template": "B", "model": "B"}]
+    assert any("fuori dall'intervallo del PIR" in n and f"({with_c})" in n for n in out["notes"])
+
+
+def test_chain_of_the_span_aligned_only_to_gaps(tmp_path):
+    """Catena B del template nell'intervallo ma allineata solo a gap: nessuna catena del modello (None), il confronto
+    non è valutabile e il riepilogo lo scrive con «?»."""
+    template = _load(DATA / "ubq_dimer.pdb", "t")
+    model = _load(DATA / "ubq_dimer.pdb", "m")
+    out = complexes.assess(model, template, _entries(target_rows=(HUMAN_UB, "-" * 76)), TEMPLATE)
+    first = out["comparison"][0]
+    assert first["template_chains"] == ["A", "B"] and first["model_chains"] == ["A", None]
+    assert first["dockq"] is None and "A–?:" in out["summary"]
+
+
+def test_unexpected_interface_error_does_not_fail_the_modeling(tmp_path, monkeypatch):
+    """Un errore inatteso dell'analisi delle interfacce di un modello diventa una riga del log (la funzione restituisce
+    None), come promette `_complex_assessor`; l'annullamento del job invece passa."""
+    from bioloom.core.jobs import JobCancelled
+
+    (tmp_path / "D_AB.pdb").write_bytes((DATA / "ubq_dimer.pdb").read_bytes())
+    logs: list[str] = []
+
+    class Ctx:
+        def log(self, message: str) -> None:
+            logs.append(message)
+
+        def check(self) -> None:
+            pass
+
+    check = ComputeService._complex_assessor(Ctx(), tmp_path, _entries(),
+                                             [{"code": "D_AB", "file": "D_AB.pdb", "chains": ["A", "B"]}],
+                                             {"template": "D_AB"})
+
+    def broken(*_args, **_kwargs):
+        raise TypeError("sequence item 1: expected str instance, NoneType found")
+
+    monkeypatch.setattr(complexes, "assess", broken)
+    assert check("D_AB.pdb", logs.append, lambda: None) is None
+    assert any("non riuscita" in m and "TypeError" in m for m in logs)
+
+    def cancelled(*_args, **_kwargs):
+        raise JobCancelled()
+
+    monkeypatch.setattr(complexes, "assess", cancelled)
+    with pytest.raises(JobCancelled):
+        check("D_AB.pdb", logs.append, lambda: None)
+
+
 def test_alignment_that_does_not_match_the_model(tmp_path):
     template = _load(DATA / "ubq_dimer.pdb", "t")
     wrong = _entries(target_rows=("W" * 76, "W" * 76))

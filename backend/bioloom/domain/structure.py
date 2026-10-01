@@ -245,6 +245,42 @@ def write_pdb(structure, dest: Path, chains: Optional[Iterable[str]] = None,
     io_.save(str(dest), select=_Selector(chain_set, keep_hetero, keep_water, exclude))
 
 
+def selenomethionine_as_methionine(pdb_text: str) -> tuple[str, int]:
+    """Selenometionine (HETATM MSE) scritte come metionine (ATOM MET, selenio SE → zolfo SD): MODELLER, PDB2PQR e i
+    campi di forza conoscono solo la metionina. Restituisce il testo e il numero di righe convertite."""
+    lines = []
+    changed = 0
+    for line in pdb_text.splitlines():
+        if line.startswith("HETATM") and line[17:20] == "MSE":
+            changed += 1
+            line = "ATOM  " + line[6:17] + "MET" + line[20:]
+            if line[12:16] == "SE  ":
+                line = line[:12] + " SD " + line[16:76] + " S" + line[78:]
+        lines.append(line)
+    return ("\n".join(lines) + "\n" if changed else pdb_text), changed
+
+
+CHAIN_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+
+def name_blank_chains(model) -> dict[str, str]:
+    """Dà una lettera non usata (di solito A) alla catena senza identificativo (colonna 22 vuota) del modello, per i
+    programmi che la rinominano a modo loro (PDB2PQR con --keep-chain le dà A). Restituisce {nuovo nome: nome
+    originale} (vuoto se tutte le catene hanno un nome)."""
+    renamed: dict[str, str] = {}
+    for chain in list(model):
+        if chain.id.strip():
+            continue
+        used = {c.id for c in model}
+        letter = next((c for c in CHAIN_LETTERS if c not in used), None)
+        if letter is None:
+            break
+        original = chain.id
+        chain.id = letter
+        renamed[letter] = original
+    return renamed
+
+
 def pdb_text(structure, **kwargs) -> str:
     import tempfile
     import os

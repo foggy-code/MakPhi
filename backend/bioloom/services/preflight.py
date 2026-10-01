@@ -261,6 +261,7 @@ class PreflightService:
             analysed = 0 if quality_mode == "none" else opts.models if quality_mode == "all" else 1
             self._disk(out, *rules.modeling_bytes(residues, opts.models, analysed))
             checks += rules.single_model_checks(opts.models)
+            checks += rules.identical_models_checks(opts.models, opts.refinement)
         self._queue(out)
 
     def _pir(self, out: dict, text: str, n_templates: int) -> tuple[int, str]:
@@ -405,6 +406,7 @@ class PreflightService:
         per_item = [rules.modeling_bytes(len(r.sequence), opts.models, 1 if quality else 0) for r in records]
         largest = sorted((s for _r, s in per_item), reverse=True)[:parallel]
         self._disk(out, sum(r for r, _s in per_item), sum(largest))
+        checks += rules.identical_models_checks(opts.models, opts.refinement)
         self._guard(out, "disordine delle sequenze", lambda: self._pipeline_disorder(out, records))
         self._queue(out)
 

@@ -60,10 +60,12 @@ T_MODEL = 2.29  # ogni modello, raffinamento "fast"
 T_QUALITY = 1.22  # analisi di qualità di un modello (DOPE, mkdssp, PROCHECK, ProSA in parallelo)
 T_QUALITY_BASIC = 1.23  # analisi di un elemento di pipeline (senza PROCHECK e ProSA)
 QUALITY_MODELS_PARALLEL = 3  # come services/compute.QUALITY_MODELS_PARALLEL
-# Tempo di un modello rispetto a "fast", misurato nello stesso processo con i livelli alternati (mediana di 3 giri,
-# `test_preflight_calibration`): very_fast 0,55 s, fast 2,37, normal 2,32, thorough 9,60 per modello. "normal" coincide
-# con "fast": entrambi lasciano a MODELLER 10.8 `md_level = refine.very_fast`, il suo predefinito.
-REFINEMENT_FACTOR = {"very_fast": 0.23, "fast": 1.0, "normal": 1.0, "thorough": 4.05}
+# Tempo di un modello rispetto a "fast" (livelli in engines/modeller.REFINEMENT_SCRIPT), misurato nello stesso processo
+# con i livelli alternati (mediana di 3 giri, `test_preflight_calibration`, 2 modelli): processo model.py meno avvio e
+# restrizioni, diviso per 2 modelli: very_fast 0,56 s, fast 2,30, normal 3,27, thorough 9,58 per modello. Sul solo
+# modello successivo i rapporti sono 0,25, 1,60 e 4,18: con "normal" (dinamica refine.fast) il tempo di un modello varia
+# più da un modello all'altro, e la media dei due rappresenta meglio un job di più modelli.
+REFINEMENT_FACTOR = {"very_fast": 0.24, "fast": 1.0, "normal": 1.42, "thorough": 4.17}
 REFINEMENT_LABEL = {"very_fast": "rapidissimo", "fast": "rapido", "normal": "standard", "thorough": "accurato"}
 # Le misure vengono da un portatile a 4 CPU logiche: un altro processore, l'emulazione x86 su Apple Silicon o altri
 # calcoli in corso cambiano i tempi. L'intervallo mostrato va da metà al doppio della stima.
@@ -629,6 +631,18 @@ def queue_checks(active: int, workers: int) -> list[dict]:
     return [check("info", "queue_busy",
                   f"{active} job attivi con {workers} {'job' if workers == 1 else 'job'} di calcolo in parallelo: questo "
                   "aspetterà in coda (ricerche, allineamenti e analisi brevi hanno la precedenza).")]
+
+
+IDENTICAL_MODELS = ("Con il raffinamento rapidissimo (a.very_fast() di MODELLER) le coordinate iniziali non vengono "
+                    "perturbate: i {n} modelli sono identici e la scelta per DOPE non serve.")
+
+
+def identical_models_checks(models: int, refinement: str) -> list[dict]:
+    """Più modelli con "very_fast": MODELLER li costruisce tutti uguali (engines/modeller.REFINEMENT_SCRIPT)."""
+    if refinement != "very_fast" or models <= 1:
+        return []
+    return [check("info", "identical_models", IDENTICAL_MODELS.format(n=models),
+                  "Costruisci 1 modello, oppure scegli almeno il raffinamento rapido per modelli diversi.")]
 
 
 def single_model_checks(models: int) -> list[dict]:

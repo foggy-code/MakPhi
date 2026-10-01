@@ -1,5 +1,6 @@
 // Rifinitura energetica con OpenMM (F9.1): finestra di avvio (dalla tabella dei modelli o da una struttura qualunque)
-// e risultati di un job `refine` nella pagina Modellazione, con il confronto prima/dopo e i link a Qualità e Confronto.
+// e risultati di un job `refine` nella pagina Modellazione, con il confronto prima/dopo, i link a Qualità e Confronto e il
+// report HTML del modello rifinito (services/reports.py).
 // La logica è in lib/refine.ts, il protocollo nel backend (domain/refinement.py).
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -11,6 +12,7 @@ import { useAsync } from "../lib/hooks";
 import { comparisonSummary, energyText, fmtDelta, fmtRefineValue, MD_DEFAULT_PS, MD_MAX_PS, refineCompareLink, refinedQualityLink, refineRequest, verdictTone } from "../lib/refine";
 import { missingTools, missingToolsText } from "../lib/toolJobs";
 import { Icon } from "./Icon";
+import { ReportButton } from "./ReportButton";
 import { Viewer3D } from "./Viewer3D";
 import { Alert, Badge, Card, Field, Grade, Modal, Stat } from "./ui";
 
@@ -78,6 +80,7 @@ export function RefineResults({ jobId, result }: { jobId: string; result: Refine
             <Link className="btn btn-sm" to={refinedQualityLink(jobId, result)}><Icon name="shield" size={13} /> Qualità del rifinito</Link>
             <Link className="btn btn-sm" to={refineCompareLink(jobId, result)} title="Sovrapposizione e deviazione per residuo rispetto alla struttura di partenza"><Icon name="compare" size={13} /> Confronta con l'originale</Link>
             <a className="btn btn-sm" href={api.jobFileUrl(jobId, result.refined_file, true)}><Icon name="download" size={13} /> PDB rifinito</a>
+            <ReportButton jobId={jobId} model={result.refined_file} />
           </>
         }>
         <div className="table-wrap">

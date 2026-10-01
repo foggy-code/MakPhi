@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { favoritesFirst, filterOptions, filterParams, filterValue, matchesFilter, normalizeTag, parseFilterValue, TAG_MAX_LENGTH } from "./tags";
+import { favoritesFirst, filterOptions, filterParams, filterValue, itemLabels, labelsKey, matchesFilter, normalizeTag, parseFilterValue, TAG_MAX_LENGTH } from "./tags";
 
 const ok = (raw: string) => {
   const r = normalizeTag(raw);
@@ -65,5 +65,26 @@ describe("filtro degli elenchi", () => {
   it("preferiti prima", () => {
     const items = [{ id: 1 }, { id: 2, favorite: true }, { id: 3 }, { id: 4, favorite: true }];
     expect(favoritesFirst(items).map((i) => i.id)).toEqual([2, 4, 1, 3]);
+  });
+});
+
+describe("stella ed etichette del dettaglio, dall'elemento dell'elenco", () => {
+  it("l'elenco è la fonte: un cambio fatto nella riga cambia la chiave e il dettaglio si riallinea", () => {
+    // Sequenze: stella cliccata nella riga → patchLabels aggiorna l'elenco; prima il dettaglio restava su ☆ e il clic
+    // successivo mandava PUT invece di DELETE
+    const before = itemLabels({ id: "s1", tags: ["urgente"], favorite: false });
+    const after = itemLabels({ id: "s1", tags: ["urgente"], favorite: true });
+    expect(after).toEqual({ tags: ["urgente"], favorite: true });
+    expect(labelsKey(before)).not.toBe(labelsKey(after));
+    expect(labelsKey(after)).not.toBe(labelsKey(itemLabels({ tags: ["urgente", "lievito"], favorite: true })));
+    // stessi valori in un oggetto nuovo (ogni disegno della pagina): stessa chiave, nessuna rilettura
+    expect(labelsKey(itemLabels({ tags: ["urgente"], favorite: true }))).toBe(labelsKey(after));
+  });
+
+  it("elemento fuori dall'elenco (filtro, limite di 200 job): nessun valore, il dettaglio legge dal server", () => {
+    expect(itemLabels(undefined)).toBeUndefined();
+    expect(itemLabels(null)).toBeUndefined();
+    expect(labelsKey(undefined)).toBeNull();
+    expect(itemLabels({})).toEqual({ tags: [], favorite: false }); // elenco senza etichette: nessuna
   });
 });

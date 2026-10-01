@@ -31,6 +31,12 @@ const TYPE_ALIASES: Record<string, SearchGroupType> = {
 
 const TYPE_PREFIX = /^(tipo|in|type):(.*)$/i;
 
+/** Nome italiano di ogni gruppo nei filtri (`tipo:sequenze`): il badge del filtro e il testo scritto nella barra. Sono
+ *  anche alias di `TYPE_ALIASES`, così il testo si rilegge uguale. */
+export const TYPE_LABEL: Record<SearchGroupType, string> = {
+  project: "progetti", sequence: "sequenze", document: "documenti", job: "job", template: "template", tag: "etichette",
+};
+
 export function parseSearchQuery(input: string): ParsedQuery {
   const words: string[] = [];
   const types: SearchGroupType[] = [];
@@ -121,10 +127,21 @@ export function resultTarget(item: SearchItem): { path: string; projectId: strin
   }
 }
 
-/** Testo della barra dopo la scelta di un'etichetta: `#etichetta` più i filtri di tipo già scritti. */
+/** Testo della barra dopo la scelta di un'etichetta: `#etichetta` più i filtri di tipo già scritti (nomi italiani). */
 export function queryForTag(tag: string, current: ParsedQuery): string {
-  const types = current.types.length ? ` tipo:${current.types.join(",")}` : "";
+  const types = current.types.length ? ` tipo:${current.types.map((t) => TYPE_LABEL[t]).join(",")}` : "";
   return `#${tag}${types} `;
+}
+
+/**
+ * Cosa fa Invio. I risultati mostrati restano quelli della richiesta precedente finché non arriva la risposta per il
+ * testo attuale (attesa di 150 ms più la richiesta): Invio allora non apre una voce vecchia ma aspetta ("wait") e apre
+ * la prima voce della risposta giusta. Con i risultati aggiornati apre la voce attiva ("open"); senza voci, nulla.
+ */
+export function enterAction(resultKey: string | null, key: string, count: number, active: number): { kind: "open"; index: number } | { kind: "wait" } | { kind: "none" } {
+  if (resultKey !== key) return { kind: "wait" };
+  if (count <= 0) return { kind: "none" };
+  return { kind: "open", index: active >= 0 && active < count ? active : 0 };
 }
 
 const fold = (c: string) => (c.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()[0] ?? c);

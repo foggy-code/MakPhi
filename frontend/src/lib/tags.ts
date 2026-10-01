@@ -71,3 +71,17 @@ export function filterOptions(counts: TagCount[] | null | undefined, type: Entit
 export function favoritesFirst<T extends { favorite?: boolean }>(items: T[]): T[] {
   return [...items.filter((i) => i.favorite), ...items.filter((i) => !i.favorite)];
 }
+
+export type ItemLabels = { tags: string[]; favorite: boolean };
+
+/** Stella ed etichette di un elemento di un elenco, per il dettaglio (`LabelEditor initial`): l'elenco è la fonte dei
+ *  dati, così una stella cambiata nella riga si vede anche nel dettaglio. undefined se l'elemento non è nell'elenco
+ *  (filtrato o oltre il limite): il dettaglio allora le legge dal server. */
+export function itemLabels<T extends { tags?: string[]; favorite?: boolean }>(item: T | null | undefined): ItemLabels | undefined {
+  return item ? { tags: item.tags ?? [], favorite: !!item.favorite } : undefined;
+}
+
+/** Chiave di confronto di stella ed etichette: cambia solo quando cambiano i valori (non l'oggetto). */
+export function labelsKey(labels: ItemLabels | null | undefined): string | null {
+  return labels ? `${labels.favorite ? 1 : 0}|${labels.tags.join("\u0001")}` : null;
+}

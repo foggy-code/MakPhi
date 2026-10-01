@@ -35,10 +35,10 @@ import { useAsync, useJob } from "../lib/hooks";
 import { parsePir } from "../lib/pir";
 
 const REFINEMENT = [
-  { value: "very_fast", label: "Rapidissimo", note: "Test o screening: ottimizzazione minima." },
-  { value: "fast", label: "Rapido", note: "Buon compromesso per molti modelli." },
-  { value: "normal", label: "Standard", note: "Impostazioni predefinite di MODELLER." },
-  { value: "thorough", label: "Accurato", note: "Ottimizzazione ripetuta, dinamica lenta: ~3–5× più lento." },
+  { value: "very_fast", label: "Rapidissimo", note: "Test o screening: ottimizzazione minima senza dinamica; i modelli sono tutti uguali (ne basta uno)." },
+  { value: "fast", label: "Rapido", note: "Impostazioni predefinite di MODELLER: buon compromesso per molti modelli." },
+  { value: "normal", label: "Standard", note: "Dinamica di raffinamento più lunga (refine.fast): circa 1,4× il tempo di Rapido." },
+  { value: "thorough", label: "Accurato", note: "Ottimizzazione ripetuta, dinamica lenta: circa 4× il tempo di Rapido." },
 ];
 
 type Restraint = RestraintRow;

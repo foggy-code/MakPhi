@@ -5,7 +5,7 @@ import { isAlphaFoldId, plddtLabel, plddtTone } from "../lib/alphafold";
 import { useProject, useToast } from "../lib/context";
 import { useAsync } from "../lib/hooks";
 import { defaultTransfer } from "../lib/ligands";
-import { jobChoices, modelChoices, modelFiles } from "../lib/picker";
+import { jobChoices, modelChoices, modelFiles, parsePastedSequence, pastedTextMatches } from "../lib/picker";
 import { FileButton, SequenceFileButton } from "./FileLoad";
 import { Icon } from "./Icon";
 import { Badge, DropZone, Segmented } from "./ui";
@@ -20,6 +20,12 @@ export function SequencePicker({ value, onChange, label = "Sequenza bersaglio" }
   const { data: seqs } = useAsync<Sequence[]>(() => (projectId ? api.sequences(projectId) : Promise.resolve([])), [projectId]);
   const [mode, setMode] = useState<"project" | "paste" | "file">("project");
   const [fromFile, setFromFile] = useState<ParsedFile | null>(null);
+  // testo grezzo del campo «Incolla»: un'intestazione FASTA in corso di scrittura resta visibile (parsePastedSequence)
+  const [pasted, setPasted] = useState(value.sequence);
+  useEffect(() => {
+    setPasted((raw) => (pastedTextMatches(raw, value) ? raw : value.sequence));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value.name, value.sequence]);
   useEffect(() => {
     if (seqs && seqs.length === 0) setMode((m) => (m === "project" ? "paste" : m));
   }, [seqs]);
@@ -82,13 +88,11 @@ export function SequencePicker({ value, onChange, label = "Sequenza bersaglio" }
             className="input"
             rows={5}
             placeholder="Sequenza amminoacidica (testo o FASTA)"
-            value={value.sequence}
+            value={pasted}
             onChange={(e) => {
-              const text = e.target.value;
-              if (text.trimStart().startsWith(">")) {
-                const [head, ...rest] = text.trim().split(/\r?\n/);
-                onChange({ name: head.slice(1).split(/\s+/)[0] || value.name, sequence: rest.join("").replace(/[^A-Za-z]/g, "").toUpperCase() });
-              } else onChange({ ...value, sequence: text });
+              setPasted(e.target.value);
+              const next = parsePastedSequence(e.target.value, value);
+              if (next.name !== value.name || next.sequence !== value.sequence) onChange(next);
             }}
           />
         </>

@@ -145,7 +145,8 @@ def clean_input(model) -> tuple[str, dict]:
             hydrogens += sum(1 for a in res if (a.element or "").upper() in ("H", "D"))
             if prev is not None and not _linked(prev, res):
                 breaks.append({"chain": chain.id, "after": structure._resid(prev), "before": structure._resid(res)})
-                starts.add((chain.id, structure._resid(res)))
+                # catena senza identificativo (colonna 22 vuota): Biopython la chiama ' ', il testo la rilegge vuota
+                starts.add((chain.id.strip(), structure._resid(res)))
             prev = res
     if not keep:
         raise ValueError("nessun residuo amminoacidico da rifinire")
@@ -173,7 +174,11 @@ def clean_input(model) -> tuple[str, dict]:
 
 def split_chain_breaks(pdb_text: str, starts: set[tuple[str, str]]) -> str:
     """Inserisce un TER prima del primo atomo di ogni residuo in `starts` ((catena, residuo)): OpenMM vi chiude la
-    catena e ne apre una nuova con lo stesso identificativo, senza legame peptidico fra i due tratti."""
+    catena e ne apre una nuova con lo stesso identificativo, senza legame peptidico fra i due tratti.
+
+    Le catene si confrontano senza spazi: una catena senza identificativo (colonna 22 vuota, comune nei file di
+    dinamica molecolare o scritti a mano) è ' ' per Biopython e '' nel testo, e deve avere il suo TER."""
+    starts = {(chain.strip(), resid) for chain, resid in starts}
     if not starts:
         return pdb_text
     out: list[str] = []

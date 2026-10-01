@@ -37,3 +37,37 @@ export function modelFiles(result: unknown): string[] {
 export function modelChoices(models: string[], file: string | null | undefined): string[] {
   return file && !models.includes(file) ? [file, ...models] : models;
 }
+
+export interface PastedSequence {
+  name: string;
+  sequence: string;
+}
+
+/**
+ * Testo del campo «Incolla» della sequenza bersaglio (SequencePicker): FASTA (`>nome descrizione`, poi le righe della
+ * sequenza) o sequenza semplice, che resta com'è (la convalida è del server).
+ *
+ * Il campo conserva il testo grezzo e questa funzione dice cosa diventa il valore: un'intestazione FASTA ancora senza
+ * a capo (la si sta scrivendo) non cambia nulla, e il valore resta `current`. Prima il testo si analizzava a ogni
+ * tasto: al primo '>' la sequenza diventava vuota e il campo, che la mostrava, cancellava quanto scritto. Con più
+ * voci FASTA vale la prima.
+ */
+export function parsePastedSequence(text: string, current: PastedSequence): PastedSequence {
+  const trimmed = (text ?? "").trimStart();
+  if (!trimmed.startsWith(">")) return { name: current.name, sequence: text ?? "" };
+  const [head, ...rest] = trimmed.split(/\r?\n/);
+  if (!rest.length) return current; // intestazione in corso: niente da analizzare
+  const end = rest.findIndex((line) => line.startsWith(">"));
+  const body = end < 0 ? rest : rest.slice(0, end);
+  return {
+    name: head.slice(1).trim().split(/\s+/)[0] || current.name,
+    sequence: body.join("").replace(/[^A-Za-z]/g, "").toUpperCase(),
+  };
+}
+
+/** Il testo grezzo del campo corrisponde ancora al valore? Se no (valore cambiato da fuori: scelta dal progetto, da
+ *  file, nuovo bersaglio) il campo mostra la sequenza del valore. Il solo nome non conta: si cambia anche nel suo
+ *  campo, e un'intestazione FASTA scritta resta. */
+export function pastedTextMatches(text: string, value: PastedSequence): boolean {
+  return parsePastedSequence(text, value).sequence === value.sequence;
+}

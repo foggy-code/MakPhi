@@ -24,6 +24,37 @@ def test_scripts_are_valid_python():
     compile(modeller.build_loop_script("m.pdb", "m", "5:A", "10:A", 3, "fast"), "loop.py", "exec")
 
 
+REFINEMENT_LINES = {
+    "very_fast": ["a.very_fast()"],
+    "fast": ["a.library_schedule = autosched.normal", "a.max_var_iterations = 200", "a.md_level = refine.very_fast"],
+    "normal": ["a.library_schedule = autosched.normal", "a.max_var_iterations = 200", "a.md_level = refine.fast"],
+    "thorough": ["a.library_schedule = autosched.slow", "a.max_var_iterations = 300", "a.md_level = refine.slow",
+                 "a.repeat_optimization = 2"],
+}
+
+
+@pytest.mark.parametrize("level", list(REFINEMENT_LINES))
+def test_refinement_levels_write_distinct_settings(level):
+    """Ogni livello scrive le sue impostazioni di AutoModel (engines/modeller.REFINEMENT_SCRIPT): "normal" non coincide
+    più con "fast" (dinamica refine.fast invece di refine.very_fast) e "thorough" lascia max_molpdf al predefinito."""
+    script = modeller.build_model_script(["1UBQ_A"], "target", modeller.parse_options({"refinement": level}))
+    compile(script, "model.py", "exec")
+    lines = script.splitlines()
+    for line in REFINEMENT_LINES[level]:
+        assert line in lines, line
+    others = {line for other, rows in REFINEMENT_LINES.items() if other != level for line in rows}
+    assert not [line for line in others - set(REFINEMENT_LINES[level]) if line in lines]
+    assert "max_molpdf" not in script
+
+
+def test_refinement_default_is_the_modeller_default():
+    """Senza livello: "fast", i predefiniti di AutoModel (come l'interfaccia); i quattro script sono diversi."""
+    assert modeller.parse_options({}).refinement == "fast" and modeller.ModelOptions().refinement == "fast"
+    scripts = {modeller.build_model_script(["1UBQ_A"], "t", modeller.parse_options({"refinement": level}))
+               for level in modeller.REFINEMENTS}
+    assert len(scripts) == len(modeller.REFINEMENTS)
+
+
 @pytest.mark.parametrize("raw", [
     {"models": 0}, {"refinement": "ultra"}, {"seed": 5},
     {"restraints": [{"type": "helix", "start": "1'); import os; ('", "end": "5:A"}]},
@@ -57,6 +88,9 @@ def test_end_to_end_modeling(client_with_ubq):
     assert len(res["models"]) == 2 and sum(m["best"] for m in res["models"]) == 1
     best = next(m for m in res["models"] if m["best"])
     assert best["dope"] < -6000 and best["quality"]["grade"] in ("A", "B")
+    # a.very_fast() non perturba le coordinate iniziali: i due modelli sono uguali, e il risultato lo dice
+    assert res["models"][0]["dope"] == res["models"][1]["dope"]
+    assert any("i 2 modelli sono identici" in w for w in res["warnings"])
     report = c.get(f"/api/jobs/{job['id']}/quality/{best['file']}").json()
     assert report["dope"]["profile"] and report["residues"][0]["dope"] is not None
     # consenso del modello: GA341 di MODELLER già nel rapporto salvato, e la rotta lo ricalcola uguale

@@ -1,4 +1,5 @@
-"""Report HTML autonomo di un modello (o di un'analisi di qualità), stampabile in PDF dal browser.
+"""Report HTML autonomo di un modello (anche rifinito con OpenMM) o di un'analisi di qualità, stampabile in PDF dal
+browser.
 
 Un solo file: CSS in linea, grafici SVG generati qui, nessuno script né risorsa esterna (una Content-Security-Policy
 nel documento lo ribadisce), immagine 3D facoltativa incorporata come data URI dopo la verifica che sia un PNG vero.
@@ -44,7 +45,7 @@ CSP = ("default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri '
        "frame-ancestors 'none'")
 
 KIND_LABEL = {"model": "Modellazione", "loop": "Raffinamento di un loop", "pipeline": "Pipeline batch",
-              "quality": "Analisi di qualità"}
+              "quality": "Analisi di qualità", "refine": "Rifinitura energetica"}
 
 
 def _image_error(reason: str) -> AppError:
@@ -152,6 +153,13 @@ def _num(value: Any, digits: int = 2, suffix: str = "") -> str:
         return "—"
     text = f"{float(value):.{digits}f}".replace(".", ",")
     return ("−" + text[1:] if text.startswith("-") else text) + suffix
+
+
+def _signed(value: Any, digits: int = 2, suffix: str = "") -> str:
+    """Differenza con il segno esplicito (+1,20 / −1,20); '—' se assente."""
+    if not _isnum(value):
+        return "—"
+    return ("+" if float(value) > 0 else "") + _num(value, digits, suffix)
 
 
 def _sci(value: Any) -> str:
@@ -620,6 +628,18 @@ REFERENCES = {
              "11:e0161879.",
     "capri": "Méndez R., Leplae R., De Maria L., Wodak S.J. (2003) Assessment of blind predictions of protein-protein "
              "interactions: current status of docking methods. Proteins 52:51–67.",
+    # rifinitura energetica (F9.1)
+    "openmm": "Eastman P. et al. (2017) OpenMM 7: rapid development of high performance algorithms for molecular "
+              "dynamics. PLoS Comput. Biol. 13:e1005659.",
+    "ff14sb": "Maier J.A., Martinez C., Kasavajhala K., Wickstrom L., Hauser K.E., Simmerling C. (2015) ff14SB: "
+              "improving the accuracy of protein side chain and backbone parameters from ff99SB. J. Chem. Theory "
+              "Comput. 11:3696–3713.",
+    "obc": "Onufriev A., Bashford D., Case D.A. (2004) Exploring protein native states and large-scale conformational "
+           "changes with a modified generalized Born model. Proteins 55:383–394.",
+    "lbfgs": "Liu D.C., Nocedal J. (1989) On the limited memory BFGS method for large scale optimization. Math. "
+             "Program. 45:503–528.",
+    "kabsch": "Kabsch W. (1976) A solution for the best rotation to relate two sets of vectors. Acta Cryst. "
+              "A32:922–923.",
 }
 
 LEGEND = {
@@ -705,6 +725,19 @@ LEGEND = {
                 "non riprodotta. Misura la fedeltà all'interfaccia del template, non l'accuratezza rispetto al "
                 "complesso reale. Simmetria: restrizioni di MODELLER sui C-alfa delle catene con la stessa sequenza, "
                 "che rendono uguali le catene (non la disposizione, che viene dal template)."),
+    "refine_energy": ("Energia del campo di forza", "energia potenziale AMBER ff14SB con solvente implicito OBC2 "
+                      "(Maier et al. 2015; Onufriev et al. 2004), in kJ/mol, senza il termine delle restrizioni "
+                      "(riportato a parte): prima della minimizzazione, sulla struttura con gli atomi e gli idrogeni "
+                      "aggiunti da PDBFixer, e alla fine. Vale per confrontare prima e dopo sulla stessa struttura, "
+                      "non fra strutture diverse; un valore iniziale molto alto indica contatti sterici gravi."),
+    "refine_rmsd": ("RMSD della catena principale", "atomi N, CA, C e O in comune fra la struttura di partenza e "
+                    "quella rifinita, dopo la sovrapposizione ottimale (Kabsch 1976) e senza sovrapposizione (le "
+                    "restrizioni tengono le posizioni assolute); spostamento massimo con l'atomo che lo ha. Con le "
+                    "restrizioni armoniche sulla catena principale resta di solito sotto 0,5 Å."),
+    "refine_compare": ("Prima e dopo la rifinitura", "le stesse metriche di qualità calcolate sulla copia data a "
+                       "OpenMM (stessi residui, senza ligandi né idrogeni) e sul modello rifinito; «invariato» per "
+                       "differenze entro l'arrotondamento dei rapporti. La rifinitura migliora soprattutto clash e "
+                       "rotameri; non corregge errori di allineamento né di ripiegamento."),
 }
 
 
@@ -835,8 +868,8 @@ def _td(value: str, num: bool = False) -> str:
 BAND_TONE = {"buona": "ok", "intermedia": "warn", "scarsa": "err"}
 REFINEMENT_LABEL = {
     "very_fast": "rapidissimo (a.very_fast())",
-    "fast": "rapido (md_level = refine.very_fast)",
-    "normal": "standard (impostazioni predefinite di AutoModel)",
+    "fast": "rapido (predefiniti di AutoModel: autosched.normal, refine.very_fast)",
+    "normal": "standard (autosched.normal, dinamica più lunga refine.fast)",
     "thorough": "accurato (autosched.slow, 300 iterazioni, refine.slow, 2 ripetizioni)",
 }
 LOOP_LEVEL_LABEL = {"very_fast": "refine.very_fast", "fast": "refine.fast", "slow": "refine.slow"}
@@ -854,7 +887,8 @@ def _raw(method: dict) -> str:
 def _header(data: dict, toc: list[tuple[str, str]]) -> str:
     """Intestazione: titolo del job, progetto, date, strumenti e indice delle sezioni (fuori dalla stampa)."""
     kind = data.get("kind")
-    heading = "Report dell'analisi di qualità" if kind == "quality" else "Report del modello"
+    heading = {"quality": "Report dell'analisi di qualità", "refine": "Report del modello rifinito"}.get(
+        str(kind), "Report del modello")
     meta = [("Job", f"{_e(data.get('job_id'))} · {_e(_lookup(KIND_LABEL, kind))}"),
             ("Progetto", _e(data.get("project")) or "—")]
     if data.get("model"):
@@ -903,20 +937,30 @@ def _summary(doc: _Doc, data: dict) -> None:
     qmean = methods.get("qmean")
     if qmean:
         cards.append(_card("QMEAN4 Z-score", _num(qmean.get("raw"), 2), "−4 o meno: bassa qualità"))
+    refine = data.get("refine") if isinstance(data.get("refine"), dict) else None
+    if refine:  # rifinitura: energia e spostamento della catena principale
+        energy = refine.get("energy") if isinstance(refine.get("energy"), dict) else {}
+        rmsd = refine.get("rmsd") if isinstance(refine.get("rmsd"), dict) else {}
+        cards.append(_card("Energia (kJ/mol)", _num(energy.get("after"), 0),
+                           f"prima {_num(energy.get('before'), 0)} · Δ {_signed(energy.get('delta'), 0)}"))
+        cards.append(_card("RMSD catena principale", _num(rmsd.get("rmsd"), 2, " Å"),
+                           f"{_e(rmsd.get('atoms'))} atomi N, CA, C, O"))
+        doc.explain("refine_energy", "refine_rmsd")
     if not cards:
         return
     doc.section("riepilogo", "Riepilogo")
     doc.add('<div class="cards">', *cards, "</div>")
     if not quality:
-        doc.add(_note("Analisi di qualità non calcolata per questo modello: il report riporta solo i risultati di "
-                      "MODELLER.", "warn"))
+        doc.add(_note("Analisi di qualità non calcolata per questo modello: il report riporta solo i risultati "
+                      + ("della rifinitura." if data.get("kind") == "refine" else "di MODELLER."), "warn"))
     doc.end()
 
 
 def _target(doc: _Doc, data: dict) -> None:
     target = data.get("target") or {}
     structure = data.get("structure")
-    doc.section("bersaglio", "Struttura analizzata" if data.get("kind") == "quality" else "Bersaglio")
+    doc.section("bersaglio", {"quality": "Struttura analizzata", "refine": "Struttura rifinita"}.get(
+        str(data.get("kind")), "Bersaglio"))
     chains = [c for c in str(target.get("sequence") or "").split("/") if c]
     rows = [("Nome", _e(target.get("name"))),
             ("Lunghezza", f"{sum(len(c) for c in chains)} residui" + (f" in {len(chains)} catene" if len(chains) > 1
@@ -1344,7 +1388,8 @@ def _external_block(doc: _Doc, quality: dict) -> None:
 
 def _quality(doc: _Doc, data: dict) -> None:
     quality = data.get("quality")
-    title = "Qualità della struttura" if data.get("kind") == "quality" else "Qualità del modello scelto"
+    title = {"quality": "Qualità della struttura", "refine": "Qualità del modello rifinito"}.get(
+        str(data.get("kind")), "Qualità del modello scelto")
     doc.section("qualita", title, page_break=True)
     image = data.get("image_png")
     if image:
@@ -1593,6 +1638,111 @@ def _complex(doc: _Doc, data: dict) -> None:
     doc.end()
 
 
+REFINE_DIGITS = {"grade_score": 1, "rama_favored": 1, "rama_outliers": 1, "clashscore": 2, "dope": 0, "zdope": 2}
+REFINE_VERDICT_TONE = {"meglio": "ok", "peggio": "err", "invariato": "info"}
+ENERGY_TERMS = (("bonds", "Legami"), ("angles", "Angoli"), ("torsions", "Torsioni"),
+                ("nonbonded", "Non legate (van der Waals, Coulomb)"), ("solvation", "Solvatazione (OBC2)"),
+                ("total", "Totale"))
+ENERGY_STAGES = (("before", "Iniziale"), ("after_minimization", "Dopo la minimizzazione"),
+                 ("after_md", "Dopo la dinamica"), ("final", "Finale"))
+
+
+def _dict(value: Any) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _refinement(doc: _Doc, data: dict) -> None:
+    """Rifinitura energetica (F9.1): confronto prima/dopo, energia con le componenti, spostamento della catena
+    principale, protocollo e parametri di OpenMM, preparazione della struttura (PDBFixer e copia pulita)."""
+    ref = _dict(data.get("refine"))
+    if not ref:
+        return
+    doc.section("rifinitura", "Rifinitura energetica (OpenMM)")
+    rows = []
+    for r in ref.get("comparison") or []:
+        if not isinstance(r, dict):
+            continue
+        digits = REFINE_DIGITS.get(str(r.get("key")), 2)
+        verdict = r.get("verdict")
+        tag = (f'<span class="tag {_lookup(REFINE_VERDICT_TONE, verdict, "")}">{_e(verdict)}</span>' if verdict
+               else "—")
+        rows.append("<tr>" + _td(_e(r.get("label"))) + _td(_num(r.get("before"), digits), True)
+                    + _td(_num(r.get("after"), digits), True) + _td(_signed(r.get("delta"), digits + 1), True)
+                    + _td(tag) + "</tr>")
+    if rows:
+        doc.add("<h3>Prima e dopo</h3>",
+                _table([("Metrica", False), ("Prima", True), ("Dopo", True), ("Differenza", True), ("Esito", False)],
+                       rows),
+                '<p class="small muted">«Prima» è la copia data a OpenMM (stessi residui, senza ligandi né idrogeni), '
+                "così il confronto riguarda gli stessi atomi.</p>")
+        doc.explain("refine_compare", "grade", "rama", "clash")
+    energy = _dict(ref.get("energy"))
+    components = _dict(energy.get("components"))
+    stages = [(key, label) for key, label in ENERGY_STAGES if isinstance(components.get(key), dict)]
+    doc.add("<h3>Energia del campo di forza</h3>")
+    trend = ("diminuita" if energy.get("decreased") else "non diminuita") if _isnum(energy.get("delta")) else ""
+    doc.add(f"<p>Da {_num(energy.get('before'), 1)} a {_num(energy.get('after'), 1)} kJ/mol (Δ "
+            f"{_signed(energy.get('delta'), 1)} kJ/mol{', ' + trend if trend else ''}); energia delle restrizioni "
+            f"alla fine {_num(energy.get('restraint_final'), 2)} kJ/mol.</p>")
+    if stages:
+        erows = ["<tr>" + _td(_e(label)) + "".join(_td(_num(_dict(components.get(key)).get(term), 1), True)
+                                                    for key, _l in stages) + "</tr>" for term, label in ENERGY_TERMS]
+        doc.add(_table([("Termine (kJ/mol)", False), *((label, True) for _k, label in stages)], erows))
+    doc.explain("refine_energy")
+    rmsd = _dict(ref.get("rmsd"))
+    doc.add("<h3>Spostamento della catena principale</h3>",
+            f"<p>RMSD {_num(rmsd.get('rmsd'), 3, ' Å')} dopo la sovrapposizione, {_num(rmsd.get('rmsd_no_fit'), 3, ' Å')}"
+            f" senza; spostamento massimo {_num(rmsd.get('max_displacement'), 3, ' Å')} ({_e(rmsd.get('max_atom'))}), "
+            f"su {_e(rmsd.get('atoms'))} atomi N, CA, C, O in comune.</p>")
+    doc.explain("refine_rmsd")
+
+    protocol, openmm, added, prepared = (_dict(ref.get(k)) for k in ("protocol", "openmm", "added", "input"))
+    restraint, minimization, md = (_dict(protocol.get(k)) for k in ("restraint", "minimization", "md"))
+    cutoff = _dict(protocol.get("cutoff"))
+    params: list[tuple[str, str]] = [
+        ("Campo di forza", _e(protocol.get("forcefield"))),
+        ("Solvente implicito", _e(protocol.get("solvent"))),
+        ("Protonazione", f"PDBFixer a pH {_num(protocol.get('ph'), 1)} (varianti dei residui titolabili alla pKa del "
+                         "residuo libero)"),
+        ("Restrizioni", f"armoniche su {_e(', '.join(str(a) for a in restraint.get('atoms') or []))}, "
+                        f"k = {_num(restraint.get('k_kcal_mol_A2'), 1)} kcal·mol⁻¹·Å⁻² "
+                        f"({_num(restraint.get('k_kj_mol_nm2'), 0)} kJ·mol⁻¹·nm⁻²), {_e(restraint.get('form'))}"),
+        ("Minimizzazione", f"L-BFGS fino a {_num(minimization.get('tolerance_kj_mol_nm'), 0)} kJ·mol⁻¹·nm⁻¹ o "
+                           f"{_e(minimization.get('max_iterations'))} iterazioni"),
+        ("Dinamica", f"Langevin, {_num(md.get('ps'), 1)} ps a {_num(md.get('temperature_k'), 0)} K (passo "
+                     f"{_num(md.get('timestep_fs'), 1)} fs, {_e(md.get('steps'))} passi, attrito "
+                     f"{_num(md.get('friction_ps'), 1)} ps⁻¹, seme {_e(md.get('seed'))}), poi una seconda "
+                     "minimizzazione" if md else "nessuna (solo minimizzazione)"),
+        ("Interazioni non legate", _e(openmm.get("nonbonded")) + (
+            f" (taglio oltre {_e(cutoff.get('atoms_over'))} atomi)" if cutoff else "")),
+        ("Calcolo", f"OpenMM {_e(openmm.get('openmm'))}, piattaforma {_e(openmm.get('platform'))}, "
+                    f"{_e(openmm.get('threads'))} thread; {_e(openmm.get('atoms'))} atomi, "
+                    f"{_e(openmm.get('restrained_atoms'))} con restrizione"),
+        ("Atomi aggiunti da PDBFixer", f"{_e(added.get('heavy_atoms'))} pesanti, {_e(added.get('terminal_atoms'))} "
+                                       f"terminali, {_e(added.get('hydrogens'))} idrogeni"),
+        ("Idrogeni nel modello rifinito", "sì" if protocol.get("hydrogens_in_output") else "no"),
+    ]
+    if added.get("nonstandard"):
+        params.append(("Residui non standard sostituiti", _e(", ".join(str(x) for x in added["nonstandard"]))))
+    clean = []
+    if prepared.get("excluded"):
+        clean.append("gruppi eteroatomici esclusi " + ", ".join(str(x) for x in prepared["excluded"][:20]))
+    if prepared.get("modified"):
+        clean.append("residui modificati tenuti " + ", ".join(str(x) for x in prepared["modified"][:20]))
+    breaks = [b for b in prepared.get("breaks") or [] if isinstance(b, dict)]
+    if breaks:
+        clean.append("catena interrotta (" + ", ".join(f"{b.get('chain')}{b.get('after')}/{b.get('before')}"
+                                                       for b in breaks[:12]) + "), nessun residuo ricostruito")
+    if prepared.get("hydrogens_removed"):
+        clean.append(f"{prepared['hydrogens_removed']} idrogeni del file sostituiti")
+    params.append(("Copia data a OpenMM", f"{_e(prepared.get('residues'))} residui"
+                   + (": " + _e("; ".join(clean)) if clean else "; nessun gruppo escluso")))
+    doc.add("<h3>Protocollo</h3>", "<table><tbody>",
+            *(f"<tr><th>{_e(k)}</th><td>{v}</td></tr>" for k, v in params), "</tbody></table>")
+    doc.cite("openmm", "ff14sb", "obc", "lbfgs", "kabsch")
+    doc.end()
+
+
 def _warnings(doc: _Doc, data: dict) -> None:
     items: list[str] = []
     for w in [*(data.get("warnings") or []), *(((data.get("quality") or {}).get("warnings")) or [])]:
@@ -1620,7 +1770,7 @@ def render(data: dict) -> str:
     """Documento HTML completo del report.
 
     `data` (raccolto da services/reports.py; ogni testo è trattato come non fidato): kind ("model" | "loop" |
-    "pipeline" | "quality"), title, job_id, project, created_at, finished_at, generated_at, tools [(nome, versione)],
+    "pipeline" | "quality" | "refine"), title, job_id, project, created_at, finished_at, generated_at, tools [(nome, versione)],
     model (file scelto), target {name, sequence (catene separate da '/'), chains}, structure (solo quality:
     report.structure), source (descrizione della struttura analizzata), templates [{id, code, chains, first, last,
     source, title, method, resolution, identity, coverage, predicted, plddt_mean, trim, trim_off}], search (pipeline:
@@ -1631,12 +1781,19 @@ def render(data: dict) -> str:
     ligands (verifica di domain/ligands per il modello senza rapporto di qualità; altrimenti quella del rapporto).
     analysis (services/analysis.report_summary: job_id, finished_at, disulfides, interfaces) o None.
     complex (modelli a più catene, F5.3: chains, symmetry, template, assessment di domain/complexes.assess) o None.
+    refine (solo kind "refine", F9.1: dal risultato del job di services/refine.py: label, protocol, openmm, added, input,
+    energy, rmsd, quality {before, after}, comparison); con "refine" niente template, allineamento, parametri di
+    MODELLER e tabella dei modelli.
     """
     doc = _Doc()
     kind = data.get("kind")
     _summary(doc, data)
     _target(doc, data)
-    if kind != "quality":
+    if kind == "refine":
+        _refinement(doc, data)
+        if (data.get("quality") or {}).get("dope"):
+            doc.cite("modeller", "dope")
+    elif kind != "quality":
         _templates(doc, data)
         _alignment(doc, data)
         _options(doc, data)
@@ -1651,7 +1808,8 @@ def render(data: dict) -> str:
     _warnings(doc, data)
     _legend_and_refs(doc)
     subject = data.get("title") or data.get("model") or ""
-    title = ("Report qualità" if kind == "quality" else "Report modello") + (f" · {subject}" if subject else "")
+    title = ({"quality": "Report qualità", "refine": "Report rifinitura"}.get(str(kind), "Report modello")
+             + (f" · {subject}" if subject else ""))
     version = dict(data.get("tools") or []).get("BioLoom", "")
     footer = (f"<footer>Generato da BioLoom {_e(version)} il {_date(data.get('generated_at'))} dai file del job "
               f"{_e(data.get('job_id'))}. Le regioni di Ramachandran e il clashscore sono approssimazioni: per una "
