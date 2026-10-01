@@ -15,7 +15,8 @@ from ..core.errors import AppError, Conflict, NotFound
 from ..core.jobs import QMEAN_LOCAL, JobCancelled, JobContext, JobManager
 from ..core.parallel import Steps
 from ..core.storage import atomic_write_json, atomic_write_text, read_json, safe_join
-from ..domain import consensus, ligands, multitemplate, sequences, structure, template_rank
+from ..domain import (assembly, complexes, consensus, interactions, interfaces, ligands, multitemplate, sequences,
+                      structure, template_rank)
 from ..domain.sequences import SeqRecord
 from ..engines import align, modeller, qmean_local, quality, remote, search
 from ..engines.modeller import TemplateSpec
@@ -62,7 +63,8 @@ class PreparedTemplates:
         stat = source.stat()
         chosen = None if spec.ligands is None else tuple(sorted(tuple(g) for g in spec.ligands))
         return (spec.id, str(source), stat.st_size, stat.st_mtime_ns, tuple(spec.chains), bool(spec.hetatm),
-                chosen if spec.hetatm else None, None if spec.plddt_min is None else float(spec.plddt_min))
+                chosen if spec.hetatm else None, None if spec.plddt_min is None else float(spec.plddt_min),
+                bool(spec.keep_order))
 
     def get(self, source: Path, spec: TemplateSpec, dest_dir: Path,
             check: Callable[[], None]) -> tuple[dict, bool]:
@@ -103,7 +105,7 @@ def _record(raw: dict, default: str = "TARGET") -> SeqRecord:
     return SeqRecord(sequences.sanitize_code(raw.get("name"), default=default), seq)
 
 
-def _template_specs(raw: list[dict]) -> list[TemplateSpec]:
+def _template_specs(raw: list[dict], keep_order: bool = False) -> list[TemplateSpec]:
     if not raw:
         raise AppError("Seleziona almeno un template.")
     if len(raw) > 10:
@@ -114,8 +116,17 @@ def _template_specs(raw: list[dict]) -> list[TemplateSpec]:
         chains = [c.strip() for c in t.get("chains", []) if str(c).strip()]
         if not tid:
             raise AppError("Template senza identificativo.")
-        specs.append(TemplateSpec(id=tid, chains=chains, hetatm=bool(t.get("hetatm", False))))
+        specs.append(TemplateSpec(id=tid, chains=chains, hetatm=bool(t.get("hetatm", False)), keep_order=keep_order))
     return specs
+
+
+def complex_templates(target: dict, templates_raw: list[dict]) -> list[dict]:
+    """Complesso (F5.3): un solo template (o assemblaggio), con le catene nell'ordine delle catene del bersaglio."""
+    if len(templates_raw or []) != 1:
+        raise AppError("Nella modalità Complesso scegli un solo template (o un assemblaggio biologico): la disposizione "
+                       "delle catene viene da quel template. Per più template usa un PIR a più catene.",
+                       code="invalid_complex")
+    return [{**templates_raw[0], "chains": [c.template_chain for c in target["chains"]]}]
 
 
 def _apply_ligand_options(specs: list[TemplateSpec], opts: modeller.ModelOptions) -> None:
@@ -437,6 +448,35 @@ class ComputeService:
                 notes.append(choice["message"])
         return (workdir / "alignment.ali").read_text(encoding="utf-8"), notes
 
+    def _run_complex_alignment(self, ctx: JobContext, target: dict, template: dict, workdir: Path,
+                               progress: tuple[float, float]) -> tuple[str, str]:
+        """Complesso (F5.3): align2d di ogni catena del bersaglio sulla sua catena del template, unite con '/' nelle
+        stesse colonne (`domain/complexes.merge_chain_alignments`). Restituisce (PIR, codice del bersaglio)."""
+        code = target["name"]
+        if code == template["code"]:
+            code = f"{code}_target"
+        for i, chain in enumerate(target["chains"]):
+            atomic_write_text(workdir / modeller.chain_target_file(i), modeller.target_ali(code, chain.sequence))
+        ctx.progress(progress[0], "Allineamento per catena")
+        modeller.run_script(ctx, modeller.build_complex_alignment_script(template, code), "align.py",
+                            workdir=workdir, progress_range=progress)
+        texts = []
+        for i in range(len(target["chains"])):
+            path = workdir / modeller.chain_alignment_file(i)
+            if not path.exists():
+                raise AppError(f"MODELLER non ha scritto l'allineamento della catena {template['chains'][i]}.",
+                               code="modeller_error")
+            texts.append(path.read_text(encoding="utf-8"))
+        entries = complexes.merge_chain_alignments(texts, template, code)
+        for chain, tc, piece_t, piece_s in zip(target["chains"], template["chains"], entries[0].sequence.split("/"),
+                                               entries[1].sequence.split("/")):
+            pairs, same = multitemplate.identical_pairs(piece_s, piece_t)
+            ctx.log(f"Catena {tc} del template ← {chain.name}: {len(chain.sequence)} residui, {pairs} allineati, "
+                    f"identità {100.0 * same / pairs if pairs else 0.0:.1f}%")
+        pir = sequences.format_pir(entries)
+        atomic_write_text(workdir / "alignment.ali", pir)
+        return pir, code
+
     @staticmethod
     def _choose_multi_alignment(ctx: JobContext, templates: list[dict], workdir: Path) -> dict:
         """Più template: salign oppure gli align2d di ogni template uniti sul bersaglio, se salign ha spostato un
@@ -499,16 +539,26 @@ class ComputeService:
 
     def run_modeling(self, ctx: JobContext, *, target: Optional[SeqRecord], templates_raw: list[dict],
                      alignment: Optional[str], options_raw: dict, quality_mode: str = "best",
-                     extended_quality: bool = False, template_cache: Optional[PreparedTemplates] = None) -> dict:
+                     extended_quality: bool = False, template_cache: Optional[PreparedTemplates] = None,
+                     complex_raw: Optional[dict] = None) -> dict:
         """Flusso completo: template → allineamento → AutoModel → selezione → qualità. Usato anche dalla pipeline.
 
         Con la qualità "all" i modelli si analizzano in parallelo (al massimo `QUALITY_MODELS_PARALLEL`), ognuno con
         il proprio contesto e la propria cartella; i risultati restano nell'ordine dei modelli. `template_cache`
         (pipeline): template preparati riusati fra gli elementi del job.
+
+        `complex_raw` (F5.3, modalità Complesso): bersaglio a più catene con la corrispondenza catena del template →
+        sequenza (`domain/complexes.parse_target`), un solo template con le catene in quell'ordine e l'allineamento per
+        catena. Ogni bersaglio a più catene (anche da un PIR) ha le catene del modello con i nomi del template, le
+        restrizioni di simmetria facoltative e il confronto delle interfacce con il template (`complex` nel risultato e
+        nei rapporti di qualità).
         """
         workdir = ctx.workdir
         opts = modeller.parse_options(options_raw or {})
-        specs = _template_specs(templates_raw)
+        complex_target = complexes.parse_target(complex_raw) if complex_raw else None
+        if complex_target is not None:
+            templates_raw = complex_templates(complex_target, templates_raw)
+        specs = _template_specs(templates_raw, keep_order=complex_target is not None)
         _apply_ligand_options(specs, opts)
         modeller.modeller_python(ctx)  # errore immediato se MODELLER manca
         ctx.progress(0.02, "Preparazione dei template")
@@ -519,6 +569,16 @@ class ComputeService:
         if alignment:
             pir, target_code, warnings = self._normalize_pir(alignment, templates)
             atomic_write_text(workdir / "alignment.ali", pir)
+            if complex_target is not None:
+                given = complexes.target_chains(next(e for e in sequences.parse_pir(pir) if e.kind == "sequence"))
+                wanted = [c.sequence for c in complex_target["chains"]]
+                if given != wanted:
+                    raise AppError(f"Il PIR ha {len(given)} catene nel bersaglio che non corrispondono alle "
+                                   f"{len(wanted)} sequenze del complesso (stesse catene, nello stesso ordine).",
+                                   code="invalid_pir")
+        elif complex_target is not None:
+            pir, target_code = self._run_complex_alignment(ctx, complex_target, templates[0], workdir, (0.05, 0.12))
+            warnings = list(sequences.validate_pir(pir)["warnings"])
         else:
             if target is None:
                 raise AppError("Indica la sequenza bersaglio oppure un allineamento PIR.")
@@ -539,10 +599,20 @@ class ComputeService:
         anchor = multitemplate.unanchored(entries, templates) if len(templates) > 1 else None
         if anchor:
             warnings.append(anchor)
+        # bersaglio a più catene (F5.3): catene coerenti con il template, nomi del template, simmetria
+        multi = self._complex_plan(entries, templates, opts, complex_target)
+        warnings = [*warnings, *multi["warnings"]]
         for w in warnings:
             ctx.log(f"Avviso: {w}")
+        if multi["chains"]:
+            ctx.log("Complesso: " + ", ".join(f"catena {c['model_chain']} ({c['length']} residui"
+                                              + (f", catena {c['template_chain']} del template" if c["template_chain"]
+                                                 else "") + ")" for c in multi["chains"])
+                    + (f"; simmetria sui C-alfa fra {', '.join('='.join(g) for g in multi['symmetry']['groups'])}, "
+                       f"peso {opts.symmetry_weight:g}" if multi["symmetry"]["applied"] else ""))
         ctx.progress(0.15, "Costruzione dei modelli")
-        script = modeller.build_model_script([t["code"] for t in templates], target_code, opts, hetatm=transfer)
+        script = modeller.build_model_script([t["code"] for t in templates], target_code, opts, hetatm=transfer,
+                                             symmetry=multi["groups"], chain_names=multi["names"])
         modeller.run_script(ctx, script, "model.py", workdir=workdir, progress_range=(0.15, 0.8))
         summary = modeller.read_models(workdir)
         models = []
@@ -563,6 +633,8 @@ class ComputeService:
         model_groups = [m for m in ligands.model_groups(entries, templates) if m] if transfer else []
         transferred = [ligands.group_label(g["chain"], g["resnum"], g["resname"])
                        for g in (members[0][1] for members in model_groups)]
+        # complesso: interfacce del modello confrontate con quelle del template (calcolate una volta)
+        interfaces_check = self._complex_assessor(ctx, workdir, entries, templates, multi) if multi["chains"] else None
 
         def assess(m: dict) -> None:
             """Analisi di un modello: rapporto accanto al modello, metriche nel riepilogo, REMARK nel PDB."""
@@ -577,6 +649,11 @@ class ComputeService:
                 if checked is not None:
                     report["ligands"] = checked
                     m["ligands"] = ligands.summary(checked)
+            if interfaces_check is not None:  # complesso: interfacce e confronto con il template
+                assessed = interfaces_check(m["file"], sub.log, sub.check)
+                if assessed is not None:
+                    report["complex"] = assessed
+                    m["complex"] = complexes.brief(assessed)
             atomic_write_json(workdir / f"{m['file']}.quality.json", report)
             m["quality"] = quality.summary_metrics(report)
             quality.inject_remarks(workdir / m["file"], [
@@ -588,6 +665,12 @@ class ComputeService:
                   for t in templates if t.get("predicted")),
                 *([f"LIGANDS {len(transferred)} " + " ".join(g.replace(" ", ":") for g in transferred)]
                   if transferred else []),
+                *([f"CHAINS {len(multi['chains'])} " + " ".join(
+                    f"{c['model_chain']}={c['template_chain'] or '?'}" for c in multi["chains"])] if multi["chains"]
+                  else []),
+                *([f"SYMMETRY CA WEIGHT {opts.symmetry_weight:g} "
+                   + " ".join(",".join(g) for g in multi["symmetry"]["groups"])] if multi["symmetry"]["applied"]
+                  else []),
                 f"DOPE {m.get('dope')} ZDOPE {m.get('zdope')} GA341 {m.get('ga341')}",
                 f"GRADE {m['quality']['grade']} ({m['quality']['grade_score']}) "
                 f"RAMA_FAVORED {m['quality']['rama_favored']} CLASHSCORE {m['quality']['clashscore']}",
@@ -641,7 +724,118 @@ class ComputeService:
                  "sources": [{"template": code, "chain": g["chain"], "resnum": g["resnum"], "resname": g["resname"]}
                              for code, g in members]}
                 for members in model_groups], "verification": checked}
+        if multi["chains"]:
+            # interfacce del modello migliore anche senza analisi di qualità (il risultato le mostra nel 3D)
+            if best in targets:
+                assessed = (read_json(workdir / f"{best['file']}.quality.json") or {}).get("complex")
+            else:
+                assessed = interfaces_check(best["file"], ctx.log, ctx.check) if interfaces_check else None
+                if assessed is not None:
+                    best["complex"] = complexes.brief(assessed)
+            result["complex"] = {"chains": multi["chains"], "symmetry": multi["symmetry"],
+                                 "template": multi["template"], "mode": "complex" if complex_target else "pir",
+                                 "assessment": assessed}
         return result
+
+    @staticmethod
+    def _complex_plan(entries: list, templates: list[dict], opts: modeller.ModelOptions,
+                      complex_target: Optional[dict]) -> dict:
+        """Bersaglio a più catene: coerenza delle catene del PIR (`complexes.check_chains`: errore nella modalità
+        Complesso, avviso con un PIR), nomi delle catene del modello (quelle del template principale, se la sua voce ha
+        una catena per ogni catena del bersaglio; altrimenti A, B, C…), gruppi di simmetria e descrizione per il
+        risultato. Un bersaglio a catena singola non cambia nulla (nessuna rinomina: il modello resta catena A)."""
+        target = next(e for e in entries if e.kind == "sequence")
+        chain_seqs = complexes.target_chains(target)
+        empty = {"chains": [], "names": None, "groups": [], "warnings": [], "template": None,
+                 "symmetry": {"requested": opts.symmetry, "applied": False, "groups": [], "weight": opts.symmetry_weight}}
+        if len(chain_seqs) < 2:
+            if opts.symmetry:
+                empty["warnings"].append("Restrizioni di simmetria richieste, ma il bersaglio ha una sola catena: "
+                                         "nessuna restrizione aggiunta.")
+            return empty
+        warnings = complexes.check_chains(entries, templates, strict=complex_target is not None)
+        principal, span = None, None
+        for t in templates:
+            entry = next((e for e in entries if e.is_template and e.code == t["code"]), None)
+            if entry is None or complexes.break_columns(entry.sequence) != complexes.break_columns(target.sequence):
+                continue
+            fields = (entry.fields + [""] * 4)[:4]
+            chains = list(t["chains"])
+            first = fields[1] if fields[1] in chains else chains[0]
+            last = fields[3] if fields[3] in chains else chains[-1]
+            candidate = chains[chains.index(first):chains.index(last) + 1]
+            if len(candidate) == len(chain_seqs):
+                principal, span = t, candidate
+                break
+        names = list(span) if span else list(assembly.CHAIN_IDS[:len(chain_seqs)])
+        if principal is None:
+            warnings.append("Nessun template ha una catena di fronte a ogni catena del bersaglio con i '/' nelle "
+                            "stesse colonne: le catene del modello si chiamano A, B, C… e le interfacce non si "
+                            "confrontano con un template.")
+        groups = complexes.symmetry_groups(chain_seqs) if opts.symmetry else []
+        if opts.symmetry and not groups:
+            warnings.append("Restrizioni di simmetria richieste, ma nessuna coppia di catene del bersaglio ha la stessa "
+                            "sequenza: nessuna restrizione aggiunta.")
+        by_chain = {c.template_chain: c for c in (complex_target or {}).get("chains") or []}
+        described = []
+        for k, seq in enumerate(chain_seqs):
+            tc = span[k] if span else None
+            source = by_chain.get(tc) if tc else None
+            described.append({"index": k, "model_chain": names[k], "template_chain": tc, "length": len(seq),
+                              "name": source.name if source else None,
+                              "same_as": source.same_as if source else None})
+        return {"chains": described, "names": names, "groups": groups, "warnings": warnings,
+                "template": principal["code"] if principal else None,
+                "symmetry": {"requested": opts.symmetry, "applied": bool(groups), "weight": opts.symmetry_weight,
+                             "groups": [[names[i] for i in g] for g in groups], "atoms": "CA dei residui standard"}}
+
+    @staticmethod
+    def _complex_assessor(ctx: JobContext, workdir: Path, entries: list, templates: list[dict],
+                          multi: dict) -> Optional[Callable]:
+        """Interfacce di un modello a più catene e confronto con il template principale (`complexes.assess`).
+
+        La copia preparata del template e le sue interfacce si calcolano una volta (qui, prima dei modelli analizzati
+        in parallelo); ogni chiamata legge il modello. Senza template confrontabile si analizzano solo le interfacce
+        del modello. Un errore inatteso diventa una riga del log: non fa fallire la modellazione."""
+        template = next((t for t in templates if t["code"] == multi["template"]), None)
+        template_model = template_ifaces = None
+        if template is not None:
+            try:
+                template_model = structure.first_model(structure.load_structure(workdir / template["file"],
+                                                                                template["code"]))
+                template_ifaces = interfaces.analyze(template_model, interactions.analyze(template_model),
+                                                     check=ctx.check)
+            except (AppError, ValueError, KeyError) as exc:
+                ctx.log(f"Interfacce del template {template['code']} non calcolate: {exc}")
+                template = None
+            else:
+                ctx.log(f"Interfacce del template {template['code']}: "
+                        + (", ".join(f"{'–'.join(p['chains'])} {p['area']:.0f} Å²" for p in template_ifaces["pairs"])
+                           or "nessuna"))
+
+        def check(model_file: str, log: Callable[[str], None], cancel: Callable[[], None]) -> Optional[dict]:
+            try:
+                model = structure.first_model(structure.load_structure(workdir / model_file, Path(model_file).stem))
+                if template is None:
+                    iface = interfaces.analyze(model, interactions.analyze(model), check=cancel)
+                    out = {"version": complexes.VERSION, "template": None, "chains": [],
+                           "interfaces": {k: v for k, v in iface.items() if k != "residues"},
+                           "template_interfaces": None, "comparison": [], "status": "non valutabile", "tone": "warn",
+                           "summary": "Nessun template confrontabile: solo le interfacce del modello.", "notes": [],
+                           "limits": complexes.LIMITS}
+                else:
+                    out = complexes.assess(model, template_model, entries, template, template_ifaces=template_ifaces,
+                                           check=cancel)
+            except (AppError, ValueError, KeyError, IndexError) as exc:
+                log(f"Analisi delle interfacce di {model_file} non riuscita: {exc}")
+                return None
+            pairs = out["interfaces"].get("pairs") or []
+            log(f"Interfacce di {model_file}: "
+                + (", ".join(f"{'–'.join(p['chains'])} {p['area']:.0f} Å²" for p in pairs) or "nessuna")
+                + (f"; confronto con {out['template']}: {out['status']}" if out.get("template") else ""))
+            return out
+
+        return check
 
     @staticmethod
     def _ligand_verifier(workdir: Path, entries: list, templates: list[dict]) -> Callable:
@@ -671,7 +865,18 @@ class ComputeService:
         return verify
 
     def handle_align2d(self, ctx: JobContext, p: dict) -> dict:
-        target = _record(p.get("target", {}))
+        if p.get("complex"):  # complesso (F5.3): un allineamento per catena, unito con '/'
+            target_complex = complexes.parse_target(p["complex"])
+            modeller.modeller_python(ctx)
+            templates = self._prepare_templates(
+                ctx, _template_specs(complex_templates(target_complex, p.get("templates", [])), keep_order=True),
+                ctx.workdir)
+            pir, _code = self._run_complex_alignment(ctx, target_complex, templates[0], ctx.workdir, (0.1, 0.9))
+            return {"pir": pir, "report": sequences.validate_pir(pir), "templates": self._public(templates),
+                    "warnings": [], "pap": "",
+                    "chains": [{"template_chain": c.template_chain, "name": c.name, "length": len(c.sequence),
+                                "same_as": c.same_as} for c in target_complex["chains"]]}
+        target = _record(p.get("target") or {})
         modeller.modeller_python(ctx)
         templates = self._prepare_templates(ctx, _template_specs(p.get("templates", [])), ctx.workdir)
         pir, warnings = self._run_alignment(ctx, target, templates, ctx.workdir, (0.1, 0.9))
@@ -691,7 +896,8 @@ class ComputeService:
         return self.run_modeling(ctx, target=target, templates_raw=p.get("templates", []),
                                  alignment=p.get("alignment") or None, options_raw=p.get("options", {}),
                                  quality_mode=p.get("quality", "best"),
-                                 extended_quality=bool(p.get("extended_quality", False)))
+                                 extended_quality=bool(p.get("extended_quality", False)),
+                                 complex_raw=p.get("complex") or None)
 
     def handle_loop(self, ctx: JobContext, p: dict) -> dict:
         path, label = self.resolve_structure(p.get("source", {}))

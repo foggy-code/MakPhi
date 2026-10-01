@@ -252,6 +252,13 @@ class ReportService:
             lig = res.get("ligands") if isinstance(res.get("ligands"), dict) else {}
             if rel == res.get("best_model") and isinstance(lig.get("verification"), dict):
                 data["ligands"] = lig["verification"]
+            # complesso (F5.3): interfacce del rapporto del modello; per il migliore anche senza analisi di qualità
+            cx = res.get("complex") if isinstance(res.get("complex"), dict) else None
+            if cx is not None:
+                assessed = (quality or {}).get("complex")
+                if not isinstance(assessed, dict) and rel == res.get("best_model"):
+                    assessed = cx.get("assessment")
+                data["complex"] = {**cx, "assessment": assessed if isinstance(assessed, dict) else None}
         else:  # loop: la struttura di partenza è il bersaglio, niente template né allineamento
             params = job.get("params") or {}
             region = res.get("region") if isinstance(res.get("region"), list) else []

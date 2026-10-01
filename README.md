@@ -293,11 +293,32 @@ sperimentale**, con il pLDDT medio (confidenza della predizione, 0–100).
   i residui coordinanti e le linee di coordinazione. Il risultato della Modellazione e il report HTML hanno la stessa
   tabella.
 
+## Complessi e omo-oligomeri
+
+- **Assemblaggio biologico:** il file del PDB contiene l'unità asimmetrica del cristallo, che non sempre è il complesso
+  biologico. Nella **Libreria template** la scheda di un template elenca gli assemblaggi dichiarati nel file (REMARK 350
+  del PDB, `pdbx_struct_assembly` del mmCIF) con lo stato oligomerico e le catene; **Importa come template** crea il
+  template `<ID>_ASM<n>` con le coordinate dell'assemblaggio (operatori di simmetria applicati). Le catene copiate
+  ricevono nuovi nomi, con l'origine indicata (es. «B = A con l'operatore 2»).
+- **Modellazione → Complesso:** si sceglie il template (o l'assemblaggio) e, per ogni sua catena, la sequenza del
+  bersaglio: dal progetto, incollata oppure **stessa della catena A** per gli omo-oligomeri. Le catene del modello hanno i
+  nomi del template, con i residui numerati da 1. Con catene uguali si possono aggiungere **restrizioni di simmetria**
+  (MODELLER, C-alfa, peso 1): le catene restano identiche fra loro, la loro disposizione viene dal template.
+  **Anteprima dell'allineamento per catena** mostra l'allineamento di ogni catena in modalità Confidenza. Limiti: da 2 a
+  12 catene e al più 3000 residui in tutto (il tempo di MODELLER cresce con i residui del modello).
+- **Interfacce:** per ogni modello a più catene BioLoom confronta le interfacce con quelle del template: residui
+  d'interfaccia conservati, area sepolta del modello e del template e **DockQ** (Basu & Wallner 2016) con il template
+  come riferimento, con l'esito alta, media, accettabile o non riprodotta. Nel risultato il 3D colora le catene e le
+  interfacce (conservate, solo nel modello, perse); il report HTML ha la sezione **Interfacce del complesso**. Il confronto
+  dice quanto il modello riproduce l'interfaccia del template, non se l'interfaccia è quella vera del bersaglio.
+- Anche un PIR a più catene (Editor PIR, modalità «Da documento PIR») produce un modello con le catene del template, le
+  interfacce e la simmetria facoltativa.
+
 ## Cosa contiene
 
 | Area | Strumenti |
 |---|---|
-| Modellazione | MODELLER 10.8 (AutoModel, loop, allineamenti `align2d`/`salign`), con il trasferimento dei ligandi, cofattori e metalli scelti |
+| Modellazione | MODELLER 10.8 (AutoModel, loop, allineamenti `align2d`/`salign`), con il trasferimento dei ligandi, cofattori e metalli scelti; complessi e omo-oligomeri (una sequenza per catena, restrizioni di simmetria, confronto delle interfacce con il template) su strutture a più catene o assemblaggi biologici importati |
 | Ricerca template | RCSB, NCBI BLAST e modelli predetti di AlphaFold DB (online); BLAST+ e MMseqs2 sul database locale pdbaa; punteggio motivato di ogni template e template complementari consigliati |
 | Allineamenti | Clustal Omega, MAFFT, MUSCLE, TM-align, US-align, più motori integrati; confronto strutturale con GDT-TS/GDT-HA, lDDT e deviazione per residuo |
 | Qualità | Ramachandran, clashscore, DSSP (mkdssp), SASA, profilo DOPE, **PROCHECK**, **ProSA II**, **QMEAN locale** (UniClust30) o SWISS-MODEL, voto A–D, consenso tra i metodi, qualità per residuo nel 3D (anche pLDDT di AlphaFold), verifica di ligandi e metalli (contatti, scontri, coordinazione); i passi indipendenti girano in parallelo e con l'analisi "Su tutti i modelli" si analizzano più modelli insieme, report HTML stampabile in PDF |

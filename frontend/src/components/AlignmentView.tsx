@@ -26,12 +26,14 @@ interface Props {
   width?: number;
   /** riga del bersaglio per la modalità "Confidenza" (PIR: la voce `sequence`); predefinita la prima */
   reference?: number;
+  /** modalità iniziale dei colori (l'anteprima per catena dei complessi parte da "Confidenza") */
+  initialMode?: Mode;
 }
 
 const isRes = (c: string | undefined) => !!c && /[A-Za-z]/.test(c);
 
-export function AlignmentView({ ids, aligned, conservation, width = 60, reference = 0 }: Props) {
-  const [mode, setMode] = useState<Mode>("class");
+export function AlignmentView({ ids, aligned, conservation, width = 60, reference = 0, initialMode = "class" }: Props) {
+  const [mode, setMode] = useState<Mode>(initialMode);
   const [block, setBlock] = useState(width);
   const length = aligned[0]?.length ?? 0;
   const cells = length * aligned.length;

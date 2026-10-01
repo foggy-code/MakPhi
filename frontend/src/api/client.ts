@@ -2,7 +2,9 @@ import type {
   Align2dResult,
   AlignResult,
   AnalysisRequest,
+  AssemblyList,
   AuthStatus,
+  ComplexRequest,
   ConsensusResult,
   CoverageCheck,
   CoverageRequest,
@@ -207,6 +209,10 @@ export const api = {
   templateFileUrl: (id: string) => `/api/templates/${enc(id)}/file`,
   templateText: (id: string) => get<string>(`/api/templates/${enc(id)}/file`),
   deleteTemplate: (id: string) => del(`/api/templates/${enc(id)}`),
+  /** assemblaggi biologici del file (REMARK 350, pdbx_struct_assembly) e loro importazione come template <ID>_ASM<n> */
+  templateAssemblies: (id: string) => get<AssemblyList>(`/api/templates/${enc(id)}/assemblies`),
+  importAssembly: (id: string, assemblyId: string) =>
+    post<TemplateItem & { cached: boolean }>(`/api/templates/${enc(id)}/assemblies/${enc(assemblyId)}`),
 
   // job
   jobs: (q: { project_id?: string; kind?: string; status?: string; limit?: number } = {}) => {
@@ -249,10 +255,12 @@ export const api = {
   /** allineamento strutturale di B su A (riferimento) con il confronto per residuo; catena vuota = prima catena */
   structuralAlign: (body: { project_id?: string; structures: [StructureSource, StructureSource]; tool?: string; use_cache?: boolean }) =>
     post<JobSummary>("/api/align", { ...body, mode: "structural" }),
-  align2d: (body: { project_id?: string; target: { name: string; sequence: string }; templates: TemplateRef[] }) =>
+  /** `complex` (F5.3): un allineamento per catena del template (target non serve) */
+  align2d: (body: { project_id?: string; target?: { name: string; sequence: string } | null; templates: TemplateRef[]; complex?: ComplexRequest | null }) =>
     post<JobSummary>("/api/align2d", body),
-  /** `options.hetatm` + `options.ligands`: ligandi, cofattori e metalli da trasferire (elenco = solo quei gruppi) */
-  model: (body: { project_id?: string; target?: { name: string; sequence: string } | null; alignment?: string | null; templates: TemplateRef[]; options: Record<string, unknown> & { hetatm?: boolean; ligands?: LigandRef[] }; quality: string; extended_quality?: boolean }) =>
+  /** `options.hetatm` + `options.ligands`: ligandi, cofattori e metalli da trasferire (elenco = solo quei gruppi);
+   *  `complex` + `options.symmetry`: bersaglio a più catene su un solo template (F5.3) */
+  model: (body: { project_id?: string; target?: { name: string; sequence: string } | null; alignment?: string | null; templates: TemplateRef[]; options: Record<string, unknown> & { hetatm?: boolean; ligands?: LigandRef[]; symmetry?: boolean; symmetry_weight?: number }; quality: string; extended_quality?: boolean; complex?: ComplexRequest | null }) =>
     post<JobSummary>("/api/model", body),
   loop: (body: { project_id?: string; source: StructureSource; chain: string; start: number; end: number; models: number; level: string }) =>
     post<JobSummary>("/api/model/loop", body),

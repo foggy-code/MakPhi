@@ -46,6 +46,9 @@ class TemplateSpec:
     # Gruppi da trasferire come (catena, numero, nome); None = scelta predefinita (domain/ligands.select: niente
     # additivi, ioni monovalenti e residui modificati). Conta solo con `hetatm`.
     ligands: Optional[list[tuple[str, str, str]]] = None
+    # Complessi (F5.3): catene nella copia preparata nell'ordine di `chains` (quello delle catene del bersaglio),
+    # invece che nell'ordine del file
+    keep_order: bool = False
 
 
 @dataclass
@@ -77,6 +80,10 @@ class ModelOptions:
     # template con quel gruppo). None = scelta predefinita dei template con i ligandi attivi; un elenco = solo quei
     # gruppi (e attiva il trasferimento per i loro template).
     ligands: Optional[list[dict]] = None
+    # Bersaglio a più catene (F5.3): restrizioni di simmetria fra le catene con la stessa sequenza (C-alfa dei residui
+    # standard, domain/complexes.symmetry_groups) e loro peso
+    symmetry: bool = False
+    symmetry_weight: float = 1.0
 
 
 def modeller_python(ctx: JobContext) -> str:
@@ -119,6 +126,10 @@ def prepare_template(source: Path, spec: TemplateSpec, dest_dir: Path) -> dict:
     if unknown:
         raise AppError(f"Catene {', '.join(sorted(unknown))} non presenti nel template {spec.id} "
                        f"(disponibili: {', '.join(order)}).")
+    if spec.keep_order and spec.chains:
+        # complesso: la copia ha le catene nell'ordine del bersaglio, così i '/' del PIR si corrispondono
+        chains = list(dict.fromkeys(spec.chains))
+        model.child_list.sort(key=lambda c: chains.index(c.id) if c.id in chains else len(chains))
     code = sequences.sanitize_code(f"{spec.id}_{''.join(chains)}", default="TEMPLATE")
     dest = dest_dir / f"{code}.pdb"
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -315,14 +326,62 @@ def pair_file(index: int) -> str:
     return f"alignment_pair_{index + 1}.ali"
 
 
+def chain_target_file(index: int) -> str:
+    return f"target_chain_{index + 1}.ali"
+
+
+def chain_alignment_file(index: int) -> str:
+    return f"alignment_chain_{index + 1}.ali"
+
+
+def build_complex_alignment_script(template: dict, target_code: str) -> str:
+    """Complesso (F5.3): align2d di ogni catena del bersaglio (`chain_target_file`) sulla sua catena del template
+    (segmento FIRST:X–LAST:X della copia preparata, catene nell'ordine del bersaglio), un allineamento per catena
+    (`chain_alignment_file`); BioLoom li unisce con '/' (domain/complexes.merge_chain_alignments)."""
+    lines = [_header(), "env = Environ()", "env.io.atom_files_directory = ['.']"]
+    total = len(template["chains"])
+    for i, chain in enumerate(template["chains"]):
+        seg = (f"FIRST:{chain}", f"LAST:{chain}")
+        lines += [
+            f"mark('stage Allineamento della catena {chain} ({i + 1} di {total}, align2d)')",
+            "aln = Alignment(env)",
+            f"mdl = Model(env, file={template['file']!r}, model_segment={seg!r})",
+            f"aln.append_model(mdl, align_codes={template['code']!r}, atom_files={template['file']!r})",
+            f"aln.append(file={chain_target_file(i)!r}, align_codes={target_code!r})",
+            "aln.align2d(max_gap_length=50)",
+            f"aln.write(file={chain_alignment_file(i)!r}, alignment_format='PIR')",
+        ]
+    lines.append("mark('stage Allineamenti per catena scritti')")
+    return "\n".join(lines) + "\n"
+
+
 def build_model_script(knowns: list[str], target_code: str, opts: ModelOptions,
-                       hetatm: Optional[bool] = None) -> str:
+                       hetatm: Optional[bool] = None, symmetry: Optional[list[list[int]]] = None,
+                       chain_names: Optional[list[str]] = None) -> str:
     """Script di AutoModel/DOPELoopModel. `hetatm`: MODELLER legge i gruppi HETATM dei template (quelli scritti nelle
-    copie preparate, con le colonne '.' nel PIR); None = come l'opzione `hetatm`."""
+    copie preparate, con le colonne '.' nel PIR); None = come l'opzione `hetatm`.
+
+    Bersaglio a più catene (F5.3): `symmetry` = gruppi di indici di catene con la stessa sequenza (ogni catena vincolata
+    alla prima del gruppo: `restraints.symmetry` sui C-alfa dei residui standard, peso `opts.symmetry_weight`, come
+    nell'esempio del manuale di MODELLER); `chain_names` = nomi delle catene del modello (quelli del template), con i
+    residui di ogni catena numerati da 1 (`rename_segments` in `special_patches`)."""
     base = "DOPELoopModel" if opts.loop_refinement else "AutoModel"
     body = [f"class BioLoomModel({base}):", "    _done = 0", "    _loops_done = 0"]
-    if opts.restraints:
+    if chain_names:
+        names = [str(c) for c in chain_names]
+        if len(set(names)) != len(names) or not all(re.fullmatch(r"[A-Za-z0-9]", c) for c in names):
+            raise AppError(f"Nomi delle catene del modello non validi: {', '.join(names)}.")
+        body += ["    def special_patches(self, aln):",
+                 f"        self.rename_segments(segment_ids={names!r}, renumber_residues={[1] * len(names)!r})"]
+    pairs = [(int(g[0]), int(k)) for g in symmetry or [] for k in g[1:]]
+    if opts.restraints or pairs:
         body += ["    def special_restraints(self, aln):", "        rsr = self.restraints", "        at = self.atoms"]
+        for a, b in pairs:
+            body += [
+                f"        s1 = Selection(self.chains[{a}]).only_std_residues().only_atom_types('CA')",
+                f"        s2 = Selection(self.chains[{b}]).only_std_residues().only_atom_types('CA')",
+                f"        rsr.symmetry.append(Symmetry(s1, s2, {float(opts.symmetry_weight)!r}))",
+            ]
         for r in opts.restraints:
             if r.type in ("helix", "strand"):
                 cls = "Alpha" if r.type == "helix" else "Strand"
@@ -462,6 +521,15 @@ def parse_options(raw: dict) -> ModelOptions:
     if not 0 <= opts.plddt_min <= 100:
         raise AppError("La soglia pLDDT deve essere compresa tra 0 e 100 (predefinita 70).")
     opts.ligands = _parse_ligands(raw.get("ligands"))
+    opts.symmetry = bool(raw.get("symmetry", False))
+    try:
+        weight = raw.get("symmetry_weight")
+        opts.symmetry_weight = 1.0 if weight is None else float(weight)
+    except (TypeError, ValueError):
+        raise AppError("Il peso delle restrizioni di simmetria deve essere un numero.")
+    if not 0 < opts.symmetry_weight <= 10:
+        raise AppError("Il peso delle restrizioni di simmetria deve essere compreso tra 0 (escluso) e 10 "
+                       "(predefinito 1, come nel manuale di MODELLER).")
     loop = raw.get("loop") or {}
     opts.loop_refinement = bool(loop.get("enabled", False))
     opts.loop_models = int(loop.get("models", 4))

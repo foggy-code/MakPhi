@@ -13,8 +13,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
-from ..core.errors import AppError, NotFound, RemoteServiceError
+from ..core.errors import AppError, Conflict, NotFound, RemoteServiceError
 from ..core.storage import atomic_write_bytes, atomic_write_json, atomic_write_text, read_json, safe_join
+from ..domain import assembly as assembly_mod
 from ..domain import ligands, plddt, secondary, structure
 from ..engines import remote
 
@@ -134,7 +135,7 @@ class TemplateLibrary:
                 "title": meta.get("title", ""), "method": meta.get("method", ""),
                 "resolution": meta.get("resolution"), "chains": meta.get("chains", []),
                 "predicted": bool(meta.get("predicted")), "plddt_mean": meta.get("plddt_mean"),
-                "alphafold": meta.get("alphafold"),
+                "alphafold": meta.get("alphafold"), "assembly": meta.get("assembly"),
             })
         return items
 
@@ -232,7 +233,8 @@ class TemplateLibrary:
         atomic_write_text(dest, text)
         return self._register(tid, dest, source=source)
 
-    def _register(self, tid: str, path: Path, source: str, alphafold: Optional[dict] = None) -> dict:
+    def _register(self, tid: str, path: Path, source: str, alphafold: Optional[dict] = None,
+                  extra: Optional[dict] = None) -> dict:
         self._analysis_path(tid).unlink(missing_ok=True)
         analysis = self.analyze(tid)
         meta = {
@@ -240,6 +242,7 @@ class TemplateLibrary:
             "title": analysis["header"].get("title", ""), "method": analysis["header"].get("method", ""),
             "resolution": analysis["header"].get("resolution"),
             "chains": [c["chain"] for c in analysis["chains"]],
+            **(extra or {}),
         }
         # Modello predetto: scaricato da AlphaFold DB, oppure un file di AlphaFold caricato dall'utente
         # (riconosciuto come nel rapporto di qualità, mai dai soli B-factor).
@@ -301,3 +304,56 @@ class TemplateLibrary:
         }
         atomic_write_json(cache_path, {"mtime": mtime, "version": ANALYSIS_VERSION, "data": data})
         return data
+
+    # ----------------------------------------------------------------------------- assemblaggi biologici (F5.3)
+    def assemblies(self, template_id: str) -> dict:
+        """Assemblaggi biologici dichiarati nel file (REMARK 350 del PDB, pdbx_struct_assembly del mmCIF): stato
+        oligomerico, catene generate e loro origine (domain/assembly). Si leggono dal file a ogni richiesta."""
+        tid = normalize_id(template_id)
+        path = self.path(tid)
+        meta = self._meta(tid, path)
+        out = {"template": tid, **assembly_mod.describe(path)}
+        if meta.get("assembly"):
+            out["note"] = (f"{tid} è già l'assemblaggio {meta['assembly'].get('assembly_id')} di "
+                           f"{meta['assembly'].get('source_id')}.")
+            out["assemblies"] = []
+        elif meta.get("predicted"):
+            out["note"] = "Modello predetto: nessun assemblaggio biologico."
+            out["assemblies"] = []
+        return out
+
+    def import_assembly(self, template_id: str, assembly_id: str) -> dict:
+        """Assemblaggio biologico come nuovo template `<ID>_ASM<n>`: coordinate generate con gli operatori del file
+        (domain/assembly.pdb_text), catene rinominate in modo univoco, metadati con l'origine di ogni catena. Già in
+        libreria e generato dallo stesso file d'origine (impronta SHA-256): si riusa."""
+        from ..core.cache import content_hash
+
+        tid = normalize_id(template_id)
+        path = self.path(tid)
+        if self._meta(tid, path).get("assembly"):
+            raise AppError(f"{tid} è già un assemblaggio biologico.", code="invalid_assembly")
+        aid = str(assembly_id or "").strip()
+        new_id = normalize_id(f"{tid}_ASM{aid}")
+        fingerprint = content_hash(path)
+        lock = self._fetch_lock(new_id)
+        with lock:
+            if self.exists(new_id):
+                existing = self._meta(new_id).get("assembly") or {}
+                if existing.get("source_id") != tid:  # un template dell'utente con lo stesso nome non si sovrascrive
+                    raise Conflict(f"In libreria c'è già un template {new_id} che non è l'assemblaggio {aid} di {tid}: "
+                                   "eliminalo o rinominalo prima di importare l'assemblaggio.")
+                if existing.get("source_sha256") == fingerprint:
+                    return {**self.describe(new_id), "cached": True}
+            info = assembly_mod.read(path)
+            chosen = assembly_mod.find(info, aid)
+            model = structure.first_model(structure.load_structure(path, tid))
+            analysis = self.analyze(tid)
+            text, chains = assembly_mod.pdb_text(model, info, chosen, source_id=tid, header=analysis["header"])
+            dest = safe_join(self.root, f"{new_id}.pdb")
+            atomic_write_text(dest, text)  # un assemblaggio rigenerato (file d'origine cambiato) sostituisce il vecchio
+            extra = {"assembly": {
+                "source_id": tid, "assembly_id": chosen.id, "details": chosen.details, "method": chosen.method,
+                "oligomeric_details": chosen.oligomeric_details, "oligomeric_count": chosen.oligomeric_count,
+                "chains": chains, "format": info.format, "source_sha256": fingerprint}}
+            described = self._register(new_id, dest, source=f"assemblaggio {chosen.id} di {tid}", extra=extra)
+        return {**described, "cached": False}

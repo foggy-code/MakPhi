@@ -615,6 +615,11 @@ REFERENCES = {
     "barlow": "Barlow D.J., Thornton J.M. (1983) Ion-pairs in proteins. J. Mol. Biol. 168:867–885.",
     "richardson": "Richardson J.S. (1981) The anatomy and taxonomy of protein structure. Adv. Protein Chem. "
                   "34:167–339.",
+    # complessi e omo-oligomeri (F5.3)
+    "dockq": "Basu S., Wallner B. (2016) DockQ: a quality measure for protein-protein docking models. PLoS ONE "
+             "11:e0161879.",
+    "capri": "Méndez R., Leplae R., De Maria L., Wodak S.J. (2003) Assessment of blind predictions of protein-protein "
+             "interactions: current status of docking methods. Proteins 52:51–67.",
 }
 
 LEGEND = {
@@ -689,6 +694,17 @@ LEGEND = {
                   "Thornton 1983). Plausibilità dalla sola area: sotto 400 Å² bassa (contatti cristallini, Janin et "
                   "al. 2008), 400–600 Å² incerta, da 600 Å² compatibile (interfacce standard, Lo Conte et al. 1999): "
                   "un indicatore semplice, non una classificazione come PISA o EPPIC."),
+    "complex": ("Interfacce del complesso", "ogni interfaccia del template (residui con ΔSASA > 1 Å²) si confronta con "
+                "quella delle catene corrispondenti del modello attraverso l'allineamento: residui d'interfaccia del "
+                "template conservati (il residuo allineato è d'interfaccia anche nel modello), area del modello e del "
+                "template, e DockQ con il template come riferimento (Basu & Wallner 2016): Fnat = frazione dei "
+                "contatti fra residui entro 5 Å (CAPRI, Méndez et al. 2003) presenti nel modello; iRMS = RMSD dello "
+                "scheletro dei residui entro 10 Å dall'altra catena dopo la loro sovrapposizione; LRMS = RMSD dello "
+                "scheletro della catena più corta dopo la sovrapposizione della più lunga; DockQ = (Fnat + 1/(1 + "
+                "(iRMS/1,5)²) + 1/(1 + (LRMS/8,5)²)) / 3. Esito: ≥ 0,80 alta, ≥ 0,49 media, ≥ 0,23 accettabile, sotto "
+                "non riprodotta. Misura la fedeltà all'interfaccia del template, non l'accuratezza rispetto al "
+                "complesso reale. Simmetria: restrizioni di MODELLER sui C-alfa delle catene con la stessa sequenza, "
+                "che rendono uguali le catene (non la disposizione, che viene dal template)."),
 }
 
 
@@ -1061,6 +1077,10 @@ def _options(doc: _Doc, data: dict) -> None:
         if opts.get("plddt_trim") is not None:
             rows.append(("Ritaglio pLDDT (solo template AlphaFold)",
                          f"sì, soglia {_num(opts.get('plddt_min'), 0)}" if opts.get("plddt_trim") else "no"))
+        if opts.get("symmetry") or isinstance(data.get("complex"), dict):  # bersaglio a più catene (F5.3)
+            rows.append(("Simmetria fra catene", f"sì, C-alfa delle catene con la stessa sequenza, peso "
+                                                 f"{_num(opts.get('symmetry_weight'), 1)}" if opts.get("symmetry")
+                         else "no"))
     if pipe:
         auto = pipe.get("template_mode") != "fixed"
         tw = pipe.get("twilight") if isinstance(pipe.get("twilight"), dict) else {}
@@ -1499,6 +1519,80 @@ def _structural(doc: _Doc, data: dict) -> None:
     doc.end()
 
 
+COMPLEX_TONE = {"alta": "ok", "media": "ok", "accettabile": "warn", "non riprodotta": "err", "nuova": "warn",
+                "non valutabile": "warn"}
+
+
+def _complex(doc: _Doc, data: dict) -> None:
+    """Interfacce del complesso (F5.3): catene del modello, simmetria e confronto di ogni interfaccia con quella del
+    template (residui conservati, aree, DockQ con esito motivato). Solo per i modelli a più catene."""
+    info = data.get("complex")
+    if not isinstance(info, dict):
+        return
+    doc.section("complesso", "Interfacce del complesso")
+    chains = [c for c in info.get("chains") or [] if isinstance(c, dict)]
+    if chains:
+        parts = []
+        for c in chains:
+            extra = [f"catena {c['template_chain']} del template" if c.get("template_chain") else "",
+                     f"{c['length']} residui" if _isnum(c.get("length")) else "",
+                     f"«{c['name']}»" if c.get("name") and c.get("name") != c.get("template_chain") else "",
+                     f"stessa sequenza della catena {c['same_as']}" if c.get("same_as") else ""]
+            parts.append(f"<b>{_e(c.get('model_chain'))}</b> ({_e(', '.join(x for x in extra if x))})")
+        doc.add(f'<p>Catene del modello: {"; ".join(parts)}. I residui di ogni catena sono numerati da 1.</p>')
+    sym = info.get("symmetry") if isinstance(info.get("symmetry"), dict) else {}
+    if sym.get("applied"):
+        groups = ", ".join(" = ".join(str(x) for x in g) for g in sym.get("groups") or [] if isinstance(g, list))
+        doc.add(f'<p class="small">Restrizioni di simmetria di MODELLER sui C-alfa dei residui standard fra le catene '
+                f"con la stessa sequenza ({_e(groups)}), peso {_num(sym.get('weight'), 1)}.</p>")
+    elif sym.get("requested"):
+        doc.add('<p class="small muted">Simmetria richiesta ma non applicata: nessuna coppia di catene con la stessa '
+                "sequenza.</p>")
+    assessment = info.get("assessment") if isinstance(info.get("assessment"), dict) else None
+    if assessment is None:
+        doc.add('<p class="small muted">Interfacce non analizzate per questo modello (analisi di qualità non '
+                "eseguita).</p>")
+        doc.end()
+        return
+    rows = []
+    for c in [x for x in assessment.get("comparison") or [] if isinstance(x, dict)]:
+        status = c.get("status")
+        tchains = c.get("template_chains")
+        origin = (f"template {' – '.join(str(x) for x in tchains)}" if isinstance(tchains, list)
+                  else "assente nel template")
+        rows.append("<tr>" + _td(f"{_e(' – '.join(str(x) for x in c.get('model_chains') or [] if x))}"
+                                 f'<div class="small muted">{_e(origin)}</div>')
+                    + _td(f"{_num(c.get('area_model'), 0)} ({_num(c.get('area_template'), 0)})", True)
+                    + _td(f"{_num(c.get('conserved_percent'), 0, '%')} ({_e(c.get('conserved'))}/"
+                          f"{_e(c.get('template_residues'))})" if _isnum(c.get("conserved_percent")) else "—", True)
+                    + _td(_num(c.get("fnat"), 2), True) + _td(_num(c.get("irms"), 2), True)
+                    + _td(_num(c.get("lrms"), 2), True) + _td(_num(c.get("dockq"), 2), True)
+                    + _td(f'<span class="tag {_lookup(COMPLEX_TONE, status, "")}">{_e(status or "—")}</span>')
+                    + "</tr>")
+    template = assessment.get("template")
+    if template:
+        doc.add(f'<p class="small muted">Confronto con il template {_e(template)} (catene corrispondenti '
+                "attraverso l'allineamento).</p>")
+    if rows:
+        doc.add(_table([("Catene", False), ("Area (template), Å²", True), ("Residui conservati", True),
+                        ("Fnat", True), ("iRMS (Å)", True), ("LRMS (Å)", True), ("DockQ", True), ("Esito", False)],
+                       rows))
+        for c in [x for x in assessment.get("comparison") or [] if isinstance(x, dict)]:
+            if c.get("text"):
+                doc.add(_note(_e(c["text"]), _lookup(COMPLEX_TONE, c.get("status"), "")))
+    else:
+        pairs = ((assessment.get("interfaces") or {}).get("pairs")) or []
+        doc.add('<p class="small muted">' + (f"{len(pairs)} interfacce nel modello, nessuna da confrontare."
+                                              if pairs else "Nessuna interfaccia fra le catene del modello.") + "</p>")
+    for note in assessment.get("notes") or []:
+        doc.add(_note(_e(note), "warn"))
+    if assessment.get("limits"):
+        doc.add(_note(_e(assessment["limits"]), "warn"))
+    doc.explain("complex", "interface")
+    doc.cite("dockq", "capri", "sasa", "krissinel")
+    doc.end()
+
+
 def _warnings(doc: _Doc, data: dict) -> None:
     items: list[str] = []
     for w in [*(data.get("warnings") or []), *(((data.get("quality") or {}).get("warnings")) or [])]:
@@ -1536,6 +1630,7 @@ def render(data: dict) -> str:
     (domain/consensus.compute), warnings [testo], image_png (byte di un PNG già verificato con `decode_png`) o None,
     ligands (verifica di domain/ligands per il modello senza rapporto di qualità; altrimenti quella del rapporto).
     analysis (services/analysis.report_summary: job_id, finished_at, disulfides, interfaces) o None.
+    complex (modelli a più catene, F5.3: chains, symmetry, template, assessment di domain/complexes.assess) o None.
     """
     doc = _Doc()
     kind = data.get("kind")
@@ -1551,6 +1646,7 @@ def render(data: dict) -> str:
         doc.cite("modeller", "dope")
     _quality(doc, data)
     _ligands(doc, data)
+    _complex(doc, data)
     _structural(doc, data)
     _warnings(doc, data)
     _legend_and_refs(doc)
