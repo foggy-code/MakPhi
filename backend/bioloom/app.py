@@ -16,6 +16,7 @@ from . import __version__
 from .api import analysis
 from .api import auth as auth_api
 from .api import bio, compute, databases, files, jobs, licenses, projects, system, templates
+from .api import structure_tools
 from .config import FRONTEND_DIST, Paths, default_paths
 from .core import auth
 from .core.container import build_core
@@ -71,6 +72,7 @@ def create_app(paths: Optional[Paths] = None, frontend_dist: Optional[Path] = FR
     for module in (auth_api, system, licenses, databases, files, projects, bio, templates, jobs, compute):
         app.include_router(module.router)
     app.include_router(analysis.router)  # analisi strutturale (F7)
+    app.include_router(structure_tools.router)  # tasche, elettrostatica, rifinitura (F7b, F9.1)
 
     @app.get("/api/{rest:path}", include_in_schema=False)
     async def api_not_found(rest: str):

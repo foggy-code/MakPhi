@@ -1,7 +1,9 @@
 # Integrazione continua di BioLoom v4.
 # - backend: lint e test rapidi in Python puro (senza MODELLER né strumenti esterni: quei test vengono saltati)
 # - frontend: typecheck, test e build dell'interfaccia
-# - docker: costruzione dell'immagine completa e test al suo interno, come scripts/test.sh in locale.
+# - docker: costruzione dell'immagine completa e test al suo interno, come scripts/test.sh in locale; l'immagine ha
+#   fpocket, APBS, PDB2PQR, OpenMM e PDBFixer (versioni fissate nel Dockerfile e in backend/requirements-tools.lock),
+#   quindi qui girano anche i test di tasche, elettrostatica e rifinitura, saltati nel job backend.
 #   PROCHECK e ProSA (pacchetti con licenza) non sono nel repository: l'immagine della CI ne è priva.
 #   La chiave di MODELLER, se configurata come secret MODELLER_KEY, abilita i test di MODELLER.
 name: CI

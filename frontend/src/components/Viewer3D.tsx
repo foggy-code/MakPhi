@@ -30,6 +30,17 @@ interface Props {
   lines?: ViewerLine[];
   /** con `centerKey`: oltre a centrare, ingrandisce sui residui evidenziati (un sito di un ligando) */
   centerZoom?: boolean;
+  /** sfere disegnate sopra la struttura (es. sfere alfa e centri delle tasche di fpocket) */
+  spheres?: ViewerSphere[];
+}
+
+/** Sfera disegnata sopra la struttura (coordinate e raggio in Å del file). */
+export interface ViewerSphere {
+  center: [number, number, number];
+  radius: number;
+  color: string;
+  /** 0–1 (1 = opaca) */
+  opacity?: number;
 }
 
 /** Segmento tratteggiato disegnato sopra la struttura (coordinate in Å del file). */
@@ -59,7 +70,7 @@ interface ViewerColors {
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-function applyStyle(viewer: any, scheme: Scheme, highlight: { chain: string; resi: number }[], colors: ViewerColors | null, lines: ViewerLine[] = []) {
+function applyStyle(viewer: any, scheme: Scheme, highlight: { chain: string; resi: number }[], colors: ViewerColors | null, lines: ViewerLine[] = [], spheres: ViewerSphere[] = []) {
   viewer.setStyle({}, {});
   let cartoon: any;
   if (colors) cartoon = { colorfunc: (atom: any) => colors.residues.get(atomKey(atom)) ?? colors.chains.get(atom.chain ?? "") ?? NO_VALUE_INT };
@@ -86,6 +97,9 @@ function applyStyle(viewer: any, scheme: Scheme, highlight: { chain: string; res
       radius: 0.07, color: l.color, dashed: true, dashLength: 0.25, gapLength: 0.15, fromCap: 1, toCap: 1,
     });
     if (l.marker) viewer.addSphere({ center: { x: l.end[0], y: l.end[1], z: l.end[2] }, radius: 0.28, color: l.color });
+  }
+  for (const s of spheres) {
+    viewer.addSphere({ center: { x: s.center[0], y: s.center[1], z: s.center[2] }, radius: s.radius, color: s.color, opacity: s.opacity ?? 1 });
   }
   viewer.render();
 }
@@ -124,7 +138,7 @@ function ViewerLegend({ coloring }: { coloring: ResidueColoring }) {
 }
 
 /** Visualizzatore 3D (3Dmol.js caricato su richiesta, contesto WebGL rilasciato allo smontaggio). */
-export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highlight = [], format = "pdb", coloring = null, onPickResidue, centerKey, handle, lines = [], centerZoom = false }: Props) {
+export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highlight = [], format = "pdb", coloring = null, onPickResidue, centerKey, handle, lines = [], centerZoom = false, spheres = [] }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewer = useRef<any>(null);
   const [text, setText] = useState<string | null>(pdb ?? null);
@@ -141,8 +155,8 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
   }, [coloring]);
   const interactive = !!coloring || !!onPickResidue;
   // i callback di 3Dmol leggono sempre i valori correnti
-  const live = useRef({ scheme, highlight, colors, coloring, onPickResidue, centerKey, interactive, lines, centerZoom });
-  live.current = { scheme, highlight, colors, coloring, onPickResidue, centerKey, interactive, lines, centerZoom };
+  const live = useRef({ scheme, highlight, colors, coloring, onPickResidue, centerKey, interactive, lines, centerZoom, spheres });
+  live.current = { scheme, highlight, colors, coloring, onPickResidue, centerKey, interactive, lines, centerZoom, spheres };
 
   // Immagine per il report: solo con la struttura disegnata e nessun caricamento in corso (con un altro `url` il
   // viewer mostra ancora la struttura precedente finché il file nuovo non arriva) né errore.
@@ -211,7 +225,7 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
         const cur = live.current;
         v.clear();
         v.addModel(text, format === "cif" ? "cif" : "pdb");
-        applyStyle(v, cur.scheme, cur.highlight, cur.colors, cur.lines);
+        applyStyle(v, cur.scheme, cur.highlight, cur.colors, cur.lines, cur.spheres);
         enablePicking(v);
         v.zoomTo();
         if (cur.centerKey !== undefined) centerOn(v, cur.highlight, cur.centerZoom);
@@ -229,9 +243,9 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
   }, [text, format]);
 
   useEffect(() => {
-    if (viewer.current && text) applyStyle(viewer.current, scheme, highlight, colors, lines);
+    if (viewer.current && text) applyStyle(viewer.current, scheme, highlight, colors, lines, spheres);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scheme, JSON.stringify(highlight), colors, JSON.stringify(lines)]);
+  }, [scheme, JSON.stringify(highlight), colors, JSON.stringify(lines), JSON.stringify(spheres)]);
 
   useEffect(() => {
     if (viewer.current && text) enablePicking(viewer.current);

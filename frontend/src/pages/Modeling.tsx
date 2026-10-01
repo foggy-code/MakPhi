@@ -5,6 +5,7 @@ import type {
   DocumentItem, JobSummary, LigandRef, LoopResult, ModelEntry, ModelResult, PreparedTemplate, Sequence, StructureSource, SystemInfo, TemplateAnalysis, TemplateItem,
   TemplateRef,
 } from "../api/types";
+import type { RefineResult } from "../api/types";
 import { LigandPicker } from "../components/LigandPicker";
 import { LigandTable } from "../components/LigandsPanel";
 import { groupTitle, STATUS_TONE } from "../lib/ligands";
@@ -15,6 +16,7 @@ import { JobPanel } from "../components/JobPanel";
 import { TextFileButton } from "../components/FileLoad";
 import { SequencePicker, StructurePicker, TemplatePicker } from "../components/Pickers";
 import { ReportButton } from "../components/ReportButton";
+import { RefineDialog, RefineResults } from "../components/Refinement";
 import { Viewer3D, type Viewer3DHandle } from "../components/Viewer3D";
 import { Alert, Badge, Card, Empty, Field, Grade, Modal, PageHead, Segmented, Stat } from "../components/ui";
 import { pirReference } from "../lib/alignConfidence";
@@ -51,7 +53,7 @@ function CompareSelect({ jobId, model, models, templates }: { jobId: string; mod
   );
 }
 
-function ModelsTable({ jobId, models, selected, onSelect, templates, viewer }: { jobId: string; models: ModelEntry[]; selected: string; onSelect: (f: string) => void; templates?: PreparedTemplate[]; viewer?: RefObject<Viewer3DHandle | null> }) {
+function ModelsTable({ jobId, models, selected, onSelect, templates, viewer, onRefine }: { jobId: string; models: ModelEntry[]; selected: string; onSelect: (f: string) => void; templates?: PreparedTemplate[]; viewer?: RefObject<Viewer3DHandle | null>; onRefine?: (file: string) => void }) {
   const navigate = useNavigate();
   return (
     <div className="table-wrap">
@@ -91,6 +93,7 @@ function ModelsTable({ jobId, models, selected, onSelect, templates, viewer }: {
                 <CompareSelect jobId={jobId} model={m} models={models} templates={templates} />
                 {/* il viewer mostra il modello selezionato: solo il suo report riceve la vista 3D */}
                 <ReportButton jobId={jobId} model={m.file} viewer={m.file === selected ? viewer : undefined} disabled={!!m.failure} />
+                {onRefine && <>{" "}<button className="btn btn-sm" disabled={!!m.failure} title="Rifinitura energetica con OpenMM (minimizzazione con restrizioni sulla catena principale)" onClick={() => onRefine(m.file)}><Icon name="flask" size={13} /> Rifinisci</button></>}
               </td>
             </tr>
           ))}
@@ -146,6 +149,7 @@ function Results({ jobId, result, kind }: { jobId: string; result: ModelResult |
   const toast = useToast();
   const [selected, setSelected] = useState(result.best_model);
   const [loop, setLoop] = useState(false);
+  const [refine, setRefine] = useState<string | null>(null); // modello da rifinire con OpenMM (F9.1)
   const viewer = useRef<Viewer3DHandle>(null);
   const best = result.models.find((m) => m.best);
   const full = kind === "model" ? (result as ModelResult) : null;
@@ -187,7 +191,7 @@ function Results({ jobId, result, kind }: { jobId: string; result: ModelResult |
           </>
         }
       >
-        <ModelsTable jobId={jobId} models={result.models} selected={selected} onSelect={setSelected} templates={full?.templates} viewer={viewer} />
+        <ModelsTable jobId={jobId} models={result.models} selected={selected} onSelect={setSelected} templates={full?.templates} viewer={viewer} onRefine={setRefine} />
       </Card>
       {full?.ligands && (
         <Card title="Ligandi, cofattori e metalli trasferiti" sub="verifica del modello migliore; il dettaglio e la vista 3D sono nella pagina Qualità">
@@ -219,6 +223,7 @@ function Results({ jobId, result, kind }: { jobId: string; result: ModelResult |
         </Card>
       )}
       {loop && <LoopDialog source={{ type: "job", job_id: jobId, file: selected }} label={selected} onClose={() => setLoop(false)} />}
+      {refine && <RefineDialog source={{ type: "job", job_id: jobId, file: refine }} label={refine} onClose={() => setRefine(null)} />}
     </div>
   );
 }
@@ -254,6 +259,7 @@ export default function Modeling() {
   const [templateInfo, setTemplateInfo] = useState<Record<string, TemplateAnalysis>>({});
   const [loopSource, setLoopSource] = useState<StructureSource | null>(null);
   const [loopOpen, setLoopOpen] = useState(false);
+  const [refineOpen, setRefineOpen] = useState(false); // rifinitura energetica della struttura scelta (F9.1)
   const { data: info } = useAsync<SystemInfo>(() => api.systemInfo(), []);
   // libreria riletta quando cambiano i template scelti: un modello AlphaFold appena scaricato risulta predetto
   const templateKey = templates.map((t) => t.id).join(",");
@@ -498,16 +504,22 @@ export default function Modeling() {
                 : <span className="tiny muted">Lettura dei ligandi dei template in corso…</span>)}
             </div>
           </Card>
-          <Card title="Raffinamento dei loop" sub="di un modello, un template o un file PDB/mmCIF">
+          <Card title="Raffinamento dei loop e rifinitura energetica" sub="di un modello, un template o un file PDB/mmCIF">
             <div className="stack-sm">
               <StructurePicker label="Struttura" value={loopSource} onChange={setLoopSource} />
               <button className="btn btn-sm" style={{ alignSelf: "start" }} disabled={!loopSource || !!modellerMissing} onClick={() => setLoopOpen(true)}>
                 <Icon name="wand" size={13} /> Scegli il loop da raffinare
               </button>
+              <button className="btn btn-sm" style={{ alignSelf: "start" }} disabled={!loopSource} onClick={() => setRefineOpen(true)} title="Minimizzazione con OpenMM e restrizioni sulla catena principale">
+                <Icon name="flask" size={13} /> Rifinitura energetica (OpenMM)
+              </button>
             </div>
           </Card>
           {loopOpen && loopSource && (
             <LoopDialog source={loopSource} label={loopSource.id ?? loopSource.file ?? "struttura"} onClose={() => setLoopOpen(false)} />
+          )}
+          {refineOpen && loopSource && (
+            <RefineDialog source={loopSource} label={loopSource.id ?? loopSource.file ?? "struttura"} onClose={() => setRefineOpen(false)} />
           )}
           <Card title="Modellazioni recenti">
             {!recent?.length ? <p className="small muted">Nessuna.</p> : (
@@ -524,7 +536,9 @@ export default function Modeling() {
         </div>
         <div className="stack">
           {jobId ? <JobPanel summary={summary} log={log} onCancel={cancel} /> : <Card><Empty icon="cube" title="Configura bersaglio e template, poi avvia la modellazione" /></Card>}
-          {job?.status === "completed" && job.result && <Results key={job.id} jobId={job.id} result={job.result} kind={job.kind} />}
+          {job?.status === "completed" && job.result && (job.kind === "refine"
+            ? <RefineResults key={job.id} jobId={job.id} result={job.result as unknown as RefineResult} />
+            : <Results key={job.id} jobId={job.id} result={job.result} kind={job.kind} />)}
         </div>
       </div>
     </div>

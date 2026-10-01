@@ -26,6 +26,9 @@ const OPEN_IN: Record<JobKind, (id: string) => string> = {
   db_convert_uniclust: () => "/settings?tab=databases",
   db_local_uniclust: () => "/settings?tab=databases",
   analysis: (id) => `/quality?ajob=${id}`,
+  pockets: (id) => `/quality?pjob=${id}`,
+  electrostatics: (id) => `/quality?ejob=${id}`,
+  refine: (id) => `/modeling?job=${id}`,
 };
 
 function Detail({ id, onDeleted, onChanged }: { id: string; onDeleted: () => void; onChanged: () => void }) {

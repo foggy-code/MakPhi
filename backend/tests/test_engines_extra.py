@@ -186,3 +186,13 @@ def test_databases_status_and_selftest_job(client):
     assert {"MODELLER", "DSSP", "BLAST+", "PROCHECK", "ProSA II", "QMEAN locale"} <= checks.keys()
     assert checks["QMEAN locale"]["status"] == "missing"
     assert all(c["status"] in ("ok", "missing", "error") for c in checks.values())
+    # strumenti di F7b e F9.1: verificati su 1UBQ se ci sono, "non disponibili" con il motivo se mancano
+    expected = {"fpocket": bool(tools.find("fpocket")),
+                "PDB2PQR + APBS": bool(tools.find("pdb2pqr") and tools.find("apbs")),
+                "OpenMM": bool(tools.find_module("openmm") and tools.find_module("pdbfixer"))}
+    for name, present in expected.items():
+        assert checks[name]["status"] == ("ok" if present else "missing"), checks[name]
+    if expected["PDB2PQR + APBS"]:
+        assert "carica netta di 1UBQ a pH 7 +0.00" in checks["PDB2PQR + APBS"]["detail"]
+    if not expected["fpocket"]:
+        assert "fpocket" in checks["fpocket"]["detail"]

@@ -1,7 +1,14 @@
-"""Rilevamento degli strumenti opzionali installati (DSSP, BLAST+, allineatori, validatori)."""
+"""Rilevamento degli strumenti opzionali installati (DSSP, BLAST+, allineatori, validatori, tasche, elettrostatica,
+rifinitura).
+
+Gli eseguibili si cercano nel PATH e in data/tools (`TOOLS`, `find`); le librerie Python di calcolo (OpenMM, PDBFixer)
+nell'interprete del server, senza importarle (`MODULES`, `find_module`): la rifinitura le usa da un processo figlio
+dello stesso interprete. Senza uno strumento la funzione che lo usa degrada con un messaggio chiaro (`missing_message`).
+"""
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
@@ -24,6 +31,15 @@ TOOLS: dict[str, dict] = {
     "blastdbcmd": {"names": ["blastdbcmd"], "label": "BLAST+ (blastdbcmd)", "use": "estrazione sequenze dal database pdbaa"},
     "procheck": {"names": ["procheck.scr"], "label": "PROCHECK", "use": "stereochimica (Ramachandran, G-factor)"},
     "prosa": {"names": ["prosa2003"], "label": "ProSA II 2003", "use": "z-score energetico del ripiegamento"},
+    "fpocket": {"names": ["fpocket"], "label": "fpocket", "use": "tasche e cavità (druggability)"},
+    "pdb2pqr": {"names": ["pdb2pqr", "pdb2pqr30"], "label": "PDB2PQR (con PROPKA)",
+                "use": "cariche e raggi a pH 7 per l'elettrostatica"},
+    "apbs": {"names": ["apbs"], "label": "APBS", "use": "potenziale elettrostatico (Poisson-Boltzmann)"},
+}
+# Librerie Python di calcolo (nessun eseguibile): presenti se l'interprete del server le trova
+MODULES: dict[str, dict] = {
+    "openmm": {"module": "openmm", "label": "OpenMM", "use": "rifinitura energetica (minimizzazione, dinamica)"},
+    "pdbfixer": {"module": "pdbfixer", "label": "PDBFixer", "use": "atomi mancanti e idrogeni per la rifinitura"},
 }
 
 _extra_dirs: list[Path] = []
@@ -59,9 +75,43 @@ def find(key: str) -> Optional[str]:
     return found
 
 
+def find_module(key: str) -> Optional[str]:
+    """Percorso del pacchetto Python dello strumento `key` di `MODULES` (None se manca), senza importarlo: OpenMM si
+    importa solo nel processo della rifinitura."""
+    with _lock:
+        if f"module:{key}" in _cache:
+            return _cache[f"module:{key}"]
+    try:
+        spec = importlib.util.find_spec(MODULES[key]["module"])
+    except (ImportError, ValueError):
+        spec = None
+    found = None
+    if spec is not None:
+        found = spec.origin or next(iter(spec.submodule_search_locations or []), None) or MODULES[key]["module"]
+    with _lock:
+        _cache[f"module:{key}"] = found
+    return found
+
+
+def missing_message(keys: list[str], purpose: str) -> Optional[str]:
+    """"<purpose> non disponibile: mancano fpocket, …" per gli strumenti assenti fra `keys` (di TOOLS o MODULES),
+    con l'indicazione di dove si trovano; None se ci sono tutti."""
+    missing = [(TOOLS.get(k) or MODULES[k])["label"] for k in keys
+               if (find(k) if k in TOOLS else find_module(k)) is None]
+    if not missing:
+        return None
+    return (f"{purpose} non disponibile: {'manca' if len(missing) == 1 else 'mancano'} {', '.join(missing)} in "
+            "questa installazione. fpocket, APBS, PDB2PQR, OpenMM e PDBFixer sono nell'immagine Docker aggiornata di "
+            "BioLoom: ricostruiscila (avviatore o docker compose build).")
+
+
 def status() -> dict:
-    return {key: {"label": meta["label"], "use": meta["use"], "path": find(key), "available": find(key) is not None}
-            for key, meta in TOOLS.items()}
+    out = {key: {"label": meta["label"], "use": meta["use"], "path": find(key), "available": find(key) is not None}
+           for key, meta in TOOLS.items()}
+    for key, meta in MODULES.items():
+        path = find_module(key)
+        out[key] = {"label": meta["label"], "use": meta["use"], "path": path, "available": path is not None}
+    return out
 
 
 # ------------------------------------------------------------------------------------------ MODELLER

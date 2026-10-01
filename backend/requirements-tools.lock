@@ -1,0 +1,15 @@
+# Strumenti di calcolo in Python dell'immagine Docker (F7b, F9.1), installati nella stessa venv dell'applicazione:
+#   PDB2PQR 3.7.1 con PROPKA 3.5.1 (cariche e raggi a pH dato per APBS), OpenMM 8.6.1 e PDBFixer 1.12.0 (rifinitura).
+# Le dipendenze già fissate in requirements.lock (numpy, idna, certifi) non si ripetono; il Dockerfile esegue
+# `pip check`, quindi un lock incompleto fa fallire la costruzione. Licenze nel README (Licenze degli strumenti).
+# Aggiornamento: cambiare le versioni, ricostruire l'immagine (docker build -f docker/Dockerfile -t bioloom:dev .),
+# rieseguire i test con BIOLOOM_BASE_IMAGE=bioloom:dev scripts/test.sh.
+charset-normalizer==3.5.2
+docutils==0.17.1
+mmcif-pdbx==2.1.0
+openmm==8.6.1
+pdb2pqr==3.7.1
+pdbfixer==1.12.0
+propka==3.5.1
+requests==2.34.2
+urllib3==2.8.0

@@ -29,6 +29,9 @@ export const KIND_LABEL: Record<JobKind, string> = {
   db_convert_uniclust: "Conversione UniClust30",
   db_local_uniclust: "Copia locale UniClust30",
   analysis: "Analisi strutturale",
+  pockets: "Tasche (fpocket)",
+  electrostatics: "Elettrostatica (APBS)",
+  refine: "Rifinitura energetica",
 };
 
 export const ACTIVE_STATUSES: JobStatus[] = ["queued", "running", "cancelling"];
