@@ -16,6 +16,7 @@ import type {
   InterProDomain,
   Job,
   JobSummary,
+  LatestToolJob,
   LigandRef,
   PipelineItem,
   PipelinePage,
@@ -285,6 +286,18 @@ export const api = {
     const params = new URLSearchParams({ type: source.type });
     for (const key of ["id", "job_id", "file"] as const) if (source[key]) params.set(key, String(source[key]));
     return get<{ job_id: string | null; finished_at: string | null; active_job_id?: string | null }>(`/api/analysis/latest?${params}`);
+  },
+
+  // tasche (fpocket), elettrostatica (PDB2PQR + APBS) e rifinitura energetica (OpenMM): job; risultati in api.job
+  pockets: (body: { project_id?: string; source: StructureSource }) => post<JobSummary>("/api/pockets", body),
+  electrostatics: (body: { project_id?: string; source: StructureSource; forcefield?: "PARSE" | "AMBER"; ph?: number }) =>
+    post<JobSummary>("/api/electrostatics", body),
+  refine: (body: { project_id?: string; source: StructureSource; md_ps?: number; hydrogens?: boolean }) => post<JobSummary>("/api/refine", body),
+  /** calcolo completato più recente (`pockets` o `electrostatics`) sulla struttura, e quello in coda o in corso */
+  latestToolJob: (kind: "pockets" | "electrostatics", source: StructureSource) => {
+    const params = new URLSearchParams({ type: source.type });
+    for (const key of ["id", "job_id", "file"] as const) if (source[key]) params.set(key, String(source[key]));
+    return get<LatestToolJob>(`/api/${kind}/latest?${params}`);
   },
 };
 

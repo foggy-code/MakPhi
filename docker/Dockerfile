@@ -4,7 +4,8 @@
 # cartella principale del progetto.
 #
 # Strumenti: MODELLER 10.8, DSSP (mkdssp), BLAST+, Clustal Omega, MAFFT, MUSCLE, MMseqs2, TM-align,
-# US-align, PROCHECK e ProSA II (se i pacchetti con licenza sono in docker/vendor/).
+# US-align, fpocket, APBS, PDB2PQR (con PROPKA), OpenMM e PDBFixer, PROCHECK e ProSA II (se i pacchetti con
+# licenza sono in docker/vendor/).
 # Le chiavi di licenza NON entrano nell'immagine: stanno nella cartella dati (data/licenses).
 
 ARG BIOLOOM_VERSION=4.1.0
@@ -18,17 +19,36 @@ RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
 RUN npm run build
 
-# ------------------------------------------------------------------ compilazione di US-align e PROCHECK
+# ------------------------------------------------------------------ compilazione di US-align, fpocket e PROCHECK
 FROM --platform=linux/amd64 ubuntu:24.04 AS tools-build
 ARG USALIGN_TAG=20260527
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        g++ gfortran gcc make ca-certificates wget \
+        g++ gfortran gcc make ca-certificates wget unzip \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 RUN wget -q "https://github.com/pylelab/USalign/archive/refs/tags/${USALIGN_TAG}.tar.gz" -O usalign.tar.gz \
     && tar -xzf usalign.tar.gz && cd "USalign-${USALIGN_TAG}" \
     && g++ -O3 -ffast-math -o /build/USalign USalign.cpp -lm \
     && /build/USalign -h > /dev/null
+# fpocket (tasche; Le Guilloux et al. 2009, licenza MIT): non è fra i pacchetti di Ubuntu 24.04, si compila dalla
+# release ufficiale. Senza la profilazione -pg del makefile, che scriverebbe gmon.out nella cartella di ogni calcolo;
+# niente cartella data/ (esempi e dizionario mmCIF: BioLoom passa a fpocket un PDB).
+ARG FPOCKET_TAG=4.2.3
+RUN wget -q "https://github.com/Discngine/fpocket/archive/refs/tags/${FPOCKET_TAG}.tar.gz" -O fpocket.tar.gz \
+    && tar -xzf fpocket.tar.gz --exclude="fpocket-${FPOCKET_TAG}/data" && rm -f fpocket.tar.gz \
+    && cd "fpocket-${FPOCKET_TAG}" && sed -i 's/ -pg//g' makefile \
+    && make qhull && make bin/fpocket \
+    && cp bin/fpocket /build/fpocket && cd /build && rm -rf "fpocket-${FPOCKET_TAG}" && test -x /build/fpocket
+# APBS (Poisson-Boltzmann; Jurrus et al. 2018, licenza BSD): binario ufficiale della release, verificato con
+# SHA-256. Il pacchetto apbs di Ubuntu 24.04 (stessa versione 3.4.1) porterebbe circa 340 MB di dipendenze
+# (OpenMPI con le librerie ROCm/LLVM, MathJax); il binario ufficiale (30 MB) usa solo libc e libstdc++.
+ARG APBS_VERSION=3.4.1
+ARG APBS_SHA256=750f6a2df7b5a82b69be5c4cb192115c02fa261d0ff52cf1d9632ed1eda8b4f0
+RUN wget -q "https://github.com/Electrostatics/apbs/releases/download/v${APBS_VERSION}/APBS-${APBS_VERSION}.Linux.zip" \
+         -O apbs.zip \
+    && echo "${APBS_SHA256}  apbs.zip" | sha256sum -c - \
+    && unzip -q -j apbs.zip "APBS-${APBS_VERSION}.Linux/bin/apbs" -d /build/apbs-bin && rm -f apbs.zip \
+    && chmod 755 /build/apbs-bin/apbs && test -x /build/apbs-bin/apbs
 COPY docker/vendor/ /build/vendor/
 RUN mkdir -p /opt/procheck \
     && if [ -f /build/vendor/procheck/procheck.tar.gz ]; then \
@@ -73,6 +93,8 @@ RUN wget -q "https://salilab.org/modeller/${MODELLER_VERSION}/modeller_${MODELLE
     && rm -f /tmp/modeller.deb
 
 COPY --from=tools-build /build/USalign /usr/local/bin/USalign
+COPY --from=tools-build /build/fpocket /usr/local/bin/fpocket
+COPY --from=tools-build /build/apbs-bin/apbs /usr/local/bin/apbs
 COPY --from=tools-build /opt/procheck /opt/procheck
 COPY docker/vendor/prosa/ /tmp/prosa/
 RUN if [ -f /tmp/prosa/prosa2003.linux.tar.gz ]; then \
@@ -95,6 +117,13 @@ COPY backend/requirements.lock backend/requirements.lock
 RUN python3 -m venv --system-site-packages /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check -r backend/requirements.lock \
     && python3 -c "import modeller" 2>&1 | grep -q "license" || python3 -c "import modeller"
+# Strumenti di calcolo in Python (PDB2PQR con PROPKA, OpenMM, PDBFixer) nella stessa venv, in un livello a parte:
+# versioni fissate in requirements-tools.lock, `pip check` fa fallire la costruzione se manca una dipendenza.
+COPY backend/requirements-tools.lock backend/requirements-tools.lock
+RUN /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check -r backend/requirements-tools.lock \
+    && /opt/venv/bin/pip check \
+    && /opt/venv/bin/python -c "import openmm, pdbfixer, propka, pdb2pqr; print('OpenMM', openmm.__version__)" \
+    && /opt/venv/bin/pdb2pqr --help > /dev/null
 COPY backend/ backend/
 COPY --from=frontend /src/dist frontend/dist
 COPY docker/entrypoint.sh /entrypoint.sh

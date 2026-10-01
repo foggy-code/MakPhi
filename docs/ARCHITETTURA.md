@@ -22,7 +22,7 @@ Container "bioloom" (Ubuntu 24.04, Python 3.12, utente = proprietario di /data)
                      ├─ /api/*   rotte REST (OpenAPI su /docs)      ├─ /*  interfaccia React compilata
                      ├─ JobManager: code con priorità "cpu" (core−1) + "io" (8) · budget di CPU condiviso · stato su SQLite · lavoro in /scratch
                      │    └─ sottoprocessi: MODELLER 10.8, mkdssp, BLAST+, MMseqs2, Clustal Omega, MAFFT, MUSCLE,
-                     │                      TM-align, US-align, PROCHECK, ProSA II
+                     │                      TM-align, US-align, PROCHECK, ProSA II, fpocket, PDB2PQR, APBS, OpenMM
                      └─ servizi remoti: RCSB · UniProt · InterPro · NCBI QBlast · AlphaFold DB (EBI) · SWISS-MODEL (opt-in)
   /data     ◀─ bind mount  cartella data/ (chiavetta, cartella o server): viaggia con BioLoom
   /scratch  ◀─ volume      lavoro dei job e file temporanei (veloce, svuotato a ogni avvio)
@@ -99,15 +99,15 @@ data/
 | Pacchetto | Contenuto |
 |---|---|
 | `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `dispatch` (coda con priorità di ogni pool), `budget` (budget di CPU condiviso fra i job), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi), `eta` (stima del tempo residuo), `events` (notifiche in-process dei cambiamenti dei job), `parallel` (passi indipendenti di un calcolo su un pool locale di thread, vedi [Prestazioni](#prestazioni)) |
-| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG), `template_rank` (punteggio motivato dei template e selezione dei complementari), `multitemplate` (scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template), `ligands` (classificazione dei gruppi eteroatomici, colonne '.' del PIR, verifica di contatti, scontri e coordinazione dei metalli), `disorder` (disordine FoldIndex, bassa complessità SEG, domini e copertura del bersaglio), `interactions`, `interfaces`, `conservation` (analisi strutturale, vedi [Analisi strutturale](#analisi-strutturale)) |
-| `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB), `remote` (client HTTP), `tools` (rilevamento strumenti, preambolo di licenza) |
-| `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job), `reports` (dati del report di un modello o di un'analisi), `coverage` (copertura del bersaglio da parte dei template, avvisi su disordine e domini), `analysis` (job dell'analisi strutturale) |
-| `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases`, `analysis` oltre a sistema, progetti, calcoli, job) |
+| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG), `template_rank` (punteggio motivato dei template e selezione dei complementari), `multitemplate` (scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template), `ligands` (classificazione dei gruppi eteroatomici, colonne '.' del PIR, verifica di contatti, scontri e coordinazione dei metalli), `disorder` (disordine FoldIndex, bassa complessità SEG, domini e copertura del bersaglio), `interactions`, `interfaces`, `conservation` (analisi strutturale, vedi [Analisi strutturale](#analisi-strutturale)), `pockets` (uscita di fpocket), `electrostatics` (PQR, griglia e input di APBS, mappe OpenDX, potenziale di superficie), `refinement` (protocollo della rifinitura, copia pulita, confronto prima/dopo; vedi [Tasche, elettrostatica e rifinitura energetica](#tasche-elettrostatica-e-rifinitura-energetica-f7b-f91)) |
+| `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB), `remote` (client HTTP), `tools` (rilevamento strumenti e librerie Python di calcolo, preambolo di licenza), `pockets` (fpocket), `electrostatics` (PDB2PQR + APBS), `refine` e `refine_worker` (OpenMM e PDBFixer in un processo separato) |
+| `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job), `reports` (dati del report di un modello o di un'analisi), `coverage` (copertura del bersaglio da parte dei template, avvisi su disordine e domini), `analysis` (job dell'analisi strutturale), `structure_tools` (job `pockets` ed `electrostatics`), `refine` (job `refine`) |
+| `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases`, `analysis`, `structure_tools` oltre a sistema, progetti, calcoli, job) |
 
 ### Job
 
-Tutti i calcoli (`search`, `align`, `align2d`, `model`, `loop`, `quality`, `qmean`, `analysis`, `pipeline`) passano
-dal `JobManager`:
+Tutti i calcoli (`search`, `align`, `align2d`, `model`, `loop`, `quality`, `qmean`, `analysis`, `pockets`,
+`electrostatics`, `refine`, `pipeline`) passano dal `JobManager`:
 
 - stato `queued → running → completed | failed | cancelled` (più `cancelling`) salvato su SQLite;
 - coda con priorità per tipo di job e budget di CPU condiviso dai processi esterni di tutti i job (vedi [Coda con
@@ -266,8 +266,8 @@ con 8. I worker prendono sempre il primo job avviabile in quest'ordine (`core/jo
 
 | Priorità | Tipi di job | Perché |
 |---|---|---|
-| 0 | `search`, `align`, `align2d`, `quality`, `qmean`, `analysis` (e `compare`) | interattivi brevi: l'utente aspetta davanti allo schermo |
-| 1 | `model`, `loop`, `selftest` e i tipi non elencati | minuti |
+| 0 | `search`, `align`, `align2d`, `quality`, `qmean`, `analysis`, `pockets`, `electrostatics` (e `compare`) | interattivi brevi: l'utente aspetta davanti allo schermo |
+| 1 | `model`, `loop`, `selftest`, `refine` e i tipi non elencati | minuti |
 | 2 | `pipeline`, `db_update_pdbaa`, `db_build_mmseqs`, `db_index_mmseqs`, `db_convert_uniclust`, `db_local_uniclust` | lavori lunghi in blocco |
 
 - **A parità:** `created_at`, poi il rowid della riga (ordine di creazione anche nello stesso secondo). Un job ripreso
@@ -318,8 +318,8 @@ il processo e li restituisce quando termina: `True` (predefinito) = 1, un numero
 | Processo | Slot |
 |---|---|
 | MODELLER (allineamento, modelli, loop, DOPE) | 1: gli script non usano `parallel.Job`, un thread |
-| PROCHECK, ProSA II, TM-align, US-align, `blastp` (`-num_threads` predefinito 1), Clustal Omega (`--threads` predefinito 1), MAFFT (`--thread` predefinito 0 = un thread), MUSCLE 3, `mmseqs createdb` | 1 |
-| MMseqs2 `easy-search` e `createindex`, MUSCLE 5 (di suo userebbe tutti i processori) | da 1 a core − 1, uno per thread: al suo turno il processo prende gli slot liberi e parte con altrettanti thread (`--threads`/`-threads`) |
+| PROCHECK, ProSA II, TM-align, US-align, `blastp` (`-num_threads` predefinito 1), Clustal Omega (`--threads` predefinito 1), MAFFT (`--thread` predefinito 0 = un thread), MUSCLE 3, `mmseqs createdb`, fpocket, PDB2PQR (Python), APBS (binario ufficiale senza OpenMP) | 1 |
+| MMseqs2 `easy-search` e `createindex`, MUSCLE 5 (di suo userebbe tutti i processori), rifinitura con OpenMM (thread della piattaforma CPU) | da 1 a core − 1, uno per thread: al suo turno il processo prende gli slot liberi e parte con altrettanti thread (`--threads`/`-threads`) |
 | `blastdbcmd -entry all` (estrazione di pdbaa per MMseqs2) | 0: I/O |
 | mkdssp (da Biopython, non da `ctx.run`, meno di un secondo), servizio QMEAN (container a parte), download | fuori dal budget |
 
@@ -977,6 +977,153 @@ più recente della stessa struttura ha disolfuri o interfacce. Il report non ric
   per residuo); "Evidenzia l'interfaccia" per ogni coppia di catene.
 - Link stabile di un'analisi: `/quality?ajob=<id>` (anche «Apri» nella pagina Job).
 
+### Tasche, elettrostatica e rifinitura energetica (F7b, F9.1)
+
+Tre calcoli con strumenti nuovi dell'immagine: tasche con **fpocket**, potenziale elettrostatico con **PDB2PQR + APBS**,
+rifinitura energetica con **OpenMM + PDBFixer**. Logica pura in `domain/pockets.py`, `domain/electrostatics.py`,
+`domain/refinement.py`; motori in `engines/pockets.py`, `engines/electrostatics.py`, `engines/refine.py` (con
+`engines/refine_worker.py`); job in `services/structure_tools.py` (`pockets`, `electrostatics`) e `services/refine.py`
+(`refine`); rotte in `api/structure_tools.py`. Stesso schema del job `analysis`: sorgente della struttura come la
+qualità, impronta SHA-256 del file nel risultato, calcolo più recente sulla stessa struttura da `/latest`. Nessuna
+colonna né tabella nuova in SQLite, nessuna impostazione nuova; niente cache dei calcoli (fpocket è istantaneo, la mappa
+di APBS è un file del job, il modello rifinito è il risultato del job).
+
+**Strumenti e degradazione.** `engines/tools.py` rileva gli eseguibili `fpocket`, `pdb2pqr`, `apbs` (`TOOLS`) e le
+librerie Python `openmm` e `pdbfixer` (`MODULES`, con `importlib.util.find_spec`, senza importarle nel server). Tutti
+compaiono in `/api/system/info` (Impostazioni → Strumenti, Panoramica) e nella verifica dell'installazione (1UBQ:
+tasche, carica netta e potenziale, minimizzazione). Senza uno strumento il job fallisce subito con `ToolUnavailable` e
+il messaggio di `tools.missing_message` ("Ricerca delle tasche non disponibile: manca fpocket in questa installazione…");
+le schede dell'interfaccia lo dicono prima di proporre il calcolo e disattivano il pulsante. L'immagine bioloom:4.1.0,
+senza questi strumenti, continua a funzionare.
+
+**Tasche (fpocket 4.2.3, `pockets`, priorità 0).**
+
+- Copia pulita della struttura (`structure.pdb`: primo modello, prima altloc, sola proteina, catene e numerazione
+  originali); i gruppi eteroatomici esclusi sono elencati in un avviso e i siti che occupano risultano tasche vuote.
+- fpocket con i parametri predefiniti (sfere alfa da 3,4 a 6,2 Å, almeno 15 per tasca; Le Guilloux et al., BMC
+  Bioinformatics 10:168, 2009) da `ctx.run` (uno slot). Si conserva `structure_out/` (PDB con le sfere STP, script
+  PyMOL/VMD, file per tasca).
+- `domain/pockets.read_output`: descrittori di `<nome>_info.txt` (punteggio, druggability, volume, sfere alfa, SASA,
+  idrofobicità, polarità, carica…; quelli sconosciuti in `other`), sfere da `<nome>_pockets.pqr`, residui che rivestono
+  ogni tasca da `pockets/pocket<N>_atm.pdb`, centro = baricentro dei centri delle sfere alfa. Ordine per druggability
+  (Schmidtke & Barril, J. Med. Chem. 53:5858, 2010), soglia di "probabilmente druggabile" 0,5.
+- **1UBQ** (uscita reale in `tests/data/fpocket_1ubq_out`): 4 tasche; la tasca 2 (Met1, Glu18, Pro19, Ser57, Asn60,
+  Ile61, Gln62, Lys63; 19 sfere, circa 324 Å³) è l'unica sopra 0,5 (0,535), poi la 4 (0,498). Il volume è una stima
+  Monte Carlo e varia di qualche Å³ fra esecuzioni; tasche e residui no. 0,4 s.
+
+**Elettrostatica (PDB2PQR 3.7.1 + PROPKA 3.5.1 + APBS 3.4.1, `electrostatics`, priorità 0).**
+
+| Passo | Scelta | Fonte |
+|---|---|---|
+| Cariche e raggi | PDB2PQR, campo di forza PARSE (predefinito, parametrizzato per Poisson-Boltzmann) o AMBER; `--drop-water --keep-chain` | Dolinsky et al. 2007; Jurrus et al. 2018; Sitkoff, Sharp & Honig 1994 |
+| Protonazione | PROPKA a pH 7 (modificabile, 0–14) | Olsson et al. 2011 |
+| Equazione | Poisson-Boltzmann linearizzata, `mg-auto`, `bcfl sdh`, `srfm smol`, `chgm spl2`, `sdens 10`, `swin 0,3` | Baker et al. 2001 |
+| Mezzo | dielettrico 2 (proteina) e 78,54 (acqua a 25 °C), 150 mM di ioni ±1 di raggio 2,0 Å, sonda 1,4 Å, 298,15 K | input generato da PDB2PQR |
+| Griglia | come `psize.py`: grossolana 1,7 × estensione della molecola (sfere atomiche del PQR), fine estensione + 20 Å, centrate; punti 32k + 1 con passo fine 0,5 Å; oltre il tetto di memoria il passo cresce del 10% alla volta (un solo processo, invece del `mg-para` di psize) | psize.py di PDB2PQR |
+| Memoria | stima 500 byte per punto, tetto 1000 MB (circa 2,1 milioni di punti, lo stesso massimo di psize con 200 byte e 400 MB) | misurato: 586 MB di picco per 1,21 milioni di punti su 1UBQ |
+| Potenziale per residuo | interpolazione trilineare della mappa sui punti della superficie accessibile (sfera r + 1,4 Å, 100 punti per atomo non coperti da altri atomi); media per atomo, poi sugli atomi esposti del residuo (idrogeni compresi); residui sepolti senza valore | Shrake & Rupley 1973; spostamento di 1,4 Å come UCSF Chimera |
+| Scala | rosso (negativo) – bianco – blu (positivo), saturata a ±5 kT/e; 1 kT/e = 25,69 mV a 298,15 K | convenzione di PyMOL e Chimera per APBS |
+
+- File del job: `structure.pdb`, `structure.pqr`, `apbs.in` (per ripetere il calcolo), `potential.dx` (mappa in kT/e,
+  scaricabile: 16 MB per 1UBQ, al massimo circa 30 MB con il tetto della griglia), `pdb2pqr.log`, `apbs.log`. Due
+  processi da `ctx.run`, uno slot ciascuno (il binario ufficiale di APBS non usa OpenMP).
+- Risultato: carica netta e residui carichi per tipo (`charge_summary`: Lys+, Glu−…, estremità N e C), griglia,
+  parametri, campionamento, scala, estremi della mappa, potenziale per residuo nell'ordine della struttura originale,
+  riepilogo (residui esposti, minimo, massimo, media, residui oltre ±1 kT/e).
+- **1UBQ:** carica netta 0 a pH 7 (7 Lys + 4 Arg + N-terminale contro 5 Asp + 6 Glu + C-terminale; His68 neutra con HD1;
+  PROPKA dà pI 7,07): il test accetta |q| ≤ 1 per una His68 che a pH 7 potrebbe risultare protonata. Griglia 97 × 97 ×
+  129 (passo 0,55/0,57/0,46 Å). Potenziale di superficie da −2,09 a +3,84 kT/e su 66 residui esposti; tutte le 7 Lys
+  positive (da +0,34 a +2,42), 5 Glu su 6 negative (Glu16, fra Lys29 e Lys33, +0,26). Lo stesso con AMBER (carica 0).
+  Tempi: PDB2PQR 1,0 s, APBS 3,5 s, superficie 0,8 s.
+
+**Rifinitura energetica (OpenMM 8.6.1 + PDBFixer 1.12.0, `refine`, priorità 1).** Protocollo dichiarato in
+`domain/refinement.py` e nel risultato (`protocol`):
+
+1. Copia pulita (`input.pdb`): primo modello, prima altloc, residui amminoacidici (anche modificati, che PDBFixer
+   sostituisce), senza acque, ligandi, ioni (esclusi con avviso: il campo di forza non ha parametri per loro) e senza
+   idrogeni. Alle interruzioni della catena (C–N > 2,0 Å) un `TER`: senza, OpenMM legherebbe i due residui lontani e la
+   minimizzazione li avvicinerebbe. Nessun residuo mancante viene ricostruito; le estremità dell'interruzione diventano
+   cariche (avviso).
+2. PDBFixer: atomi pesanti mancanti e idrogeni a pH 7.
+3. AMBER ff14SB (`amber14-all.xml`) con solvente implicito **OBC2** nella forza nativa `GBSAOBCForce` (raggi mbondi2 e
+   fattori di scala di `implicit/obc2.xml`, dielettrici 1/78,5, termine ACE, nessun sale). **Perché non GBn2** (più
+   accurato con ff14SB): in OpenMM esiste solo come `CustomGBForce`, lenta sulla piattaforma CPU. Misure su 1UBQ (1231
+   atomi con gli idrogeni, i3-1115G4, 4 thread): GBn2 201 ms per passo e 370 s di minimizzazione; `implicit/obc2.xml`
+   (anch'essa `CustomGBForce`) 183 ms; OBC2 nativo 21 ms e 15 s, con la stessa energia di `obc2.xml` entro 0,003
+   kJ/mol. Con le restrizioni sulla catena principale il modello di solvente cambia poco la geometria finale; il costo
+   decide se la rifinitura è usabile. Oltre 4000 atomi le interazioni non legate e GB si troncano a 2,0 nm
+   (`CutoffNonPeriodic`, dielettrico di campo di reazione 1 come gli script implicit di OpenMM).
+4. Restrizioni armoniche sugli atomi N, CA, C, O verso le posizioni di partenza: E = k·|r − r₀|², k = 10 kcal·mol⁻¹·Å⁻²
+   (convenzione di `restraint_wt` di AMBER, senza ½) = 4184 kJ·mol⁻¹·nm⁻².
+5. Minimizzazione L-BFGS fino a 10 kJ·mol⁻¹·nm⁻¹ (al massimo 5000 iterazioni); facoltativa una dinamica di Langevin a
+   300 K (attrito 1 ps⁻¹, passo 2 fs, legami con H vincolati, seme fisso) di 0,5–50 ps (10 proposti nell'interfaccia)
+   con le stesse restrizioni, seguita da una seconda minimizzazione.
+6. Uscita: `<nome>_refined.pdb` (idrogeni facoltativi, catene e numerazione originali, righe `REMARK 999 BIOLOOM` con
+   protocollo, energie, RMSD e voto), `refine_result.json` del processo.
+
+- **Processo separato:** il server non importa OpenMM. `refine_worker.py` gira con lo stesso interprete del server
+  (`sys.executable`) da `ctx.run`, con richiesta di CPU elastica (da 1 a core − 1 slot, altrettanti thread della
+  piattaforma CPU, `OMP_NUM_THREADS=1`); avanzamento con i marcatori `@@BIOLOOM progress <frazione> <fase>`
+  ("Minimizzazione…", "Dinamica molecolare: 3,5 di 10 ps"). Annullamento e timeout terminano il processo anche a metà
+  di una minimizzazione o di una dinamica.
+- **Energie:** potenziale del campo di forza senza il termine delle restrizioni (riportato a parte), con le componenti
+  (legami, angoli, torsioni, non legate, solvatazione), prima della minimizzazione (struttura completata da PDBFixer)
+  e alla fine. Servono al confronto sulla stessa struttura, non fra strutture. L'energia iniziale dipende dalle
+  posizioni degli idrogeni scelte da PDBFixer (`Modeller.addHydrogens`, che le ottimizza con una breve minimizzazione),
+  che non sono identiche fra un'esecuzione e l'altra: su 1UBQ l'energia iniziale è variata fra −191 e +987 kJ/mol,
+  quella finale solo fra −12 448 e −12 437 kJ/mol.
+- **Confronto prima/dopo:** `quality.analyze` (DOPE con MODELLER, senza PROCHECK e ProSA) in parallelo sulla copia
+  pulita (prima: stessi residui, senza ligandi né idrogeni) e sul rifinito (dopo); righe di `refinement.compare` (voto,
+  Ramachandran favorite e outlier, clashscore, DOPE, zDOPE; "invariato" entro l'arrotondamento dei rapporti); RMSD della
+  catena principale dopo Kabsch (`comparison.kabsch_rmsd`) e senza sovrapposizione, con lo spostamento massimo. Il
+  rapporto del rifinito è `<nome>_refined.pdb.quality.json`: la pagina Qualità lo apre come quello di un modello.
+- **1UBQ e 1UBQ con χ1 di Ile30 ruotato di 120°** (test): energia 710 → −12 448 kJ/mol, RMSD 0,08 Å, clashscore 1,66
+  → 0, favorite 95,9 % invariate, zDOPE −2,73 → −2,76; con il rotamero sbagliato energia 146 870 → −12 399 kJ/mol,
+  clashscore 3,32 → 0, RMSD 0,09 Å; con 10 ps di dinamica stessa geometria (RMSD 0,09 Å), zDOPE −2,66. Tempi (4 core,
+  altri job in corso): minimizzazione 15–70 s, 10 ps di dinamica 130 s.
+
+**Rotte** (`api/structure_tools.py`):
+
+| Rotta | Funzione |
+|---|---|
+| `POST /api/pockets` | `{source}` → job `pockets` ("Tasche · …"); struttura assente 404, sorgente incompleta 400 `invalid_source`, prima della coda |
+| `POST /api/electrostatics` | `{source, forcefield: PARSE \| AMBER, ph: 0–14}` → job `electrostatics`; campo di forza o pH non validi 422 |
+| `POST /api/refine` | `{source, md_ps: 0–50, hydrogens}` → job `refine` ("Rifinitura · …, dinamica 10 ps"); durata non valida 422 |
+| `GET /api/pockets/latest`, `GET /api/electrostatics/latest` | come `/api/analysis/latest`: `{job_id, finished_at, active_job_id}` per la stessa sorgente e la stessa impronta del file |
+
+La mappa si scarica da `/api/jobs/{id}/files/potential.dx?download=true`.
+
+**Interfaccia.**
+
+- **Qualità**, schede **Tasche** ed **Elettrostatica** (`components/StructureTools.tsx`, logica in `lib/pockets.ts`,
+  `lib/electrostatics.ts`, `lib/toolJobs.ts`): calcolo più recente della struttura del rapporto (o in corso), lancio e
+  rilancio, job seguito conservato dalla pagina cambiando scheda. Tasche: tabella ordinata per druggability (barra,
+  badge "druggabile", punteggio, volume, sfere, idrofobicità, residui), 3D con i residui delle prime 8 tasche colorati
+  con la tavolozza di Okabe-Ito e il resto grigio chiaro, centri delle sfere alfa come sferette e centro della tasca in
+  bianco (`Viewer3D.spheres`); clic su una riga → solo quella tasca, residui evidenziati e vista centrata; clic nel 3D
+  → la tasca del residuo. Elettrostatica: campo di forza e pH, carica netta con i residui carichi per tipo, 3D e
+  striscia per residuo con la scala ±5 kT/e e la legenda, residui più positivi e più negativi (clic → evidenza; solo
+  quelli con almeno 10 punti di superficie: Ile13 di 1UBQ, con un solo punto esposto a +3,8 kT/e, resta nel 3D ma non
+  nell'elenco),
+  download di `.dx`, PQR e input di APBS, parametri e fonti. Link `/quality?pjob=<id>` e `/quality?ejob=<id>` («Apri»
+  nella pagina Job).
+- **Modellazione** (`components/Refinement.tsx`, `lib/refine.ts`): «Rifinisci» in ogni riga della tabella dei modelli
+  e «Rifinitura energetica (OpenMM)» per una struttura qualunque (riquadro dei loop). La finestra spiega il protocollo e
+  propone dinamica (0,5–50 ps) e idrogeni; il job si apre in `/modeling?job=<id>` con voto, energia, RMSD, clashscore, la
+  tabella prima/dopo con l'esito di ogni metrica, il 3D del rifinito, «Qualità del rifinito», «Confronta con
+  l'originale» (pagina Confronto con l'originale come riferimento A) e il PDB.
+
+**Immagine Docker** (`docker/Dockerfile`):
+
+| Strumento | Come | Perché | Spazio |
+|---|---|---|---|
+| fpocket 4.2.3 (MIT) | compilato dalla release ufficiale nello stadio `tools-build` (senza `-pg` e senza `data/`) | non è nei pacchetti di Ubuntu 24.04 | 1,9 MB |
+| APBS 3.4.1 (BSD) | binario ufficiale della release GitHub, verificato con SHA-256 | il pacchetto `apbs` di Ubuntu (stessa versione) porta circa 340 MB di dipendenze (OpenMPI con ROCm/LLVM, MathJax); il binario usa solo libc e libstdc++ | 29,9 MB |
+| PDB2PQR 3.7.1 (BSD), PROPKA 3.5.1 (LGPL 2.1), OpenMM 8.6.1 (MIT/LGPL), PDBFixer 1.12.0 (MIT) | pip nella venv dell'applicazione da `backend/requirements-tools.lock` (con le dipendenze non già fissate), `pip check` | PDB2PQR e OpenMM 8.6 di PyPI sono le versioni correnti; i pacchetti di Ubuntu (OpenMM 8.0, PDBFixer 1.9) sono legati al numpy di sistema | 107 MB |
+
+Totale: circa 139 MB in più nei livelli dell'immagine (bioloom:4.1.0 869 MB, immagine di sviluppo 1,04 GB; contenuto
+compresso 215 → 244 MB). I test di questi strumenti si saltano, con il motivo, nelle immagini che non li hanno.
+
 ### Ricerca di template
 
 - **RCSB** (predefinito): Search API (MMseqs2 lato server) → sequenze di catena via GraphQL → riallineamento
@@ -1622,8 +1769,8 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 | Libreria template | download RCSB e "Da AlphaFold DB (UniProt)", upload PDB/mmCIF, catene, residui mancanti, ligandi classificati (metallo, cofattore noto, additivo, altro ligando, residuo modificato), DSSP, 3D; badge "AlphaFold", pLDDT medio e fasce di confidenza |
 | Allineamenti | pairwise, multiplo, strutturale (con il confronto per residuo e «Apri in Confronto»); esportazione FASTA/Clustal/PIR; salvataggio nel progetto; cache per multiplo e strutturale |
 | Editor PIR | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
-| Modellazione | input automatico o da PIR, parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); avvisi prima del lancio su regioni disordinate e domini non coperti dai template, con suggerimento; modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job; «Trasferisci ligandi, cofattori e metalli dai template» con la scelta dei gruppi (additivi e ioni del tampone deselezionati per default, `LigandPicker`, che usa le analisi già lette dal selettore dei template anche dopo un download; una lettura non riuscita si mostra con «Riprova», un 404 di un template in download si riprova da sé, e sotto «Avvia modellazione» si dice quale template blocca) e la verifica del modello migliore |
-| Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche, disordine predetto come segnale informativo), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura; sezione Ligandi e metalli (esiti, coordinazione, confronto con il sito del template): il clic su un gruppo lo mostra nel 3D con i residui coordinanti e le linee di coordinazione (`LigandsPanel`, `lib/ligands.ts`; ioni metallici sempre a sfere); scheda Interazioni (analisi strutturale: legami H, ponti salini, disolfuri, aromatiche, interfacce, conservazione; `?ajob=`) |
+| Modellazione | input automatico o da PIR, parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); avvisi prima del lancio su regioni disordinate e domini non coperti dai template, con suggerimento; modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job; «Trasferisci ligandi, cofattori e metalli dai template» con la scelta dei gruppi (additivi e ioni del tampone deselezionati per default, `LigandPicker`, che usa le analisi già lette dal selettore dei template anche dopo un download; una lettura non riuscita si mostra con «Riprova», un 404 di un template in download si riprova da sé, e sotto «Avvia modellazione» si dice quale template blocca) e la verifica del modello migliore; «Rifinisci» (OpenMM) per ogni modello e per una struttura qualunque, con i risultati prima/dopo |
+| Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche, disordine predetto come segnale informativo), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura; sezione Ligandi e metalli (esiti, coordinazione, confronto con il sito del template): il clic su un gruppo lo mostra nel 3D con i residui coordinanti e le linee di coordinazione (`LigandsPanel`, `lib/ligands.ts`; ioni metallici sempre a sfere); scheda Interazioni (analisi strutturale: legami H, ponti salini, disolfuri, aromatiche, interfacce, conservazione; `?ajob=`); schede Tasche (fpocket, `?pjob=`) ed Elettrostatica (PDB2PQR + APBS, `?ejob=`) |
 | Confronto | `/compare?a=&ca=&b=&cb=&job=`: B sovrapposta ad A (riferimento), metriche (TM-score su A e su B, RMSD, RMSD entro 5 Å, GDT-TS, GDT-HA, lDDT, lunghezza allineata), 3D con B colorata per distanza (0 → ≥ 5 Å) o lDDT e A in grigio chiaro, grafico di distanza e lDDT per posizione, tratti che deviano, tabella per coppia; clic ovunque → coppia evidenziata nel 3D |
 | Pipeline batch | multi-FASTA → modelli validati, template da ricerca automatica, «Più template complementari» (N da 2 a 5) o fissi (casella «Ligandi» del template solo se la scelta predefinita trasferisce qualcosa dalle catene scelte, con i gruppi esclusi nel suggerimento: `lib/ligands.defaultTransfer`); filtro zona crepuscolare, tabella paginata (template usati elencati, motivazioni nel suggerimento), CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
 | Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione e la posizione di quelli in coda ("2° in coda") |
@@ -1796,7 +1943,22 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     con code e inserzioni nella riga), scelta della riga, catene multiple, allineamenti non validi; prestazioni su 4816
     atomi; job e rotte (allineamento da testo, da sequenze non allineate e da un job; errori; analisi più recente per
     sorgente e impronta; job concorrenti), sezione del report (dimero sì, 1UBQ no, modelli di un job, escape);
-  - verifica dell'installazione.
+  - tasche, elettrostatica e rifinitura (`test_pockets.py`, `test_electrostatics.py`, `test_refine.py`): parser sulle
+    uscite reali di fpocket (4 tasche di 1UBQ, ordine per druggability, sfere = sfere dichiarate, baricentro) e di
+    PDB2PQR (carica netta 0, residui carichi per tipo, His68 con HD1); griglia come psize (97 × 97 × 129, le dimensioni
+    usate da APBS), passo allargato oltre il tetto, input di APBS con ogni parametro; mappe OpenDX sintetiche nel formato
+    di APBS e interpolazione esatta su un campo lineare; punti di Shrake-Rupley (atomo isolato, sovrapposti, sepolto);
+    potenziale per residuo su 1UBQ con una mappa lineare; costanti e unità del protocollo, copia pulita (Zn escluso,
+    TER all'interruzione 34/38), confronto prima/dopo e RMSD (spostamento noto di un Cα); rilevamento delle librerie
+    senza importarle e messaggi degli strumenti mancanti; job falliti con il motivo senza gli strumenti, validazione
+    delle rotte prima della coda, priorità. Con gli strumenti (immagine di sviluppo): fpocket su 1UBQ (stesse tasche
+    dell'uscita salvata, file conservati, `/latest`) e su `ubq_zn.pdb` (Zn escluso con avviso); PDB2PQR + APBS su 1UBQ
+    (carica |q| ≤ 1, tutte le Lys esposte positive, almeno 5 Glu su 6 negative, medie separate di oltre 1,5 kT/e,
+    residui sepolti senza valore, `.dx` scaricabile, PARSE e AMBER) e annullamento durante APBS (processo terminato);
+    rifinitura di 1UBQ con χ1 di Ile30 ruotato (energia diminuita, RMSD < 0,5 Å, clashscore non peggiore, REMARK,
+    rapporto di qualità), con 0,5 ps di dinamica, idrogeni e un'interruzione della catena (nessun residuo ricostruito,
+    34 e 38 non legati) e annullamento durante la dinamica (processo terminato);
+  - verifica dell'installazione (anche fpocket, PDB2PQR + APBS e OpenMM: "ok" se ci sono, "non disponibile" altrimenti).
 
   `pytest -m network` prova i servizi reali. Oltre a 1UBQ, `tests/data` contiene strutture sintetiche generate
   da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con interfaccia di contatto) e `ubq_zn.pdb` (sito Zn²⁺
@@ -1850,8 +2012,16 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     (una lettera come catena o amminoacido, codici di inserzione, testo libero), residui da evidenziare, scale della
     conservazione e dell'interfaccia (soglia di 1 Å² esclusa), opzioni di colorazione, richiesta dell'allineamento e
     FASTA da un file letto dal server.
+  - tasche, elettrostatica e rifinitura (`pockets.test.ts`, `electrostatics.test.ts`, `refine.test.ts`): soglia di
+    druggability, colori per posto, residuo condiviso fra due tasche, tasca scelta, sfere e centri, tasca di un residuo;
+    scala ±5 kT/e saturata, kT/e in mV, colori per segno e residui sepolti, residui estremi e cariche per tipo;
+    richiesta della rifinitura, link a Qualità e Confronto (originale come A), differenze ed esiti, energia; job
+    conservato per struttura e strumenti mancanti da `/api/system/info`.
 - **Profilazione:** `scripts/test.sh backend tests/perf_timing.py -s` (fuori dalla suite, vedi
   [Prestazioni](#prestazioni)).
+- **Immagine di sviluppo:** per provare strumenti nuovi senza toccare l'immagine dell'avviatore,
+  `docker build -f docker/Dockerfile -t bioloom:dev .` e `BIOLOOM_BASE_IMAGE=bioloom:dev scripts/test.sh` (test in
+  `bioloom-test:bioloom-dev`).
 - **Esecuzione:** `scripts/test.sh` (ruff, pytest nell'immagine con MODELLER reale, typecheck e vitest). La CI
   (`.github/workflows/ci.yml`) esegue gli stessi controlli: test rapidi senza strumenti esterni, frontend, e
   immagine completa con i test al suo interno.

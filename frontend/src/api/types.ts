@@ -4,7 +4,8 @@ export type JobStatus = "queued" | "running" | "cancelling" | "completed" | "fai
 export type JobKind =
   | "search" | "align" | "align2d" | "model" | "loop" | "quality" | "qmean" | "pipeline"
   | "selftest" | "db_update_pdbaa" | "db_build_mmseqs" | "db_index_mmseqs" | "db_convert_uniclust" | "db_local_uniclust"
-  | "analysis";
+  | "analysis"
+  | "pockets" | "electrostatics" | "refine";
 
 export type SearchEngine = "rcsb" | "ncbi" | "local" | "mmseqs" | "alphafold";
 
@@ -1414,4 +1415,144 @@ export interface AnalysisRequest {
   source: StructureSource;
   chains?: string[];
   msa?: { job_id?: string; text?: string; row?: string; tool?: "auto" | "builtin" | "clustalo" | "mafft" | "muscle" } | null;
+}
+
+// ---------------------------------------------------------------------------------- tasche, elettrostatica, rifinitura (F7b, F9.1)
+/** Calcolo completato più recente su una struttura e quello in coda o in corso (`/api/pockets/latest`, `/api/electrostatics/latest`). */
+export interface LatestToolJob {
+  job_id: string | null;
+  finished_at: string | null;
+  active_job_id?: string | null;
+}
+
+/** Sfera alfa di fpocket: centro (Å) e raggio (3,4–6,2 Å). */
+export interface PocketSphere {
+  center: [number, number, number];
+  radius: number;
+}
+
+/** Tasca di fpocket (domain/pockets.py): `id` = numero di fpocket (ordine per punteggio), `rank` = posto per druggability. */
+export interface Pocket {
+  id: number;
+  rank: number;
+  score?: number;
+  /** 0–1, Schmidtke & Barril 2010: ≥ 0,5 probabilmente druggabile */
+  druggability?: number;
+  druggable: boolean;
+  volume?: number;
+  alpha_spheres?: number;
+  sasa_total?: number;
+  sasa_polar?: number;
+  sasa_apolar?: number;
+  hydrophobicity_score?: number;
+  polarity_score?: number;
+  charge_score?: number;
+  polar_atoms_pct?: number;
+  mean_sphere_radius?: number;
+  flexibility?: number;
+  center: [number, number, number] | null;
+  spheres: PocketSphere[];
+  residues: { chain: string; resnum: string; resname: string }[];
+  atoms: number;
+  other: Record<string, number | null>;
+}
+
+/** Risultato di un job `pockets` (services/structure_tools.py). */
+export interface PocketsResult {
+  source: StructureSource;
+  label: string;
+  source_sha256: string;
+  pockets: Pocket[];
+  summary: { count: number; druggable: number; threshold: number; best: { id: number; druggability: number | null; volume: number | null; residues: number } | null };
+  structure: { residues: number; chains: number; heavy_atoms: number; chains_detail: ChainSummary[] };
+  warnings: string[];
+  files: string[];
+  params: { program: string; options: string; druggable_threshold: number };
+  /** PDB di fpocket con le sfere alfa (residui STP), fra i file del job */
+  pdb: string;
+}
+
+export interface ElectrostaticsResidue {
+  chain: string;
+  resnum: string;
+  resname: string;
+  /** media sugli atomi esposti del potenziale sulla superficie accessibile (kT/e); null se il residuo è sepolto */
+  potential: number | null;
+  exposed_atoms: number;
+  points: number;
+  /** carica del residuo nel PQR (estremità comprese nel primo e nell'ultimo) */
+  charge: number | null;
+}
+
+/** Risultato di un job `electrostatics` (services/structure_tools.py, domain/electrostatics.py). */
+export interface ElectrostaticsResult {
+  source: StructureSource;
+  label: string;
+  source_sha256: string;
+  forcefield: "PARSE" | "AMBER";
+  ph: number;
+  net_charge: number;
+  charges: { net_charge: number; positive: number; negative: number; by_type: Record<string, number>; charged: { chain: string; resnum: string; resname: string; charge: number }[] };
+  grid: { dime: [number, number, number]; cglen: number[]; fglen: number[]; center: number[]; spacing: number[]; memory_mb: number; ceiling_mb: number; coarsened: boolean };
+  parameters: Record<string, number | string>;
+  sampling: { surface: string; probe: number; points_per_atom: number; residue_value: string };
+  scale: { unit: string; limit: number; mv_per_unit: number };
+  map: { file: string; min: number; max: number; points: number };
+  residues: ElectrostaticsResidue[];
+  summary: { residues: number; min: number | null; max: number | null; mean: number | null; positive: number; negative: number; threshold: number };
+  structure: { residues: number; chains: number; heavy_atoms: number };
+  warnings: string[];
+  files: string[];
+  timings: Record<string, number>;
+}
+
+export type RefineVerdict = "meglio" | "peggio" | "invariato" | null;
+
+export interface RefineComparisonRow {
+  key: "grade_score" | "rama_favored" | "rama_outliers" | "clashscore" | "dope" | "zdope";
+  label: string;
+  before: number | null;
+  after: number | null;
+  delta: number | null;
+  verdict: RefineVerdict;
+  higher_is_better: boolean;
+}
+
+export interface RefineEnergyComponents {
+  bonds: number;
+  angles: number;
+  torsions: number;
+  nonbonded: number;
+  solvation: number;
+  total: number;
+}
+
+/** Risultato di un job `refine` (services/refine.py, protocollo in domain/refinement.py). */
+export interface RefineResult {
+  source: StructureSource;
+  label: string;
+  source_sha256: string;
+  /** modello rifinito fra i file del job, con il suo rapporto di qualità `<file>.quality.json` */
+  refined_file: string;
+  /** copia pulita data a OpenMM: la struttura "prima" del confronto */
+  input_file: string;
+  protocol: {
+    forcefield: string; solvent: string; ph: number;
+    restraint: { atoms: string[]; k_kcal_mol_A2: number; k_kj_mol_nm2: number; form: string };
+    minimization: { tolerance_kj_mol_nm: number; max_iterations: number };
+    md: { ps: number; temperature_k: number; friction_ps: number; timestep_fs: number; steps: number; seed: number } | null;
+    cutoff: { atoms_over: number; nm: number };
+    hydrogens_in_output: boolean;
+  };
+  openmm: { openmm: string; platform: string; threads: number; atoms: number; nonbonded: string; restrained_atoms: number; md_steps: number; timings: Record<string, number> };
+  added: { heavy_atoms: number; terminal_atoms: number; hydrogens: number; nonstandard: string[] };
+  input: { excluded: string[]; modified: string[]; breaks: { chain: string; after: string; before: string }[]; hydrogens_removed: number; residues: number };
+  energy: {
+    before: number | null; after: number | null; delta: number | null; decreased: boolean; restraint_final: number | null; unit: string;
+    components: { before: RefineEnergyComponents; after_minimization: RefineEnergyComponents; after_md?: RefineEnergyComponents; final: RefineEnergyComponents; restraint_final: number };
+  };
+  rmsd: { atoms: number; rmsd: number | null; rmsd_no_fit: number | null; max_displacement: number | null; max_atom: string | null };
+  quality: { before: QualitySummary; after: QualitySummary };
+  comparison: RefineComparisonRow[];
+  warnings: string[];
 }

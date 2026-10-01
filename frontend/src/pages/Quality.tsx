@@ -12,6 +12,7 @@ import { JobPanel } from "../components/JobPanel";
 import { StructurePicker } from "../components/Pickers";
 import { ReportButton } from "../components/ReportButton";
 import { AnalysisJobCard, StructuralAnalysisPanel } from "../components/StructuralAnalysis";
+import { ElectrostaticsPanel, PocketsPanel, ToolJobCard } from "../components/StructureTools";
 import { Viewer3D, type Viewer3DHandle } from "../components/Viewer3D";
 import { Alert, Badge, BarCell, Card, DropZone, Empty, Grade, PageHead, Stat, Tabs } from "../components/ui";
 import { compareLink } from "../lib/compare";
@@ -27,8 +28,9 @@ import {
   colorOptions, isPlddt, QMEAN_LOCAL_THRESHOLD, regionResidues, residueColoring, resiNumber, SIGNAL_LABEL, type ColorBy, type ColorOption, type ResidueRef,
 } from "../lib/residueColoring";
 import { qmeanRoute } from "../lib/status";
+import type { ToolJobMemory } from "../lib/toolJobs";
 
-type Tab = "rama" | "profiles" | "clashes" | "residues" | "3d" | "interactions";
+type Tab = "rama" | "profiles" | "clashes" | "residues" | "3d" | "interactions" | "pockets" | "electrostatics";
 
 function structureUrl(source: StructureSource | undefined): string | null {
   if (!source) return null;
@@ -369,6 +371,9 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
   const [lines, setLines] = useState<CoordinationLine[]>([]);
   // scheda Interazioni: job seguito e scelte dell'allineamento, conservati quando si cambia scheda
   const [analysisMemory, setAnalysisMemory] = useState<AnalysisPanelMemory | null>(null);
+  // schede Tasche ed Elettrostatica (F7b): job seguito, conservato quando si cambia scheda
+  const [pocketsMemory, setPocketsMemory] = useState<ToolJobMemory | null>(null);
+  const [electroMemory, setElectroMemory] = useState<ToolJobMemory | null>(null);
   // vista 3D per il report: c'è solo con la scheda 3D aperta
   const viewer = useRef<Viewer3DHandle>(null);
   const g = report.grade;
@@ -495,6 +500,8 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
           { value: "residues", label: "Residui" },
           { value: "3d", label: "3D" },
           { value: "interactions", label: "Interazioni" },
+          { value: "pockets", label: "Tasche" },
+          { value: "electrostatics", label: "Elettrostatica" },
         ]} />
         {tab === "rama" && (
           <div className="grid grid-2" style={{ alignItems: "start" }}>
@@ -572,6 +579,12 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
           (source ?? report.source) ? <StructuralAnalysisPanel source={(source ?? report.source)!} url={url} memory={analysisMemory} onMemory={setAnalysisMemory} />
             : <p className="small muted">Struttura del rapporto non disponibile: rilancia l'analisi di qualità.</p>
         )}
+        {/* tasche (fpocket) ed elettrostatica (PDB2PQR + APBS) della stessa struttura (F7b) */}
+        {(tab === "pockets" || tab === "electrostatics") && !(source ?? report.source) && (
+          <p className="small muted">Struttura del rapporto non disponibile: rilancia l'analisi di qualità.</p>
+        )}
+        {tab === "pockets" && (source ?? report.source) && <PocketsPanel source={(source ?? report.source)!} url={url} memory={pocketsMemory} onMemory={setPocketsMemory} />}
+        {tab === "electrostatics" && (source ?? report.source) && <ElectrostaticsPanel source={(source ?? report.source)!} url={url} memory={electroMemory} onMemory={setElectroMemory} />}
       </Card>
     </div>
   );
@@ -626,6 +639,8 @@ export default function Quality() {
   const modelFile = params.get("file");
   const templateId = params.get("template");
   const ajob = params.get("ajob"); // analisi strutturale da un link (F7)
+  const pjob = params.get("pjob"); // tasche da un link (F7b)
+  const ejob = params.get("ejob"); // elettrostatica da un link (F7b)
   const [source, setSource] = useState<StructureSource | null>(null);
   const [dope, setDope] = useState(true);
   const [extended, setExtended] = useState(true);
@@ -695,7 +710,9 @@ export default function Quality() {
         <div className="stack">
           {qjob && <JobPanel summary={summary} log={log} onCancel={cancel} />}
           {ajob && !qjob && !report && <AnalysisJobCard jobId={ajob} />}
-          {!qjob && !report && !ajob && (
+          {pjob && !qjob && !report && <ToolJobCard kind="pockets" jobId={pjob} />}
+          {ejob && !qjob && !report && <ToolJobCard kind="electrostatics" jobId={ejob} />}
+          {!qjob && !report && !ajob && !pjob && !ejob && (
             <Card>
               {modelJob ? (
                 <Empty icon="shield" title="Analisi non ancora calcolata per questo modello">

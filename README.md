@@ -104,8 +104,9 @@ sequenze e altre opzioni di modellazione salta così tutte le ricerche.
 
 ## Coda dei calcoli
 
-- **Priorità:** ricerche, allineamenti, analisi di qualità, analisi strutturali e QMEAN partono prima di modellazioni
-  e raffinamenti dei loop, e questi prima di pipeline e aggiornamenti dei database; a parità, in ordine di creazione.
+- **Priorità:** ricerche, allineamenti, analisi di qualità, analisi strutturali (anche tasche ed elettrostatica) e
+  QMEAN partono prima di modellazioni, raffinamenti dei loop e rifiniture energetiche, e questi prima di pipeline e
+  aggiornamenti dei database; a parità, in ordine di creazione.
   I job in coda mostrano la posizione ("2° in coda") nella pagina Job e nel riquadro del job.
 - **CPU condivisa:** i programmi di calcolo di tutti i job insieme (MODELLER, PROCHECK, ProSA, BLAST+, MMseqs2,
   allineatori…) non superano i **Job di calcolo in parallelo** delle Impostazioni (predefinito: core − 1). Una
@@ -183,6 +184,29 @@ esclusi) in pochi secondi:
 - L'analisi è un job ("Analisi strutturale" nella pagina Job, link stabile `/quality?ajob=<id>`); la scheda mostra la
   più recente per la stessa struttura, oppure quella in corso (anche dopo aver cambiato scheda o ricaricato la pagina). Il **report HTML** del modello o dell'analisi di qualità riassume interfacce e
   ponti disolfuro, se l'analisi della stessa struttura li ha trovati.
+
+## Tasche, elettrostatica e rifinitura energetica
+
+Tre calcoli con programmi inclusi nell'immagine Docker (se mancano, BioLoom lo dice e il resto funziona):
+
+- **Tasche** (pagina Qualità, scheda **Tasche**): fpocket trova le cavità della superficie e le ordina per
+  *druggability* (0–1; da 0,5 la tasca è probabilmente adatta a legare una piccola molecola simile a un farmaco). La
+  tabella riporta punteggio, volume, sfere alfa e residui che rivestono ogni tasca; nel 3D le tasche sono colorate,
+  con i centri delle sfere alfa e il centro della tasca. Un clic su una riga mostra solo quella tasca. Ligandi e acque
+  si escludono dal calcolo, quindi i loro siti compaiono come tasche vuote.
+- **Elettrostatica** (scheda **Elettrostatica**): PDB2PQR assegna cariche e raggi (PARSE o AMBER) con la protonazione a
+  pH 7 di PROPKA, APBS risolve l'equazione di Poisson-Boltzmann (150 mM di sale, dielettrici 2 e 78,54, 25 °C). Il
+  potenziale sulla superficie colora i residui dal rosso (negativo) al blu (positivo), fino a ±5 kT/e; la scheda
+  riporta la carica netta e i residui più carichi, e la mappa `.dx` si scarica per PyMOL, Chimera o VMD.
+- **Rifinitura energetica** (Modellazione: **Rifinisci** nella tabella dei modelli, oppure per qualunque struttura nel
+  riquadro dei loop): PDBFixer completa gli atomi e aggiunge gli idrogeni, OpenMM minimizza l'energia con AMBER ff14SB
+  e solvente implicito, tenendo ferma la catena principale con restrizioni; facoltativa una breve dinamica a 300 K. Il
+  risultato confronta prima e dopo (voto, Ramachandran, clashscore, DOPE, energia, spostamento della catena
+  principale) e porta alla pagina Qualità del modello rifinito e al Confronto con l'originale. Ligandi e ioni non sono
+  rifiniti (il modello rifinito contiene solo la proteina). Su 1UBQ la minimizzazione richiede da 15 s a un minuto.
+
+Ogni calcolo è un job (pagina Job; link `/quality?pjob=`, `/quality?ejob=`, `/modeling?job=`). Parametri, scelte e
+fonti sono nelle schede e in [Architettura](docs/ARCHITETTURA.md#tasche-elettrostatica-e-rifinitura-energetica-f7b-f91).
 
 ## Report del modello
 
@@ -277,7 +301,8 @@ sperimentale**, con il pLDDT medio (confidenza della predizione, 0–100).
 | Ricerca template | RCSB, NCBI BLAST e modelli predetti di AlphaFold DB (online); BLAST+ e MMseqs2 sul database locale pdbaa; punteggio motivato di ogni template e template complementari consigliati |
 | Allineamenti | Clustal Omega, MAFFT, MUSCLE, TM-align, US-align, più motori integrati; confronto strutturale con GDT-TS/GDT-HA, lDDT e deviazione per residuo |
 | Qualità | Ramachandran, clashscore, DSSP (mkdssp), SASA, profilo DOPE, **PROCHECK**, **ProSA II**, **QMEAN locale** (UniClust30) o SWISS-MODEL, voto A–D, consenso tra i metodi, qualità per residuo nel 3D (anche pLDDT di AlphaFold), verifica di ligandi e metalli (contatti, scontri, coordinazione); i passi indipendenti girano in parallelo e con l'analisi "Su tutti i modelli" si analizzano più modelli insieme, report HTML stampabile in PDF |
-| Analisi strutturale | legami idrogeno, ponti salini, ponti disolfuro, interazioni aromatiche, interfacce fra catene (superficie sepolta, plausibilità), conservazione da un allineamento multiplo mappata sulla struttura |
+| Analisi strutturale | legami idrogeno, ponti salini, ponti disolfuro, interazioni aromatiche, interfacce fra catene (superficie sepolta, plausibilità), conservazione da un allineamento multiplo mappata sulla struttura; tasche con **fpocket** (druggability), potenziale elettrostatico con **PDB2PQR** (PROPKA) e **APBS** |
+| Rifinitura | **OpenMM** e **PDBFixer**: minimizzazione con restrizioni sulla catena principale e dinamica breve facoltativa, confronto prima/dopo |
 | Automazione | pipeline batch da multi-FASTA, riprendibili dopo un annullamento, un errore o un riavvio ("Riprendi" o "Riprova solo i falliti": le sequenze già modellate non si rifanno) e, se completate con sequenze fallite, "Riprova i falliti"; avanzamento, log e tabella dei risultati aggiornati in tempo reale, con la stima del tempo residuo ("circa 3 min rimanenti"); un template usato da più sequenze si prepara una volta sola per pipeline; verifica dell'installazione (Impostazioni → Strumenti) |
 
 ## Dove stanno i dati
@@ -335,6 +360,20 @@ sono in [docs/SERVER.md](docs/SERVER.md).
 Le chiavi restano in `data/licenses/` e non entrano mai nelle immagini Docker. I pacchetti PROCHECK e ProSA
 (`docker/vendor/`) e le chiavi sono tuoi: non distribuirli ad altri.
 
+**Licenze degli strumenti open source dell'immagine** (versioni fissate in `docker/Dockerfile` e
+`backend/requirements-tools.lock`):
+
+| Strumento | Versione | Licenza | Installazione |
+|---|---|---|---|
+| fpocket | 4.2.3 | MIT | compilato dalla release ufficiale (non è fra i pacchetti di Ubuntu 24.04) |
+| APBS | 3.4.1 | BSD 3 clausole | binario ufficiale verificato con SHA-256 (il pacchetto di Ubuntu porterebbe circa 340 MB di dipendenze) |
+| PDB2PQR | 3.7.1 | BSD 3 clausole | pip |
+| PROPKA | 3.5.1 | LGPL 2.1 | pip (usato da PDB2PQR) |
+| OpenMM | 8.6.1 | MIT (librerie) e LGPL (piattaforme CUDA/OpenCL, non usate) | pip |
+| PDBFixer | 1.12.0 | MIT | pip |
+
+Insieme aggiungono circa 140 MB all'immagine.
+
 ## Documentazione
 
 - [Architettura](docs/ARCHITETTURA.md): container, flusso dei dati, motori, API.
@@ -358,6 +397,10 @@ docker compose -f launcher/compose.yml build
 `scripts/test.sh` costruisce `bioloom-test:<versione>` sopra l'immagine locale (con pytest e ruff) e monta il
 repository. La chiave di MODELLER viene da `MODELLER_KEY` oppure da `data/licenses/modeller.key`; da un worktree
 indica la cartella dati con `BIOLOOM_DATA_PATH`. La stessa verifica gira in CI (`.github/workflows/ci.yml`).
+
+Per provare un'immagine con strumenti nuovi senza toccare quella dell'avviatore: `docker build -f docker/Dockerfile -t
+bioloom:dev .` e poi `BIOLOOM_BASE_IMAGE=bioloom:dev scripts/test.sh`. Con l'immagine attuale i test degli strumenti che
+mancano (fpocket, APBS, OpenMM…) vengono saltati con il motivo.
 
 Profilazione dei tempi con MODELLER reale (job model, elemento di pipeline, analisi di qualità, avvio di MODELLER;
 non fa parte della suite): `scripts/test.sh backend tests/perf_timing.py -s`. Le misure e le condizioni sono in

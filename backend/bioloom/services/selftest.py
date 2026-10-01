@@ -14,7 +14,7 @@ from ..core.errors import AppError, ToolUnavailable
 from ..core.jobs import JobContext, JobManager
 from ..domain import structure
 from ..domain.sequences import SeqRecord
-from ..engines import align, modeller, procheck, prosa, qmean_local, quality, search, tools
+from ..engines import align, electrostatics, modeller, pockets, procheck, prosa, qmean_local, quality, refine, search, tools
 
 ASSET = Path(__file__).resolve().parents[1] / "assets" / "1UBQ.pdb"
 UBQ = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"
@@ -35,6 +35,7 @@ class SelfTestService:
             ("TM-align", lambda c, w: self._structural(c, "tmalign")),
             ("US-align", lambda c, w: self._structural(c, "usalign")),
             ("PROCHECK", self._procheck), ("ProSA II", self._prosa), ("QMEAN locale", self._qmean),
+            ("fpocket", self._fpocket), ("PDB2PQR + APBS", self._electrostatics), ("OpenMM", self._openmm),
         ]
         results = []
         for n, (name, fn) in enumerate(checks):
@@ -129,6 +130,28 @@ class SelfTestService:
     def _prosa(ctx: JobContext, workdir: Path) -> str:
         data = prosa.run(ASSET, ctx, workdir)
         return f"z-score 1UBQ {data['zscore']}"
+
+    @staticmethod
+    def _fpocket(ctx: JobContext, workdir: Path) -> str:
+        data = pockets.run(ASSET, ctx.sub("fpocket", workdir), workdir)
+        best = data["summary"]["best"]
+        return (f"{data['summary']['count']} tasche in 1UBQ"
+                + (f", migliore druggability {best['druggability']}" if best else ""))
+
+    @staticmethod
+    def _electrostatics(ctx: JobContext, workdir: Path) -> str:
+        data = electrostatics.run(ASSET, ctx.sub("APBS", workdir), workdir)
+        s = data["summary"]
+        return (f"carica netta di 1UBQ a pH 7 {data['net_charge']:+.2f}, potenziale di superficie da {s['min']} a "
+                f"{s['max']} kT/e (griglia {'×'.join(str(n) for n in data['grid']['dime'])})")
+
+    @staticmethod
+    def _openmm(ctx: JobContext, workdir: Path) -> str:
+        data = refine.run(ASSET, ctx.sub("OpenMM", workdir), workdir, output="1UBQ_refined.pdb")
+        e = data["energy"]
+        return (f"OpenMM {data['openmm']} ({data['platform']}, {data['threads']} thread): energia di 1UBQ "
+                f"{e['before']['total']:.0f} → {e['final']['total']:.0f} kJ/mol in "
+                f"{data['timings'].get('minimizzazione', 0):.0f} s")
 
     @staticmethod
     def _qmean(ctx: JobContext, workdir: Path) -> str:

@@ -16,7 +16,9 @@ from ..services.licenses import LicenseService
 from ..services.live import LiveService
 from ..services.pipeline import PipelineService
 from ..services.projects import ProjectService
+from ..services.refine import RefineService
 from ..services.selftest import SelfTestService
+from ..services.structure_tools import StructureToolsService
 from ..services.templates import TemplateLibrary
 from . import cache
 from .db import Database
@@ -78,6 +80,8 @@ def build_core(paths: Paths) -> Core:
     projects = ProjectService(db)
     compute = ComputeService(jobs, library, paths.uploads, paths.databases)
     AnalysisService(jobs, compute).register()  # job "analysis" (F7)
+    StructureToolsService(jobs, compute).register()  # job "pockets" ed "electrostatics" (F7b)
+    RefineService(jobs, compute).register()  # job "refine" (F9.1)
     pipeline = PipelineService(db, jobs, compute)
     databases = DatabaseService(jobs, paths.databases, paths.local_cache, settings.get)
     SelfTestService(jobs, paths.databases)
