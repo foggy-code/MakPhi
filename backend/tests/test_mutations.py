@@ -395,6 +395,15 @@ def test_dope_and_energy_signals():
     assert [s["code"] for s in out["signals"]] == ["dope", "energy"]
 
 
+def test_numbers_in_the_reasons_round_like_the_interface():
+    """I numeri dei motivi si arrotondano come la tabella accanto (fmtNum, Intl in it-IT): metà lontano da zero
+    sulla rappresentazione decimale (ΔDOPE −22,5 della riga A:Q49A: −23 nella colonna, prima −22 nel motivo)."""
+    assert mutations.dope_signal(-0.225, -22.5)["text"].startswith("ΔDOPE −23 (−0,23 residui equivalenti)")
+    assert [mutations._n(v, d) for v, d in ((-22.5, 0), (-23.5, 0), (22.5, 0), (0.125, 2), (1.005, 2), (2.675, 2),
+                                            (305.4, 0), (-3, 0), (-0.4, 0), (-0.04, 1), (0.0, 1))] == \
+        ["−23", "−24", "23", "0,13", "1,01", "2,68", "305", "−3", "0", "0,0", "0,0"]
+
+
 def test_energy_terms_and_dope_summary():
     e = mutations.energy_terms(-12393.2, -12370.3, -904.0, -953.7)
     assert e["delta_folded"] == 22.9 and e["delta_reference"] == -49.7 and e["ddE"] == 72.6

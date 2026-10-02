@@ -9,7 +9,7 @@ import threading
 import time
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from .. import __version__
 from ..core import auth
@@ -135,6 +135,41 @@ class SettingsUpdate(BaseModel):
     esmfold_url: str | None = None
 
 
+# Nomi delle impostazioni come nella pagina Impostazioni, per i messaggi d'errore
+SETTING_LABELS = {
+    "contact_email": "Email di contatto", "modeller_python": "Interprete Python con MODELLER",
+    "max_workers": "Job di calcolo in parallelo", "job_timeout_minutes": "Timeout per processo (minuti)",
+    "qmean_mode": "Dove calcolare QMEAN", "qmean_uniclust": "Versione di UniClust30/UniRef30",
+    "qmean_timeout_minutes": "Tempo massimo per un calcolo QMEAN locale (minuti)",
+    "default_search_engine": "Motore di ricerca predefinito",
+    "uploads_retention_days": "Conservazione dei file caricati (giorni)",
+    "esmfold_url": "Indirizzo del servizio ESMFold",
+}
+ESMFOLD_URL_LOCKED = ("In modalità server l'indirizzo del servizio ESMFold lo imposta l'amministratore sul server "
+                      "(BIOLOOM_ESMFOLD_URL in server.env; vuoto = API pubblica di ESM Atlas), non l'interfaccia.")
+
+
+def _setting_error(err: dict) -> str:
+    """Un errore di validazione di UserSettings in italiano: i validatori del modello scrivono già in italiano, i
+    vincoli dei campi (minimo, massimo, lunghezza, valori ammessi) li scrive pydantic in inglese."""
+    field = ".".join(str(p) for p in err.get("loc", ()))
+    ctx = err.get("ctx") or {}
+    kind = err.get("type", "")
+    if kind == "value_error":
+        text = str(err.get("msg", "")).removeprefix("Value error, ")
+    elif kind in ("less_than_equal", "greater_than_equal", "less_than", "greater_than"):
+        bound = {"less_than_equal": ("al massimo", "le"), "greater_than_equal": ("almeno", "ge"),
+                 "less_than": ("minore di", "lt"), "greater_than": ("maggiore di", "gt")}[kind]
+        text = f"deve essere {bound[0]} {ctx.get(bound[1])}"
+    elif kind == "string_too_long":
+        text = f"al massimo {ctx.get('max_length')} caratteri"
+    elif kind == "literal_error":
+        text = f"valore non ammesso (ammessi: {str(ctx.get('expected', '')).replace(' or ', ' o ')})"
+    else:  # tipi sbagliati: li ferma prima la validazione della richiesta (SettingsUpdate, errore 422)
+        text = str(err.get("msg", "valore non valido"))
+    return f"{SETTING_LABELS.get(field, field or 'impostazioni')}: {text}"
+
+
 @router.get("/settings")
 def get_settings(core: Core = Depends(get_core)) -> dict:
     return core.settings.get().model_dump()
@@ -143,6 +178,11 @@ def get_settings(core: Core = Depends(get_core)) -> dict:
 @router.put("/settings")
 def update_settings(body: SettingsUpdate, core: Core = Depends(get_core)) -> dict:
     changes = body.model_dump(exclude_none=True)
+    if "esmfold_url" in changes and core.settings.server:
+        # l'unico indirizzo impostabile: in modalità server lo sceglie l'amministratore, non chi ha la chiave d'accesso
+        # (la pagina rimanda il valore in uso, che resta com'è)
+        if changes.pop("esmfold_url").strip() != core.settings.get().esmfold_url:
+            raise AppError(ESMFOLD_URL_LOCKED, code="esmfold_url_locked", status=403)
     if "esmfold_url" in changes:  # stessa verifica dell'uso (F9.3): un indirizzo sbagliato è un errore, non si ignora
         from ..engines import remote
 
@@ -150,6 +190,9 @@ def update_settings(body: SettingsUpdate, core: Core = Depends(get_core)) -> dic
             remote.validate_esmfold_url(changes["esmfold_url"])
     try:
         updated = core.settings.update(changes)
+    except ValidationError as exc:
+        raise AppError("Impostazioni non valide: " + "; ".join(_setting_error(e) for e in exc.errors()[:5]) + ".",
+                       code="invalid_settings")
     except ValueError as exc:
         raise AppError(f"Impostazioni non valide: {exc}")
     if "modeller_python" in changes:

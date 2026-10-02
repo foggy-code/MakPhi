@@ -407,6 +407,7 @@ sperimentale**, con il pLDDT medio (confidenza della predizione, 0–100).
   il progetto attivo nella Panoramica); negli elenchi di job e template, e nel dialogo **Progetti** della barra in alto, si
   filtra per etichetta o per preferiti. Eliminando un elemento se ne vanno anche le sue etichette.
 - **Tema:** Scuro, Chiaro o **Sistema** (segue il tema del sistema operativo) in fondo alla barra laterale.
+- **Schermi stretti (telefono):** la barra laterale si apre dal pulsante del menu (☰) in alto a sinistra.
 - **Tasti:** `?` (o **Tasti** nella barra laterale) elenca le scorciatoie: `g` e poi una lettera per le pagine principali
   (`g s` Sequenze, `g j` Job, `g q` Qualità…). Mentre scrivi in un campo valgono solo Ctrl K ed Esc.
 - **Liste lunghe:** la tabella dei residui in Qualità, le coppie in Confronto e gli allineamenti con molte sequenze

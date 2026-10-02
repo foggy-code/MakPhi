@@ -470,6 +470,26 @@ def test_refine_report(client_with_ubq):
     assert r.status_code == 400 and r.json()["error"]["code"] == "report_model_required"
 
 
+def test_quality_report_names_keep_the_model_number(client_with_ubq):
+    """Report di qualità di due modelli dello stesso job: l'etichetta ("yeast.B99990002") è già senza estensione e il
+    nome del file la conserva intera (prima entrambi diventavano report_qualita_yeast.html)."""
+    c = client_with_ubq
+    job = fake_model_job(c)
+    names = []
+    for model in (BEST, SECOND):
+        q = c.post("/api/quality", json={"source": {"type": "job", "job_id": job["id"], "file": model}, "dope": False,
+                                         "procheck": False, "prosa": False}).json()
+        assert wait_job(c, q["id"])["status"] == "completed"
+        names.append(c.get(f"/api/jobs/{q['id']}/report").headers["content-disposition"])
+    assert names == ['attachment; filename="report_qualita_yeast.B99990001.html"',
+                     'attachment; filename="report_qualita_yeast.B99990002.html"']
+    # stessa regola per la scansione di alanina: si toglie solo l'estensione di un file di struttura
+    stem = reports_service._label_stem
+    assert stem("ubi_classica.B99990001") == "ubi_classica.B99990001" and stem("mio.modello") == "mio.modello"
+    assert [stem(n) for n in ("1UBQ.pdb", "x.B99990001.PDB", "y.cif", "z.mmcif", "w.ent.gz", "dir/v.pdb")] == \
+        ["1UBQ", "x.B99990001", "y", "z", "w", "v"]
+
+
 def test_refine_report_without_quality_and_dynamics(ubq_quality):
     """Dati di render senza rapporto di qualità né dinamica: avviso senza «MODELLER», «nessuna» dinamica."""
     from bioloom.domain import refinement

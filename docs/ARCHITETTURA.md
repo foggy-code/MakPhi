@@ -1517,7 +1517,7 @@ Nessuna dipendenza nuova, nessuna colonna né tabella SQLite nuova; due impostaz
 | Lunghezza | al più 400 residui, controllata prima dell'invio (`sequence_too_long`); almeno 10 | oltre 400 il servizio risponde 413 «Sequence is longer than 400.» (stesso codice, se il limite del servizio cambiasse) |
 | Alfabeto | solo i 20 amminoacidi standard, prima dell'invio (`invalid_sequence`, con le posizioni) | con X, B, Z il servizio risponde 200 ma salta quei residui (50 inviati, 47 nel file) |
 | Verifica della risposta | coordinate presenti, lettere dei Cα uguali alla sequenza inviata e nello stesso ordine, al più 20 MB | |
-| Errori | 404 → `esmfold_unavailable` («potrebbe essere stato dismesso, oppure l'indirizzo è sbagliato»); 413 → `sequence_too_long`; altri 4xx (429 con «troppe richieste») → `esmfold_rejected`; rete, tempo scaduto (300 s) e 5xx dopo 3 tentativi (pause di 5 e 10 s, annullabili) → `esmfold_unavailable`; risposta non valida → `esmfold_invalid_response` | test con il servizio simulato |
+| Errori | 404 → `esmfold_unavailable` («potrebbe essere stato dismesso, oppure l'indirizzo è sbagliato»); 413 → `sequence_too_long`; altri 4xx (429 con «troppe richieste») → `esmfold_rejected`; rete, tempo scaduto (300 s) e 5xx dopo 3 tentativi (pause di 5 e 10 s, annullabili) → `esmfold_unavailable`; reindirizzamento (3xx, non seguito) → `esmfold_unavailable`; risposta non valida → `esmfold_invalid_response`. Il testo della risposta d'errore entra nel messaggio solo dal servizio pubblico | test con il servizio simulato |
 | Cache | `data/cache/esmfold`, chiave = indirizzo + sequenza, 30 giorni (come la pulizia della cache remota); nessuna voce per una risposta non valida; scritture atomiche, anche con più job insieme | |
 | File salvato | intestazione del servizio conservata (oppure un TITLE «ESMFOLD PREDICTION, … SAVED BY BIOLOOM»), `REMARK 999 BIOLOOM PREDICTOR ESMFOLD <servizio>` e `… PLDDT SCALE 0-1 X100 TO 0-100`, pLDDT su 0–100, END | |
 
@@ -1639,6 +1639,8 @@ preventivi](#controlli-preventivi-domainpreflightpy-servicespreflightpy)).
   nella pagina Job).
 - **Impostazioni → Generale**: riquadro «Predizione di struttura (ESMFold)» con il consenso e l'indirizzo del servizio
   (vuoto = servizio pubblico; un indirizzo non valido è un 400 `invalid_esmfold_url` della rotta delle impostazioni).
+  In modalità server l'indirizzo è in sola lettura: lo imposta l'amministratore con `BIOLOOM_ESMFOLD_URL` (vedi
+  [Sicurezza e privacy](#sicurezza-e-privacy)).
 
 ### Ricerca di template
 
@@ -2775,6 +2777,9 @@ Il client API (`api/client.ts`) e i tipi (`api/types.ts`) sono l'unico punto di 
   etichette dell'elemento (`itemLabels`) e si riallinea quando cambiano (stella cliccata nella riga, dialogo
   «Progetti»); un elemento fuori dall'elenco (filtro, limite dei job) le legge dal server. Filtro per etichetta o preferiti (`LabelFilterSelect`) negli elenchi di job e
   template, nell'URL (`?tag=`), così un link lo conserva; un clic su un chip filtra per quell'etichetta.
+- **Schermi stretti** (≤ 760 px): la barra laterale (pagine, tema, Tasti, Disconnetti, Esci) si apre come pannello sopra
+  la pagina dal pulsante del menu nella barra in alto (`Layout`, classe `nav-open`) e si chiude scegliendo una pagina,
+  con Esc, con la ✕ o toccando fuori; le griglie (`grid-2`…`grid-5`) passano a una colonna.
 - **Tema** (`lib/theme.ts`): Scuro, Chiaro o Sistema nella barra laterale. "Sistema" segue `prefers-color-scheme` e
   cambia con il sistema operativo (evento `change` della media query); il tema si applica prima del primo render
   (`initialTheme` in `main.tsx`). La scelta resta in `bioloom.theme` come prima: i valori salvati "dark" e "light" valgono
@@ -2816,6 +2821,11 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 - **Server:** con `BIOLOOM_AUTH=on` tutte le API (e `/docs`) richiedono la chiave d'accesso, tramite
   cookie HttpOnly firmato o header Bearer, con ritardo sui tentativi falliti.
 - **Arresto dall'interfaccia:** solo con `BIOLOOM_ALLOW_SHUTDOWN=1` (preset locale).
+- **Richieste in uscita:** tutte verso indirizzi fissi e identificatori validati, tranne il servizio ESMFold. In
+  modalità server il suo indirizzo lo sceglie l'amministratore (`BIOLOOM_ESMFOLD_URL` in `server.env`, vuoto = servizio
+  pubblico): `PUT /api/settings` rifiuta un altro `esmfold_url` (403 `esmfold_url_locked`) e quello salvato in
+  `settings.json` non vale (`SettingsStore` con `server`). La richiesta a ESMFold non segue i reindirizzamenti, e il corpo
+  di una risposta d'errore entra nel messaggio del job solo dal servizio pubblico (gli altri vanno nel log del server).
 - **Container:** gira senza root (`setpriv` all'utente proprietario di `/data`). QMEAN non ha accesso al
   socket di Docker e usa i database in sola lettura.
 - **Licenze:** in `data/licenses` con permessi 0600, mascherate nelle risposte API, mai nelle immagini. Il

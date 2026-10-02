@@ -41,9 +41,14 @@ export const KIND_LABEL: Record<JobKind, string> = {
 export const ACTIVE_STATUSES: JobStatus[] = ["queued", "running", "cancelling"];
 export const isActive = (s: string) => (ACTIVE_STATUSES as string[]).includes(s);
 
+/**
+ * Numero all'italiana (virgola decimale) con `digits` decimali: metà lontano da zero sulla rappresentazione decimale
+ * (−22,5 → −23), come `_n` nei testi del server, e senza segno per un valore che arrotonda a zero («0», non «-0»).
+ */
 export function fmtNum(v: number | null | undefined, digits = 1): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
-  return v.toLocaleString("it-IT", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  const text = v.toLocaleString("it-IT", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  return /^-0(,0*)?$/.test(text) ? text.slice(1) : text;
 }
 
 export function fmtInt(v: number | null | undefined): string {

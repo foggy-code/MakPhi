@@ -158,8 +158,10 @@ export default function SettingsPage() {
                   <input type="checkbox" checked={form.esmfold_remote} onChange={(e) => set("esmfold_remote", e.target.checked)} />
                   Consenti l'invio delle sequenze a ESMFold per il confronto con una predizione
                 </label>
-                <Field label="Indirizzo del servizio ESMFold" hint={`Vuoto = API pubblica di ESM Atlas (${ESMFOLD_PUBLIC_URL}). Un altro servizio deve accettare la sequenza in POST e rispondere con un PDB, come quello pubblico.`}>
-                  <input className="input mono" value={form.esmfold_url} maxLength={300} onChange={(e) => set("esmfold_url", e.target.value)} placeholder={ESMFOLD_PUBLIC_URL} />
+                <Field label="Indirizzo del servizio ESMFold" hint={info?.runtime?.auth
+                  ? "In modalità server lo imposta l'amministratore sul server (BIOLOOM_ESMFOLD_URL in server.env); vuoto = API pubblica di ESM Atlas."
+                  : `Vuoto = API pubblica di ESM Atlas (${ESMFOLD_PUBLIC_URL}). Un altro servizio deve accettare la sequenza in POST e rispondere con un PDB, come quello pubblico.`}>
+                  <input className="input mono" value={form.esmfold_url} maxLength={300} onChange={(e) => set("esmfold_url", e.target.value)} placeholder={ESMFOLD_PUBLIC_URL} readOnly={!!info?.runtime?.auth} />
                 </Field>
                 <p className="tiny muted">
                   Con il consenso, «Confronta con una predizione» (pagine Qualità e Modellazione) invia al servizio la sola sequenza della catena (al più {ESMFOLD_MAX_LENGTH} residui), mai le coordinate; la predizione resta in cache su questo computer per 30 giorni. Con AlphaFold DB va a EBI solo l'accessione UniProt.

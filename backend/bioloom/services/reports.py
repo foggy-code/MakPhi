@@ -59,6 +59,18 @@ def _rel(model: str) -> str:
     return PurePosixPath(str(model or "").replace("\\", "/")).as_posix()
 
 
+# estensione di un file di struttura, anche compresso
+_STRUCTURE_SUFFIX = re.compile(r"\.(?:pdb|ent|cif|mmcif)(?:\.gz)?$", re.IGNORECASE)
+
+
+def _label_stem(label: object) -> str:
+    """Nome del file del report dall'etichetta della struttura analizzata: si toglie solo l'estensione di un file di
+    struttura. L'etichetta di un job di qualità o di una scansione di alanina è già senza (`resolve_structure`:
+    "ubi.B99990001" per ubi.B99990001.pdb), e `PurePosixPath.stem` toglierebbe ".B99990001", dando lo stesso nome ai
+    report di modelli diversi dello stesso job."""
+    return _STRUCTURE_SUFFIX.sub("", PurePosixPath(str(label).replace("\\", "/")).name)
+
+
 def _head(path: Optional[Path]) -> str:
     if path is None:
         return ""
@@ -546,7 +558,7 @@ class ReportService:
                                              "caveat", "interface")},
             "warnings": [str(w) for w in res.get("warnings") or []],
         })
-        return data, f"report_alascan_{PurePosixPath(label).stem}"
+        return data, f"report_alascan_{_label_stem(label)}"
 
     # ------------------------------------------------------------------------------ job quality
     def _quality_data(self, job: dict, qmean_job: Optional[str]) -> tuple[dict, str]:
@@ -568,4 +580,4 @@ class ReportService:
         data.update({"quality": quality, "consensus": cons, "tools": self._tools(_head(path), quality, qmean),
                      "target": {"name": label, "sequence": seq, "chains": chains}, "structure": struct,
                      "source": describe_source(source)})
-        return data, f"report_qualita_{PurePosixPath(str(label)).stem}"
+        return data, f"report_qualita_{_label_stem(label)}"

@@ -1,4 +1,5 @@
 import type { LigandGroupCheck, LigandReport } from "../api/types";
+import { fmtNum } from "../lib/format";
 import { CLASS_LABEL, CLASS_TONE, coordinationText, donorColor, donorText, groupTitle, STATUS_TONE } from "../lib/ligands";
 import { Badge, Card } from "./ui";
 
@@ -58,7 +59,7 @@ function LigandDetail({ group }: { group: LigandGroupCheck }) {
           )}
         </div>
       ))}
-      {group.clashes.length > 0 && <div style={{ color: "var(--err)" }}>Scontri: {group.clashes.map((c) => `${c.atom}–${c.partner} ${c.distance.toFixed(2).replace(".", ",")} Å`).join("; ")}</div>}
+      {group.clashes.length > 0 && <div style={{ color: "var(--err)" }}>Scontri: {group.clashes.map((c) => `${c.atom}–${c.partner} ${fmtNum(c.distance, 2)} Å`).join("; ")}</div>}
       {group.links.length > 0 && <div className="text-2">{group.links.map((l) => `${l.confirmed ? "Legame covalente" : "Possibile legame covalente"} ${l.atom}–${l.partner}`).join("; ")}</div>}
       {group.contacts.length > 0 && <div className="muted">Residui entro 4 Å: {group.contacts.map((c) => `${c.resname} ${c.chain}${c.resnum}`).join(", ")}</div>}
     </div>

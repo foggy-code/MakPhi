@@ -132,6 +132,7 @@ code, pre, .mono { font-family: var(--mono); font-size: 12.5px; }
 .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.grid-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .split { display: grid; grid-template-columns: minmax(320px, 420px) minmax(0, 1fr); gap: 18px; align-items: start; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .stack { display: grid; gap: 12px; }
@@ -409,15 +410,27 @@ kbd {
   .search-trigger span, .search-trigger kbd { display: none; }
 }
 
+/* menu degli schermi stretti: nascosto altrove */
+.nav-toggle, .nav-close, .nav-backdrop { display: none; }
+
 @media (max-width: 1100px) {
+  .grid-5 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .split { grid-template-columns: 1fr; }
 }
 @media (max-width: 760px) {
   .app { grid-template-columns: 1fr; }
+  /* la barra laterale (pagine, tema, Tasti, Disconnetti, Esci) diventa un pannello sopra la pagina */
   .sidebar { display: none; }
-  .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+  .nav-toggle { display: inline-flex; flex: none; }
+  .app.nav-open .sidebar {
+    display: flex; position: fixed; top: 0; bottom: 0; left: 0; width: min(272px, 86vw); z-index: 30;
+    box-shadow: var(--shadow);
+  }
+  .app.nav-open .nav-close { display: inline-flex; margin-left: auto; }
+  .app.nav-open .nav-backdrop { display: block; position: fixed; inset: 0; z-index: 29; background: rgba(2, 6, 16, 0.6); }
+  .grid-2, .grid-3, .grid-4, .grid-5 { grid-template-columns: 1fr; }
   .content { padding: 16px; }
   .topbar { padding: 10px 16px; }
 }

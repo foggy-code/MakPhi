@@ -102,6 +102,15 @@ export function isJobSummary(data: unknown): data is JobSummary {
 }
 
 /**
+ * Il job (o il riepilogo) tenuto da useJob, solo se è quello chiesto. Al cambio di id lo stato contiene ancora il
+ * job precedente fino all'effetto che lo azzera, cioè per un render intero: una pagina che passa da un'analisi
+ * completata a una appena avviata mostrerebbe il risultato vecchio e chiederebbe dati del job nuovo ancora in corso.
+ */
+export function ownJob<T extends { id: string }>(value: T | null, jobId: string | null | undefined): T | null {
+  return value && jobId && value.id === jobId ? value : null;
+}
+
+/**
  * Un riepilogo arrivato dal flusso dell'elenco: aggiorna sul posto il job già in elenco; un job nuovo che
  * rientra nel filtro chiede di ricaricare l'elenco (posizione e limite li decide il server).
  */

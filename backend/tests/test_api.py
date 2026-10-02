@@ -96,6 +96,24 @@ def test_validation_errors_are_readable(client):
     assert r["valid"] is False
 
 
+def test_settings_errors_are_short_and_in_italian(client):
+    """Un'impostazione rifiutata dal modello (validatore o vincolo del campo): messaggio breve in italiano con il nome
+    del campo come nella pagina, mai il testo di pydantic (inglese, con il link a errors.pydantic.dev)."""
+    r = client.put("/api/settings", json={"contact_email": "non-valida"})
+    assert r.status_code == 400
+    assert r.json()["error"] == {"code": "invalid_settings",
+                                 "message": "Impostazioni non valide: Email di contatto: indirizzo email non valido."}
+    r = client.put("/api/settings", json={"max_workers": 100, "qmean_mode": "altrove", "qmean_uniclust": "x" * 301})
+    message = r.json()["error"]["message"]
+    assert r.status_code == 400 and "pydantic" not in message and "Input should" not in message
+    assert "Job di calcolo in parallelo: deve essere al massimo 64" in message
+    assert "Dove calcolare QMEAN: valore non ammesso (ammessi: 'local' o 'remote')" in message
+    assert "Versione di UniClust30/UniRef30: al massimo 300 caratteri" in message
+    r = client.put("/api/settings", json={"job_timeout_minutes": 0})
+    assert r.json()["error"]["message"] == "Impostazioni non valide: Timeout per processo (minuti): deve essere almeno 1."
+    assert client.get("/api/settings").json()["contact_email"] == ""  # niente salvato
+
+
 def test_pipeline_items_pagination(client):
     # Sottomissione con motore inesistente per MODELLER assente: si verifica solo la gestione degli elementi.
     core = client.app.state.core

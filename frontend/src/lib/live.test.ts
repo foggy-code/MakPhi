@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { JobSummary } from "../api/types";
 import {
   backoffDelay, CONNECT_TIMEOUT_MS, FeedHub, type FeedState, isJobSummary, isLive, jobPollInterval, listPollInterval,
-  LiveFeed, mergeJob, parseData, polledLogChunk, RecentJobs, REOPEN_MS, sliceLogChunk, type SourceLike, throttle, type Timers,
-  wantJobStream,
+  LiveFeed, mergeJob, ownJob, parseData, polledLogChunk, RecentJobs, REOPEN_MS, sliceLogChunk, type SourceLike, throttle,
+  type Timers, wantJobStream,
 } from "./live";
 
 /** Timer finti: `advance` esegue in ordine quelli scaduti. */
@@ -174,6 +174,14 @@ describe("eventi e elenchi", () => {
     recent.remember(job("z", { updated_at: t }));
     recent.apply([job("a")]);
     expect(recent.size).toBe(0);
+  });
+  it("useJob dà solo il job chiesto: al cambio di id il precedente non vale nemmeno per un render", () => {
+    // Qualità: report di A completato, poi «Analizza» avvia B; prima dell'azzeramento lo stato contiene ancora A
+    const done = job("a", { kind: "quality", status: "completed", progress: 1 });
+    expect(ownJob(done, "a")).toBe(done);
+    expect(ownJob(done, "b")).toBeNull(); // niente risultato di A sotto l'id di B (né richieste del consenso di B)
+    expect(ownJob(done, null)).toBeNull();
+    expect(ownJob(null, "a")).toBeNull();
   });
 });
 

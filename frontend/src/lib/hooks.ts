@@ -3,8 +3,8 @@ import { api, ApiError } from "../api/client";
 import type { Job, JobLogChunk, JobSummary, ResumeScope } from "../api/types";
 import { isActive } from "./format";
 import {
-  FeedHub, type FeedState, isJobSummary, isLive, jobPollInterval, LiveFeed, LOG_MAX_CHARS, mergeJob, polledLogChunk,
-  RecentJobs, sliceLogChunk, streamSupported, throttle, wantJobStream,
+  FeedHub, type FeedState, isJobSummary, isLive, jobPollInterval, LiveFeed, LOG_MAX_CHARS, mergeJob, ownJob,
+  polledLogChunk, RecentJobs, sliceLogChunk, streamSupported, throttle, wantJobStream,
 } from "./live";
 import { cancelAndSync, type JobSync, recordStatus, resumeAndSync } from "./status";
 
@@ -169,14 +169,20 @@ export function useJob<R = unknown>(jobId: string | null | undefined, opts: { wi
   const visible = usePageVisible();
   const offset = useRef(0);
   const last = useRef<JobSummary | null>(null); // ultimo stato visto, per ricaricare il job solo quando serve
-  const active = summary ? isActive(summary.status) : !!jobId;
-  const watch = !active && !!job?.resumable;
+  const wanted = useRef(jobId); // un caricamento del job precedente che risponde dopo il cambio non scrive nulla
+  wanted.current = jobId;
+  // solo il job chiesto: al cambio di id lo stato tiene il precedente per un render (ownJob)
+  const current = ownJob(job, jobId);
+  const currentSummary = ownJob(summary, jobId) ?? current;
+  const active = currentSummary ? isActive(currentSummary.status) : !!jobId;
+  const watch = !active && !!current?.resumable;
   const withLog = !!opts.withLog;
 
   const loadFull = useCallback(async () => {
     if (!jobId) return;
     try {
       const full = await api.job<R>(jobId);
+      if (wanted.current !== jobId) return;
       last.current = full;
       setJob(full);
       setSummary(full);
@@ -187,6 +193,7 @@ export function useJob<R = unknown>(jobId: string | null | undefined, opts: { wi
       }
       setLoads((n) => n + 1);
     } catch (e) {
+      if (wanted.current !== jobId) return;
       setError(e instanceof Error ? e.message : String(e));
       if (e instanceof ApiError && e.status === 404) setGone(true);
     }
@@ -267,7 +274,7 @@ export function useJob<R = unknown>(jobId: string | null | undefined, opts: { wi
     if (jobId) await resumeAndSync(sync, () => api.resumeJob(jobId, scope));
   }, [jobId, sync]);
 
-  return { job, summary: summary ?? job, log, error, gone, active, cancel, resume, reload: loadFull };
+  return { job: current, summary: currentSummary, log, error, gone, active, cancel, resume, reload: loadFull };
 }
 
 export function useLocalStorage<T>(key: string, initial: T) {

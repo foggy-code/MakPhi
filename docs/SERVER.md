@@ -78,6 +78,9 @@ COMPOSE_PROFILES=qmean BIOLOOM_QMEAN_URL=http://qmean:8080 \
 
 - **Sessione:** il login crea un cookie HttpOnly firmato, valido 30 giorni. Cambiando la chiave e riavviando
   si invalidano tutte le sessioni.
+- **ESMFold:** chi ha la chiave può consentire l'invio delle sequenze (Impostazioni → Generale), ma non scegliere
+  l'indirizzo del servizio: lo imposti tu con `BIOLOOM_ESMFOLD_URL` in `server.env` (vuoto = API pubblica di ESM
+  Atlas), così nessuno può far chiamare al server indirizzi della sua rete interna.
 - **Script:** possono usare l'header `Authorization: Bearer <chiave>`.
 - **Tentativi sbagliati:** vengono rallentati progressivamente.
 - **Arresto:** dall'interfaccia è disabilitato (`BIOLOOM_ALLOW_SHUTDOWN=0`). Si arresta con

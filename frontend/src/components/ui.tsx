@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { gradeTone, STATUS_LABEL } from "../lib/format";
+import { fmtNum, gradeTone, STATUS_LABEL } from "../lib/format";
 import { Icon } from "./Icon";
 
 export function Card({ title, sub, right, children, className = "" }: { title?: ReactNode; sub?: ReactNode; right?: ReactNode; children?: ReactNode; className?: string }) {
@@ -228,7 +228,7 @@ export function BarCell({ value, max = 100, tone, label }: { value: number | nul
       <div className="bar">
         <div style={{ width: `${Math.min(100, (v / max) * 100)}%`, background: color }} />
       </div>
-      <span className="nowrap" style={{ minWidth: 42, textAlign: "right" }}>{label ?? (value === null || value === undefined ? "—" : `${v.toFixed(1)}%`)}</span>
+      <span className="nowrap" style={{ minWidth: 42, textAlign: "right" }}>{label ?? (value === null || value === undefined ? "—" : `${fmtNum(v, 1)}%`)}</span>
     </div>
   );
 }

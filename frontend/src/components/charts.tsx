@@ -1,6 +1,7 @@
 import { useMemo, useState, type MouseEvent as RMouseEvent, type ReactNode } from "react";
 import type { ConsensusRegion, ConsensusResult, QualityReport, RamaRect, ResidueRow } from "../api/types";
 import { colorFor } from "../lib/colorscale";
+import { fmtNum } from "../lib/format";
 import { CONSENSUS_SCALE, describeResidue, type ResidueColoring } from "../lib/residueColoring";
 
 // ---------------------------------------------------------------------------------- tooltip
@@ -196,7 +197,7 @@ export function ResidueProfile({ residues, metric = "dope", values: custom, labe
             tip.show(e, (
               <>
                 <b>{r.resname} {r.chain}{r.resnum}</b>
-                <div>{info.label.split(" ")[0]}: {v === null || v === undefined ? "—" : v.toFixed(3)} {info.unit}</div>
+                <div>{info.label.split(" ")[0]}: {fmtNum(v, 3)} {info.unit}</div>
                 <div className="muted">DSSP {r.ss} · Rama {r.rama ?? "—"}</div>
               </>
             ));
@@ -209,7 +210,7 @@ export function ResidueProfile({ residues, metric = "dope", values: custom, labe
           return (
             <g key={k}>
               <line className="grid-line" x1={pad.l} x2={W - pad.r} y1={y(v)} y2={y(v)} />
-              <text x={pad.l - 6} y={y(v) + 3} textAnchor="end">{Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2)}</text>
+              <text x={pad.l - 6} y={y(v) + 3} textAnchor="end">{fmtNum(v, Math.abs(v) >= 100 ? 0 : 2)}</text>
             </g>
           );
         })}
@@ -313,7 +314,7 @@ export function ConsensusTracks({ residues, consensus, selected, onSelect, onReg
               <b>{r.resname} {r.chain}{r.resnum}</b>
               <div>{per.flags[i].length ? per.flags[i].map((k) => signals.find((s) => s.key === k)?.label ?? k).join(", ") : "nessuna segnalazione"}</div>
               {dis?.flags[i] && <div className="muted">disordine predetto: atteso poco affidabile</div>}
-              {pred?.lddt[i] != null && <div className="muted">lDDT rispetto alla predizione {pred.lddt[i]!.toFixed(2)}{pred.plddt[i] != null ? ` · pLDDT ${pred.plddt[i]!.toFixed(0)}` : ""}</div>}
+              {pred?.lddt[i] != null && <div className="muted">lDDT rispetto alla predizione {fmtNum(pred.lddt[i], 2)}{pred.plddt[i] != null ? ` · pLDDT ${fmtNum(pred.plddt[i], 0)}` : ""}</div>}
             </>
           ));
         }}
@@ -397,12 +398,12 @@ export function StackBar({ parts }: { parts: { label: string; value: number; col
     <div className="stack-sm">
       <div style={{ display: "flex", height: 12, borderRadius: 6, overflow: "hidden", background: "var(--panel-3)" }}>
         {parts.map((p) => (
-          <div key={p.label} title={`${p.label}: ${p.value.toFixed(1)}%`} style={{ width: `${(p.value / total) * 100}%`, background: p.color }} />
+          <div key={p.label} title={`${p.label}: ${fmtNum(p.value, 1)}%`} style={{ width: `${(p.value / total) * 100}%`, background: p.color }} />
         ))}
       </div>
       <div className="legend">
         {parts.map((p) => (
-          <span key={p.label}><i style={{ background: p.color }} />{p.label} {p.value.toFixed(1)}%</span>
+          <span key={p.label}><i style={{ background: p.color }} />{p.label} {fmtNum(p.value, 1)}%</span>
         ))}
       </div>
     </div>
@@ -437,7 +438,7 @@ export function Heatmap({ ids, values }: { ids: string[]; values: number[][] }) 
               height={cell - 1}
               rx={2}
               fill={color(v)}
-              onMouseMove={(e) => tip.show(e, <>{ids[i]} ↔ {ids[j]}: <b>{v.toFixed(1)}%</b> identità</>)}
+              onMouseMove={(e) => tip.show(e, <>{ids[i]} ↔ {ids[j]}: <b>{fmtNum(v, 1)}%</b> identità</>)}
               onMouseLeave={tip.hide}
             />
           )),

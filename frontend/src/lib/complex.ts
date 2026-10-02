@@ -10,6 +10,7 @@ import type {
   AssemblyChain, AssemblySummary, ChainSummary, ComplexAssessment, ComplexRequest, InterfaceComparison, InterfaceStatus, TemplateRef,
 } from "../api/types";
 import type { CategoricalScale } from "./colorscale";
+import { fmtNum } from "./format";
 import type { PirEntry } from "./pir";
 import { resiNumber, type ResidueColoring, type ResidueValue } from "./residueColoring";
 
@@ -222,7 +223,7 @@ export function complexColoring(assessment: ComplexAssessment | null | undefined
         const kind = conserved.has(label) ? "conserved" : "new";
         const prev = values.get(label);
         if (!prev || (prev.value === "new" && kind === "conserved")) {
-          values.set(label, { chain: c, resnum: r.resnum, value: kind, note: `${r.resname} · ΔSASA ${r.delta.toFixed(1).replace(".", ",")} Å²` });
+          values.set(label, { chain: c, resnum: r.resnum, value: kind, note: `${r.resname} · ΔSASA ${fmtNum(r.delta, 1)} Å²` });
         }
       }
     }

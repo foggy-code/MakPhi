@@ -31,8 +31,9 @@ def create_app(paths: Optional[Paths] = None, frontend_dist: Optional[Path] = FR
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         resolved = paths or default_paths()
-        app.state.core = build_core(resolved)
+        resolved.ensure()  # la chiave generata va nella cartella dati
         app.state.auth = auth_config or auth.load(resolved.data)
+        app.state.core = build_core(resolved, server=app.state.auth.enabled)
         if app.state.auth.enabled and app.state.auth.generated:
             print(f"\n  Accesso protetto: chiave d'accesso generata in {resolved.data / 'access_key'}\n"
                   f"  Chiave: {app.state.auth.key}\n", flush=True)

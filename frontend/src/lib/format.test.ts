@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { cachedLabel, fmtCpuSlots, fmtEta, fmtQueuePosition, queueLabel, searchCacheHitsLabel } from "./format";
+import { cachedLabel, fmtCpuSlots, fmtEta, fmtNum, fmtQueuePosition, queueLabel, searchCacheHitsLabel } from "./format";
+
+describe("fmtNum", () => {
+  it("virgola decimale e arrotondamento come i testi del server (metà lontano da zero)", () => {
+    expect(fmtNum(96.06, 1)).toBe("96,1");
+    expect(fmtNum(-22.5, 0)).toBe("-23"); // ΔDOPE della scansione di alanina: «−23» anche nel motivo
+    expect(fmtNum(0.125, 2)).toBe("0,13");
+    expect(fmtNum(1.005, 2)).toBe("1,01");
+    expect(fmtNum(null)).toBe("—");
+  });
+  it("nessun segno per un valore che arrotonda a zero", () => {
+    expect(fmtNum(-0.4, 0)).toBe("0");
+    expect(fmtNum(-0.04, 1)).toBe("0,0");
+    expect(fmtNum(-0, 2)).toBe("0,00");
+    expect(fmtNum(-0.06, 1)).toBe("-0,1");
+  });
+});
 
 describe("fmtCpuSlots", () => {
   it("slot in uso e processi in attesa", () => {

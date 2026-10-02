@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { SystemInfo } from "../api/types";
 import { useProject, useToast } from "../lib/context";
@@ -73,6 +73,7 @@ export function Layout() {
   const { projects, projectId, select, create } = useProject();
   const toast = useToast();
   const navigate = useNavigate();
+  const location = useLocation();
   const { pref: themePref, setPref: setThemePref } = useThemePreference();
   const [active, setActive] = useState(0);
   const [info, setInfo] = useState<SystemInfo | null>(null);
@@ -82,6 +83,19 @@ export function Layout() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [projectsOpen, setProjectsOpen] = useState(false);
+  // schermi stretti: la barra laterale è un pannello sopra la pagina, aperto dal pulsante del menu nella barra in alto
+  const [navOpen, setNavOpen] = useState(false);
+  useEffect(() => {
+    setNavOpen(false); // cambiando pagina (anche con le scorciatoie) il pannello si chiude
+  }, [location.pathname, location.search]);
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !document.querySelector('[role="dialog"]')) setNavOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navOpen]);
   useGlobalShortcuts({
     search: () => setSearchOpen((open) => !open), // Ctrl+K a ricerca aperta la chiude
     help: () => setHelpOpen(true),
@@ -115,21 +129,24 @@ export function Layout() {
   }, live ? null : 3000);
 
   return (
-    <div className="app">
-      <aside className="sidebar">
+    <div className={navOpen ? "app nav-open" : "app"}>
+      <aside className="sidebar" id="sidebar">
         <div className="brand">
           <img src="/favicon.svg" alt="" />
           <div>
             <b>BioLoom</b>
             <small>v{info?.version ?? "4"} · modellazione per omologia</small>
           </div>
+          <button className="btn btn-ghost btn-icon nav-close" onClick={() => setNavOpen(false)} aria-label="Chiudi il menu" title="Chiudi il menu (Esc)">
+            <Icon name="x" size={16} />
+          </button>
         </div>
         <nav className="nav">
           {NAV.map((group) => (
             <div key={group.section || "root"}>
               {group.section && <div className="nav-section">{group.section}</div>}
               {group.items.map((item) => (
-                <NavLink key={item.to} to={item.to} end={item.to === "/"}>
+                <NavLink key={item.to} to={item.to} end={item.to === "/"} onClick={() => setNavOpen(false)}>
                   <Icon name={item.icon} />
                   {item.label}
                   {item.to === "/jobs" && active > 0 && <span className="count">{active}</span>}
@@ -168,8 +185,13 @@ export function Layout() {
           </div>
         </div>
       </aside>
+      {navOpen && <div className="nav-backdrop" onClick={() => setNavOpen(false)} />}
       <div className="main">
         <header className="topbar">
+          <button className="btn btn-ghost btn-icon nav-toggle" onClick={() => setNavOpen((open) => !open)} aria-label="Menu"
+            aria-expanded={navOpen} aria-controls="sidebar" title="Pagine, tema e uscita">
+            <Icon name="menu" />
+          </button>
           <Icon name="folder" />
           <select
             className="input"

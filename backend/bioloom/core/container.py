@@ -71,9 +71,10 @@ class Core:
         self.db.close()
 
 
-def build_core(paths: Paths) -> Core:
+def build_core(paths: Paths, *, server: bool = False) -> Core:
+    """`server`: modalità server (accesso con chiave, BIOLOOM_AUTH=on), vedi SettingsStore."""
     paths.ensure()
-    settings = SettingsStore(paths.settings_file)
+    settings = SettingsStore(paths.settings_file, server=server)
     tools.configure(paths.tools)
     licenses = LicenseService(paths.licenses, settings.get)
     licenses.apply()

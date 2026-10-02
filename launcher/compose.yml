@@ -28,6 +28,7 @@ services:
       BIOLOOM_ALLOW_SHUTDOWN: "${BIOLOOM_ALLOW_SHUTDOWN:-1}"
       MODELLER_KEY: "${MODELLER_KEY:-}"
       BIOLOOM_QMEAN_URL: "${BIOLOOM_QMEAN_URL:-}"   # http://qmean:8080 quando il profilo qmean è attivo
+      BIOLOOM_ESMFOLD_URL: "${BIOLOOM_ESMFOLD_URL:-}"   # solo con BIOLOOM_AUTH=on: servizio ESMFold; vuoto = pubblico
     volumes:
       - "${BIOLOOM_DATA_PATH:-../data}:/data"   # progetti e risultati: viaggiano con la cartella
       - scratch:/scratch                         # lavoro temporaneo dei calcoli, svuotato a ogni avvio

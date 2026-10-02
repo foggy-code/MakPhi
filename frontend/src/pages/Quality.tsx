@@ -478,7 +478,7 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
               {plddt && ` · pLDDT medio ${fmtNum(report.bfactor.mean, 1)}`}
             </div>
             <div className="small muted" style={{ marginTop: 4 }}>
-              Punteggio {fmtNum(g.score, 1)}/100 — penalità: Ramachandran {g.penalties.ramachandran}, clash {g.penalties.clashes}, DOPE {g.penalties.dope}
+              Punteggio {fmtNum(g.score, 1)}/100 — penalità: Ramachandran {fmtNum(g.penalties.ramachandran, 1)}, clash {fmtNum(g.penalties.clashes, 1)}, DOPE {fmtNum(g.penalties.dope, 1)}
               {consensus?.score != null && <> · consenso {fmtNum(consensus.score, 0)}/100 ({consensus.band}, {consensus.methods_used} metodi)</>}
             </div>
             {plddt && <div style={{ marginTop: 6 }}><Badge tone="info" title="Riconosciuto come nella libreria dei template: intestazione di AlphaFold DB (TITLE «ALPHAFOLD … PREDICTION» senza EXPDTA, oppure ModelCIF senza _exptl.method) o di ESMFold (TITLE «ESMFOLD … PREDICTION» senza EXPDTA), o nome AF-<accessione>-F<n> senza un altro metodo dichiarato, e valori tra 0 e 100">{report.structure.predictor === "esmfold" ? "Predizione ESMFold" : "Modello AlphaFold"}: la colonna B-factor contiene il pLDDT</Badge></div>}
@@ -574,7 +574,7 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
                       show(clashHighlight(c));
                       setTab("3d");
                     }}>
-                      <td className="mono">{c.atom1}</td><td className="mono">{c.atom2}</td><td className="num">{c.distance.toFixed(2)}</td><td className="num">{c.overlap.toFixed(2)}</td>
+                      <td className="mono">{c.atom1}</td><td className="mono">{c.atom2}</td><td className="num">{fmtNum(c.distance, 2)}</td><td className="num">{fmtNum(c.overlap, 2)}</td>
                     </tr>
                   ))}
                 </tbody>

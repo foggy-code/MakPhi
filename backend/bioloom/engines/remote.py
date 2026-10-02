@@ -854,6 +854,17 @@ def esmfold_sequence(sequence: str, max_length: int = ESMFOLD_MAX_LENGTH) -> str
     return seq
 
 
+def _esmfold_error_detail(service: str, status: Optional[int], body: object) -> str:
+    """Testo di una risposta d'errore di ESMFold da mostrare nel messaggio del job: solo quello del servizio pubblico
+    (es. 413 "Sequence is longer than 400."). Il corpo della risposta di un altro indirizzo va solo nel log del
+    server: un indirizzo della rete interna non deve far leggere le sue risposte a chi può avviare i job."""
+    detail = str(body or "")[:200]
+    if not detail or httpx.URL(service).host == httpx.URL(ESMFOLD_URL).host:
+        return detail
+    print(f"[BioLoom] ESMFold {service}: errore {status}: {detail!r}", flush=True)
+    return ""
+
+
 def esmfold_cached(sequence: str, url: str = ESMFOLD_URL) -> Optional[dict]:
     """Predizione già in cache per la sequenza e il servizio (senza richieste), oppure None."""
     try:
@@ -883,8 +894,10 @@ def esmfold_predict(sequence: str, *, url: str = ESMFOLD_URL, name: str = "", us
             return {**cached, "cached": True}
     host = httpx.URL(service).host
     try:
+        # nessun reindirizzamento: il servizio pubblico risponde direttamente, e uno seguito porterebbe la richiesta
+        # del server a un indirizzo che nessuno ha scelto (anche della sua rete interna)
         resp = _request_retry("POST", service, "ESMFold", attempts=3, wait=5.0, check=check, log=log,
-                              content=seq.encode("ascii"), timeout=ESMFOLD_TIMEOUT,
+                              content=seq.encode("ascii"), timeout=ESMFOLD_TIMEOUT, follow_redirects=False,
                               headers={"Content-Type": "text/plain", "Accept": "chemical/x-pdb, text/plain, */*"})
     except NotFound:
         raise RemoteServiceError(f"Il servizio ESMFold non risponde all'indirizzo {service} (404): potrebbe essere "
@@ -892,7 +905,7 @@ def esmfold_predict(sequence: str, *, url: str = ESMFOLD_URL, name: str = "", us
                                  code="esmfold_unavailable")
     except RemoteServiceError as exc:
         status = getattr(exc, "upstream_status", None)
-        detail = str(exc.details or "")[:200]
+        detail = _esmfold_error_detail(service, status, exc.details)
         if status == 413:
             raise AppError(f"Il servizio ESMFold ha rifiutato la sequenza perché troppo lunga ({len(seq)} residui): "
                            f"{detail or 'limite del servizio superato'}.", code="sequence_too_long")
@@ -904,6 +917,10 @@ def esmfold_predict(sequence: str, *, url: str = ESMFOLD_URL, name: str = "", us
         raise RemoteServiceError(f"{exc.message} Controlla la connessione a internet e l'indirizzo del servizio in "
                                  "Impostazioni → Generale; la predizione si può ripetere più tardi.",
                                  code="esmfold_unavailable")
+    if 300 <= resp.status_code < 400:
+        raise RemoteServiceError(f"Il servizio ESMFold all'indirizzo {service} risponde con un reindirizzamento "
+                                 f"(codice {resp.status_code}), che non si segue: indica in Impostazioni → Generale "
+                                 "l'indirizzo finale del servizio.", code="esmfold_unavailable")
     if len(resp.content) > ESMFOLD_MAX_BYTES:
         raise RemoteServiceError(f"ESMFold ha inviato una risposta non valida: {len(resp.content) // 1024 ** 2} MB per "
                                  f"{len(seq)} residui.", code="esmfold_invalid_response")

@@ -54,8 +54,10 @@ numerazioni coincidano.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Iterable, Optional
 
 import numpy as np
@@ -687,7 +689,15 @@ def _signal(level: str, code: str, text: str) -> dict:
 
 
 def _n(value: float, digits: int = 1) -> str:
-    return f"{value:.{digits}f}".replace(".", ",").replace("-", "−")
+    """Numero all'italiana arrotondato come nell'interfaccia (fmtNum: Intl in it-IT), che mostra gli stessi valori
+    accanto a queste frasi: metà lontano da zero sulla rappresentazione decimale più breve (−22,5 → −23; 0,125 → 0,13),
+    non metà al pari sul valore binario come il formato di Python (−22,5 → −22), e senza segno se arrotonda a zero."""
+    if not math.isfinite(value):
+        return str(value)
+    rounded = Decimal(repr(float(value))).quantize(Decimal(1).scaleb(-digits), rounding=ROUND_HALF_UP)
+    if rounded.is_zero():
+        rounded = abs(rounded)
+    return f"{rounded:.{digits}f}".replace(".", ",").replace("-", "−")
 
 
 def site_signals(ind: dict) -> list[dict]:

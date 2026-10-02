@@ -74,7 +74,7 @@ export default function Dashboard() {
       {/* stella ed etichette del progetto attivo (F8b) */}
       {projectId && <LabelEditor key={projectId} type="project" id={projectId} initial={itemLabels(project)} onChange={() => reloadProjects().catch(() => undefined)} />}
 
-      <div className="grid grid-4" style={{ gridTemplateColumns: "repeat(5, minmax(0,1fr))" }}>
+      <div className="grid grid-5">
         {FLOW.map((f, i) => (
           <Link key={f.to} to={f.to} className="card" style={{ color: "inherit", textDecoration: "none" }}>
             <div className="row" style={{ marginBottom: 8 }}>

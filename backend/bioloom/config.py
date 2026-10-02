@@ -188,23 +188,42 @@ class UserSettings(BaseModel):
         return self.max_workers or max(1, (os.cpu_count() or 2) - 1)
 
 
+def server_esmfold_url() -> str:
+    """Indirizzo di ESMFold scelto dall'amministratore per la modalità server (vuoto = API pubblica di ESM Atlas)."""
+    return os.environ.get("BIOLOOM_ESMFOLD_URL", "").strip()
+
+
 class SettingsStore:
-    def __init__(self, path: Path) -> None:
+    """Impostazioni salvate in settings.json.
+
+    In modalità server (`server`, accesso con chiave: BIOLOOM_AUTH=on) l'indirizzo di ESMFold è quello
+    dell'amministratore (`server_esmfold_url`), mai quello salvato: è l'unico indirizzo a cui il server invia richieste
+    che si potrebbe scegliere dall'interfaccia, e chi ha la chiave d'accesso non deve poterlo puntare sulla rete interna
+    del server. Il valore salvato (anche da una versione precedente) resta nel file e vale di nuovo in locale.
+    """
+
+    def __init__(self, path: Path, *, server: bool = False) -> None:
         self._path = path
         self._lock = threading.Lock()
+        self.server = server
         raw = read_json(path, default={}) or {}
         try:
             self._settings = UserSettings(**raw)
         except ValueError:
             self._settings = UserSettings()
 
+    def _effective(self) -> UserSettings:
+        if self.server:
+            return self._settings.model_copy(update={"esmfold_url": server_esmfold_url()})
+        return self._settings.model_copy()
+
     def get(self) -> UserSettings:
         with self._lock:
-            return self._settings.model_copy()
+            return self._effective()
 
     def update(self, changes: dict) -> UserSettings:
         with self._lock:
             merged = {**self._settings.model_dump(), **changes}
             self._settings = UserSettings(**merged)
             atomic_write_json(self._path, self._settings.model_dump())
-            return self._settings.model_copy()
+            return self._effective()

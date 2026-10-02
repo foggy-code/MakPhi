@@ -72,6 +72,8 @@ class FakeServices:
         status, body = self.esm.pop(0) if len(self.esm) > 1 else (self.esm[0] if self.esm else (500, ""))
         if status == -1:
             raise httpx.ReadTimeout("timeout", request=request)
+        if 300 <= status < 400:  # reindirizzamento verso `body`
+            return httpx.Response(status, headers={"location": body})
         return httpx.Response(status, text=body, headers={"content-type": "chemical/x-pdb"})
 
     def esm_calls(self) -> list[httpx.Request]:
@@ -82,7 +84,9 @@ class FakeServices:
 def services(monkeypatch, tmp_path):
     fake = FakeServices()
     fake.esm = [(200, ubq_prediction())]
-    monkeypatch.setattr(remote, "_client", httpx.Client(transport=httpx.MockTransport(lambda r: fake.handler(r))))
+    # reindirizzamenti seguiti come nel client condiviso (remote.client)
+    monkeypatch.setattr(remote, "_client", httpx.Client(transport=httpx.MockTransport(lambda r: fake.handler(r)),
+                                                        follow_redirects=True))
     monkeypatch.setattr(remote, "_cache_dir", tmp_path / "remote_cache")
     monkeypatch.setattr(remote, "_sleep_checked", lambda seconds, check, sleep: None)  # tentativi senza attesa
     return fake
@@ -245,6 +249,79 @@ def test_settings_route_validates_the_url(client):
     r = client.put("/api/settings", json={"esmfold_url": "https://esm.example.org/fold", "esmfold_remote": True})
     assert r.status_code == 200 and r.json()["esmfold_url"] == "https://esm.example.org/fold"
     assert client.get("/api/system/info").json()["services"]["esmfold_remote"] is True
+
+
+# ------------------------------------------------------------------------------------------ richieste in uscita
+INTERNAL = "http://169.254.169.254/latest/"
+
+
+@pytest.fixture
+def server_client(tmp_path, monkeypatch, services):
+    """Modalità server (accesso con chiave) con impostazioni salvate prima che l'indirizzo fosse bloccato: consenso
+    dato e un indirizzo della rete interna."""
+    from fastapi.testclient import TestClient
+
+    from bioloom.app import create_app
+    from bioloom.config import Paths
+    from bioloom.core import auth
+
+    monkeypatch.delenv("BIOLOOM_ESMFOLD_URL", raising=False)
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "settings.json").write_text(json.dumps({"esmfold_remote": True, "esmfold_url": INTERNAL}))
+    app = create_app(Paths(data), frontend_dist=None, auth_config=auth.AuthConfig(enabled=True, key="segreto-12345"))
+    with TestClient(app, headers={"Authorization": "Bearer segreto-12345"}) as c:
+        yield c
+
+
+def test_server_mode_esmfold_url_is_set_by_the_administrator_only(server_client, services, monkeypatch):
+    """Con l'accesso con chiave, chi ha la chiave non sceglie dove il server invia richieste: PUT /api/settings rifiuta
+    un altro indirizzo (403), quello salvato in settings.json non vale e si usa quello dell'amministratore
+    (BIOLOOM_ESMFOLD_URL, vuoto = servizio pubblico)."""
+    c = server_client
+    assert c.get("/api/settings").json()["esmfold_url"] == ""  # servizio pubblico, non l'indirizzo salvato
+    for url in (INTERNAL, "http://127.0.0.1:8080/fold", "https://esm.example.org/fold"):
+        r = c.put("/api/settings", json={"esmfold_url": url})
+        assert r.status_code == 403 and r.json()["error"]["code"] == "esmfold_url_locked", url
+        assert "BIOLOOM_ESMFOLD_URL" in r.json()["error"]["message"]
+    # la pagina rimanda il valore in uso insieme alle altre impostazioni: si salva tutto il resto
+    r = c.put("/api/settings", json={"esmfold_url": "", "contact_email": "a@b.it"})
+    assert r.status_code == 200 and r.json()["esmfold_url"] == "" and r.json()["contact_email"] == "a@b.it"
+    job = c.post("/api/predict", json={"sequence": {"name": "ubq", "sequence": HUMAN_UB}}).json()
+    assert wait_job(c, job["id"])["status"] == "completed"
+    assert [str(r.url) for r in services.esm_calls()] == [remote.ESMFOLD_URL]
+    # indirizzo dell'amministratore
+    monkeypatch.setenv("BIOLOOM_ESMFOLD_URL", "https://esm.example.org/fold")
+    assert c.get("/api/settings").json()["esmfold_url"] == "https://esm.example.org/fold"
+    assert c.put("/api/settings", json={"esmfold_url": "https://esm.example.org/fold"}).status_code == 200
+    job = c.post("/api/predict", json={"sequence": {"name": "ubq", "sequence": HUMAN_UB}}).json()
+    assert wait_job(c, job["id"])["status"] == "completed"
+    assert str(services.esm_calls()[-1].url) == "https://esm.example.org/fold"
+    assert INTERNAL not in [str(r.url) for r in services.calls]
+
+
+def test_client_does_not_follow_redirects(services):
+    """Un servizio che reindirizza (es. con un 303 verso la rete interna del server) non porta il server altrove."""
+    services.esm = [(303, INTERNAL)]
+    with pytest.raises(RemoteServiceError) as err:
+        remote.esmfold_predict(HUMAN_UB, url="https://esm.example.org/fold")
+    assert err.value.code == "esmfold_unavailable" and "reindirizzamento" in err.value.message
+    assert [str(r.url) for r in services.calls] == ["https://esm.example.org/fold"]
+
+
+@pytest.mark.parametrize("status, code", [(403, "esmfold_rejected"), (413, "sequence_too_long")])
+def test_client_keeps_error_bodies_of_other_services_out_of_the_message(services, capsys, status, code):
+    """Il corpo di una risposta d'errore entra nel messaggio (e così nel job) solo dal servizio pubblico; quello di un
+    altro indirizzo va nel log del server."""
+    services.esm = [(status, "INTERNAL-SECRET: role=admin")]
+    with pytest.raises(AppError) as err:
+        remote.esmfold_predict(HUMAN_UB, url="https://esm.example.org/fold")
+    assert err.value.code == code and "INTERNAL-SECRET" not in err.value.message
+    assert "INTERNAL-SECRET" in capsys.readouterr().out
+    services.esm = [(status, "Sequence is longer than 400." if status == 413 else "Bad request")]
+    with pytest.raises(AppError) as err:
+        remote.esmfold_predict(HUMAN_UB)
+    assert err.value.message.count("Sequence is longer than 400." if status == 413 else "Bad request") == 1
 
 
 def test_submit_without_consent_is_refused_before_any_request(client_with_ubq, services):
