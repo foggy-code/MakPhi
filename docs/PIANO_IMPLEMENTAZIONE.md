@@ -1,8 +1,12 @@
 # Piano di implementazione — evoluzione di BioLoom v4
 
-Stato: **in corso** — avanzamento nella sezione [Avanzamento](#avanzamento) in fondo. Deriva dall'analisi di `services/pipeline.py`, `core/jobs.py`,
-`engines/*`, `domain/*` e del frontend React. Le stime di effort sono relative (S ≈ 1–2 giorni, M ≈ 3–5, L ≈ 1–2
-settimane, XL > 2 settimane) e non sono state misurate.
+Stato: **completato** — tutte le fasi F0–F9 sono realizzate. Lo stato finale di ognuna, con le differenze rispetto al
+piano e i motivi, è nella sezione [Avanzamento](#avanzamento); i limiti noti che restano sono in [Seguiti
+possibili](#seguiti-possibili). Le sezioni F0–F9 qui sotto sono il piano originale, lasciato com'era: dove il codice ne
+differisce vale l'Avanzamento, e il funzionamento attuale è descritto in [ARCHITETTURA.md](ARCHITETTURA.md).
+
+Il piano deriva dall'analisi di `services/pipeline.py`, `core/jobs.py`, `engines/*`, `domain/*` e del frontend React. Le
+stime di effort sono relative (S ≈ 1–2 giorni, M ≈ 3–5, L ≈ 1–2 settimane, XL > 2 settimane) e non sono state misurate.
 
 ## Principi
 
@@ -257,24 +261,111 @@ Le prime cinque tappe danno il beneficio più visibile con il rischio più basso
 
 ## Avanzamento
 
-| Fase | Stato | Note |
-|---|---|---|
-| F0 | fatto | CI (`.github/workflows/ci.yml`), `scripts/test.sh` + `docker/test/Dockerfile`, ruff configurato, strutture sintetiche `ubq_dimer.pdb` e `ubq_zn.pdb` |
-| F1.1 | fatto | `core/cache.py`: ricerca, allineamento multiplo e strutturale; chiave con timbro di database/strumenti/file; TTL 7 giorni per RCSB/NCBI; `use_cache` e interruttore globale `compute_cache` |
-| F2.1 | fatto | `JobManager.requeue` atomico, `PipelineService.resume` (ambiti "incomplete"/"failed"), anche da pipeline completate con elementi falliti. Nessuno stato `interrupted`: un riavvio lascia `failed` e la ripresa vale per `failed`, `cancelled` e (solo pipeline) `completed`. Un elemento diventa `completed` solo dopo il salvataggio dei file |
-| F2.3, F2.4 | fatto | `core/eta.py` (mediana per le pipeline, progresso per gli altri job); `core/events.py` + `services/live.py`: SSE per job ed elenco, ricaduta sul polling nel frontend (`lib/live.ts`) |
-| F3 | fatto | Le metriche per residuo esistevano già nel rapporto di qualità: fatto il viewer (colorazione per valore, legenda, selezione nei due sensi), il pLDDT e la modalità Confidenza degli allineamenti |
-| F5.1 | fatto | Libreria `AF-<ACC>-F<n>`, motore `alphafold` (accessione o NCBI BLAST su Swiss-Prot), ritaglio per pLDDT con rimozione dei frammenti corti; un solo riconoscitore dei modelli AlphaFold (`domain/plddt.py`) che esclude le strutture sperimentali |
-| F6 | fatto | `domain/consensus.py`: scale e pesi dichiarati, discordanze, regioni problematiche; rotte del consenso con QMEAN e MODELLER |
-| F1.2, F1.3 | fatto | Misure prima/dopo in ARCHITETTURA.md (Prestazioni): la costruzione dei modelli è l'86% del tempo; analisi di qualità a passi paralleli (`core/parallel.Steps`), template preparati una volta per pipeline. Non unite più sequenze in un processo MODELLER (isolamento degli errori, stato del generatore casuale) |
-| F1.4, F2.2 | fatto | `core/budget.py` (slot di CPU condivisi, richieste elastiche, invecchiamento), `core/dispatch.py` (coda con priorità per pool, posizione in coda); QMEAN locale uno alla volta con controllo della memoria, risorsa rilasciata prima del ripiego su SWISS-MODEL |
-| F4.1 | fatto | Estesa la sovrapposizione esistente: `domain/comparison.py` (distanze per coppia, GDT-TS/HA con ricerca per soglia, lDDT sui Cα), pagina `/compare` |
-| F4.2 | fatto | `domain/report.py`: HTML autonomo con SVG, PNG facoltativo validato, report nello ZIP della pipeline |
-| F5.2 | fatto | `domain/template_rank.py` (curva di Rost, risoluzione, R-free, …), selezione dei complementari con avviso di orientamento non vincolato, modalità pipeline `multi`; corretto l'allineamento multi-template (`salign` con template complementari) con il ripiego sugli `align2d` uniti |
-| F5.4 | fatto | Trasferimento selettivo (l'opzione `hetatm` precedente non trasferiva nulla), un solo ligando per sito con più template, verifica di contatti e coordinazione con le distanze di Harding 2006 verificate |
-| F5.5 | fatto | `domain/disorder.py` (FoldIndex, SEG), domini InterPro, avvisi di copertura prima del lancio, regioni `expected` nel consenso |
-| F7 | fatto (parte interna) | `interactions`, `interfaces`, `conservation`; job `analysis`, scheda Interazioni. fpocket ed elettrostatica nella tappa 6 (immagine di sviluppo) |
-| F5.3 | fatto | Assemblaggi (mmCIF, REMARK 350), modalità Complesso con simmetria, confronto delle interfacce con DockQ |
-| F7b, F9.1 | fatto | fpocket, PDB2PQR+APBS, OpenMM/PDBFixer nell'immagine (verificati in `bioloom:dev`; `bioloom:4.1.0` va ricostruita dall'avviatore per averli) |
-| F8 | fatto | Controlli preventivi, procedura guidata `/wizard`, migrazioni SQLite con backup, etichette e preferiti, ricerca globale (Ctrl+K), tema Sistema, virtualizzazione. Il tema scuro esisteva già |
-| F9.2, F9.3, F9.4 | fatto | Mutagenesi (protocollo mutate_model, stima qualitativa, non un ΔΔG) e scansione di alanina; confronto con ESMFold (consenso esplicito, URL configurabile) o AlphaFold DB; pacchetti riproducibili, `python bioloom.py rerun` e confronto con stato «equivalente» per il rumore numerico di OpenMM |
+Tutte le fasi sono **fatte**. Ordine effettivo di consegna: F0 → F1.1 e F2.1 → F3 con F6, F5.1, F2.3 con F2.4 → F4.1,
+F4.2, F1.2 con F1.3, F1.4 con F2.2 → F5.2, F5.4, F5.5, F7 → F8a (procedura guidata e controlli preventivi) → F5.3 → F8b
+(ricerca globale, etichette e rifiniture) → F7b (tasche ed elettrostatica) con F9.1 → F9.2, F9.3, F9.4, poi una fase
+finale di correzioni dalla prova end-to-end e dalla revisione di sicurezza. Le tappe sono state riviste a gruppi, con le
+correzioni in commit a parte. I dettagli di ogni punto sono nelle sezioni di [ARCHITETTURA.md](ARCHITETTURA.md).
+
+| Fase | Stato | Realizzato | Differenze dal piano e motivi |
+|---|---|---|---|
+| F0 | fatto | CI in `.github/workflows/ci.yml` con tre job (backend in Python puro, frontend con typecheck, vitest e build, immagine Docker costruita senza push con i test al suo interno); `scripts/test.sh` con `docker/test/Dockerfile`; ruff con le regole E4/E7/E9/F/B | Dati di test: invece di altre strutture del PDB, `tests/data/make_synthetic.py` genera da 1UBQ `ubq_dimer.pdb` (multi-catena) e `ubq_zn.pdb` (con un metallo), riproducibili e senza rete. Il blocco dei PR con un test rotto è un'impostazione del repository su GitHub, non del codice |
+| F1.1 | fatto | `core/cache.py` per ricerche, allineamenti multipli e strutturali; chiave con timbro di database, strumenti e file; TTL 7 giorni per RCSB, NCBI e AlphaFold DB; `use_cache` nelle rotte («Ricalcola ignorando la cache») e interruttore globale `compute_cache` | Come da piano; il pairwise non passa dalla cache (è istantaneo) |
+| F1.2 | fatto | Template preparati una volta per esecuzione della pipeline e copiati agli altri elementi (`services/compute.PreparedTemplates`) | Nessuno script MODELLER con più bersagli: isolerebbe peggio errori e log di ogni elemento e cambierebbe lo stato del generatore casuale fra i modelli; il guadagno massimo (avvio dei processi, 0,21–0,28 s su 9 s per elemento) non lo giustifica |
+| F1.3 | fatto | Passi dell'analisi di qualità in parallelo (`core/parallel.Steps`), stesso rapporto della versione seriale; QMEAN resta un job a parte | Accettazione: le misure prima/dopo (ARCHITETTURA, Prestazioni) sono su job singoli, un elemento di pipeline e una pipeline di 4 sequenze con un template grande, a varianti alternate e confronti accoppiati nello stesso processo, invece che su una pipeline di 20 sequenze: il carico della macchina falsava i confronti fra esecuzioni separate. La costruzione dei modelli è l'86% del tempo e resta seriale (riproducibilità a parità di seme) |
+| F1.4 | fatto | `core/budget.py`: slot di CPU condivisi dai processi di tutti i job, richieste elastiche per i programmi multi-thread, invecchiamento, nessun sorpasso | Il budget governa i processi, non i job: anche i passi paralleli di uno stesso job ne passano, senza un secondo limitatore |
+| F2.1 | fatto | `POST /api/jobs/{id}/resume` con gli ambiti `incomplete` e `failed`, `JobManager.requeue` atomico, `PipelineService.resume`, anche da pipeline completate con elementi falliti; un elemento diventa `completed` solo dopo il salvataggio dei file | Nessuno stato `interrupted`: un riavvio lascia `failed` con il motivo e la ripresa vale per `failed`, `cancelled` e (solo pipeline) `completed`. Così stati, filtri, client e dati esistenti non cambiano e non serve una migrazione |
+| F2.2 | fatto | `core/dispatch.py`: coda con priorità per pool (interattivi, poi modellazioni, poi lavori in blocco), invecchiamento, posizione in coda; QMEAN locale come risorsa esclusiva, con il controllo della memoria prima di partire e la risorsa restituita prima del ripiego su SWISS-MODEL | Nessuna colonna `priority`: la priorità si ricava dal tipo e lo schema non cambia. Nessuna stima di RAM per gli altri tipi di job: solo QMEAN ha un fabbisogno grande e misurato (12 GB con UniRef30_2020_06); i core li governa il budget di F1.4 |
+| F2.3 | fatto | `core/eta.py`: mediana delle durate per le pipeline, dal progresso per gli altri job; `eta_seconds` in tutti i riepiloghi, mostrato in `JobPanel` e nell'elenco dei job | Come da piano; nessuna colonna nuova |
+| F2.4 | fatto | `core/events.py` e `services/live.py`: SSE per job (`/api/jobs/{id}/events`) ed elenco (`/api/jobs/events`), ricaduta sul polling in `lib/live.ts` | Flusso dell'elenco condiviso fra le parti di una scheda e chiuso nelle schede nascoste, per il limite di 6 connessioni HTTP/1.1 del browser |
+| F3.1 | fatto | `domain/perresidue.py` con pLDDT, QMEAN locale e ProSA per residuo | Ramachandran, clash e DOPE per residuo c'erano già nel rapporto di qualità: nessun endpoint `/residues`, i valori arrivano con il rapporto e con le rotte del consenso |
+| F3.2 | fatto | `Viewer3D` con la colorazione per valore (struttura secondaria, Ramachandran, clash, DOPE, RSA, B-factor, pLDDT, QMEAN locale, consenso), legenda e selezione nei due sensi | Schemi in più rispetto al piano; la scala pLDDT usa i colori di AlphaFold DB |
+| F3.3 | fatto | Modalità Confidenza di `AlignmentView` (Allineamenti, Modellazione, Editor PIR) | Come da piano |
+| F4.1 | fatto | `domain/comparison.py` (distanze per coppia, GDT-TS e GDT-HA con ricerca per soglia, lDDT sui Cα), pagina `/compare`, link da Modellazione, Qualità e Allineamenti | Nessuna rotta né job `compare`: si estende il job `align` strutturale esistente (US-align, TM-align o integrato) con il confronto per residuo. La voce `compare` di `core/jobs.PRIORITY` è rimasta senza handler |
+| F4.2 | fatto | `domain/report.py` e `services/reports.py`: HTML autonomo con grafici SVG del backend, vista 3D facoltativa come PNG verificato, report nello ZIP della pipeline | PDF dalla stampa del browser, senza `weasyprint` (nessuna dipendenza in più); report anche per rifinitura, mutagenesi e scansione di alanina |
+| F5.1 | fatto | Libreria `AF-<ACC>-F<n>`, motore `alphafold`, ritaglio per pLDDT con la rimozione dei frammenti isolati, un solo riconoscitore dei modelli predetti (`domain/plddt.py`) che esclude le strutture sperimentali | L'accessione viene dall'utente o dall'intestazione UniProt, altrimenti da NCBI BLAST su Swiss-Prot (non da una ricerca su UniProt) |
+| F5.2 | fatto | `domain/template_rank.py` (punteggio 0–100 con curva di Rost, copertura, E-value, risoluzione, R-free, metodo, lacune, data), selezione dei complementari con l'avviso di orientamento non vincolato, modalità pipeline `multi` (2–5 template); corretto l'allineamento multi-template (`salign` con template complementari) con il ripiego sugli `align2d` uniti | Nome del modulo `template_rank`. La ridondanza si valuta per identità di sequenza (> 95%) dagli allineamenti della ricerca, non con un clustering TM-align: richiederebbe di scaricare tutti i candidati. Ligandi e stato oligomerico sono informativi (peso 0) |
+| F5.3 | fatto | Assemblaggi biologici generati dagli operatori del file (`domain/assembly.py`: mmCIF e REMARK 350), modalità Complesso con simmetria, confronto delle interfacce con il template (DockQ) | Un solo template (o assemblaggio) per complesso, con una sequenza del bersaglio per ogni sua catena; 2–12 catene e al più 3000 residui per il tempo di MODELLER. Gli assemblaggi si generano in locale invece di scaricarli da RCSB: funzionano senza rete e con i file caricati |
+| F5.4 | fatto | Trasferimento selettivo dei gruppi eteroatomici, un solo gruppo per sito con più template, verifica di contatti, scontri e coordinazione con le distanze di Harding 2006 (verificate sulla fonte) | L'opzione `hetatm` precedente non trasferiva nulla (difetto corretto) |
+| F5.5 | fatto | `domain/disorder.py` (FoldIndex, SEG), domini InterPro, avvisi di copertura prima del lancio, regioni `expected` nel consenso e nel report | FoldIndex invece di IUPred: IUPred dipende da file distribuiti con il programma per uso accademico, che non si possono ricostruire dalle pubblicazioni. Le regioni compaiono nella mappa della pagina Sequenze, negli avvisi, nel consenso e nel report, non sulla vista dell'allineamento |
+| F6 | fatto | `domain/consensus.py`: scale e pesi dichiarati, discordanze spiegate, regioni problematiche, grafico per residuo; `grade` invariato | Dalla F9.3 il consenso accetta anche l'accordo con una predizione (peso 0,25), solo a confronto eseguito |
+| F7 | fatto | Interazioni, interfacce e conservazione (job `analysis`, scheda Interazioni); tasche con fpocket e potenziale con PDB2PQR + APBS (job `pockets` ed `electrostatics`, schede Tasche ed Elettrostatica) | Calcoli interni con Biopython e numpy, senza `freesasa`. Tre tipi di job invece di un solo `analysis`. APBS nell'immagine principale invece che in un profilo compose: il binario ufficiale pesa 30 MB contro i circa 340 MB di dipendenze del pacchetto di Ubuntu. La conservazione usa un allineamento dei job di Allineamenti o uno incollato |
+| F8.1 | fatto | Procedura guidata `/wizard` in sei passi (sequenza, template, allineamento, opzioni, avvio, risultati) con lo stato nell'URL e nel browser | Come da piano, con un passo in più per l'allineamento e le opzioni spiegate |
+| F8.2 | fatto | Controlli preventivi `POST /api/compute/preflight` (logica in `domain/preflight.py`) in Modellazione, Pipeline, procedura guidata, mutagenesi, predizione e riesecuzione | `POST` invece di `GET`, perché il corpo è lo stesso della rotta di avvio; la soglia d'identità è la curva di Rost (con il 30% come informazione) invece di un 30% fisso; stima del tempo e dello spazio dalle misure |
+| F8.3 | fatto | Tabelle `tags` e `favorites` (migrazione 2 con copia di sicurezza), ricerca globale su progetti, sequenze, documenti, job, template ed etichette (Ctrl+K) | L'indice FTS5 è temporaneo e si ricostruisce all'avvio, con il ripiego su LIKE: nulla di FTS5 nel file, così una build di SQLite senza FTS5 apre la stessa cartella dati |
+| F8.4 | fatto | Tema Sistema, scorciatoie da tastiera, virtualizzazione delle liste lunghe (oltre 200 righe) | Il tema scuro esisteva già |
+| F9.1 | fatto | Rifinitura con OpenMM e PDBFixer in un processo separato (`engines/refine_worker.py`), restrizioni sulla catena principale, dinamica facoltativa, confronto prima/dopo | Solvente implicito OBC2 invece di GBn2, molto più lento sulla CPU; strumenti nell'immagine principale (circa 140 MB in più in tutto) invece che in un profilo separato |
+| F9.2 | fatto | Mutagenesi e scansione di alanina con MODELLER (protocollo `mutate_model` esteso ai vicini entro 5 Å), stima qualitativa dell'effetto con indicatori dichiarati, energia facoltativa con OpenMM, varianti di UniProt | Nessun ΔΔG: FoldX e Rosetta non sono ridistribuibili, e la stima resta qualitativa con l'avvertenza. Varianti da UniProt (naturali, di malattia, di mutagenesi), non da ClinVar |
+| F9.3 | fatto | Confronto con ESMFold (consenso esplicito, indirizzo configurabile, fino a 400 residui) o con il modello di AlphaFold DB; TM-score, lDDT per residuo, regioni divergenti incrociate con il pLDDT e il consenso | In più rispetto al piano: AlphaFold DB come seconda sorgente e l'accordo nel consenso e nel report |
+| F9.4 | fatto | Pacchetti riproducibili (manifest con versioni, parametri, semi, checksum), riesecuzione da interfaccia (`/rerun`) e con `python bioloom.py rerun`, confronto dei risultati | Esito «compatibile» in più per il rumore di OpenMM su più thread (tolleranze scientifiche dichiarate), distinto da «equivalente» (tolleranze numeriche). Ricerca, QMEAN e predizione hanno il pacchetto ma non si rieseguono (dipendono da servizi remoti) |
+
+Rischi trasversali: FoldX e Rosetta sono esclusi perché le loro licenze non sono ridistribuibili; l'immagine cresce di
+circa 140 MB per fpocket, APBS, PDB2PQR, OpenMM e PDBFixer (`bioloom:4.1.0` 869 MB, immagine di sviluppo 1,04 GB);
+l'unica migrazione dello schema è quella delle etichette (`priority` e `interrupted` non sono servite), con la copia di
+sicurezza automatica; i servizi remoti hanno cache, timeout e consenso dove inviano sequenze o coordinate.
+
+## Seguiti possibili
+
+Limiti noti dichiarati nel codice e in [ARCHITETTURA.md](ARCHITETTURA.md), da cui partire per un'evoluzione successiva.
+
+**Installazione e verifica**
+
+- L'immagine `bioloom:4.1.0` dell'avviatore non contiene fpocket, APBS, PDB2PQR, OpenMM e PDBFixer: tasche,
+  elettrostatica e rifinitura funzionano dopo averla ricostruita (avviatore o `docker compose -f launcher/compose.yml
+  build`); i loro test girano nell'immagine di sviluppo `bioloom:dev`.
+- Un calcolo QMEAN locale completo non è stato verificato sul PC di sviluppo (5,7 GB per Docker contro i 12 richiesti da
+  UniRef30_2020_06): ricerca dei database, vista, copia locale e avvio di HHblits sì.
+- Sui Mac Apple Silicon i container girano in emulazione x86 (MODELLER, ProSA e QMEAN esistono solo per x86).
+- Il frontend si controlla solo con `tsc --noEmit` e vitest: ESLint non è installato.
+- I valori della v4 per 3IU0 e 9QB7 nel confronto con la v3 non sono ripetuti dai test (i file non sono in `tests/data`).
+
+**Calcolo e prestazioni**
+
+- La costruzione dei modelli, l'86% del tempo di un job model, resta seriale: dividerla fra processi cambierebbe i modelli
+  a parità di seme; servirebbero semi dichiarati per modello, registrati nel risultato.
+- Il DOPE di più modelli in un solo script è stato valutato e non applicato (guadagno stimato di 0,5 s, perdita
+  dell'isolamento per modello).
+- Solo QMEAN ha un controllo della memoria prima di partire; gli altri tipi di job non dichiarano la RAM che usano.
+- La voce `compare` di `core/jobs.PRIORITY` non ha un handler e si può togliere.
+
+**Template e modellazione**
+
+- La ridondanza fra template è di sola sequenza; un filtro strutturale (TM-score fra i candidati) richiederebbe di
+  scaricarli tutti.
+- Due frammenti dello stesso file caricati come template diversi ricevono l'avviso di orientamento non vincolato anche se
+  condividono le coordinate: BioLoom non può saperlo.
+- Ligandi: i gruppi di una catena senza residui proteici non si trasferiscono; il carbonio non è considerato donatore (CO
+  e CN⁻ legati al ferro dell'eme risultano scontri); i codici minuscoli di `restyp.lib` in un PIR dell'utente si leggono
+  come amminoacidi; il raffinamento dei loop non legge gli HETATM, quindi i ligandi non passano ai modelli di loop. Le
+  distanze attese per Ser/Thr/Tyr e Met sono scelte di BioLoom non verificate su una fonte, e i valori per residuo di
+  Bazayeva et al. 2024 non sono stati consultati.
+- Complessi: un solo template per complesso, da 2 a 12 catene e al più 3000 residui; gli avvisi di copertura non si
+  calcolano nella modalità Complesso né per i PIR a più catene; DockQ misura la fedeltà all'interfaccia del template, non
+  la correttezza dell'interfaccia del bersaglio.
+- AlphaFold DB: proteine oltre circa 2700 residui senza modello, isoforme non supportate.
+- I vincoli di interfaccia di PDBePISA della v3 non sono stati portati (servizio EBI instabile).
+
+**Qualità e analisi**
+
+- Disordine: FoldIndex è molto meno accurato di IUPred2A e dei predittori di deep learning, non vede il disordine con
+  composizione da proteina ripiegata né i loop corti, ha confini incerti di circa mezza finestra e non conosce il contesto
+  (partner, cofattori, disolfuri).
+- Interfacce: la plausibilità biologica si basa sulla sola area; non valuta conservazione né complementarità chimica
+  (PISA, EPPIC).
+- Elettrostatica: PDB2PQR toglie i residui modificati che non conosce (SEP, TPO…), con un avviso; la griglia è un solo
+  calcolo con un tetto di memoria invece del `mg-para` di psize.
+- Rifinitura: OBC2 invece di GBn2, ligandi e ioni esclusi, residui mancanti non ricostruiti; con più thread di OpenMM le
+  esecuzioni differiscono di poco (esito «compatibile» nelle riesecuzioni).
+- Mutagenesi: stima qualitativa, non un ΔΔG; il rumore dell'energia fra due selvatici ottimizzati arriva a 36 kJ/mol; il
+  protocollo non considera ligandi, metalli, acqua né movimenti della catena principale oltre il residuo mutato; le
+  varianti vengono solo da UniProt (ClinVar, previsto dal piano, non è integrato).
+- Predizione esterna: il servizio pubblico di ESMFold accetta fino a 400 residui e potrebbe essere dismesso (l'indirizzo
+  si cambia nelle Impostazioni); il confronto riguarda una catena e una sola conformazione, ed ESMFold è meno accurato con
+  poche sequenze omologhe.
+
+**Riproducibilità**
+
+- Ricerca di template, QMEAN e predizione esterna hanno il pacchetto ma non si rieseguono, perché dipendono da servizi
+  remoti; la pipeline non ha un pacchetto (c'è l'archivio ZIP dei risultati).
+- Le versioni degli strumenti nel pacchetto sono quelle dell'installazione al momento dell'esportazione: i job non
+  registrano l'ambiente a ogni esecuzione.

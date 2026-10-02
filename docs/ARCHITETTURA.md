@@ -1,6 +1,9 @@
 # Architettura di BioLoom v4
 
-BioLoom v4 è la riscrittura di BioLoom v3 (vedi [REVERSE_ENGINEERING.md](REVERSE_ENGINEERING.md)).
+BioLoom v4 è la riscrittura di BioLoom v3 (vedi [REVERSE_ENGINEERING.md](REVERSE_ENGINEERING.md)). Questo documento è per
+chi sviluppa: come è fatto il programma e perché, con le misure e i valori di riferimento dei test. L'uso è descritto nel
+[README](../README.md), l'evoluzione per fasi (le sigle F0–F9 usate qui) nel [piano di
+implementazione](PIANO_IMPLEMENTAZIONE.md).
 
 **Obiettivi:**
 
@@ -10,7 +13,44 @@ BioLoom v4 è la riscrittura di BioLoom v3 (vedi [REVERSE_ENGINEERING.md](REVERS
 - correzione dei difetti scientifici rilevati nella v3;
 - funzionamento anche senza gli strumenti esterni facoltativi.
 
+## Indice
+
+- [Vista d'insieme](#vista-dinsieme): [container e volumi](#container-e-volumi) · [cartella dati](#cartella-dati) ·
+  [flusso dei dati e file temporanei](#flusso-dei-dati-e-file-temporanei)
+- [Backend](#backend): [pacchetti](#pacchetti) · [job](#job) ·
+  [coda con priorità e budget di CPU](#coda-con-priorità-e-budget-di-cpu) ·
+  [ripresa delle pipeline](#ripresa-delle-pipeline) ·
+  [tempo residuo e aggiornamenti in tempo reale](#tempo-residuo-e-aggiornamenti-in-tempo-reale) ·
+  [cache dei calcoli](#cache-dei-calcoli) · [migrazioni dello schema](#migrazioni-dello-schema) ·
+  [licenze dei programmi esterni](#licenze-dei-programmi-esterni)
+- [Calcoli](#calcoli), nell'ordine del percorso dalla sequenza al modello:
+  - sequenza e template: [disordine, bassa complessità e domini](#disordine-bassa-complessità-e-domini) ·
+    [ricerca di template](#ricerca-di-template) · [scelta ragionata dei template](#scelta-ragionata-dei-template) ·
+    [modelli AlphaFold DB](#modelli-alphafold-db) · [allineamenti](#allineamenti)
+  - modellazione: [MODELLER](#modeller) ·
+    [più template: salign o align2d uniti sul bersaglio](#più-template-salign-o-align2d-uniti-sul-bersaglio) ·
+    [ligandi, cofattori e metalli](#ligandi-cofattori-e-metalli) · [complessi e omo-oligomeri](#complessi-e-omo-oligomeri)
+  - qualità: [validazione di qualità](#validazione-di-qualità) ·
+    [QMEAN locale con qualunque versione di UniClust30](#qmean-locale-con-qualunque-versione-di-uniclust30) ·
+    [consenso tra i metodi e qualità per residuo](#consenso-tra-i-metodi-e-qualità-per-residuo) ·
+    [confronto strutturale](#confronto-strutturale)
+  - analisi del modello: [analisi strutturale](#analisi-strutturale) ·
+    [tasche, elettrostatica e rifinitura energetica](#tasche-elettrostatica-e-rifinitura-energetica) ·
+    [mutagenesi in silico e scansione di alanina](#mutagenesi-in-silico-e-scansione-di-alanina) ·
+    [confronto con un predittore esterno](#confronto-con-un-predittore-esterno)
+  - risultato: [report del modello](#report-del-modello)
+- [Funzioni trasversali](#funzioni-trasversali): [controlli preventivi](#controlli-preventivi) ·
+  [procedura guidata](#procedura-guidata) · [etichette, preferiti e ricerca globale](#etichette-preferiti-e-ricerca-globale) ·
+  [riproducibilità: pacchetti e riesecuzione](#riproducibilità-pacchetti-e-riesecuzione)
+- [Prestazioni](#prestazioni): [misure per i controlli preventivi](#misure-per-i-controlli-preventivi)
+- [Frontend](#frontend)
+- [Sicurezza e privacy](#sicurezza-e-privacy)
+- [Test](#test)
+- [Non portato dalla v3](#non-portato-dalla-v3)
+
 ## Vista d'insieme
+
+### Container e volumi
 
 ```
 Computer ospite (Windows, macOS, Linux; Apple Silicon in emulazione x86)
@@ -31,18 +71,34 @@ Container "bioloom" (Ubuntu 24.04, Python 3.12, utente = proprietario di /data)
 
 Container "qmean" (profilo compose "qmean", immagine ufficiale QMEAN 4.3.0 + worker HTTP)
   rete interna :8080 (nessuna porta pubblicata) · /uniclust_src e /qmtl in sola lettura dal disco esterno
-  /cache ◀─ volume qmean_cache: cs219 ricreati per i database HH-suite 2
+  /cache ◀─ volume qmean_cache: copia locale di indici e cs219 di UniClust30, cs219 ricreati per i database HH-suite 2
+```
 
+Le versioni degli strumenti sono fissate in `docker/Dockerfile` e `backend/requirements-tools.lock`; PROCHECK e ProSA
+(pacchetti con licenza) arrivano da `docker/vendor/` e mancano nelle immagini costruite senza.
+
+### Cartella dati
+
+```
 data/
   bioloom.db          progetti, sequenze, documenti, job, elementi di pipeline, etichette e preferiti (SQLite, WAL esclusivo, schema versionato)
   backups/            copie di sicurezza di bioloom.db fatte prima di ogni migrazione dello schema
   jobs/<id>/          params.json, job.log, result.json e i soli risultati (niente intermedi MODELLER)
+  jobs/.rerun-incoming/  pacchetti di riproducibilità in arrivo, spostati nel job alla sua creazione
   templates/          libreria globale (ID.pdb|cif + ID.meta.json + ID.analysis.json in cache)
-  uploads/  cache/    file caricati per l'analisi; risposte remote e cache dei calcoli in cache/compute (pulizia automatica)
+  uploads/            strutture caricate per l'analisi (pulizia automatica)
+  cache/              risposte dei servizi remoti (uniprot, uniprot_variants, interpro, rcsb_meta, alphafold, esmfold)
+                      e cache dei calcoli in cache/compute (pulizia automatica)
   licenses/           modeller.key, prosa/LicenseDB (permessi 0600, mai nelle immagini)
   databases/          pdbaa (BLAST+), pdbaa_mmseqs (database MMseqs2 senza indice)
+  tools/              facoltativa: eseguibili aggiunti ai percorsi in cui `engines/tools` cerca gli strumenti
+  access_key          chiave d'accesso generata in modalità server, se BIOLOOM_ACCESS_KEY è vuota
   settings.json       impostazioni utente
 ```
+
+Nel container `BIOLOOM_DATA_DIR=/data`, `BIOLOOM_SCRATCH_DIR=/scratch` e `BIOLOOM_CACHE_DIR=/cache`. Fuori da Docker
+(sviluppo con `python bioloom.py`) la cartella dati è `data/` del repository, lo scratch `data/.scratch` e la cache locale
+`data/.localcache`, salvo le stesse variabili.
 
 ### Flusso dei dati e file temporanei
 
@@ -67,11 +123,16 @@ data/
 - **SQLite:** `locking_mode=EXCLUSIVE` impostato prima del WAL, quindi nessun file `-shm`. È affidabile
   sui bind mount di Docker Desktop e su exFAT, e impedisce a una seconda istanza di aprire la stessa
   cartella dati (errore chiaro). Lo schema ha una versione e si aggiorna all'avvio con migrazioni non distruttive,
-  dopo una copia di sicurezza in `backups/` (vedi [Migrazioni dello schema](#migrazioni-dello-schema-coredbpy)).
-- **Pulizia automatica** (`services/housekeeping.py`), all'avvio, ogni 24 ore e con un pulsante:
-  - upload più vecchi dei giorni impostati;
-  - cache remota e cache dei calcoli oltre i 30 giorni, più i file temporanei di scritture interrotte;
-  - scratch orfano.
+  dopo una copia di sicurezza in `backups/` (vedi [Migrazioni dello schema](#migrazioni-dello-schema)).
+- **Pulizia automatica** (`services/housekeeping.py`), all'avvio, ogni 24 ore e con «Pulisci ora» in Impostazioni →
+  Spazio e file temporanei (`POST /api/system/cleanup`):
+  - upload più vecchi dei giorni impostati (`uploads_retention_days`, predefinito 30; 0 = mai);
+  - cache remota e cache dei calcoli oltre i 30 giorni (`CACHE_MAX_AGE_DAYS`, più del TTL più lungo), più i file
+    temporanei di scritture interrotte;
+  - scratch orfano (cartelle di job non attivi) e file di `scratch/tmp` oltre le 24 ore, come i pacchetti caricati per
+    una riesecuzione.
+
+  Risultati dei job, libreria dei template, database e licenze non vengono mai toccati.
 - **Processi esterni:** ognuno ha il proprio gruppo di processi; annullamento e timeout terminano anche i
   figli (mafft e PROCHECK sono script). Il timeout dei job vale per tutti gli strumenti. I processi di calcolo
   prendono gli slot del budget di CPU condiviso fra i job (vedi [Coda con priorità e budget di
@@ -85,47 +146,190 @@ data/
   | indice sul bind mount | 22 s |
   | senza indice | 12 s |
 
-### Licenze (`services/licenses.py`)
+## Backend
 
-- **MODELLER:** la chiave viene da `data/licenses/modeller.key` oppure da `MODELLER_KEY`.
-  - Arriva ai soli sottoprocessi tramite `BIOLOOM_MODELLER_KEY`.
-  - Il preambolo degli script (`engines/tools.LICENSE_PREAMBLE`) esegue il `config.py` dell'installazione e
-    registra `modeller.config` con la chiave in `sys.modules` prima di `import modeller`. L'installazione
-    non viene modificata.
-  - Una chiave nuova viene provata con MODELLER prima di essere salvata; nelle risposte è sempre mascherata.
-- **ProSA II 2003:** `LicenseDB` ha righe `programma scadenza MAC codice`. L'avviatore imposta quel MAC sul
-  container (`mac_address`), e l'interfaccia confronta il MAC richiesto con quello effettivo.
-- **PROCHECK:** licenza accademica senza chiave.
+### Pacchetti
 
-## Backend (`backend/bioloom/`)
-
-| Pacchetto | Contenuto |
+| Pacchetto (`backend/bioloom/`) | Ruolo |
 |---|---|
-| `core/` | `storage` (scritture atomiche, `safe_join`, identificatori), `db` (SQLite esclusivo, migrazioni versionate), `jobs` (JobManager, JobContext, scratch e salvataggio definitivo), `dispatch` (coda con priorità di ogni pool), `budget` (budget di CPU condiviso fra i job), `cache` (cache dei calcoli), `auth` (chiave d'accesso), `errors`, `container` (composizione dei servizi), `eta` (stima del tempo residuo), `events` (notifiche in-process dei cambiamenti dei job), `parallel` (passi indipendenti di un calcolo su un pool locale di thread, vedi [Prestazioni](#prestazioni)) |
-| `domain/` | Logica pura e testata: `sequences` (FASTA, IUPAC, PIR, Clustal, statistiche), `structure` (PDB/mmCIF, catene, header, filtri), `ramachandran`, `clashes`, `secondary` (DSSP integrata + GOR), `geometry` (Kabsch, TM-score), `comparison` (confronto strutturale per residuo: distanze, GDT, lDDT), `grading`, `consensus` (consenso tra i metodi), `perresidue` (pLDDT, QMEAN locale e ProSA per residuo), `procheck` (lettura del .sum), `exports` (PyMOL), `plddt` (pLDDT dei modelli AlphaFold: fasce, ritaglio, riconoscimento dei file), `report` (report HTML autonomo del modello, grafici SVG, verifica del PNG), `template_rank` (punteggio motivato dei template e selezione dei complementari), `multitemplate` (scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template), `ligands` (classificazione dei gruppi eteroatomici, colonne '.' del PIR, verifica di contatti, scontri e coordinazione dei metalli), `disorder` (disordine FoldIndex, bassa complessità SEG, domini e copertura del bersaglio), `interactions`, `interfaces`, `conservation` (analisi strutturale, vedi [Analisi strutturale](#analisi-strutturale)), `pockets` (uscita di fpocket), `electrostatics` (PQR, griglia e input di APBS, mappe OpenDX, potenziale di superficie), `refinement` (protocollo della rifinitura, copia pulita, confronto prima/dopo; vedi [Tasche, elettrostatica e rifinitura energetica](#tasche-elettrostatica-e-rifinitura-energetica-f7b-f91)), assembly` (assemblaggi biologici dal mmCIF e dal REMARK 350), `prediction` (file di un predittore esterno e plausibilità di un modello rispetto alla predizione, vedi [Confronto con un predittore esterno](#confronto-con-un-predittore-esterno-f93)), `complexes` (bersagli a più catene, simmetria, confronto delle interfacce con il template; vedi [Complessi e omo-oligomeri](#complessi-e-omo-oligomeri-domainassemblypy-domaincomplexespy)), `preflight` (regole dei controlli preventivi, vedi [Controlli preventivi](#controlli-preventivi-domainpreflightpy-servicespreflightpy)), `labels` (normalizzazione delle etichette), `textsearch` (parole, corrispondenza e pertinenza della ricerca globale, escape per FTS5 e LIKE), `reproducibility` (controlli dell'archivio caricato, impronta del manifest, oscuramento dei segreti, confronto con le tolleranze; vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione-f94)) |
-| `engines/` | Adattatori: `modeller` (preparazione template, script, esecuzione), `quality` (pipeline di validazione), `procheck`, `prosa`, `qmean_local` (client del worker), `align`, `search` (RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB), `remote` (client HTTP, anche ESMFold), `tools` (rilevamento strumenti e librerie Python di calcolo, preambolo di licenza), `pockets` (fpocket), `electrostatics` (PDB2PQR + APBS), `refine` e `refine_worker` (OpenMM e PDBFixer in un processo separato), `versions` (versioni degli strumenti per i pacchetti di riproducibilità) |
-| `services/` | `projects`, `templates` (libreria), `compute` (handler dei job), `pipeline` (batch), `licenses`, `databases` (pdbaa, MMseqs2, stato UniClust), `housekeeping` (pulizia e spazio), `selftest` (verifica dell'installazione), `live` (flussi Server-Sent Events dei job), `reports` (dati del report di un modello o di un'analisi), `coverage` (copertura del bersaglio da parte dei template, avvisi su disordine e domini), `analysis` (job dell'analisi strutturale), `structure_tools` (job `pockets` ed `electrostatics`), `refine` (job `refine`), `predict` (job `predict`: predizione esterna e confronto con il modello), `preflight` (fatti per i controlli preventivi), `labels` (etichette e preferiti), `globalsearch` (ricerca globale; vedi [Etichette, preferiti e ricerca globale](#etichette-preferiti-e-ricerca-globale-f8b)), `reproducibility` (pacchetti dei job e job `rerun`) |
-| `api/` | Rotte FastAPI sottili con modelli Pydantic (`auth`, `licenses`, `databases`, `analysis`, `structure_tools`, `labels`, `reproducibility`, `predict` oltre a sistema, progetti, calcoli — compresi i controlli preventivi — e job) |
+| radice | avvio, applicazione, configurazione, comandi da riga di comando |
+| `core/` | infrastruttura: persistenza, job, coda, budget di CPU, cache, eventi |
+| `domain/` | logica scientifica pura e testata: nessun I/O di rete, nessun processo esterno |
+| `engines/` | adattatori verso i programmi esterni e i servizi remoti |
+| `services/` | servizi applicativi e handler dei job: combinano dominio, motori e persistenza |
+| `api/` | rotte FastAPI sottili con modelli Pydantic |
 
-Fuori dai pacchetti: `cli.py`, i comandi da riga di comando oltre al server (`python bioloom.py rerun`).
+Fuori dal backend: `frontend/` (vedi [Frontend](#frontend)); `docker/` con il `Dockerfile` dell'immagine, `entrypoint.sh`,
+il worker QMEAN (`docker/qmean/`: `qmean_worker.py`, `uniclust.py`, `run_qmean_wrapper.py`), l'immagine dei test
+(`docker/test/`) e i pacchetti con licenza (`docker/vendor/`); `launcher/` con gli avviatori, `compose.yml` e
+`server.env.example`; `scripts/test.sh`.
 
-Mutagenesi (F9.2): `domain/mutations` (notazione, copia per MODELLER, indicatori, classificazione, scansione, varianti
-di UniProt), `engines/mutate` (script di MODELLER, energia con OpenMM), `services/mutations` (job `mutate` e `alascan`),
-`api/mutations`; vedi [Mutagenesi in silico e scansione di alanina](#mutagenesi-in-silico-e-scansione-di-alanina-f92).
+**Radice**
+
+| Modulo | Contenuto |
+|---|---|
+| `__main__` | avvio del server (`python -m bioloom`, `--host`, `--port`, `--no-browser`) e comando `rerun` |
+| `app` | applicazione FastAPI: rotte, middleware d'accesso, interfaccia compilata (`frontend/dist`) |
+| `cli` | comandi oltre al server: `python bioloom.py rerun` (vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione)) |
+| `config` | percorsi (`Paths`), impostazioni utente (`UserSettings`, `SettingsStore`), limite degli upload |
+| `selftest` | verifica dell'installazione da riga di comando (`python -m bioloom.selftest`) |
+
+**`core/`**
+
+| Modulo | Contenuto |
+|---|---|
+| `auth` | chiave d'accesso della modalità server (`BIOLOOM_AUTH=on`) |
+| `budget` | budget di CPU condiviso fra i job (vedi [Coda con priorità e budget di CPU](#coda-con-priorità-e-budget-di-cpu)) |
+| `cache` | cache dei calcoli (vedi [Cache dei calcoli](#cache-dei-calcoli)) |
+| `container` | composizione dei servizi, creata una volta all'avvio |
+| `db` | SQLite esclusivo, migrazioni versionate (vedi [Migrazioni dello schema](#migrazioni-dello-schema)) |
+| `dispatch` | coda con priorità di ogni pool |
+| `errors` | errori applicativi con codice e stato HTTP, serializzati in modo uniforme |
+| `eta` | stima del tempo residuo |
+| `events` | notifiche in-process dei cambiamenti dei job |
+| `jobs` | `JobManager`, `JobContext`, scratch e salvataggio definitivo |
+| `parallel` | passi indipendenti di un calcolo su un pool locale di thread (`Steps`, vedi [Prestazioni](#prestazioni)) |
+| `storage` | scritture atomiche, `safe_join`, identificatori validati |
+
+**`domain/`**
+
+| Modulo | Contenuto |
+|---|---|
+| `assembly` | assemblaggi biologici dal mmCIF e dal REMARK 350 |
+| `clashes` | clashscore sugli atomi pesanti |
+| `comparison` | confronto strutturale per residuo: distanze, GDT, lDDT |
+| `complexes` | bersagli a più catene, simmetria, confronto delle interfacce con il template |
+| `consensus` | consenso tra i metodi di validazione |
+| `conservation` | conservazione per colonna di un allineamento multiplo, mappata sulla struttura |
+| `disorder` | disordine FoldIndex, bassa complessità SEG, domini e copertura del bersaglio |
+| `electrostatics` | PQR, griglia e input di APBS, mappe OpenDX, potenziale di superficie |
+| `exports` | sessione PyMOL |
+| `fileformats` | lettura di sequenze e allineamenti da file in ogni formato comune |
+| `geometry` | Kabsch, RMSD, TM-score |
+| `grading` | voto A–D |
+| `interactions` | legami idrogeno, ponti salini, disolfuri, interazioni aromatiche |
+| `interfaces` | interfacce fra catene: residui, area sepolta, interazioni, plausibilità |
+| `labels` | normalizzazione delle etichette |
+| `ligands` | classificazione dei gruppi eteroatomici, colonne '.' del PIR, verifica di contatti, scontri e coordinazione dei metalli |
+| `multitemplate` | scelta fra `salign` e gli `align2d` uniti sul bersaglio con più template, orientamento non vincolato |
+| `mutations` | mutagenesi: notazione, copia per MODELLER, indicatori, classificazione, scansione, varianti di UniProt |
+| `perresidue` | grandezze per residuo esterne al rapporto di qualità: pLDDT, QMEAN locale, ProSA |
+| `plddt` | pLDDT dei modelli predetti: fasce, ritaglio, riconoscimento dei file |
+| `pockets` | lettura dell'uscita di fpocket |
+| `prediction` | file di un predittore esterno e plausibilità di un modello rispetto alla predizione |
+| `preflight` | regole dei controlli preventivi |
+| `procheck` | lettura del `.sum` di PROCHECK |
+| `ramachandran` | diedri dello scheletro e regioni di Ramachandran |
+| `refinement` | protocollo della rifinitura, copia pulita, confronto prima/dopo |
+| `report` | report HTML autonomo, grafici SVG, verifica del PNG |
+| `reproducibility` | controlli dell'archivio caricato, impronta del manifest, oscuramento dei segreti, confronto con le tolleranze |
+| `secondary` | DSSP integrata e predizione GOR |
+| `sequences` | FASTA, IUPAC, PIR, Clustal, statistiche di allineamento |
+| `structure` | PDB/mmCIF, catene, header, residui mancanti, filtri |
+| `template_rank` | punteggio motivato dei template e selezione dei complementari |
+| `textsearch` | parole, corrispondenza e pertinenza della ricerca globale, escape per FTS5 e LIKE |
+
+**`engines/`**
+
+| Modulo | Contenuto |
+|---|---|
+| `align` | allineamenti a coppie (Biopython), multipli (Clustal Omega, MAFFT, MUSCLE o center-star integrato), strutturali (US-align, TM-align o Kabsch) |
+| `electrostatics` | PDB2PQR con PROPKA, poi APBS |
+| `modeller` | preparazione dei template, script, esecuzione di MODELLER |
+| `mutate` | script di MODELLER dei mutanti, energia con OpenMM |
+| `pockets` | fpocket |
+| `procheck` | PROCHECK |
+| `prosa` | ProSA II |
+| `qmean_local` | client del worker QMEAN |
+| `quality` | pipeline di validazione |
+| `refine`, `refine_worker` | OpenMM e PDBFixer in un processo separato |
+| `remote` | client HTTP dei servizi remoti (UniProt, InterPro, RCSB, NCBI, AlphaFold DB, SWISS-MODEL, ESMFold) |
+| `search` | ricerca di template: RCSB, NCBI, BLAST+, MMseqs2, AlphaFold DB |
+| `tools` | rilevamento di strumenti e librerie Python di calcolo, preambolo di licenza |
+| `versions` | versioni degli strumenti per i pacchetti di riproducibilità |
+
+**`services/`**
+
+| Modulo | Contenuto |
+|---|---|
+| `analysis` | job `analysis` (analisi strutturale) |
+| `compute` | job `search`, `align`, `align2d`, `model`, `loop`, `quality`, `qmean`; template preparati riusati (`PreparedTemplates`) |
+| `coverage` | copertura del bersaglio da parte dei template, avvisi su disordine e domini |
+| `databases` | pdbaa, MMseqs2, stato di UniClust30; job dei database |
+| `globalsearch` | ricerca globale |
+| `housekeeping` | pulizia automatica e spazio occupato |
+| `labels` | etichette e preferiti |
+| `licenses` | chiave MODELLER, licenza ProSA, stato di PROCHECK |
+| `live` | flussi Server-Sent Events dei job |
+| `mutations` | job `mutate` e `alascan`, varianti di UniProt |
+| `pipeline` | job `pipeline` (batch) |
+| `predict` | job `predict`: predizione esterna e confronto con il modello |
+| `preflight` | fatti per i controlli preventivi |
+| `projects` | progetti, sequenze, documenti |
+| `refine` | job `refine` |
+| `reports` | dati del report di un modello o di un'analisi |
+| `reproducibility` | pacchetti dei job e job `rerun` |
+| `selftest` | job `selftest` (verifica dell'installazione su 1UBQ) |
+| `structure_tools` | job `pockets` ed `electrostatics` |
+| `templates` | libreria dei template, assemblaggi, download da RCSB e AlphaFold DB |
+
+**`api/`** (OpenAPI completo su `/docs`)
+
+| Modulo | Prefisso | Contenuto |
+|---|---|---|
+| `analysis` | `/api/analysis` | analisi strutturale e la più recente per struttura |
+| `auth` | `/api/auth` | stato, login, logout |
+| `bio` | `/api` | analisi di sequenza, disordine, copertura, FASTA, conversione degli allineamenti, validazione PIR, UniProt, InterPro, metadati RCSB |
+| `compute` | `/api` | avvio di ricerca di template (`POST /api/search`), allineamenti, modellazione, loop, qualità, QMEAN, pipeline (elementi ed esportazioni) e controlli preventivi |
+| `databases` | `/api/databases` | stato e job dei database |
+| `deps` | — | dipendenze condivise (servizi, lettura limitata degli upload) |
+| `files` | `/api/files` | sequenze e strutture da file, strutture caricate |
+| `jobs` | `/api/jobs` | elenco, stato, eventi, log, file, annullamento, ripresa, eliminazione, qualità, consenso, report, PyMOL, archivio |
+| `labels` | `/api/tags`, `/api/favorites`, `/api/search` | etichette, preferiti e ricerca globale (`GET /api/search`) |
+| `licenses` | `/api/licenses` | MODELLER e ProSA |
+| `mutations` | `/api` | mutagenesi, scansione di alanina, varianti, cronologia |
+| `predict` | `/api` | confronto con un predittore esterno |
+| `projects` | `/api/projects` | progetti, sequenze, documenti |
+| `reproducibility` | `/api/jobs` | pacchetto di un job, anteprima e riesecuzione di un pacchetto |
+| `structure_tools` | `/api` | tasche, elettrostatica, rifinitura e i più recenti per struttura |
+| `system` | `/api` | salute, informazioni, risorse, spazio, verifica, pulizia, esempi, impostazioni, arresto |
+| `templates` | `/api/templates` | libreria, download, upload, assemblaggi, file, eliminazione |
 
 ### Job
 
-Tutti i calcoli (`search`, `align`, `align2d`, `model`, `loop`, `quality`, `qmean`, `analysis`, `pockets`,
-`electrostatics`, `refine`, `mutate`, `alascan`, `predict`, `pipeline`, `rerun`) passano dal `JobManager`:
+Tutti i calcoli passano dal `JobManager` (priorità di ogni tipo nella [coda](#coda-con-priorità-e-budget-di-cpu)):
 
-- stato `queued → running → completed | failed | cancelled` (più `cancelling`) salvato su SQLite;
+| Tipo | Avvio | Pool |
+|---|---|---|
+| `search` | `POST /api/search` | io |
+| `align` (a coppie, multiplo, strutturale) | `POST /api/align` | cpu |
+| `align2d` | `POST /api/align2d` | cpu |
+| `quality` | `POST /api/quality`, `/api/quality/upload` | cpu |
+| `qmean` | `POST /api/qmean` | io, con la risorsa esclusiva del QMEAN locale |
+| `analysis` | `POST /api/analysis` | cpu |
+| `pockets`, `electrostatics` | `POST /api/pockets`, `/api/electrostatics` | cpu |
+| `mutate` | `POST /api/mutate` | cpu |
+| `predict` | `POST /api/predict` | io |
+| `model`, `loop` | `POST /api/model`, `/api/model/loop` | cpu |
+| `refine` | `POST /api/refine` | cpu |
+| `alascan` | `POST /api/alascan` | cpu |
+| `rerun` | `POST /api/jobs/rerun` | cpu |
+| `selftest` | `POST /api/system/selftest` | cpu |
+| `pipeline` | `POST /api/pipeline` | cpu |
+| `db_update_pdbaa` | `POST /api/databases/pdbaa/update` | io |
+| `db_build_mmseqs`, `db_index_mmseqs` | `POST /api/databases/mmseqs/build`, `/mmseqs/index` | cpu |
+| `db_convert_uniclust`, `db_local_uniclust` | `POST /api/databases/uniclust/convert`, `/uniclust/local` | io, con la risorsa esclusiva del QMEAN locale |
+
+- stato `queued → running → completed | failed | cancelled` (più `cancelling`) salvato su SQLite; non ci sono altri
+  stati (`core/jobs.TERMINAL`, `ACTIVE`);
 - coda con priorità per tipo di job e budget di CPU condiviso dai processi esterni di tutti i job (vedi [Coda con
   priorità e budget di CPU](#coda-con-priorità-e-budget-di-cpu)), con la posizione in coda `queue_position`;
 - log incrementale (`GET /api/jobs/{id}/log?offset=`) con l'output dei sottoprocessi in tempo reale;
 - progresso e fase aggiornati dagli handler (per MODELLER tramite marcatori `@@BIOLOOM` stampati dallo script),
   con la stima del tempo residuo `eta_seconds` e gli aggiornamenti in tempo reale via Server-Sent Events (vedi
   [Tempo residuo e aggiornamenti in tempo reale](#tempo-residuo-e-aggiornamenti-in-tempo-reale));
-- annullamento immediato (i processi registrati vengono terminati) e timeout configurabile;
+- annullamento immediato (i processi registrati vengono terminati) e timeout configurabile (`job_timeout_minutes`,
+  predefinito 120);
 - al riavvio i job rimasti attivi vengono marcati come falliti (nessuno stato "fantasma"), con fase
   "Interrotto"; gli elementi di pipeline non conclusi diventano falliti con lo stesso motivo;
 - lo stato finale si scrive anche se il salvataggio dei file non riesce (disco dati pieno): il job finisce
@@ -137,6 +341,107 @@ Tutti i calcoli (`search`, `align`, `align2d`, `model`, `loop`, `quality`, `qmea
   `DELETE … WHERE status IN ('completed','failed','cancelled')`. Un job ripreso nel frattempo non si elimina
   (409) e, dopo l'eliminazione, una ripresa riceve 404: niente job eliminati mentre ripartono, né cartelle
   orfane.
+
+### Coda con priorità e budget di CPU
+
+**Coda** (`core/dispatch.py`). Ogni pool ha un dispatcher con una coda ordinata al posto del `ThreadPoolExecutor`
+FIFO: "cpu" con i job di calcolo in parallelo delle Impostazioni (`effective_workers`, core − 1 se automatico), "io"
+con 8. I worker prendono sempre il primo job avviabile in quest'ordine (`core/jobs.PRIORITY`):
+
+| Priorità | Tipi di job | Perché |
+|---|---|---|
+| 0 | `search`, `align`, `align2d`, `quality`, `qmean`, `analysis`, `pockets`, `electrostatics`, `mutate`, `predict` | interattivi brevi: l'utente aspetta davanti allo schermo |
+| 1 | `model`, `loop`, `selftest`, `refine`, `alascan`, `rerun` (registrato con priorità 1) e i tipi non elencati | minuti |
+| 2 | `pipeline`, `db_update_pdbaa`, `db_build_mmseqs`, `db_index_mmseqs`, `db_convert_uniclust`, `db_local_uniclust` | lavori lunghi in blocco |
+
+`PRIORITY` contiene anche `compare` (0), rimasto dal piano (F4.1): nessun handler lo registra, perché il
+confronto strutturale usa il job `align` (vedi [Confronto strutturale](#confronto-strutturale)).
+
+- **A parità:** `created_at`, poi il rowid della riga (ordine di creazione anche nello stesso secondo). Un job ripreso
+  rientra con la sua data di creazione e passa davanti ai job creati dopo di lui.
+- **Invecchiamento** (`dispatch.AGING_SECONDS` = 300 s): la priorità effettiva di un job in coda migliora di un
+  livello ogni 5 minuti di attesa, fino a 0. Senza, un flusso continuo di job interattivi lasciava una pipeline in
+  coda per sempre. 5 minuti sono più di un calcolo interattivo tipico (ricerca, allineamento, qualità: da secondi a
+  pochi minuti), quindi le richieste di chi aspetta davanti allo schermo passano ancora davanti; con un flusso
+  continuo una modellazione parte dopo al più 5 minuti e una pipeline dopo al più 10, più i job creati prima di lei.
+  A parità di priorità effettiva vale la creazione: un job della stessa priorità arrivato dopo non sorpassa chi
+  aspetta da prima, perché ha atteso di meno. L'ordine si calcola a ogni scelta (e per `queue_position`), non
+  all'ingresso in coda.
+- **Nessuna colonna nuova:** la priorità si ricava dal tipo; lo schema SQLite non cambia. La coda sta in memoria e lo
+  stato vero resta su SQLite: una voce della coda dice solo "prova ad avviare". `_execute` parte soltanto da `queued`,
+  con il passaggio condizionato di prima, quindi un tentativo rimasto indietro non avvia nulla due volte. Un job ha al
+  più una voce in coda.
+- **Compatibilità:** annullare un job in coda scrive lo stato finale e lo toglie dalla coda nello stesso passo, sotto
+  il lock del gestore, così una ripresa successiva non può vedersi togliere la voce nuova. La ripresa lo rimette in
+  coda a preparazione finita. All'arresto la coda si svuota e il `recover` del prossimo avvio marca i job rimasti
+  `queued`, come prima.
+- **Eventi:** quelli di prima (`job` all'ingresso in coda, all'avvio, a ogni fase e alla fine; `idle` a esecuzione
+  chiusa); ETA invariata.
+- **Posizione:** `queue_position` in tutti i riepiloghi (elenco, dettaglio, `/status`, annullamento, ripresa, SSE). È
+  la posizione da 1 nella coda del pool, null per chi non è in coda (anche una ripresa in preparazione). I flussi SSE
+  la contano nella firma del riepilogo: quando parte il job davanti, il cambio arriva come `job` o `status`.
+  L'interfaccia mostra "2° in coda" in `JobPanel` e nell'elenco dei job (`queueLabel` in `lib/format.ts`).
+- **Capacità dinamica:** pool "cpu" e budget rileggono `effective_workers` a ogni scelta. `PUT /api/settings` con
+  `max_workers` li risveglia subito (`JobManager.reconfigure`): l'impostazione vale senza riavvio.
+- **Risorse esclusive** (`register(resource=...)`): il servizio QMEAN locale (`QMEAN_LOCAL`) esegue al massimo un
+  calcolo alla volta; lo chiedono i job `qmean` in modalità locale e le conversioni e copie di UniClust30, che nel
+  servizio passano dalla stessa coda. Un job con la risorsa occupata resta `queued`, con la sua posizione e la fase
+  "In coda: il servizio QMEAN locale sta eseguendo un altro calcolo", e il worker passa al successivo: il pool "io"
+  continua a servire gli altri job. La risorsa si calcola al momento della scelta: `mode` del job o delle
+  Impostazioni; un QMEAN su SWISS-MODEL non la chiede, e nemmeno uno in modalità locale senza servizio QMEAN
+  (`BIOLOOM_QMEAN_URL` assente: l'avviatore non ha trovato UniClust30), che fallisce subito o va al fallback. Si tiene
+  fino alla chiusura dell'esecuzione, salvo che il job la restituisca prima con `JobContext.release_resource` (il
+  dispatcher gliela passa all'avvio): `handle_qmean` lo fa appena finisce la parte locale, riuscita o no, così un
+  fallback su SWISS-MODEL (minuti di attesa) non tiene in coda il QMEAN locale successivo, e più fallback partono
+  insieme. Restituita, la risorsa non si libera una seconda volta alla chiusura (quella presa nel frattempo da un
+  altro job resta sua). Prima i job QMEAN restavano `running` in attesa della coda del worker e consumavano il loro
+  timeout.
+
+**Budget di CPU** (`core/budget.py`). Senza coordinamento, pipeline × elementi in parallelo × strumenti saturavano la
+CPU. Gli slot sono `effective_workers`, condivisi da tutti i job. `JobContext.run(cpu=...)` li prende prima di avviare
+il processo e li restituisce quando termina: `True` (predefinito) = 1, un numero per i programmi multi-thread,
+`False` per i processi leggeri o di I/O.
+
+| Processo | Slot |
+|---|---|
+| MODELLER (allineamento, modelli, loop, DOPE) | 1: gli script non usano `parallel.Job`, un thread |
+| PROCHECK, ProSA II, TM-align, US-align, `blastp` (`-num_threads` predefinito 1), Clustal Omega (`--threads` predefinito 1), MAFFT (`--thread` predefinito 0 = un thread), MUSCLE 3, `mmseqs createdb`, fpocket, PDB2PQR (Python), APBS (binario ufficiale senza OpenMP) | 1 |
+| MMseqs2 `easy-search` e `createindex`, MUSCLE 5 (di suo userebbe tutti i processori), rifinitura con OpenMM (thread della piattaforma CPU) | da 1 a core − 1, uno per thread: al suo turno il processo prende gli slot liberi e parte con altrettanti thread (`--threads`/`-threads`) |
+| `blastdbcmd -entry all` (estrazione di pdbaa per MMseqs2) | 0: I/O |
+| mkdssp (da Biopython, non da `ctx.run`, meno di un secondo), servizio QMEAN (container a parte), download | fuori dal budget |
+
+- **Multi-thread:** un programma multi-thread occupa uno slot per thread, e i suoi thread li decidono gli slot che
+  ottiene. Il comando si costruisce dal numero di thread (`ctx.run(lambda n: [...], cpu=N)`) e la richiesta è
+  elastica: al suo turno prende da 1 a N slot, quelli liberi. Da solo resta veloce, insieme agli altri non satura, e
+  non tiene ferma la coda aspettando che se ne liberino N (con richieste fisse di N slot una ricerca MMseqs2 in una
+  pipeline avrebbe aspettato la fine di tutte le modellazioni in corso, bloccando anche quelle dietro di lei). Un
+  comando fisso con `cpu=N` aspetta invece tutti gli N slot (`ctx.cpu_threads` limita N alla capacità).
+- **Ordine:** priorità del job, poi arrivo. Niente sorpassi: il primo in ordine parte appena ha abbastanza slot, e
+  chi viene dopo aspetta anche se gli basterebbero. Così una richiesta fissa di N slot non resta indietro per sempre
+  dietro a quelle da uno.
+- **Invecchiamento** (`budget.AGING_SECONDS` = 60 s): la priorità effettiva di una richiesta migliora di un livello
+  ogni minuto di attesa, fino a 0, con le stesse regole della coda (a parità vale l'arrivo). I processi dei calcoli
+  interattivi durano pochi secondi (DOPE, PROCHECK, ProSA, TM-align) o meno di un minuto (BLAST+ e MMseqs2 locali):
+  un'analisi lanciata dall'utente passa ancora davanti, ma con un flusso continuo di processi interattivi un processo
+  di modellazione aspetta al più 1 minuto e uno di pipeline al più 2 prima di contare solo l'arrivo. Chi aspetta
+  riesamina il proprio turno a ogni rilascio e comunque ogni secondo, quindi l'invecchiamento vale anche senza
+  risvegli.
+- **Nessun deadlock:**
+  - gli slot li tengono solo processi in esecuzione, che finiscono da soli, per timeout o per annullamento;
+  - la pipeline non ne prende mentre aspetta i suoi elementi: li prendono i processi degli elementi;
+  - ogni richiesta è limitata alla capacità, quindi si può sempre soddisfare.
+
+  Verificato con una pipeline di 4 elementi in parallelo su 2 slot, con passi in parallelo dentro ogni elemento.
+- **Attesa:** si interrompe con l'annullamento (`cancel` sveglia subito chi aspetta: il processo non parte) e con
+  l'arresto. Non conta nel timeout del processo, che parte con il processo.
+- **Fase:** "In attesa di CPU libera" al posto della fase del job se aspetta un suo processo (anche di un contesto
+  figlio senza fase propria, come l'analisi di qualità dentro la modellazione) e nessun altro suo processo è in
+  esecuzione. Altrimenti l'attesa compare in coda alla fase: passi in parallelo ("Validazione · in attesa di CPU
+  libera": il job non è fermo) ed elementi di pipeline ("3 di 5 sequenze elaborate · in attesa di CPU libera"), così
+  le fasi della pipeline restano. Finita l'attesa torna la fase dichiarata dall'handler.
+- **Thread dello stesso job:** i passi eseguiti in parallelo da thread diversi che chiamano `ctx.run` (validazione in
+  parallelo) sono governati allo stesso modo, senza codice apposito.
+- **Diagnostica:** `/api/system/stats` → `cpu_slots` (totali, usati, processi in attesa), nella Panoramica.
 
 ### Ripresa delle pipeline
 
@@ -267,103 +572,428 @@ aggiornamento di un elemento. Ogni cambiamento ha una versione crescente e resta
   scheda ne usa al massimo due (elenco e job aperto; tre sulla pagina Qualità con QMEAN e analisi insieme, quattro per
   i pochi secondi di un'analisi strutturale lanciata nella scheda Interazioni).
 
-### Coda con priorità e budget di CPU
+### Cache dei calcoli
 
-**Coda** (`core/dispatch.py`). Ogni pool ha un dispatcher con una coda ordinata al posto del `ThreadPoolExecutor`
-FIFO: "cpu" con i job di calcolo in parallelo delle Impostazioni (`effective_workers`, core − 1 se automatico), "io"
-con 8. I worker prendono sempre il primo job avviabile in quest'ordine (`core/jobs.PRIORITY`):
+Modulo `core/cache.py`; le risposte dei servizi remoti hanno una cache propria in `engines/remote.py` (vedi [Sicurezza
+e privacy](#sicurezza-e-privacy)).
 
-| Priorità | Tipi di job | Perché |
-|---|---|---|
-| 0 | `search`, `align`, `align2d`, `quality`, `qmean`, `analysis`, `pockets`, `electrostatics`, `mutate`, `predict` (e `compare`) | interattivi brevi: l'utente aspetta davanti allo schermo |
-| 1 | `model`, `loop`, `selftest`, `refine`, `alascan` e i tipi non elencati | minuti |
-| 2 | `pipeline`, `db_update_pdbaa`, `db_build_mmseqs`, `db_index_mmseqs`, `db_convert_uniclust`, `db_local_uniclust` | lavori lunghi in blocco |
+Ricerche di template e allineamenti multipli e strutturali non si rifanno se la stessa richiesta è già stata
+calcolata: rilanciare una pipeline con le stesse sequenze e altre opzioni di modellazione salta tutte le
+ricerche. Il pairwise è istantaneo e non passa dalla cache.
 
-- **A parità:** `created_at`, poi il rowid della riga (ordine di creazione anche nello stesso secondo). Un job ripreso
-  rientra con la sua data di creazione e passa davanti ai job creati dopo di lui.
-- **Invecchiamento** (`dispatch.AGING_SECONDS` = 300 s): la priorità effettiva di un job in coda migliora di un
-  livello ogni 5 minuti di attesa, fino a 0. Senza, un flusso continuo di job interattivi lasciava una pipeline in
-  coda per sempre. 5 minuti sono più di un calcolo interattivo tipico (ricerca, allineamento, qualità: da secondi a
-  pochi minuti), quindi le richieste di chi aspetta davanti allo schermo passano ancora davanti; con un flusso
-  continuo una modellazione parte dopo al più 5 minuti e una pipeline dopo al più 10, più i job creati prima di lei.
-  A parità di priorità effettiva vale la creazione: un job della stessa priorità arrivato dopo non sorpassa chi
-  aspetta da prima, perché ha atteso di meno. L'ordine si calcola a ogni scelta (e per `queue_position`), non
-  all'ingresso in coda.
-- **Nessuna colonna nuova:** la priorità si ricava dal tipo; lo schema SQLite non cambia. La coda sta in memoria e lo
-  stato vero resta su SQLite: una voce della coda dice solo "prova ad avviare". `_execute` parte soltanto da `queued`,
-  con il passaggio condizionato di prima, quindi un tentativo rimasto indietro non avvia nulla due volte. Un job ha al
-  più una voce in coda.
-- **Compatibilità:** annullare un job in coda scrive lo stato finale e lo toglie dalla coda nello stesso passo, sotto
-  il lock del gestore, così una ripresa successiva non può vedersi togliere la voce nuova. La ripresa lo rimette in
-  coda a preparazione finita. All'arresto la coda si svuota e il `recover` del prossimo avvio marca i job rimasti
-  `queued`, come prima.
-- **Eventi:** quelli di prima (`job` all'ingresso in coda, all'avvio, a ogni fase e alla fine; `idle` a esecuzione
-  chiusa); ETA invariata.
-- **Posizione:** `queue_position` in tutti i riepiloghi (elenco, dettaglio, `/status`, annullamento, ripresa, SSE). È
-  la posizione da 1 nella coda del pool, null per chi non è in coda (anche una ripresa in preparazione). I flussi SSE
-  la contano nella firma del riepilogo: quando parte il job davanti, il cambio arriva come `job` o `status`.
-  L'interfaccia mostra "2° in coda" in `JobPanel` e nell'elenco dei job (`queueLabel` in `lib/format.ts`).
-- **Capacità dinamica:** pool "cpu" e budget rileggono `effective_workers` a ogni scelta. `PUT /api/settings` con
-  `max_workers` li risveglia subito (`JobManager.reconfigure`): l'impostazione vale senza riavvio.
-- **Risorse esclusive** (`register(resource=...)`): il servizio QMEAN locale (`QMEAN_LOCAL`) esegue al massimo un
-  calcolo alla volta; lo chiedono i job `qmean` in modalità locale e le conversioni e copie di UniClust30, che nel
-  servizio passano dalla stessa coda. Un job con la risorsa occupata resta `queued`, con la sua posizione e la fase
-  "In coda: il servizio QMEAN locale sta eseguendo un altro calcolo", e il worker passa al successivo: il pool "io"
-  continua a servire gli altri job. La risorsa si calcola al momento della scelta: `mode` del job o delle
-  Impostazioni; un QMEAN su SWISS-MODEL non la chiede, e nemmeno uno in modalità locale senza servizio QMEAN
-  (`BIOLOOM_QMEAN_URL` assente: l'avviatore non ha trovato UniClust30), che fallisce subito o va al fallback. Si tiene
-  fino alla chiusura dell'esecuzione, salvo che il job la restituisca prima con `JobContext.release_resource` (il
-  dispatcher gliela passa all'avvio): `handle_qmean` lo fa appena finisce la parte locale, riuscita o no, così un
-  fallback su SWISS-MODEL (minuti di attesa) non tiene in coda il QMEAN locale successivo, e più fallback partono
-  insieme. Restituita, la risorsa non si libera una seconda volta alla chiusura (quella presa nel frattempo da un
-  altro job resta sua). Prima i job QMEAN restavano `running` in attesa della coda del worker e consumavano il loro
-  timeout.
+- **Dove:** un file JSON per voce in `data/cache/compute/<operazione>/<chiave>.json` (`search`,
+  `align_multiple`, `align_structural`). Sta nella cartella dati e viaggia con la chiavetta. La pulizia automatica
+  la tratta come le risposte remote (30 giorni). In Impostazioni → Spazio l'occupazione è mostrata a parte.
+- **Chiave:** SHA-256 del JSON canonico (chiavi ordinate) con operazione, versione del formato della cache e di
+  BioLoom, input normalizzati, parametri e timbro delle dipendenze:
 
-**Budget di CPU** (`core/budget.py`). Senza coordinamento, pipeline × elementi in parallelo × strumenti saturavano la
-CPU. Gli slot sono `effective_workers`, condivisi da tutti i job. `JobContext.run(cpu=...)` li prende prima di avviare
-il processo e li restituisce quando termina: `True` (predefinito) = 1, un numero per i programmi multi-thread,
-`False` per i processi leggeri o di I/O.
+  | Operazione | Input e parametri | Timbro |
+  |---|---|---|
+  | ricerca | sequenza (maiuscole, senza spazi), motore, E-value, risultati massimi, taxid (solo NCBI), accessione UniProt (solo AlphaFold DB), versione del formato dei risultati (2, motori sul PDB: vedi [Scelta ragionata dei template](#scelta-ragionata-dei-template)) | BLAST+ e MMseqs2: dimensione e data di tutti i file del database (`pdbaa.*`, `pdbaa_h*`), eseguibile (percorso, dimensione, data), uso dell'indice veloce MMseqs2 |
+  | multiplo | nomi e sequenze nell'ordine dato, tipo (proteina/acido nucleico), programma effettivo (`auto` risolto) | eseguibile di Clustal Omega/MAFFT/MUSCLE |
+  | strutturale | SHA-256 del contenuto e formato dei due file, catene, programma effettivo, versione del risultato (2: con il confronto per residuo) | eseguibile di TM-align/US-align |
 
-| Processo | Slot |
+  Il nome delle strutture non entra nella chiave (un file caricato di nuovo ha un prefisso casuale): gli `ids`
+  del risultato si riapplicano dopo la lettura.
+- **Scadenza:** 7 giorni per RCSB, NCBI e AlphaFold DB (il PDB cambia ogni settimana, Swiss-Prot e AlphaFold DB con
+  le loro versioni); per i motori locali decide il timbro del
+  database e la pulizia a 30 giorni. Una voce "dal futuro" di oltre un giorno (orologio di un altro computer) non
+  vale.
+- **Valore:** risultato del motore e testo dei file che il calcolo ha scritto nella cartella di lavoro
+  (`query.fasta`, `mmseqs_hits.m8`, `msa_input/output.fasta`, `mobile.pdb`, `target.pdb` e i file di TM-align).
+  Un risultato dalla cache ricrea gli stessi file del job. Nel caso strutturale il testo del PDB sovrapposto è nel
+  risultato (`superposed_pdb`) e il job lo riscrive come `superposed.pdb`. Oltre 20 MB di file, o con file non
+  testuali, il risultato non entra in cache.
+- **Cosa non entra:** calcoli falliti, job annullati, risultati parziali (ricerca locale senza i metadati RCSB,
+  output di TM-align non riconosciuto o senza la mappatura dei residui). Con `accept` una voce trovata ma incompleta
+  (risultato strutturale senza il confronto per residuo) è un mancato riscontro e il nuovo calcolo la sostituisce.
+- **Lettura tollerante:** un file assente, corrotto, di un altro formato, con chiave diversa o scaduto è un
+  mancato riscontro, mai un errore. Anche un errore di scrittura (disco pieno) non fa fallire il calcolo. I percorsi
+  dei file da ricreare passano da `safe_join` e non possono uscire dalla cartella di lavoro.
+- **Concorrenza:** due calcoli identici in parallelo (pipeline) possono calcolare entrambi. La scrittura atomica
+  lascia comunque una voce valida.
+- **Controllo:** il parametro `use_cache` (predefinito `true`) di `/api/search`, `/api/align` e `/api/pipeline`
+  corrisponde nell'interfaccia a "Ricalcola ignorando la cache": con `false` si ricalcola e la voce viene
+  sostituita. L'impostazione `compute_cache` (predefinita accesa; le impostazioni precedenti la ricevono accesa)
+  disattiva letture e scritture. La verifica dell'installazione ricalcola sempre (`use_cache=False`), perché deve
+  eseguire davvero gli strumenti.
+- **Provenienza:** un risultato riusato ha `cached: true` e `cached_at` (data ISO del calcolo), e il log del job
+  riporta "Risultato dalla cache del …". Nella pipeline la data finisce nelle metriche dell'elemento
+  (`search_cached_at`, badge "cache" nella tabella) e il risultato del job conta le ricerche riusate
+  (`search_cache_hits`).
+
+### Migrazioni dello schema
+
+Modulo `core/db.py`.
+
+Lo schema SQLite ha una versione in `meta.schema_version`. `SCHEMA` è lo schema di base (versione 1, quello di prima
+delle migrazioni) e `MIGRATIONS` elenca i passaggi successivi (`Migration(versione, descrizione, istruzioni)`).
+All'apertura `Database._migrate`:
+
+1. esegue lo schema di base (`IF NOT EXISTS`, come ha sempre fatto) e legge la versione; un database **di una versione
+   più recente** di BioLoom non si apre (`MigrationError`: le sue tabelle potrebbero avere vincoli che questa versione
+   non conosce);
+2. se ci sono migrazioni da applicare a un database esistente, fa prima una **copia di sicurezza** in
+   `backups/bioloom.schema<N>.<data>.db` con l'API di backup di SQLite: la copia passa dalla connessione e contiene anche
+   le pagine ancora nel WAL (una copia del solo file le perderebbe; verificato con un database della versione 1 lasciato
+   con le righe solo nel WAL) e funziona con il lock esclusivo. Si scrive con un nome temporaneo, si verifica con
+   `PRAGMA quick_check` e solo dopo prende il nome definitivo; se non riesce (disco pieno, cartella non scrivibile) la
+   migrazione non parte e l'avvio si ferma con il motivo. Un database nuovo non ha copia;
+3. applica ogni migrazione in **una transazione** con la nuova `schema_version` scritta nella stessa transazione: un
+   errore a metà annulla tutto (anche il DDL, transazionale in SQLite) e il file resta alla versione precedente, con dati
+   e tabelle di prima; l'avvio si ferma con `MigrationError`, che dice a quale versione è rimasto e dov'è la copia.
+
+Le istruzioni sono **idempotenti** (`IF NOT EXISTS`): la versione 4.1.0, aperta sulla stessa cartella dati dopo la
+nuova, riscrive `schema_version` a 1 a ogni avvio, e al ritorno la migrazione riparte su tabelle già presenti senza
+errori e senza perdere etichette (provato). Le copie restano in `backups/` (una per migrazione: sono rare) e si possono
+cancellare a mano. Il log dell'avvio riporta le migrazioni applicate e la copia.
+
+| Versione | Migrazione |
 |---|---|
-| MODELLER (allineamento, modelli, loop, DOPE) | 1: gli script non usano `parallel.Job`, un thread |
-| PROCHECK, ProSA II, TM-align, US-align, `blastp` (`-num_threads` predefinito 1), Clustal Omega (`--threads` predefinito 1), MAFFT (`--thread` predefinito 0 = un thread), MUSCLE 3, `mmseqs createdb`, fpocket, PDB2PQR (Python), APBS (binario ufficiale senza OpenMP) | 1 |
-| MMseqs2 `easy-search` e `createindex`, MUSCLE 5 (di suo userebbe tutti i processori), rifinitura con OpenMM (thread della piattaforma CPU) | da 1 a core − 1, uno per thread: al suo turno il processo prende gli slot liberi e parte con altrettanti thread (`--threads`/`-threads`) |
-| `blastdbcmd -entry all` (estrazione di pdbaa per MMseqs2) | 0: I/O |
-| mkdssp (da Biopython, non da `ctx.run`, meno di un secondo), servizio QMEAN (container a parte), download | fuori dal budget |
+| 1 | schema di base: `meta`, `projects`, `sequences`, `documents`, `jobs`, `pipeline_items` |
+| 2 | etichette e preferiti: tabelle `tags` (tipo, id, etichetta) e `favorites` (tipo, id), indice per etichetta, trigger di pulizia su `projects`, `sequences`, `jobs` |
 
-- **Multi-thread:** un programma multi-thread occupa uno slot per thread, e i suoi thread li decidono gli slot che
-  ottiene. Il comando si costruisce dal numero di thread (`ctx.run(lambda n: [...], cpu=N)`) e la richiesta è
-  elastica: al suo turno prende da 1 a N slot, quelli liberi. Da solo resta veloce, insieme agli altri non satura, e
-  non tiene ferma la coda aspettando che se ne liberino N (con richieste fisse di N slot una ricerca MMseqs2 in una
-  pipeline avrebbe aspettato la fine di tutte le modellazioni in corso, bloccando anche quelle dietro di lei). Un
-  comando fisso con `cpu=N` aspetta invece tutti gli N slot (`ctx.cpu_threads` limita N alla capacità).
-- **Ordine:** priorità del job, poi arrivo. Niente sorpassi: il primo in ordine parte appena ha abbastanza slot, e
-  chi viene dopo aspetta anche se gli basterebbero. Così una richiesta fissa di N slot non resta indietro per sempre
-  dietro a quelle da uno.
-- **Invecchiamento** (`budget.AGING_SECONDS` = 60 s): la priorità effettiva di una richiesta migliora di un livello
-  ogni minuto di attesa, fino a 0, con le stesse regole della coda (a parità vale l'arrivo). I processi dei calcoli
-  interattivi durano pochi secondi (DOPE, PROCHECK, ProSA, TM-align) o meno di un minuto (BLAST+ e MMseqs2 locali):
-  un'analisi lanciata dall'utente passa ancora davanti, ma con un flusso continuo di processi interattivi un processo
-  di modellazione aspetta al più 1 minuto e uno di pipeline al più 2 prima di contare solo l'arrivo. Chi aspetta
-  riesamina il proprio turno a ogni rilascio e comunque ogni secondo, quindi l'invecchiamento vale anche senza
-  risvegli.
-- **Nessun deadlock:**
-  - gli slot li tengono solo processi in esecuzione, che finiscono da soli, per timeout o per annullamento;
-  - la pipeline non ne prende mentre aspetta i suoi elementi: li prendono i processi degli elementi;
-  - ogni richiesta è limitata alla capacità, quindi si può sempre soddisfare.
+### Licenze dei programmi esterni
 
-  Verificato con una pipeline di 4 elementi in parallelo su 2 slot, con passi in parallelo dentro ogni elemento.
-- **Attesa:** si interrompe con l'annullamento (`cancel` sveglia subito chi aspetta: il processo non parte) e con
-  l'arresto. Non conta nel timeout del processo, che parte con il processo.
-- **Fase:** "In attesa di CPU libera" al posto della fase del job se aspetta un suo processo (anche di un contesto
-  figlio senza fase propria, come l'analisi di qualità dentro la modellazione) e nessun altro suo processo è in
-  esecuzione. Altrimenti l'attesa compare in coda alla fase: passi in parallelo ("Validazione · in attesa di CPU
-  libera": il job non è fermo) ed elementi di pipeline ("3 di 5 sequenze elaborate · in attesa di CPU libera"), così
-  le fasi della pipeline restano. Finita l'attesa torna la fase dichiarata dall'handler.
-- **Thread dello stesso job:** i passi eseguiti in parallelo da thread diversi che chiamano `ctx.run` (validazione in
-  parallelo) sono governati allo stesso modo, senza codice apposito.
-- **Diagnostica:** `/api/system/stats` → `cpu_slots` (totali, usati, processi in attesa), nella Panoramica.
+Servizio `services/licenses.py`.
+
+- **MODELLER:** la chiave viene da `data/licenses/modeller.key` oppure da `MODELLER_KEY`.
+  - Arriva ai soli sottoprocessi tramite `BIOLOOM_MODELLER_KEY`.
+  - Il preambolo degli script (`engines/tools.LICENSE_PREAMBLE`) esegue il `config.py` dell'installazione e
+    registra `modeller.config` con la chiave in `sys.modules` prima di `import modeller`. L'installazione
+    non viene modificata.
+  - Una chiave nuova viene provata con MODELLER prima di essere salvata; nelle risposte è sempre mascherata.
+- **ProSA II 2003:** `LicenseDB` ha righe `programma scadenza MAC codice`. L'avviatore imposta quel MAC sul
+  container (`mac_address`), e l'interfaccia confronta il MAC richiesto con quello effettivo.
+- **PROCHECK:** licenza accademica senza chiave.
+
+## Calcoli
+
+Le sezioni seguono il percorso dalla sequenza al modello: sequenza e template, modellazione, qualità, analisi del
+modello, report. Ognuna dice dove sta la logica pura (`domain/`), quale adattatore esegue i programmi (`engines/`),
+quale servizio crea i job (`services/`) e quali rotte li espongono (`api/`).
+
+### Disordine, bassa complessità e domini
+
+Logica in `domain/disorder.py`, copertura del bersaglio in `services/coverage.py`, rotte in `api/bio.py` (F5.5).
+
+Dove il modello per omologia sarà poco affidabile, dalla sola sequenza (logica pura, nessuna dipendenza nuova). Tre
+segnali separati.
+
+| Segnale | Metodo | Parametri | Fonte |
+|---|---|---|---|
+| Disordine per residuo | FoldIndex = 2,785·⟨H⟩ − \|⟨R⟩\| − 1,151; ⟨H⟩ idropatia media di Kyte-Doolittle portata su 0–1 ((KD + 4,5)/9), ⟨R⟩ carica netta media a pH 7 (K, R +1; D, E −1; H neutra). Sotto 0 probabilmente disordinato | finestra di 51 residui centrata, passo 1 | Prilusky et al., Bioinformatics 21:3435, 2005; confine carica-idropatia di Uversky et al., Proteins 41:415, 2000; Kyte & Doolittle, J. Mol. Biol. 157:105, 1982 |
+| Regioni disordinate lunghe | almeno 30 residui con FoldIndex < 0; fino a 3 residui sopra 0 tollerati tra due tratti (meno di un giro d'elica, 3,6 residui), che non contano nei 30 | | "long disordered regions" di Ward et al., J. Mol. Biol. 337:635, 2004 |
+| Bassa complessità | SEG: finestre con entropia ≤ K1 innescano, estensione alle finestre ≤ K2, poi il sottotratto di composizione meno probabile (P0, accorciamento fino a 100 residui) come `seg`; segmenti sovrapposti fusi | finestra 12, K1 2,2 e K2 2,5 bit | Wootton & Federhen, Comput. Chem. 17:149, 1993 |
+| Domini | InterPro (`remote.interpro_domains`): voci `domain`, oppure le superfamiglie omologhe se non ce ne sono; voci sovrapposte per almeno metà del tratto più corto fuse (firme di banche dati diverse dello stesso dominio) | solo con un'accessione UniProt | |
+
+- **Perché FoldIndex e non IUPred:** IUPred (Dosztányi et al. 2005) converte l'energia di coppia in probabilità con la
+  sua matrice e una distribuzione tabulata, file distribuiti con il programma per uso accademico: ricostruirli dalle
+  pubblicazioni non darebbe gli stessi numeri. FoldIndex è definito da due costanti pubblicate e da una scala standard.
+- **Estremità:** il server di FoldIndex dà valori solo ai centri delle finestre complete. Qui ogni residuo ha un valore e
+  nei primi e negli ultimi 25 la finestra si accorcia (fino a 26 residui). Con una finestra fissa appoggiata al bordo,
+  l'ultima finestra dell'ubiquitina (26–76, FoldIndex −0,018) si ripeterebbe su 25 residui e darebbe una regione
+  disordinata 32–76 a una proteina ripiegata (test).
+- **Lettere:** X non entra nelle medie; B, Z, J come media delle due lettere, U come C, O come K. In SEG le finestre con
+  lettere non standard non si valutano. Una sequenza nucleotidica (≥ 90% di A, C, G, T/U, N, `sequences.detect_kind`) si
+  rifiuta (`not_protein`).
+- **Limiti** (anche nella risposta, `limits`, e nell'interfaccia): non è IUPred2A né un predittore di deep learning
+  (molto più accurati nelle valutazioni CAID); non vede il disordine con composizione da proteina ripiegata
+  (l'N-terminale dell'α-sinucleina risulta ordinato) né i loop disordinati corti; i confini sono incerti di circa mezza
+  finestra; non conosce il contesto (partner, cofattori, ponti disolfuro).
+
+**Valori di riferimento** (test in `test_disorder.py`):
+
+| Sequenza | Risultato |
+|---|---|
+| ubiquitina umana (1UBQ, 76) | nessuna regione, frazione disordinata 0; FoldIndex per residuo tra −0,17 e +0,26; FoldIndex della sequenza intera +0,090, uguale a 2,785·(GRAVY + 4,5)/9 − 1,151 con il GRAVY di Biopython (−0,489, carica netta 0) |
+| α-sinucleina umana (P37840, 140) | una regione 98–140 (attesa ~96–140: la coda acida C-terminale), frazione 0,307; nessuna regione prima di 90 (limite noto) |
+| ubiquitina con 25 Q dopo il residuo 40 | SEG: esattamente il tratto poli-Q 40–66 ("Q 27"); ogni residuo diverso aggiunto rende la composizione più probabile (P0) |
+| ubiquitina (SEG) | nessuna regione a bassa complessità |
+
+**Copertura e avvisi prima di modellare** (`disorder.coverage_assessment`, `services/coverage.CoverageService`):
+
+- **Copertura** = residui del bersaglio con un residuo del template di fronte:
+  - template della libreria (Modellazione, allineamento automatico): Smith-Waterman locale (BLOSUM62, gap 11/1, come i
+    motori di ricerca) su ogni catena scelta, unite; è una stima dell'allineamento di MODELLER. Per un template AlphaFold con
+    il ritaglio attivo i residui tolti (`plddt.low_confidence`: soglia e frammenti isolati, come in modellazione) non
+    coprono (test: pLDDT < 70 su 1–5 e 71–76 → coperti 6–70);
+  - PIR (Modellazione, da documento): le colonne del PIR, esatte; bersagli a più catene non valutati (nota);
+  - intervalli (Ricerca): il tratto `query_start`–`query_end` di ogni hit, valutato da solo (candidati alternativi);
+    template e PIR si valutano anche insieme (`combined`), come li usa MODELLER.
+- **Avvisi:** `disorder_uncovered` (warn) se almeno metà di una regione disordinata lunga è scoperta: MODELLER la
+  costruisce senza vincoli, come un tratto esteso senza significato strutturale; `disorder_covered` (info) altrimenti:
+  nel template può essere ordinata da un partner o dal cristallo. Domini: coperti dal 90% (i confini delle firme InterPro
+  sono approssimati di qualche residuo), `domain_uncovered` sotto il 10%, `domain_partial` in mezzo.
+- **Suggerimento:** con almeno due domini e uno non coperto del tutto, "modella per domini" (template per dominio, oppure
+  più template insieme); con un dominio solo, cercare un template che lo copra (NCBI BLAST, AlphaFold DB); con le sole
+  regioni disordinate scoperte, escluderle dal bersaglio o leggerle come ipotesi.
+- **Domini sul bersaglio:** i confini di InterPro stanno sulla sequenza di UniProt (`remote.uniprot_entry`): valgono se il
+  bersaglio è quella sequenza o un suo tratto (spostamento, nota "Bersaglio = residui 4–79 di UniProt …"), altrimenti si
+  tralasciano con una nota. UniProt e InterPro restano in cache 7 giorni. Senza accessione nessun dominio e nessuna
+  richiesta remota; accessione sconosciuta o servizi non raggiungibili danno una nota, non un errore; un'accessione con un
+  formato non valido è un 400 (`invalid_accession`).
+
+**Rotte** (`api/bio.py`):
+
+| Rotta | Corpo | Risposta ed errori |
+|---|---|---|
+| `POST /api/bio/disorder` | `{"sequence"}`: testo o FASTA con una sola sequenza | punteggi (`scores`, scala di FoldIndex), `regions`, `fraction` (residui nelle regioni), `below_fraction`, `low_complexity`, `params`, `limits`. Nessuna rete. 400 `sequence_too_long` oltre 5000 residui (come la modellazione), `empty_sequence`, `not_protein`, `multiple_sequences`; 422 oltre 200 000 caratteri |
+| `POST /api/bio/coverage` | `sequence`, `accession`, `templates` [{id, chains}] (al massimo 10), `alignment` (PIR), `ranges` [{label, start, end}] (al massimo 500), `plddt_min` | `disorder`, `domains`, `domains_info` (fonte o motivo dell'assenza), `templates` (per template o intervallo: copertura, avvisi, domini, suggerimento; `error` se il template non c'è o non ha la catena, gli altri si valutano lo stesso), `combined` |
+
+**Consenso** (`consensus.disorder_signal`): FoldIndex per catena sulle lettere dei residui presenti nel file, nell'ordine
+del rapporto (per un modello di MODELLER è la sequenza intera del bersaglio; in una struttura sperimentale con residui
+mancanti la finestra scorre sui residui presenti). Il campo `disorder` ha punteggi, residui nelle regioni, regioni e una
+frase; `informative: true`. Una regione problematica con almeno metà dei residui in una regione disordinata diventa
+`expected` e il testo lo dice ("…, in una regione disordinata predetta (attesa poco affidabile)"), come la coda di una
+proteina costruita senza template. Test: stesso rapporto con la sequenza dell'α-sinucleina e con una sequenza tutta I →
+stesso punteggio, stessi segnali e stesse regioni; su 1UBQ, `ubq_dimer.pdb` (per catena, stessi valori nelle due catene)
+e `ubq_zn.pdb` nessuna regione. `VERSION` passa a 2; i rapporti salvati prima (versione 1, senza `disorder`) funzionano: le
+rotte del consenso e del report lo ricalcolano.
+
+**Interfaccia:**
+
+- **Sequenze:** riquadro "Disordine, bassa complessità e domini" con la mappa delle caratteristiche (tracce Disordine,
+  Bassa complessità, Domini InterPro con l'accessione, Struttura secondaria GOR; le tracce vuote lo dicono), sintesi e
+  "Metodi e limiti". Una sola richiesta (`/api/bio/coverage` senza template).
+- **Modellazione:** gli avvisi (`combined`) appena bersaglio e template (o il PIR) sono scelti, con la soglia pLDDT se c'è
+  un template AlphaFold. Dalla F8a arrivano dai controlli preventivi (stessa verifica, una sola richiesta, vedi [Controlli
+  preventivi](#controlli-preventivi)) e i loro avvisi chiedono conferma all'avvio;
+  prima venivano da `/api/bio/coverage` e non bloccavano il lancio. L'accessione per i domini
+  (`modelingAccession`) viene dal bersaglio della modalità in uso: in modalità PIR dalla voce `sequence` del documento
+  (sequenza del progetto uguale, oppure codice `sp|ACC|…`), non dal selettore della modalità automatica, nascosto.
+- **Ricerca:** per ogni hit un badge ("disordine scoperto · dominio scoperto"), gli avvisi nella riga espansa e, sopra la
+  tabella, quelli del template consigliato.
+- **Qualità:** la frase del disordine sotto le regioni problematiche e una riga "disordine (info)" nel grafico del consenso
+  per residuo; le regioni `expected` in arancione invece che in rosso.
+- Logica pura in `lib/disorder.ts` (tracce, richieste, badge, ordine degli avvisi), componente `CoverageAlerts`.
+
+### Ricerca di template
+
+- **RCSB** (predefinito): Search API (MMseqs2 lato server) → sequenze di catena via GraphQL → riallineamento
+  Smith-Waterman locale per identità, copertura e coordinate. Ritenta automaticamente i timeout 5xx di RCSB.
+- **NCBI QBlast**: conforme alle linee guida (tool/email, polling ogni 60 s, attesa massima 45 min).
+- **BLAST+ locale**: `blastp` contro `data/databases/pdbaa` (scaricabile e aggiornabile da NCBI con un job).
+- **MMseqs2 locale**: `easy-search -s 7.5` sul database creato da pdbaa (`blastdbcmd` → `createdb`), con
+  l'indice locale se presente.
+- **AlphaFold DB** (modelli predetti, vedi [sotto](#modelli-alphafold-db)): accessione UniProt indicata, oppure
+  proteine Swiss-Prot più simili trovate con NCBI QBlast.
+- **Metadati RCSB degli hit** (motori sul PDB): metodo, risoluzione, titolo e, dalla versione della scelta
+  ragionata, R-free, data di rilascio, ligandi e stato oligomerico (vedi sotto).
+- Template consigliato: punteggio composito più alto (vedi [Scelta ragionata dei
+  template](#scelta-ragionata-dei-template)); a parità di punteggio una struttura sperimentale
+  prima di un modello predetto, poi identità × copertura, la miglior risoluzione, il pLDDT medio più alto. Un modello
+  AlphaFold è un'ipotesi e non un dato: la componente del metodo lo pesa meno, quindi vince solo se allinea
+  chiaramente meglio il bersaglio (prima bastava un punto di identità in più).
+
+### Scelta ragionata dei template
+
+Logica pura in `domain/template_rank.py` (F5.2), testata su hit sintetici dell'ubiquitina di lievito su 1UBQ. Il punteggio si calcola **dopo** la cache
+dei calcoli, a ogni lettura (`search.search` → `rank_hits`): cambiare pesi o scale non richiede di invalidare le
+ricerche.
+
+**Punteggio 0–100.** Ogni componente porta il valore grezzo su 0–100 con una funzione lineare a tratti
+(`consensus.piecewise`, saturata fuori dai punti); come nel consenso di qualità la soglia "affidabile" cade a 70 e
+quella "problematica" a 40 (fasce buona ≥ 70, intermedia 40–70, scarsa < 40). Il punteggio è la media pesata delle
+componenti disponibili: un dato assente (motore locale senza metadati, R-free non depositato) non penalizza. Ogni hit
+ha `rank_score`, `rank_band`, `rank_twilight` e `rank_reasons` (per componente `key`, `label`, `score` 0–100 o null,
+`weight`, `text` in italiano).
+
+| Componente | Peso | Scala (valore → punteggio) | Fonte |
+|---|---|---|---|
+| Identità | 30 | 0 → 0; curva di Rost pI(L) → 40; max(50%, pI + 10) → 70; 100% → 100 | Rost 1999, Protein Eng 12:85 (eq. 2, n = 0: pI = 480 · L^(−0,32(1+e^(−L/1000))), 100% fino a 11 residui, 19,5% oltre 450); Baker & Šali 2001 (oltre il 50% modelli di alta accuratezza) |
+| Copertura del bersaglio | 30 | lineare 0–100% | frazione del modello con vincoli dal template; 40% (soglia predefinita della pipeline) = confine della fascia scarsa |
+| E-value | 5 | −log10 E: 0 → 0, 2 → 40, 3 → 70, ≥ 10 → 100 | Pearson 2013 (E < 10⁻³ omologia affidabile) |
+| Risoluzione | 12 | raggi X e crio-EM: 1,0 Å → 100, 2,5 → 70, 3,5 → 40, 5,0 → 0; NMR: 60 fisso; predetti: pLDDT 50 → 0, 70 → 40, 90 → 70, 100 → 100 | Wlodawer et al. 2008; fasce di AlphaFold DB (Tunyasuvunakool et al. 2021); NMR scelta BioLoom |
+| R-free | 5 | 0,20 → 100, 0,25 → 70, 0,30 → 40, 0,40 → 0 (solo diffrazione) | Brünger 1992; Kleywegt & Brünger 1996 (oltre 0,40 errori gravi); punti intermedi scelta BioLoom |
+| Metodo | 8 | diffrazione 100, crio-EM 90, NMR 80, altri sperimentali 50, predetto 40 | scelta BioLoom: pesa solo ciò che la risoluzione non dice |
+| Lacune dell'allineamento | 7 | lacuna più lunga 0 → 100, 4 → 90, 8 → 70, 15 → 40, 30 → 0; −2 per ogni lacuna oltre la seconda | Fiser, Do & Šali 2000 (errore dei loop crescente con la lunghezza) |
+| Data di rilascio | 3 | 1990 → 40, 2008 → 80, 2014 → 100 | R-free dal 1992, dati sperimentali obbligatori dal 2008, rapporti di validazione wwPDB dal 2014 (Read et al. 2011; Gore et al. 2017) |
+| Ligandi e cofattori | 0 | informativo: olo (codici senza acqua e additivi di cristallizzazione) o apo | — |
+| Stato oligomerico | 0 | informativo: assemblaggio biologico 1 | — |
+
+- **Pesi:** identità e copertura pesano uguale (l'identità dice quanto è accurata la parte con template, la copertura
+  quanta parte ne ha uno): un template completo al 40% batte uno quasi identico che copre metà del bersaglio, uno in
+  zona crepuscolare no. La qualità sperimentale pesa sui dettagli, non sul ripiegamento; l'E-value dipende già da
+  identità e lunghezza.
+- **Identità sulla curva di Rost:** l'identità confrontata con la curva è quella sulle coppie allineate (colonne con
+  un residuo in entrambe le righe, come in Rost), che per allineamenti con lacune è un po' più alta di quella della
+  tabella (sulla lunghezza dell'allineamento); la motivazione riporta il valore e i residui allineati. La formula
+  pubblicata scende fino a circa 420 residui e poi risale di pochi centesimi verso 19,5%.
+- **Regola della zona crepuscolare** (scelta BioLoom): sotto la curva la copertura conta al più quanto l'identità;
+  un template in zona crepuscolare resta al massimo intermedio (0,3 × 40 + 0,3 × 40 + 0,4 × 100 = 64).
+- **Valori di riferimento** (test): ubiquitina di lievito su 1UBQ (73 identici su 76, 1,8 Å, 1987, senza R-free):
+  identità 97,6 (curva di Rost 33,2% per 76 residui), risoluzione 84, data 40, **punteggio 95,3**; lo stesso
+  allineamento a 3,8 Å con R-free 0,33 dà 87,5, una struttura a 1,5 Å al 35,5% di identità 82,0; NMR 90,6; il
+  modello AlphaFold con pLDDT 88,6 89,8 (la struttura sperimentale vince, la sola metà del bersaglio no).
+
+**Template complementari** (`select_complementary`, fino a `max_templates`, predefinito 3):
+
+1. il primo è il migliore (`sort_key`, lo stesso di `best_template`);
+2. i successivi, in ordine di merito, si scartano se sono in zona crepuscolare o in fascia scarsa; entrano se coprono
+   almeno 10 residui del bersaglio non coperti; altrimenti si scartano se ridondanti (identità reciproca > 95% su
+   almeno 10 residui in comune con uno scelto); altrimenti entrano se migliorano l'identità locale (+20 punti sulla
+   finestra centrata di 9 residui, come la modalità Confidenza) in almeno 10 residui; altrimenti si scartano.
+
+| Soglia | Valore | Motivo |
+|---|---|---|
+| Template al massimo | 3 (2–5) | Larsson et al. 2008: con MODELLER due o tre template scelti bene migliorano in media il modello, di più non aiuta |
+| Residui nuovi | 10 | un tratto più corto MODELLER lo ricostruisce come un loop con accuratezza in genere accettabile (Fiser et al. 2000) |
+| Ridondanza | identità reciproca > 95% | a quell'identità le strutture sono quasi uguali (Chothia & Lesk 1986: RMSD del nucleo circa 0,45 Å) |
+| Guadagno locale | +20 punti su 9 residui | 2 residui identici in più nella finestra |
+
+- **Confronto transitivo:** le posizioni sul bersaglio e l'identità reciproca vengono dagli allineamenti della
+  ricerca (`query_aligned`, `subject_aligned`, `query_start`), senza scaricare le strutture: il filtro di ridondanza
+  è di sola sequenza. Un TM-score > 0,9 fra i candidati richiederebbe di scaricarli tutti; oltre il 95% di identità le
+  strutture sono comunque quasi uguali, e due template strutturalmente simili ma divergenti in sequenza non sono
+  ridondanti come informazione (vincoli indipendenti). Senza le righe dell'allineamento si usano gli intervalli.
+- **Costrutto più lungo:** un candidato quasi identico a uno scelto nella regione comune entra se copre almeno 10
+  residui nuovi (porta vincoli dove non ce ne sono; nella regione comune i vincoli coincidono), con una nota.
+- **Regioni con pochi residui in comune:** un complementare con meno di 10 residui del bersaglio in comune con
+  ciascuno dei template già scelti, e di un'altra voce PDB (le catene della stessa voce condividono le coordinate), ha
+  nella motivazione l'avviso che l'orientamento relativo delle regioni non è vincolato (nessun vincolo di distanza fra
+  residui di template diversi) e `unanchored: true`. La modellazione ripete l'avviso sull'allineamento usato (sotto).
+- **Risultato:** `templates` (con `role` principale/complementare, `reason`, `new_residues`, `ranges`,
+  `unanchored` per i complementari), `excluded`
+  (con `reason`), `not_examined` (oltre il massimo), `coverage` e `covered_residues` dell'insieme. Costo: identità
+  locale con somme prefisse, calcolata una volta per template scelto (400 candidati su 1000 residui: 0,12 s
+  misurati nel container di test).
+
+**Ricerca (`handle_search`):** ogni hit ha punteggio e motivazioni, il risultato ha `best` (con il nuovo punteggio) e
+`suggested` (selezione con 3 template al massimo). Il log riporta i template consigliati.
+
+**Metadati RCSB** (`remote.rcsb_metadata`): la query GraphQL chiede anche `refine { ls_R_factor_R_free pdbx_refine_id
+}` (R-free dell'affinamento a raggi X se ce ne sono più) e `assemblies { pdbx_struct_assembly { id oligomeric_details
+oligomeric_count } rcsb_struct_symmetry { kind oligomeric_state } }` (assemblaggio 1, che non è sempre il primo
+dell'elenco, e la sua simmetria globale: "Monomer", "Homo 2-mer"). Campi verificati sul servizio reale (settembre
+2026, `test_remote.py` con `-m network`: 3IU0 R-free 0,244, 1UBQ senza R-free, 4HHB "Hetero 4-mer"). Negli hit:
+`rfree`, `released`, `ligands`, `oligomeric_state`, `oligomeric_count` (`remote.hit_metadata`).
+
+- **Cache delle risposte:** le voci hanno `version: 2`. Una voce senza versione (scritta prima, senza R-free) si
+  riscarica; se RCSB non risponde si usa lo stesso, segnata `stale`, e la ricerca che la usa è parziale (non entra
+  nella cache dei calcoli): un computer senza rete non perde metodo e risoluzione già noti.
+- **Risposte GraphQL con soli errori** (query rifiutata): errore del servizio, non più un elenco vuoto che diventava
+  "nessun template trovato".
+- **Cache dei calcoli:** il descrittore della ricerca ha `version: 2` (`SEARCH_VERSION`) per i motori sul PDB, e il
+  risultato `search_version`; `accept` scarta anche alla lettura una voce senza. Le ricerche della versione precedente
+  hanno un'altra chiave e si rifanno (i motori remoti scadevano comunque dopo 7 giorni); il motore `alphafold` non
+  cambia e tiene le sue voci.
+
+**Pipeline, modalità `multi`** (`template_mode: "multi"`, `max_templates` 2–5, predefinito 3): per ogni sequenza la
+ricerca e poi `select_complementary`; `run_modeling` riceve tutti i template scelti.
+
+- **Campi dell'elemento:** `template` = gli id separati da virgole, `identity` ed `evalue` del principale, `coverage`
+  = copertura dell'insieme (anche per il filtro della zona crepuscolare); nelle metriche `templates` (ruolo e
+  motivazione), `combined_coverage`, `excluded_templates`. Il log dell'elemento ha una riga per template scelto ed
+  escluso (le prime 10). Nessuna colonna nuova: lo schema SQLite non cambia.
+- **Interfaccia:** la colonna Template elenca i template (complementari segnati), con le motivazioni nel suggerimento;
+  il report dell'elemento dice "più template complementari (al massimo N)".
+
+### Modelli AlphaFold DB
+
+Per le proteine senza struttura sperimentale omologa un modello di AlphaFold DB (EBI) fa da template o da
+riferimento. È sempre segnato come **modello predetto, non struttura sperimentale**.
+
+- **Client** (`engines/remote.py`): `GET https://alphafold.ebi.ac.uk/api/prediction/{accessione}`, con l'accessione
+  controllata dalla regex ufficiale di UniProtKB (isoforme escluse) prima di ogni richiesta. Il parser è tollerante:
+  identificativo da `entryId` o `modelEntityId`, versione da `latestVersion`, dagli URL (`_vN`) o da `allVersions`,
+  intervallo da `uniprotStart/End` o `sequenceStart/End`, sequenza del frammento anche ritagliata dalla sequenza
+  UniProt intera, pLDDT medio da `globalMetricValue` (0–100, altrimenti nullo). Le voci senza id `AF-<ACC>-F<n>`
+  (complessi) si scartano; a parità di id resta la versione più recente. Risposte in cache 7 giorni
+  (`data/cache/alphafold`, come UniProt), nuovi tentativi sui 5xx, 404 o nessuna voce = `alphafold_not_found`
+  ("nessun modello per l'accessione…", per esempio proteine oltre 2700 residui, escluse da AlphaFold DB). Download
+  del PDB, oppure del mmCIF se il PDB manca, solo da URL `https://alphafold.ebi.ac.uk/files/…` e con controllo che
+  il file contenga coordinate (non una pagina d'errore).
+- **Libreria** (`TemplateLibrary.fetch_alphafold`, `POST /api/templates/alphafold` con `{"accession"}`, anche
+  `AF-<ACC>-F2` per i frammenti delle proteine lunghe): id `AF-<ACC>-F<n>` (compatibile con `normalize_id`), file
+  originale intatto (HEADER/TITLE/REMARK di AlphaFold e pLDDT nella colonna B-factor), meta con `source: "alphafold"`,
+  `predicted: true`, `note`, `plddt_mean`, `plddt_fractions` (dal file) e `alphafold` (versione, frammento,
+  intervallo UniProt, gene, organismo, URL del PAE). Un modello già in libreria non genera richieste. Il download
+  riceve l'annullamento del job (`fetch_alphafold(check=, log=)`): i tentativi verso EBI e le loro pause si fermano,
+  e anche l'attesa di un altro elemento di pipeline che sta scaricando lo stesso modello (lock per template preso a
+  intervalli di 0,5 s con il controllo dell'annullamento; chi si sveglia dopo l'annullamento non riscarica).
+- **Riconoscimento dei modelli AlphaFold** (`plddt.predictor`, nome storico `is_alphafold_model`, unico per libreria,
+  rapporto di qualità, copia preparata del template e, dalla F9.3, predizioni di ESMFold: vedi [Confronto con un
+  predittore esterno](#confronto-con-un-predittore-esterno)): i valori della colonna B-factor (tutti gli atomi degli
+  amminoacidi) stanno in 0–100 e non sono tutti nulli, e
+  - l'intestazione ha i segni certi di AlphaFold DB (`is_alphafold_text`): TITLE "ALPHAFOLD … PREDICTION" senza
+    EXPDTA (sempre presente nelle strutture sperimentali), oppure ModelCIF con `_ma_qa_metric` e il nome AlphaFold
+    senza `_exptl.method`;
+  - oppure il nome segue lo schema di AlphaFold DB, `AF-<accessione UniProt>-F<n>[-model_v<k>]` (file scaricati,
+    caricati con prefisso, id di libreria e loro copie `AF-…_A.pdb`), e l'intestazione non dichiara un'altra
+    origine (`declares_other_origin`: EXPDTA, `_exptl.method`, anche in forma di loop, oppure `REMARK   6 MODELLER`).
+
+  Non contano le menzioni di AlphaFold altrove (per esempio `REMARK 200 STARTING MODEL: ALPHAFOLD` di una struttura
+  risolta per sostituzione molecolare): i B-factor di una struttura sperimentale o di un modello MODELLER non vanno
+  mai presi per pLDDT. Un file di AlphaFold caricato dall'utente diventa `predicted` con lo stesso criterio. Il
+  predittore riconosciuto (`predictor`: `alphafold` o `esmfold`) si salva nei metadati e dà il nome nei testi
+  (`plddt.predicted_text`: log della preparazione, note dei risultati, controlli preventivi del ritaglio, report,
+  distintivi dell'interfaccia; riga `REMARK 999 BIOLOOM TEMPLATE <codice> ALPHAFOLD|ESMFOLD|PREDICTED …` del
+  modello): una predizione di ESMFold usata come template non si chiama mai AlphaFold, e un modello predetto senza
+  predittore noto né nome di AlphaFold DB è «modello predetto». I
+  metadati registrati prima di questi campi (senza `predicted`) si completano alla prima lettura (`_meta`: elenco,
+  dettaglio e `is_predicted` passano di lì) con `predicted`, `plddt_mean` e `plddt_fractions`, e si riscrivono: la
+  libreria e l'interfaccia (badge, opzione della soglia pLDDT) vedono quello che vede la modellazione.
+- **Motore `alphafold`** (`engines/search.py`): AlphaFold DB non ha una ricerca per sequenza.
+  - Con l'accessione (`uniprot` di `/api/search`, precompilato dall'interfaccia per le sequenze importate da UniProt;
+    nella pipeline dall'intestazione FASTA `sp|ACC|NOME` o `tr|ACC|NOME`) si usano i modelli di quell'accessione.
+    Nella pagina Ricerca l'accessione precompilata segue la sequenza da cui viene: incollando o caricando un'altra
+    sequenza si toglie, a meno che l'utente non l'abbia scritta a mano; un FASTA incollato con l'intestazione di
+    UniProt la precompila. Nella Pipeline «Usa le sequenze del progetto» scrive `sp|ACC|NOME` (`tr|` per le voci non
+    revisionate) per le sequenze importate da UniProt, così non passano da NCBI.
+  - Senza, NCBI QBlast su `swissprot` (`ncbi_blast(database="swissprot")`); le accessioni vengono da `sp|P0CG48.1|…`
+    o dall'accessione NCBI con versione (`P0CG48.1`), nell'ordine di BLAST e senza ripetizioni, e si prendono i
+    modelli delle prime 10.
+  - Per ogni modello: Smith-Waterman (`align.pairwise`, BLOSUM62, gap 11/1) del bersaglio sulla sequenza del modello;
+    identità e positivi sulla lunghezza dell'allineamento, copertura = tratto del bersaglio allineato, come gli altri
+    motori. E-value di BLAST se l'accessione viene da lì, altrimenti Karlin-Altschul sul solo confronto a coppie
+    (indicativo). Hit con `source: "alphafold"`, `predicted`, `plddt`, `template_id = pdb_id = AF-<ACC>-F<n>`, catena A.
+  - Cache dei calcoli con il TTL dei motori remoti (7 giorni); l'accessione entra nella chiave solo per questo
+    motore (le chiavi degli altri non cambiano).
+  - Esiti: con l'accessione indicata il candidato è uno solo, quindi nessun modello (404, `alphafold_not_found`) o
+    EBI non disponibile fanno fallire il job con il messaggio di AlphaFold DB, invece di "0 template trovati". Senza
+    accessione una proteina senza modello si salta (esito definitivo); EBI non disponibile per alcune proteine rende
+    il risultato parziale (niente cache), per tutte fa fallire il job come gli errori di RCSB e NCBI. Il risultato
+    ha `notes` (proteine senza modello, proteine senza risposta) che la pagina Ricerca mostra, anche al posto del
+    suggerimento sull'E-value quando non ci sono modelli; nella pipeline finiscono nell'errore dell'elemento.
+  - Nella pipeline (`template_mode: auto`) funziona come gli altri: il modello scelto si scarica nella libreria
+    prima della modellazione (`_prepare_templates` scarica da RCSB i codici di 4 caratteri e da AlphaFold DB gli id
+    `AF-…`).
+- **Ritaglio per pLDDT** (`domain/plddt.py`, `modeller.prepare_template`): per i template predetti, opzioni di
+  modellazione `plddt_trim` (predefinita accesa) e `plddt_min` (predefinita 70, 0–100), anche nella pipeline. Il
+  pLDDT è il B-factor del C-alfa. Fasce di AlphaFold DB (Tunyasuvunakool et al., Nature 596:590, 2021), estremo
+  inferiore compreso: ≥ 90 molto alta, 70–90 confidente, 50–70 bassa, < 50 molto bassa (spesso disordine). Sotto 70
+  lo scheletro non è affidabile e, come template, trasferirebbe vincoli su conformazioni non predette con confidenza.
+  - Si tolgono i residui con pLDDT < soglia; il template preparato, la sua sequenza e primo/ultimo residuo sono
+    quelli ritagliati, con i record descrittivi di AlphaFold (o un TITLE "ALPHAFOLD … PREDICTION" se il file non li
+    ha, come un mmCIF) e una riga `REMARK 999 BIOLOOM PLDDT_TRIM`: la copia resta riconoscibile come modello
+    AlphaFold qualunque sia il nome. La copia di una struttura non AlphaFold conserva invece il suo EXPDTA (o lo
+    riceve dal `_exptl.method` del mmCIF), così i suoi B-factor non passano per pLDDT.
+  - **Frammenti isolati** (`plddt.MIN_FRAGMENT = 5`): dopo la soglia si tolgono anche i tratti sopra soglia più
+    corti di 5 residui contigui (nel file e nella numerazione) accanto ad almeno un residuo tolto. Cinque residui sono
+    il minimo per un giro d'elica α con il legame i→i+4; il pLDDT misura solo la confidenza locale, e la posizione di
+    un tratto più corto in mezzo a regioni disordinate (che dice il PAE, non il pLDDT) darebbe a MODELLER
+    restrizioni da un punto arbitrario. Un tratto corto delimitato solo dalle estremità della catena resta. Il
+    risultato separa i conteggi (`removed_threshold`, `removed_fragments`, `min_fragment`; `removed` è il totale).
+  - Minimo 30 residui rimasti (`plddt_too_few`): circa la dimensione dei più piccoli domini che si ripiegano da soli
+    (HP35 della villina, dominio WW, zinc finger C2H2); sotto, il template è un frammento e align2d non è affidabile.
+  - **Allineamento automatico**: MODELLER legge il template ritagliato, quindi i residui tolti sono gap del template.
+  - **PIR dell'utente** (`_normalize_pir`): una riga scritta sul modello completo viene riportata sul ritaglio (residui
+    tolti → gap, intervallo al primo/ultimo residuo rimasto, colonne di soli gap eliminate); una riga già ritagliata
+    resta com'è; una riga diversa da entrambe è un errore chiaro. `align2d` (Editor PIR) allinea sul modello intero.
+  - Log ("rimossi 11 residui con pLDDT < 70 (1–5:A, 71–76:A), restano 65 di 76", con "… e 4 in frammenti isolati
+    di meno di 5 residui" se ce ne sono), risultato (`templates[].plddt`,
+    `plddt_removed`, avviso "modello predetto"), `REMARK 999 BIOLOOM TEMPLATE … ALPHAFOLD PLDDT<70 REMOVED 11` nel
+    modello e, nella pipeline, `template_predicted`/`plddt_removed` nelle metriche dell'elemento.
+  - Le strutture sperimentali non si ritagliano mai.
+
+### Allineamenti
+
+- **Pairwise**: Biopython `PairwiseAligner` (NW/SW, BLOSUM/PAM/GONNET, NUC.4.4), gap terminali gratuiti nel globale.
+- **Multiplo**: Clustal Omega → MAFFT → MUSCLE se installati, altrimenti *center-star* integrato; matrice di identità.
+- **Strutturale**: US-align/TM-align se installati, altrimenti sovrapposizione di Kabsch con ricerca del
+  TM-score massimo (algoritmo del programma TM-score) su un allineamento di sequenza; PDB sovrapposto per il viewer e
+  confronto per residuo (vedi [Confronto strutturale](#confronto-strutturale)).
 
 ### MODELLER
 
@@ -372,7 +1002,7 @@ sottoprocesso. Nel container è MODELLER 10.8 del pacchetto .deb; in esecuzione 
 indicare un altro interprete (`BIOLOOM_MODELLER_PYTHON`). Flusso di un job `model`:
 
 1. **Template**: conversione in PDB pulito (catene scelte, solo i ligandi scelti, niente acqua, MSE→MET; vedi
-   [Ligandi, cofattori e metalli](#ligandi-cofattori-e-metalli-domainligandspy)).
+   [Ligandi, cofattori e metalli](#ligandi-cofattori-e-metalli)).
 2. **Allineamento**: se non viene fornito un PIR, MODELLER stesso lo calcola (`align2d` con un template,
    `salign` strutturale + allineamento sul profilo con più template, con il controllo degli `align2d` di ogni
    template: vedi [Più template](#più-template-salign-o-align2d-uniti-sul-bersaglio)). Il PIR fornito dall'utente
@@ -389,12 +1019,357 @@ indicare un altro interprete (`BIOLOOM_MODELLER_PYTHON`). Flusso di un job `mode
 
 Con un bersaglio a più catene (modalità Complesso o PIR a più catene) l'allineamento è per catena, le catene del modello
 prendono i nomi del template e l'analisi comprende le interfacce: vedi [Complessi e
-omo-oligomeri](#complessi-e-omo-oligomeri-domainassemblypy-domaincomplexespy).
+omo-oligomeri](#complessi-e-omo-oligomeri).
 
 Nella pipeline un template usato da più elementi si prepara una volta per esecuzione e gli altri ne ricevono una copia
 (vedi [Prestazioni](#prestazioni)).
 
-### Validazione di qualità (`engines/quality.py`)
+### Più template: salign o align2d uniti sul bersaglio
+
+Logica in `domain/multitemplate.py`, script in `engines/modeller.py`.
+
+Con più template lo script di allineamento esegue `salign` (template fra loro, poi il bersaglio sul loro profilo:
+il metodo del tutorial di MODELLER) e, per ogni template, `align2d` del bersaglio (`alignment_pair_<n>.ali`); se
+`salign` solleva un'eccezione lo script prosegue. `domain/multitemplate.choose` confronta per ogni template i residui
+identici al bersaglio con `salign` e con `align2d`:
+
+- se `salign` ne perde più della metà per un template (allineamento spostato: scende verso l'identità casuale, mentre
+  fra due buoni allineamenti le identità differiscono di pochi residui; sotto 5 identici il confronto non vale) o non
+  è riuscito, si usa l'unione degli `align2d` sul bersaglio (`merge_on_target`): ogni template resta allineato come
+  nel suo allineamento a coppie, le inserzioni dei template vanno in colonne con un gap nel bersaglio. Il file PAP di
+  `salign` si toglie;
+- altrimenti resta `salign`, come prima;
+- template a più catene o con ligandi ('/' e '.' da tenere in colonna) non si uniscono: resta `salign`; se un template
+  risulta spostato (`displaced` nella scelta) il messaggio è un **avviso** del job (`warnings` del risultato della
+  modellazione e dell'allineamento align2d, pagina Modellazione, sezione Avvisi del report), non solo una riga del log:
+  il modello è costruito su un allineamento che BioLoom sa probabilmente spostato (con i frammenti di 1UBQ, TM-score
+  0,35). Il job non fallisce: l'allineamento si può correggere nell'Editor PIR.
+
+La scelta è nel log del job. Misurato con due frammenti di 1UBQ come template dell'ubiquitina di lievito
+(`test_template_rank.py`): con il solo `salign` il frammento 30–76 finiva allineato dal residuo 1 del bersaglio e il
+modello aveva TM-score 0,35 rispetto a 1UBQ (voto D); con gli `align2d` uniti 0,998 (frammenti 1–50 e 30–76) e 0,997
+(1–40 e 41–76, disgiunti ma nello stesso sistema di riferimento), come con 1UBQ intero (0,998). Con due template
+completi (1UBQ e una copia) `salign` è coerente e resta.
+
+**Orientamento relativo non vincolato** (`multitemplate.unanchored`, su ogni allineamento usato da MODELLER, anche
+quello dell'utente, e sull'align2d con più template): i template della stessa voce (stesso id: catene dello stesso
+file) condividono il sistema di riferimento; due voci sono *ancorate* se i loro template coprono almeno 10 residui del
+bersaglio in comune (`MIN_ANCHOR`, come `MIN_SHARED` della selezione). Se le voci ancorate fra loro formano più di un
+insieme, MODELLER costruisce ogni regione dal suo template e le unisce solo con la stereochimica del tratto che le
+collega: la posizione reciproca delle regioni (fra domini, per esempio) non viene da nessun template ed è in pratica
+arbitraria. Avviso nel risultato, nel log e nel report («Orientamento relativo non vincolato: UBQN_A (residui 1–40 del
+bersaglio) e UBQR_A (residui 41–76 del bersaglio) vengono da strutture diverse…»; test con MODELLER su 1–40 di 1UBQ e
+41–76 di una sua copia ruotata e traslata). Due frammenti dello stesso file caricati come template diversi (come nel
+test dei frammenti disgiunti sopra) hanno l'avviso anche se in realtà condividono le coordinate: BioLoom non può
+saperlo.
+
+### Ligandi, cofattori e metalli
+
+Logica in `domain/ligands.py` (F5.4), copia preparata e PIR in `engines/modeller.py`, verifica in `engines/quality.py`
+e `services/compute.py`.
+
+Il trasferimento dei gruppi eteroatomici dal template al modello è selettivo e viene verificato dopo la modellazione.
+
+- **Prima della F5.4** l'opzione `hetatm` scriveva tutti gli eteroatomi nella copia preparata, ma lo script di
+  allineamento non leggeva gli HETATM e l'intervallo del template finiva sull'ultimo residuo: MODELLER ignorava i
+  gruppi e il modello non ne aveva (verificato con MODELLER 10.8 su `ubq_zn.pdb`). La casella «Ligandi» del singolo
+  template non attivava nemmeno `env.io.hetatm`.
+- **Classificazione** (`classify`, `candidates`), nel dettaglio del template (`GET /api/templates/{id}` → `ligands`,
+  `ANALYSIS_VERSION` 3: le analisi in cache si ricalcolano) e nella scelta della Modellazione. Le acque non compaiono.
+
+  | Classe | Criterio | Per default |
+  |---|---|---|
+  | metallo | un solo atomo di un elemento metallico (colonna element, altrimenti il nome: ZN, FE2, CU1…) | sì; no per Na⁺, K⁺ e altri monovalenti (spesso dal tampone) |
+  | cofattore noto | codice CCD in `COFACTORS`: HEM, HEC, HEA, FAD, FMN, NAD, NAI, NAP, NDP, ATP, ADP, AMP, ANP, GTP, GDP, GNP, SAM, SAH, PLP, PMP, COA, ACO, TPP, TDP, BTN, LPA, FES, SF4, F3S, CLA, BCL, RET, B12, CNC, PQQ, H4B, MGD | sì |
+  | additivo | `COMMON_ADDITIVES` di `domain/structure` più glicoli, tamponi, crioprotettori e piccoli anioni (MPD, PG4, PGE, EPE, MES, TRS, CIT, BME, ACY, IMD, SCN, AZI…) | no, con la motivazione: di solito senza ruolo biologico (come le esclusioni di BioLiP, Yang et al. 2013) |
+  | residuo modificato | ha N, CA e C dello scheletro e un legame peptidico (C–N ≤ 1,9 Å) con il residuo precedente o seguente della catena (MSE, SEP, TPO…); mai un nome di `COFACTORS` | mai trasferibile: fa parte della catena |
+  | altro ligando | tutto il resto (inibitori, zuccheri, amminoacidi liberi legati come substrato…) | sì |
+
+  Il legame peptidico distingue i residui modificati da SAM, SAH e dagli amminoacidi liberi, che hanno gli stessi
+  atomi N, CA e C ma non sono nella catena: prima erano «residui modificati», quindi non trasferibili, esclusi dalla
+  scelta predefinita e dalla verifica e contati come proteina nei contatti. L'esito si conserva nel residuo (`xtra`):
+  la verifica lo chiede per ogni atomo vicino.
+
+- **Opzioni di modellazione:** `hetatm` attiva i ligandi per tutti i template con la scelta predefinita; `ligands` è
+  l'elenco `[{template, chain, resnum, resname}]` dei gruppi da trasferire, esattamente quelli, e attiva i template che
+  cita (un template attivo senza voci non trasferisce nulla). Con più template il `template` è obbligatorio; un template
+  non scelto, un gruppo che non c'è o un residuo modificato sono errori chiari (`invalid_ligand`, `ligand_not_found`,
+  `ligand_not_transferable`). I valori sono validati (regex, al massimo 100) e non entrano mai negli script. Il
+  riferimento del template conserva `hetatm` (Pipeline con template fisso). Nella pipeline con ricerca automatica vale
+  solo `hetatm`: i template non si conoscono prima (400 `invalid_ligand`).
+- **Copia preparata** (`modeller.prepare_template`): solo i gruppi scelti, spostati in fondo alla loro catena
+  nell'ordine del file; le selenometionine restano come prima (MET) con i ligandi attivi. Il risultato ha
+  `ligand_groups` (gruppi trasferiti con il sito nel file originale: donatori dei metalli, acque comprese, e legami
+  covalenti) e `ligands_excluded` (gli altri gruppi delle catene, con il motivo); il log li elenca. La chiave di
+  `PreparedTemplates` comprende la scelta.
+- **PIR** (`pir_with_ligands`, per l'allineamento automatico e per quello dell'utente): MODELLER, con
+  `env.io.hetatm = True`, legge ogni gruppo HETATM come residuo `.` (BLK) e lo copia nel modello solo se anche il
+  bersaglio ha `.` nella stessa colonna. Verificato con MODELLER 10.8: con `.` in entrambe le righe lo Zn arriva nel
+  modello, con `-` nel bersaglio no; `.` vale anche per i gruppi a cui `restyp.lib` dà un codice proprio (`z` per lo
+  Zn).
+  1. I `.` già presenti (PIR dell'utente, allineamento salvato da una modellazione precedente) diventano gap e le colonne
+     rimaste vuote si tolgono, con un avviso se non coincidono con la scelta: la scelta è quella delle opzioni.
+  2. Per ogni catena con gruppi trasferiti si aggiungono le colonne dei gruppi alla fine del tratto di quella catena
+     (prima del `/`): `.` nel template e nel bersaglio, `-` negli altri template. **Più template con lo stesso
+     gruppo nello stesso sito** (due globine con l'eme, due omologhi con lo stesso Zn: capita con la modalità `multi`
+     e con la scelta predefinita della Modellazione) condividono la colonna: `.` in ciascuno di quei template e un solo
+     `.` nel bersaglio, quindi un solo gruppo nel modello, vincolato da tutti. Prima ogni template aveva la sua colonna
+     e il modello aveva due Zn a 2,6 Å (o due porfirine sovrapposte), senza avvisi. Stesso gruppo = stesso nome e sito
+     in comune: i residui dei donatori dei metalli e dei legami covalenti (altrimenti quelli entro 4 Å, `contacts` di
+     `ligand_groups`), riportati attraverso le righe del PIR sulle colonne con un residuo del bersaglio (servono i
+     numeri dei residui della copia preparata, `_chain_ids`). L'associazione rispetta in ogni riga l'ordine dei gruppi
+     nel file (MODELLER legge i `.` di un template in quell'ordine) e unisce più gruppi possibile (programmazione
+     dinamica, `_match_slots`); un gruppo senza corrispondente ha una colonna nuova prima di quella del gruppo unito
+     che lo segue nello stesso template. Con due template che hanno gli stessi gruppi in ordine opposto se ne unisce
+     solo uno. Una nota dice quali gruppi sono stati uniti.
+  3. L'intervallo del template si aggiorna: fine sull'ultimo gruppo (se l'ultima catena ne ha), `+N` ricontato, una
+     fine che indicava un eteroatomo tolto torna sull'ultimo residuo.
+
+  Errore chiaro se i `/` del template e del bersaglio non sono nelle stesse colonne o se la voce del template non
+  comprende tutti i residui di una catena con ligandi (i gruppi stanno dopo l'ultimo residuo). Lo script dei modelli
+  imposta `env.io.hetatm = True` solo se almeno un gruppo è trasferito.
+- **Verifica** (`evaluate`), per ogni gruppo eteroatomico non d'acqua (i residui modificati no):
+
+  | Controllo | Regola | Esito |
+  |---|---|---|
+  | contatti | residui della proteina con un atomo pesante entro 4 Å | nessuno: da controllare |
+  | scontri | atomi pesanti a meno di 2,2 Å dalla proteina o da un altro gruppo, escluse la coordinazione (metallo–donatore nella sfera) e i legami covalenti (somma dei raggi covalenti + 0,45 Å) che il template ha con il residuo allineato; senza template la distanza di legame è un «possibile legame covalente» | problematico |
+  | donatori dei metalli | N, O, S (His, Cys, Met, Asp/Glu, Asn/Gln, Ser/Thr/Tyr, scheletro, acqua, altri ligandi) entro la distanza attesa + 0,5 Å | nessuno: problematico |
+  | distanze | attesa ± 0,25 Å nella norma, oltre «lunga»/«corta», sotto attesa − 0,5 Å «troppo corta» | da controllare / problematico |
+  | donatore insolito | categoria senza distanza attesa per il metallo (es. Ca–N(His)), N non imidazolico | da controllare |
+  | numero di coordinazione | fuori dall'intervallo tipico, contando le acque del template non trasferite | da controllare |
+  | geometria | gRMSD oltre 13,5° o posizioni vacanti oltre il 25% (CheckMyMetal) | da controllare |
+  | geometria | gRMSD oltre 21,5° | problematico |
+  | sito del template | meno di tutti i donatori della proteina conservati; meno della metà | da controllare; problematico |
+
+  **Distanze attese** (Å), verificate a settembre 2026 (`REFERENCE_DISTANCES`; test
+  `test_reference_distances_match_the_sources`):
+
+  - Na, Mg, K, Ca, Mn, Fe, Co, Cu, Zn: tabella «Metal-donor atom target distances (revised July 2006)» di Harding
+    (2006, Acta Cryst. D62:678–682), dal sito dell'autrice (`tanna.bch.ed.ac.uk/newtargs_06.html`, copia del
+    29/04/2009 nell'Internet Archive; il PDF della rivista non era raggiungibile), basata sul CSD e sulle strutture
+    proteiche a ≤ 1,25 Å. Tutti i valori coincidono con quelli di BioLoom. Le stelle (★) sono l'affidabilità indicata
+    dalla tabella (`REFERENCE_RELIABILITY`): ★★★ deviazione standard ~0,05 Å, ★★ 0,10, ★ 0,15–0,20, nessuna stella la
+    meno affidabile.
+  - Ni (assente in Harding): Tabella 3 di Zheng et al. (2017, CheckMyMetal, distanze del CSD), letta nel testo
+    completo di Europe PMC (PMC5349434): O dell'acqua 2,08(6); O legato a un carbonio 2,07(7) (moda più lunga; l'altra
+    è 1,86), usato per Asp/Glu e per lo scheletro; N 2,09(7) (moda più lunga; l'altra 1,89); S 2,18(3).
+  - Bazayeva et al. (2024, Acta Cryst. D80:362–376, MetalPDB a < 1,5 Å) non trovano differenze significative con
+    Harding et al. (2010) entro la dispersione (carbonile dello scheletro dei metalli alcalini e alcalino-terrosi
+    entro 0,05 Å; Zn–N(His) 2,05 ± 0,06 per Nδ1 e 2,03 ± 0,07 Å per Nε2). I loro valori per residuo sono nel
+    materiale supplementare, non consultato: nessun valore di BioLoom viene da lì.
+  - Donatori senza colonna propria, dalle note della tabella di Harding: Asn/Gln come Asp/Glu monodentato (prima di
+    questa verifica BioLoom usava lo scheletro); O, N e S dei ligandi come l'O dell'Asn (quindi Asp/Glu), l'N dell'His
+    e l'S della Cys. Scelte di BioLoom non verificate su una fonte: Ser/Thr/Tyr con il valore dell'acqua (per Harding
+    Ser/Thr stanno fra acqua e carbossilato, Tyr circa 0,1 Å sotto il carbossilato) e Met con quello della Cys.
+
+  | Metallo | O acqua | O Asp/Glu | O scheletro | N His | S Cys | Numero di coordinazione tipico |
+  |---|---|---|---|---|---|---|
+  | Na | 2,41 ★★ | 2,41 ★★ | 2,38 ★★ | — | — | 4–7 |
+  | Mg | 2,07 ★★★ | 2,07 ★★ | 2,26 | — | — | 5–6 |
+  | K | 2,81 ★ | 2,82 ★ | 2,74 ★ | — | — | 5–8 |
+  | Ca | 2,39 ★★ | 2,36 ★★ | 2,36 ★★ | — | — | 6–8 |
+  | Mn | 2,19 ★★★ | 2,15 ★★★ | 2,19 | 2,21 ★★ | 2,35 | 4–6 |
+  | Fe | 2,09 ★★ | 2,04 ★★ | 2,04 | 2,16 ★ | 2,30 ★★★ | 4–6 |
+  | Co | 2,09 ★★ | 2,05 ★★★ | 2,08 | 2,14 ★★ | 2,25 ★ | 4–6 |
+  | Ni (CSD) | 2,08 | 2,07 | 2,07 | 2,09 | 2,18 | 4–6 |
+  | Cu | 2,13 | 1,99 ★ | 2,04 | 2,02 ★★ | 2,15 | 3–6 |
+  | Zn | 2,09 ★★★ | 1,99 ★★★ | 2,07 | 2,03 ★★★ | 2,31 ★★ | 4–6 |
+
+  Gli intervalli del numero di coordinazione seguono quanto riportano le fonti (Zheng et al. 2017: Mg ottaedrico
+  stretto, siti con meno o più di 6 donatori rari; Na di solito 6, a volte 5 o 4; K di solito ottaedrico. Bazayeva et
+  al. 2024: Zn con 4 donatori nel 61% dei siti); gli estremi sono una scelta di BioLoom. Altri metalli (Cd, Hg…): donatori entro 3,0 Å, geometria, esito
+  al più «da controllare».
+- **Geometria** (`geometry`, come CheckMyMetal, Zheng et al. 2017, con le geometrie ideali confrontate per angoli di
+  Kuppuraj et al. 2009): per le geometrie ideali con m posizioni, da n a n + 2 (al massimo 7: lineare, trigonale
+  planare, tetraedrica, quadrato planare, bipiramide trigonale, piramide a base quadrata, ottaedrica, bipiramide
+  pentagonale), si cerca l'assegnazione degli n donatori che minimizza lo scarto quadratico medio fra gli angoli
+  donatore–metallo–donatore osservati e ideali (gRMSD); le posizioni libere sono vacanti. Vince la gRMSD minima; entro
+  1° quella con meno vacanze (tre donatori di un tetraedro: tetraedrica con una vacanza, non trigonale planare).
+- **Confronto con il sito del template** (modellazione, `template_contexts`): le colonne del PIR usato da MODELLER
+  legano i residui del template (dalla copia preparata, dal residuo iniziale dell'intervallo) a quelli del modello, e
+  i `.` legano i gruppi. Ogni residuo che coordina il metallo nel template è *conservato* (il residuo allineato lo
+  coordina nel modello), *perso*, *sostituito* (da un residuo che non coordina con la catena laterale), *non allineato*
+  o *non modellato* (catena o tratto fuori dall'allineamento). Le acque del template non si trasferiscono: si contano
+  per il numero di coordinazione («1 (3 con 2 acque del template, non trasferite)»). Un allineamento che non
+  corrisponde al modello o alla copia preparata lascia la verifica senza confronto, con una nota.
+- **Dove:** `quality.analyze` aggiunge `ligands` (senza template) se la struttura ha gruppi eteroatomici non d'acqua;
+  `run_modeling` lo ricalcola con il confronto per ogni modello analizzato, mette il riepilogo nel modello
+  (`models[].ligands`: gruppi, esito peggiore, conteggi) e nel risultato `ligands` (`transferred`, `verification` del
+  modello migliore anche senza analisi di qualità), scrive `REMARK 999 BIOLOOM LIGANDS n ZN:A101 …` e avvisa se il
+  modello ha meno gruppi di quelli trasferiti. `transferred`, il REMARK e l'avviso contano i gruppi del modello (i `.`
+  del bersaglio, `ligands.model_groups`): un gruppo di più template compare una volta, con `template` = i codici
+  separati da virgole, il numero del template principale e i gruppi di ciascun template in `sources`. Il confronto
+  con il sito del template usa il principale (il primo). Un errore inatteso della verifica va nel log e non fa fallire il job.
+  Voto e consenso non cambiano.
+- **Valori di riferimento** (test in `test_ligands.py`):
+  - `ubq_zn.pdb`: Zn con NE2 di His68 (2,10 Å, attesa 2,03) e due acque (2,10 Å, attesa 2,09), angoli 67,2°, 81,1° e
+    90,0°: piramide a base quadrata con 2 posizioni vacanti, gRMSD 14,1° → «da controllare» (numero di coordinazione 3
+    su 4–6, geometria distorta, vacanze 40%);
+  - lo Zn spostato a 0,9 Å dal CB di Leu43 → «problematico» (scontro);
+  - modello dell'ubiquitina di lievito (MODELLER, 1 modello `very_fast`) con il solo Zn trasferito da `ubq_zn.pdb` più
+    un SO₄ escluso: Zn A77 a 2,10 Å da NE2 di His68, sito del template conservato (1 su 1), 2 acque non trasferite →
+    numero di coordinazione 1 (3) → «da controllare»; lo stesso PIR con i ligandi spenti perde il `.` con un avviso e il
+    modello non ha HETATM;
+  - due copie di `ubq_zn.pdb` come template, scelta predefinita: una colonna `.` condivisa, un solo HETATM Zn nel
+    modello, `transferred` con `ZNA_A, ZNB_A`.
+- **Limiti:** i gruppi di una catena senza residui proteici non sono trasferibili (si trasferiscono con la catena
+  scelta); il carbonio non è considerato donatore (CO e CN⁻ legati al ferro dell'eme risultano scontri); i codici
+  minuscoli di `restyp.lib` in un PIR dell'utente (`z`, `h`, `w`) vengono letti in maiuscolo come amminoacidi: per i
+  ligandi si usa `.`; il raffinamento dei loop di un modello non legge gli HETATM (MODELLER predefinito), quindi i
+  ligandi non passano ai modelli di loop.
+
+### Complessi e omo-oligomeri
+
+Modelli con più catene (F5.3): assemblaggio biologico del template, bersaglio a una sequenza per catena, restrizioni di
+simmetria fra catene uguali e confronto delle interfacce del modello con quelle del template. Logica pura in `domain/assembly.py`
+e `domain/complexes.py`, nessuna dipendenza nuova (Biopython e numpy).
+
+**Assemblaggi biologici** (`domain/assembly.py`). Il file del PDB contiene l'unità asimmetrica; l'assemblaggio si genera
+con gli operatori dichiarati nel file, qui, invece di scaricare da RCSB l'assemblaggio già generato
+(`<ID>-assembly<N>.cif`): funziona anche senza rete, con i file già in libreria e con quelli caricati, e i nomi delle catene
+seguono una regola nota (quelli di RCSB, "A-2", non sono identificativi PDB di un carattere).
+
+- **Lettura:** mmCIF (`pdbx_struct_assembly`, `pdbx_struct_assembly_gen`, `pdbx_struct_oper_list`) oppure REMARK 350 del
+  PDB (BIOMOLECULE, AUTHOR/SOFTWARE DETERMINED…, APPLY THE FOLLOWING TO CHAINS con le righe AND CHAINS, BIOMT1–3; i numeri
+  BIOMT di gruppi diversi sono operatori diversi). La libreria scarica da RCSB in formato PDB, quindi il REMARK 350 è il caso
+  più comune. Nel mmCIF le catene dei generatori sono `label_asym_id` (proteina, ligandi e acque hanno asym diversi),
+  mentre Biopython raggruppa per `auth_asym_id`: ogni residuo del primo modello riceve il suo `label_asym_id`
+  dall'`atom_site`, e un generatore prende esattamente i residui elencati.
+- **Espressioni degli operatori** (dizionario PDBx): "1", "1,2,5", "1-4", "(1-4)" e il prodotto cartesiano "(1,2)(3,4)",
+  applicato da destra a sinistra (x' = M1·(M3·x + t3) + t1); al massimo 1000 combinazioni per generatore.
+- **Nomi delle catene:** copie nell'ordine dei generatori, degli operatori e delle catene del file; la prima copia di ogni
+  catena dell'autore tiene il nome (se di un carattere), le altre prendono il primo carattere libero di A–Z, a–z, 0–9 non
+  tenuto da una prima copia (catene A e B, due operatori per A: A, C = A·2, B). Ogni catena ha origine, operatore e
+  `identity` (coordinate del file così come sono) nel risultato e nelle righe `REMARK 999 BIOLOOM ASSEMBLY CHAIN`.
+- **Limiti:** 62 catene (identificativi di un carattere) e 99 999 atomi (numerazione del PDB); oltre, l'assemblaggio si
+  elenca con il motivo ma non si importa. Prima posizione alternativa degli atomi, primo modello del file.
+- **Libreria** (`TemplateLibrary.assemblies`, `import_assembly`): `GET /api/templates/{id}/assemblies` (stato oligomerico,
+  catene generate con l'origine, `buildable`, `identity_only`) e `POST /api/templates/{id}/assemblies/{n}` → template
+  `<ID>_ASM<n>` in PDB, con titolo, metodo e risoluzione del file d'origine e `assembly` nei metadati (template d'origine,
+  assemblaggio, catene, impronta SHA-256 del file d'origine). L'id non si tronca: oltre i 40 caratteri l'id d'origine si
+  accorcia e prende un'impronta (`<inizio>_<6 cifre di SHA-1 dell'id>_ASM<n>`, `assembly_template_id`), così gli
+  assemblaggi 1, 2 e 10 di un id lungo restano template distinti. L'assemblaggio chiesto si verifica prima (404 se il file
+  non lo dichiara). Un'importazione già fatta dello stesso assemblaggio dallo stesso file si riusa (`cached`); se il file
+  d'origine cambia, si rigenera; un template con quel nome che non è lo stesso assemblaggio dello stesso template dà 409.
+  Importazioni concorrenti dello stesso assemblaggio: un lock per template, una sola costruzione. Un assemblaggio non ha
+  assemblaggi propri; i modelli AlphaFold non ne hanno.
+
+**Bersaglio a più catene** (`complexes.parse_target`, opzione `complex` di `POST /api/model` e `/api/align2d`):
+`{name, chains: [{template_chain, sequence | same_as, name}]}` su un solo template (o assemblaggio), le cui catene
+diventano quelle della corrispondenza, nell'ordine (`TemplateSpec.keep_order`: la copia preparata ha le catene in
+quell'ordine, così i '/' del PIR si corrispondono). Errori chiari (400) prima di accodare il job: una sola catena, catena
+del template ripetuta o non valida, sequenza mancante, `same_as` verso una catena assente o senza sequenza propria, più
+template, limiti.
+
+| Limite | Valore | Motivo |
+|---|---|---|
+| Catene | da 2 a 12 | omo-oligomeri comuni fino ai dodecameri; oltre (capsidi, ferritine a 24 catene) una sequenza per catena non è pratica, e l'analisi delle interfacce cresce con le coppie di catene a contatto (fino a 66) |
+| Residui in tutto | 3000 | tempo di MODELLER per modello misurato in crescita un po' più che lineare con i residui (tabella sotto): con 3000 residui 5 modelli "accurati" (3–5 volte più lenti del "rapido") restano nel timeout predefinito dei job (120 min), con 5000 (il limite di una catena singola) no |
+
+**Allineamento per catena** (`modeller.build_complex_alignment_script`, `complexes.merge_chain_alignments`): `align2d` di
+ogni catena del bersaglio sul segmento FIRST:X–LAST:X della sua catena del template; le righe si uniscono con '/', che
+stanno quindi nelle stesse colonne, e l'intervallo del template va dal primo residuo della prima catena all'ultimo
+dell'ultima. Il log riporta per catena residui allineati e identità. La stessa funzione è l'anteprima della pagina
+(`/api/align2d` con `complex`: `chains` nel risultato).
+
+**PIR a più catene** (`complexes.check_chains`, `sequences.validate_pir`): MODELLER 10.8 tollera i '/' in colonne diverse e
+perfino una voce di template senza '/' su due catene (verificato: il modello si costruisce, con le catene fuse o un residuo
+di una catena allineato all'altra). BioLoom quindi:
+
+- nella modalità Complesso rifiuta (400 `invalid_pir`) '/' in colonne diverse fra template e bersaglio e una voce di
+  template con un numero di tratti diverso dalle catene del suo intervallo; con un PIR dell'utente nella modalità
+  Complesso le catene del bersaglio devono essere le sequenze del complesso;
+- con un PIR qualunque dà gli stessi controlli come avvisi (`validate_pir`: "Separatori di catena ('/') … in colonne
+  diverse da quelle del bersaglio").
+
+Le colonne '.' dei ligandi (`ligands.pir_with_ligands`) restano compatibili: si aggiungono alla fine del tratto di ogni
+catena in tutte le righe, i '/' non si spostano.
+
+**Modello** (`ComputeService._complex_plan`, `modeller.build_model_script`): per ogni bersaglio con più catene (anche da un
+PIR) le catene del modello prendono i nomi del template principale (il primo con una catena di fronte a ogni catena del
+bersaglio e i '/' nelle stesse colonne; altrimenti A, B, C… con un avviso), con i residui numerati da 1 in ogni catena
+(`rename_segments` in `special_patches`; MODELLER di suo numera di seguito, 77–152 per la seconda catena). Un bersaglio a
+catena singola non cambia (catena A, come prima). `REMARK 999 BIOLOOM CHAINS 2 A=A B=B` nei modelli analizzati.
+
+**Simmetria** (opzioni `symmetry`, `symmetry_weight` da 0 escluso a 10, predefinito 1): le catene del bersaglio con la
+stessa sequenza formano un gruppo e ogni catena è vincolata alla prima con `restraints.symmetry.append(Symmetry(s1, s2,
+peso))` sui C-alfa dei residui standard (`only_std_residues().only_atom_types('CA')`), come nell'esempio del manuale di
+MODELLER ("Building a model with symmetry restraints", peso 1,0). La restrizione penalizza le differenze fra le distanze
+interne corrispondenti delle due selezioni (Šali & Blundell 1993): rende uguali le catene, non impone la disposizione, che
+viene dal template. Le selezioni devono avere gli stessi atomi: per questo solo catene identiche (MODELLER altrimenti
+fallisce, "Number of selected atoms … is not the same", verificato). Richiesta senza catene uguali: avviso, nessuna
+restrizione. `REMARK 999 BIOLOOM SYMMETRY CA WEIGHT 1 A,B`.
+
+**Confronto delle interfacce** (`complexes.assess`, in `<modello>.quality.json` → `complex` e, per il modello migliore
+anche senza analisi di qualità, nel risultato `complex.assessment`; `models[].complex` = esito e DockQ minimo):
+
+| Misura | Definizione | Fonte |
+|---|---|---|
+| Interfacce del modello e del template | `domain/interfaces` (ΔSASA > 1 Å², area = metà dell'area sepolta), interfacce del template calcolate una volta per job | Krissinel & Henrick 2007 |
+| Corrispondenza | residuo del template → residuo del modello dalle colonne del PIR usato da MODELLER (lettere del template sulla copia preparata dal residuo iniziale, lettere del bersaglio sui residui del modello); catena del template → catena del modello per maggioranza | |
+| Residui conservati | residui d'interfaccia del template il cui residuo allineato è d'interfaccia nella coppia corrispondente del modello (non allineati contati a parte) | |
+| Fnat | contatti fra residui del template (atomi pesanti entro 5 Å) presenti fra i residui corrispondenti del modello | CAPRI, Méndez et al. 2003 |
+| iRMS | RMSD degli atomi N, CA, C, O dei residui entro 10 Å dall'altra catena nel template, dopo la loro sovrapposizione | Méndez et al. 2003; Basu & Wallner 2016 |
+| LRMS | RMSD dello scheletro della catena più corta dopo la sovrapposizione della più lunga (ricettore) | idem |
+| DockQ | (Fnat + 1/(1 + (iRMS/1,5)²) + 1/(1 + (LRMS/8,5)²)) / 3; ≥ 0,80 alta, ≥ 0,49 media, ≥ 0,23 accettabile, sotto non riprodotta | Basu & Wallner, PLoS ONE 11:e0161879, 2016 |
+
+- **Coppie confrontate:** solo quelle del template con le due catene nell'intervallo della sua voce del PIR
+  (`residue_map` → `span`): la copia preparata può avere altre catene scelte (es. A, B e C con un PIR da A a B), che non
+  sono modellate; una nota le elenca. Una catena dell'intervallo allineata solo a gap non ha una catena del modello (`?`
+  nel testo). Un errore inatteso dell'analisi diventa una riga del log e il modello resta senza confronto: non fa fallire
+  la modellazione (l'annullamento del job invece passa); nei risultati il modello migliore senza confronto lo dice
+  («Analisi delle interfacce non riuscita…: vedi il log del job»).
+- **Esito motivato:** classe di DockQ con il testo ("Interfaccia del template riprodotta: DockQ 0,97 (alta; Fnat 1,00, iRMS
+  0,35 Å, LRMS 1,66 Å); residui d'interfaccia del template conservati 75% (6 su 8); area 117 Å² contro 123 Å² del template
+  (95%)"); "non sono più a contatto" se le catene corrispondenti del modello non si toccano; un'interfaccia del modello che
+  il template non ha è "nuova" (contatto creato dalla modellazione, da verificare). Esito del modello = il peggiore.
+- **Limiti** (nel risultato e nel report): il template non è la struttura vera del complesso del bersaglio; DockQ misura la
+  fedeltà all'interfaccia del template, non l'accuratezza. Le coppie si confrontano anche con residui mutati. Un contatto
+  cristallino piccolo resta piccolo: vale la plausibilità dell'area di `domain/interfaces`.
+- **Costo:** due analisi delle interfacce per modello (modello e, una volta, template) più le interazioni; le ricerche dei
+  contatti usano un albero sugli atomi di una catena e una ricerca per atomo dell'altra.
+
+**Valori di riferimento** (test in `test_assembly.py`, `test_complexes.py`):
+
+| Caso | Valore |
+|---|---|
+| mmCIF sintetico (1UBQ, asym A, più due acque asym B nella stessa catena dell'autore) con identità + rotazione C2 | catene A e B; B coincide con la catena B di `ubq_dimer.pdb` entro 0,01 Å; le acque seguono la loro catena; interfaccia 122,9 Å² come il dimero |
+| stesso file, generatore con il solo asym A / espressione "(1,2)(3)" | acque escluse / copie "1×3" e "2×3" con la traslazione applicata per prima |
+| 1UBQ (REMARK 350) | un assemblaggio monomerico, catena A, solo identità |
+| dimero contro sé stesso (catene rinominate, numeri spostati di 100) | 5 contatti entro 5 Å, 8 residui d'interfaccia (S57, D58, N60, Q62 per catena), Fnat 1, iRMS 0, LRMS 0, DockQ 1 |
+| catena B spostata di 3 Å | LRMS 3,00 Å, Fnat 0,80 (4 su 5), iRMS 1,37 Å, DockQ 0,745 → media |
+| catena B allontanata di 30 Å | area 0, Fnat 0, LRMS 30 Å → non riprodotta, "non sono più a contatto" |
+| MODELLER: omodimero dell'ubiquitina di lievito su `ubq_dimer.pdb`, 2 modelli "rapidi", simmetria | catene A e B numerate da 1, RMSD dei C-alfa fra le catene dopo la sovrapposizione 0,03 Å (senza simmetria 0,63 Å), DockQ 0,97 (alta), 75% dei residui d'interfaccia conservati, area 117 contro 123 Å²; job in 14 s con l'analisi del migliore |
+
+**Tempi di MODELLER con più catene** (copie di `ubq_dimer.pdb`, raffinamento "rapido", container di test con altri test
+in esecuzione sulla stessa macchina: valori indicativi):
+
+| Catene | Residui | 1 modello | 2 modelli | Per modello |
+|---|---|---|---|---|
+| 2 | 152 | 7,5 s | 13,9 s | 6,4 s |
+| 4 | 304 | 10,9 s | 18,8 s | 7,9 s |
+| 8 | 608 | 22,3 s | 42,3 s | 20,0 s |
+
+**Interfaccia** (`components/ComplexInput.tsx`, `ComplexResults.tsx`, `AssembliesCard.tsx`, logica in `lib/complex.ts`):
+
+- **Libreria template:** scheda "Assemblaggi biologici" (stato, catene con l'origine, «Importa come template»); per un
+  assemblaggio importato la sua origine e «Modella il complesso»; pulsante «Complesso» per i template a più catene; badge
+  "assemblaggio" nell'elenco.
+- **Modellazione → Complesso** (`?cmplx=<template>` dalla libreria): template (con download da RCSB e importazione degli
+  assemblaggi), una riga per catena (dal progetto, incollata o «stessa di…»; le catene del template con la stessa sequenza
+  partono già come «stessa della catena …»), conteggi e limiti come il backend (`complexRequest`), simmetria con il peso,
+  anteprima dell'allineamento per catena in modalità Confidenza. Gli avvisi di copertura del bersaglio non si calcolano in
+  questa modalità.
+- **Risultati:** riquadro "Complesso" (catene del modello e del template, simmetria, tabella del confronto con DockQ ed
+  esito; clic su una riga = testo dell'esito e interfaccia centrata nel 3D) e 3D colorato per catena con i residui
+  d'interfaccia conservati (verde), solo nel modello (arancione) e persi (rosso). Per un modello diverso dal migliore il
+  confronto viene dal suo rapporto di qualità, se analizzato. Badge "interfacce: …" nella tabella dei modelli.
+
+### Validazione di qualità
+
+Pipeline di validazione in `engines/quality.py`; PROCHECK e ProSA in `engines/procheck.py` ed `engines/prosa.py`,
+QMEAN in `engines/qmean_local.py` (sezione seguente).
 
 | Metrica | Implementazione |
 |---|---|
@@ -407,7 +1382,7 @@ Nella pipeline un template usato da più elementi si prepara una volta per esecu
 | PROCHECK | `procheck.scr` (csh + Fortran compilato nell'immagine): Ramachandran a 4 regioni, G-factor, parametri di legame; grafici PostScript tra i file del job |
 | ProSA II | z-score combinato, di coppia e di superficie; profilo di energia per residuo (finestra 1 e 10) |
 | QMEAN | su richiesta. **Locale**: worker nel container `qmean` (HHblits su UniClust30/UniRef30 di qualunque versione; QMEANDisCo se c'è la QMTL), un calcolo alla volta, annullabile. **Remoto**: SWISS-MODEL, con email e consenso esplicito. Modalità `local` / `remote`, più **fallback facoltativo** dal locale a SWISS-MODEL (impostazione o scelta del singolo calcolo) |
-| Ligandi e metalli | campo `ligands` solo se la struttura ha gruppi eteroatomici non d'acqua: contatti, scontri, coordinazione dei metalli (`domain/ligands.py`, vedi [Ligandi, cofattori e metalli](#ligandi-cofattori-e-metalli-domainligandspy)); nessun effetto sul voto |
+| Ligandi e metalli | campo `ligands` solo se la struttura ha gruppi eteroatomici non d'acqua: contatti, scontri, coordinazione dei metalli (`domain/ligands.py`, vedi [Ligandi, cofattori e metalli](#ligandi-cofattori-e-metalli)); nessun effetto sul voto |
 
 **Esecuzione dei passi** (`quality.analyze`, `core/parallel.Steps`). La struttura si legge una volta; poi partono insieme
 i sottoprocessi (DOPE di MODELLER, mkdssp, PROCHECK, ProSA) e i calcoli Python (Ramachandran, clash, SASA; il DSSP
@@ -433,7 +1408,21 @@ integrato se mkdssp manca), su un pool di thread del singolo calcolo. QMEAN rest
   paralleli delle Impostazioni), ognuno con il proprio contesto; metriche, rapporti e REMARK restano nell'ordine dei
   modelli, e il primo modello fallito in quell'ordine fa fallire il job come prima.
 
-### QMEAN locale con qualunque versione di UniClust30 (`docker/qmean/uniclust.py`)
+**Confronto con la v3** sulle strutture di riferimento (valori della v3 in
+[REVERSE_ENGINEERING.md](REVERSE_ENGINEERING.md)). Per 1UBQ i valori della v4 sono verificati dai test
+(`test_structure_quality.py`, `test_parallel_quality.py`); per 3IU0 e 9QB7, i cui file non sono in `tests/data`, i
+test non li ripetono:
+
+| Struttura | v3 core/favorite | v4 favorite | v3 clashscore | v4 clashscore |
+|---|---|---|---|---|
+| 1UBQ | 81,1 % | 95,9 % | 31,8 | 1,7 |
+| 3IU0 | 77,1 % | 94,3 % | 24,9 | 0,4 |
+| 9QB7 | 72,7 % | 94,0 % | — | 0,2 |
+
+### QMEAN locale con qualunque versione di UniClust30
+
+Worker HTTP nel container `qmean` (`docker/qmean/qmean_worker.py`, database in `docker/qmean/uniclust.py`, avvio di
+QMEAN in `run_qmean_wrapper.py`); client in `engines/qmean_local.py`, job `qmean` in `services/compute.py`.
 
 - **Ricerca:** il worker esplora la cartella montata su `/uniclust_src` fino a 4 livelli e riconosce ogni
   database HH-suite dal file `<nome>_a3m.ffindex` (HH-suite 3) o `<nome>_a3m_db.index` (HH-suite 2). Per
@@ -517,17 +1506,9 @@ integrato se mkdssp manca), su un pool di thread del singolo calcolo. QMEAN rest
   - un calcolo QMEAN completo non è stato possibile per la memoria di questo PC (5,7 GB per Docker su 11,8 di RAM);
   - su un disco di prova con tre versioni in formati diversi e un archivio non estratto.
 
-Valori sulle strutture di riferimento (test automatici):
+### Consenso tra i metodi e qualità per residuo
 
-| Struttura | v3 core/favorite | v4 favorite | v3 clashscore | v4 clashscore |
-|---|---|---|---|---|
-| 1UBQ | 81,1 % | 95,9 % | 31,8 | 1,7 |
-| 3IU0 | 77,1 % | 94,3 % | 24,9 | 0,4 |
-| 9QB7 | 72,7 % | 94,0 % | — | 0,2 |
-
-### Consenso tra i metodi e qualità per residuo (`domain/consensus.py`, `domain/perresidue.py`)
-
-Il voto A–D non cambia: `consensus` è un campo in più del rapporto di qualità.
+Logica in `domain/consensus.py` e `domain/perresidue.py` (F6). Il voto A–D non cambia: `consensus` è un campo in più del rapporto di qualità.
 
 - **Scale:** ogni metodo è portato su 0–100 con una funzione lineare a tratti (saturata fuori dai punti). I punti
   mettono la soglia "affidabile" della letteratura a 70 e quella "problematica" a 40, così le fasce (buona ≥ 70,
@@ -541,7 +1522,7 @@ Il voto A–D non cambia: `consensus` è un campo in più del rapporto di qualit
   | QMEAN4 Z-score | −8 → 0, −4 → 40, −2 → 70, 0 → 100 | 1,5 | Benkert et al. 2011; SWISS-MODEL: −4 o meno bassa qualità, vicino a 0 ottimo |
   | ProSA z-score | 2 → 0, −2 → 40, −6 → 70, −8 → 100 | 1 | Sippl 1993; Wiederstein & Sippl 2007: positivo o vicino a zero = errore (−0,60 "troppo alto"), −8,29 nativo; −6 scelta BioLoom |
   | PROCHECK core | 50 → 0, 70 → 40, 90 → 70, 100 → 100 | 0,75 | Laskowski et al. 1993: oltre il 90% atteso a 2 Å o meglio; 70% scelta BioLoom |
-  | Accordo con una predizione (F9.3, solo con il confronto) | lDDT-Cα sui residui a predizione sicura: 0 → 0, 0,5 → 40, 0,7 → 70, 1 → 100 | 0,25 | Mariani et al. 2013; fasce del pLDDT (lDDT-Cα predetto) di Tunyasuvunakool et al. 2021; vedi [Confronto con un predittore esterno](#confronto-con-un-predittore-esterno-f93) |
+  | Accordo con una predizione (F9.3, solo con il confronto) | lDDT-Cα sui residui a predizione sicura: 0 → 0, 0,5 → 40, 0,7 → 70, 1 → 100 | 0,25 | Mariani et al. 2013; fasce del pLDDT (lDDT-Cα predetto) di Tunyasuvunakool et al. 2021; vedi [Confronto con un predittore esterno](#confronto-con-un-predittore-esterno) |
 
   Pesi: QMEAN combina quattro potenziali ed è già riferito a strutture sperimentali di pari dimensione; GA341 valuta
   solo il ripiegamento e, contenendo l'identità con il template, satura vicino a 1 per quasi tutti i modelli per
@@ -606,10 +1587,10 @@ Il voto A–D non cambia: `consensus` è un campo in più del rapporto di qualit
   Nessuna discordanza e nessuna regione problematica. Segnali isolati:
   - un clash su Arg72;
   - il picco DOPE sulla coda C-terminale flessibile (73–76; soglia −0,0355).
-- **Disordine predetto** (F5.5, vedi [sotto](#disordine-bassa-complessità-e-domini-domaindisorderpy-servicescoveragepy)): il
+- **Disordine predetto** (F5.5, vedi [Disordine, bassa complessità e domini](#disordine-bassa-complessità-e-domini)): il
   consenso ha un campo `disorder` (versione 2) e le regioni problematiche che vi cadono dentro hanno `expected`. Non cambia
   punteggio, segnali, conteggi né regioni.
-- **Accordo con una predizione esterna** (F9.3, vedi [Confronto con un predittore esterno](#confronto-con-un-predittore-esterno-f93)):
+- **Accordo con una predizione esterna** (F9.3, vedi [Confronto con un predittore esterno](#confronto-con-un-predittore-esterno)):
   solo con `predict_job` nelle rotte del consenso (o nel report). Il metodo `predictor` entra nel punteggio con peso 0,25
   (fra i mancanti, con il motivo, se il confronto non è conclusivo); il campo `predictor` ha lDDT e pLDDT per residuo, i
   residui che divergono dove la predizione è sicura (`flags`) e le regioni divergenti con gli indici del rapporto; le
@@ -619,338 +1600,10 @@ Il voto A–D non cambia: `consensus` è un campo in più del rapporto di qualit
   Senza confronto il risultato è identico a prima (test): stessi metodi (6), stessi mancanti, nessun campo in più,
   versione 2 invariata.
 
-### Disordine, bassa complessità e domini (`domain/disorder.py`, `services/coverage.py`)
+### Confronto strutturale
 
-Dove il modello per omologia sarà poco affidabile, dalla sola sequenza (logica pura, nessuna dipendenza nuova). Tre
-segnali separati.
-
-| Segnale | Metodo | Parametri | Fonte |
-|---|---|---|---|
-| Disordine per residuo | FoldIndex = 2,785·⟨H⟩ − \|⟨R⟩\| − 1,151; ⟨H⟩ idropatia media di Kyte-Doolittle portata su 0–1 ((KD + 4,5)/9), ⟨R⟩ carica netta media a pH 7 (K, R +1; D, E −1; H neutra). Sotto 0 probabilmente disordinato | finestra di 51 residui centrata, passo 1 | Prilusky et al., Bioinformatics 21:3435, 2005; confine carica-idropatia di Uversky et al., Proteins 41:415, 2000; Kyte & Doolittle, J. Mol. Biol. 157:105, 1982 |
-| Regioni disordinate lunghe | almeno 30 residui con FoldIndex < 0; fino a 3 residui sopra 0 tollerati tra due tratti (meno di un giro d'elica, 3,6 residui), che non contano nei 30 | | "long disordered regions" di Ward et al., J. Mol. Biol. 337:635, 2004 |
-| Bassa complessità | SEG: finestre con entropia ≤ K1 innescano, estensione alle finestre ≤ K2, poi il sottotratto di composizione meno probabile (P0, accorciamento fino a 100 residui) come `seg`; segmenti sovrapposti fusi | finestra 12, K1 2,2 e K2 2,5 bit | Wootton & Federhen, Comput. Chem. 17:149, 1993 |
-| Domini | InterPro (`remote.interpro_domains`): voci `domain`, oppure le superfamiglie omologhe se non ce ne sono; voci sovrapposte per almeno metà del tratto più corto fuse (firme di banche dati diverse dello stesso dominio) | solo con un'accessione UniProt | |
-
-- **Perché FoldIndex e non IUPred:** IUPred (Dosztányi et al. 2005) converte l'energia di coppia in probabilità con la
-  sua matrice e una distribuzione tabulata, file distribuiti con il programma per uso accademico: ricostruirli dalle
-  pubblicazioni non darebbe gli stessi numeri. FoldIndex è definito da due costanti pubblicate e da una scala standard.
-- **Estremità:** il server di FoldIndex dà valori solo ai centri delle finestre complete. Qui ogni residuo ha un valore e
-  nei primi e negli ultimi 25 la finestra si accorcia (fino a 26 residui). Con una finestra fissa appoggiata al bordo,
-  l'ultima finestra dell'ubiquitina (26–76, FoldIndex −0,018) si ripeterebbe su 25 residui e darebbe una regione
-  disordinata 32–76 a una proteina ripiegata (test).
-- **Lettere:** X non entra nelle medie; B, Z, J come media delle due lettere, U come C, O come K. In SEG le finestre con
-  lettere non standard non si valutano. Una sequenza nucleotidica (≥ 90% di A, C, G, T/U, N, `sequences.detect_kind`) si
-  rifiuta (`not_protein`).
-- **Limiti** (anche nella risposta, `limits`, e nell'interfaccia): non è IUPred2A né un predittore di deep learning
-  (molto più accurati nelle valutazioni CAID); non vede il disordine con composizione da proteina ripiegata
-  (l'N-terminale dell'α-sinucleina risulta ordinato) né i loop disordinati corti; i confini sono incerti di circa mezza
-  finestra; non conosce il contesto (partner, cofattori, ponti disolfuro).
-
-**Valori di riferimento** (test in `test_disorder.py`):
-
-| Sequenza | Risultato |
-|---|---|
-| ubiquitina umana (1UBQ, 76) | nessuna regione, frazione disordinata 0; FoldIndex per residuo tra −0,17 e +0,26; FoldIndex della sequenza intera +0,090, uguale a 2,785·(GRAVY + 4,5)/9 − 1,151 con il GRAVY di Biopython (−0,489, carica netta 0) |
-| α-sinucleina umana (P37840, 140) | una regione 98–140 (attesa ~96–140: la coda acida C-terminale), frazione 0,307; nessuna regione prima di 90 (limite noto) |
-| ubiquitina con 25 Q dopo il residuo 40 | SEG: esattamente il tratto poli-Q 40–66 ("Q 27"); ogni residuo diverso aggiunto rende la composizione più probabile (P0) |
-| ubiquitina (SEG) | nessuna regione a bassa complessità |
-
-**Copertura e avvisi prima di modellare** (`disorder.coverage_assessment`, `services/coverage.CoverageService`):
-
-- **Copertura** = residui del bersaglio con un residuo del template di fronte:
-  - template della libreria (Modellazione, allineamento automatico): Smith-Waterman locale (BLOSUM62, gap 11/1, come i
-    motori di ricerca) su ogni catena scelta, unite; è una stima dell'allineamento di MODELLER. Per un template AlphaFold con
-    il ritaglio attivo i residui tolti (`plddt.low_confidence`: soglia e frammenti isolati, come in modellazione) non
-    coprono (test: pLDDT < 70 su 1–5 e 71–76 → coperti 6–70);
-  - PIR (Modellazione, da documento): le colonne del PIR, esatte; bersagli a più catene non valutati (nota);
-  - intervalli (Ricerca): il tratto `query_start`–`query_end` di ogni hit, valutato da solo (candidati alternativi);
-    template e PIR si valutano anche insieme (`combined`), come li usa MODELLER.
-- **Avvisi:** `disorder_uncovered` (warn) se almeno metà di una regione disordinata lunga è scoperta: MODELLER la
-  costruisce senza vincoli, come un tratto esteso senza significato strutturale; `disorder_covered` (info) altrimenti:
-  nel template può essere ordinata da un partner o dal cristallo. Domini: coperti dal 90% (i confini delle firme InterPro
-  sono approssimati di qualche residuo), `domain_uncovered` sotto il 10%, `domain_partial` in mezzo.
-- **Suggerimento:** con almeno due domini e uno non coperto del tutto, "modella per domini" (template per dominio, oppure
-  più template insieme); con un dominio solo, cercare un template che lo copra (NCBI BLAST, AlphaFold DB); con le sole
-  regioni disordinate scoperte, escluderle dal bersaglio o leggerle come ipotesi.
-- **Domini sul bersaglio:** i confini di InterPro stanno sulla sequenza di UniProt (`remote.uniprot_entry`): valgono se il
-  bersaglio è quella sequenza o un suo tratto (spostamento, nota "Bersaglio = residui 4–79 di UniProt …"), altrimenti si
-  tralasciano con una nota. UniProt e InterPro restano in cache 7 giorni. Senza accessione nessun dominio e nessuna
-  richiesta remota; accessione sconosciuta o servizi non raggiungibili danno una nota, non un errore; un'accessione con un
-  formato non valido è un 400 (`invalid_accession`).
-
-**Rotte** (`api/bio.py`):
-
-| Rotta | Corpo | Risposta ed errori |
-|---|---|---|
-| `POST /api/bio/disorder` | `{"sequence"}`: testo o FASTA con una sola sequenza | punteggi (`scores`, scala di FoldIndex), `regions`, `fraction` (residui nelle regioni), `below_fraction`, `low_complexity`, `params`, `limits`. Nessuna rete. 400 `sequence_too_long` oltre 5000 residui (come la modellazione), `empty_sequence`, `not_protein`, `multiple_sequences`; 422 oltre 200 000 caratteri |
-| `POST /api/bio/coverage` | `sequence`, `accession`, `templates` [{id, chains}] (al massimo 10), `alignment` (PIR), `ranges` [{label, start, end}] (al massimo 500), `plddt_min` | `disorder`, `domains`, `domains_info` (fonte o motivo dell'assenza), `templates` (per template o intervallo: copertura, avvisi, domini, suggerimento; `error` se il template non c'è o non ha la catena, gli altri si valutano lo stesso), `combined` |
-
-**Consenso** (`consensus.disorder_signal`): FoldIndex per catena sulle lettere dei residui presenti nel file, nell'ordine
-del rapporto (per un modello di MODELLER è la sequenza intera del bersaglio; in una struttura sperimentale con residui
-mancanti la finestra scorre sui residui presenti). Il campo `disorder` ha punteggi, residui nelle regioni, regioni e una
-frase; `informative: true`. Una regione problematica con almeno metà dei residui in una regione disordinata diventa
-`expected` e il testo lo dice ("…, in una regione disordinata predetta (attesa poco affidabile)"), come la coda di una
-proteina costruita senza template. Test: stesso rapporto con la sequenza dell'α-sinucleina e con una sequenza tutta I →
-stesso punteggio, stessi segnali e stesse regioni; su 1UBQ, `ubq_dimer.pdb` (per catena, stessi valori nelle due catene)
-e `ubq_zn.pdb` nessuna regione. `VERSION` passa a 2; i rapporti salvati prima (versione 1, senza `disorder`) funzionano: le
-rotte del consenso e del report lo ricalcolano.
-
-**Interfaccia:**
-
-- **Sequenze:** riquadro "Disordine, bassa complessità e domini" con la mappa delle caratteristiche (tracce Disordine,
-  Bassa complessità, Domini InterPro con l'accessione, Struttura secondaria GOR; le tracce vuote lo dicono), sintesi e
-  "Metodi e limiti". Una sola richiesta (`/api/bio/coverage` senza template).
-- **Modellazione:** gli avvisi (`combined`) appena bersaglio e template (o il PIR) sono scelti, con la soglia pLDDT se c'è
-  un template AlphaFold. Dalla F8a arrivano dai controlli preventivi (stessa verifica, una sola richiesta, vedi [Controlli
-  preventivi](#controlli-preventivi-domainpreflightpy-servicespreflightpy)) e i loro avvisi chiedono conferma all'avvio;
-  prima venivano da `/api/bio/coverage` e non bloccavano il lancio. L'accessione per i domini
-  (`modelingAccession`) viene dal bersaglio della modalità in uso: in modalità PIR dalla voce `sequence` del documento
-  (sequenza del progetto uguale, oppure codice `sp|ACC|…`), non dal selettore della modalità automatica, nascosto.
-- **Ricerca:** per ogni hit un badge ("disordine scoperto · dominio scoperto"), gli avvisi nella riga espansa e, sopra la
-  tabella, quelli del template consigliato.
-- **Qualità:** la frase del disordine sotto le regioni problematiche e una riga "disordine (info)" nel grafico del consenso
-  per residuo; le regioni `expected` in arancione invece che in rosso.
-- Logica pura in `lib/disorder.ts` (tracce, richieste, badge, ordine degli avvisi), componente `CoverageAlerts`.
-
-### Controlli preventivi (`domain/preflight.py`, `services/preflight.py`)
-
-Prima di avviare un calcolo, che cosa lo farebbe fallire o renderebbe il risultato poco affidabile, senza avviare nulla
-(F8a). Regole e soglie, con le fonti, in `domain/preflight.py` (logica pura); i fatti (licenze, strumenti, libreria,
-spazio, servizio QMEAN, job attivi) li raccoglie `services/preflight.PreflightService`, creato a ogni richiesta come
-`CoverageService` (nessun servizio nuovo nel `Core`).
-
-**Rotta** `POST /api/compute/preflight` con `{kind, params, context}`:
-
-- `kind`: `model`, `loop`, `align2d`, `pipeline`, `quality`, `qmean`, `search`, `analysis`, `mutate`, `alascan`, `predict` (F9.3), `rerun` (riesecuzione di un
-  pacchetto caricato, `params` = `{package_id}`: vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione-f94));
-- `params`: lo stesso corpo della rotta di avvio, validato con lo stesso modello Pydantic (`ModelIn`, `PipelineIn`, …):
-  un campo non valido è un esito `error` (`validation_error`), come il 422 dell'avvio, non un 422 dei controlli;
-- `context` (facoltativo): `accession` (domini InterPro, come `/api/bio/coverage`), `search_job` (ricerca da cui vengono i
-  template: punteggio dei template scelti).
-
-Risposta: `ok` (nessun errore), `counts`, `checks` (errori, poi avvisi, poi informazioni, ciascuno `{level, code,
-message, suggestion}` più `group: "coverage"` per gli avvisi di copertura e `template`), `estimate` (`seconds`, `low`,
-`high`, `detail`, `basis`) e, per la modellazione, `coverage` (la verifica completa di `services/coverage.py`).
-
-| Livello | Significato | Interfaccia |
-|---|---|---|
-| `error` | la rotta di avvio o l'handler rifiuterebbero la richiesta, oppure il job fallirebbe di sicuro | pulsante disattivato con il primo errore come motivo |
-| `warning` | parte, ma il risultato rischia di essere poco affidabile o il job di non finire | conferma «Avvia comunque» con l'elenco degli avvisi |
-| `info` | da sapere, senza conseguenze sul risultato | elenco discreto sotto gli avvisi |
-
-- **Stessa validazione dell'avvio:** `modeller.parse_options`, `compute._record`, `_template_specs`,
-  `_apply_ligand_options`, `sequences.validate_pir` con il numero dei template, `PipelineService.validate` (estratta da
-  `submit`), `resolve_structure`, `AnalysisService.validate`, i limiti del loop: un loro errore è un esito `error` con lo
-  stesso codice e lo stesso messaggio (test: per ogni richiesta rifiutata dall'avvio, 400 o job fallito, lo stesso
-  messaggio fra gli errori dei controlli).
-- **Nessun effetto:** niente job, niente download (un template assente con un codice PDB o un id AlphaFold è
-  un'informazione: lo scaricherà il job), richieste remote solo per i domini (UniProt e InterPro con l'accessione, in
-  cache 7 giorni) e per lo stato del servizio QMEAN locale (rete interna, in cache 15 s).
-- **Robustezza:** un fatto che non si legge (template illeggibile durante il ritaglio, ricerca eliminata) diventa
-  `check_skipped` (informazione), mai un errore del server.
-
-**Esiti** (ogni codice ha un test che lo produce e uno che non lo produce, `test_preflight.py`):
-
-| Codice | Livello | Regola | Fonte o motivo |
-|---|---|---|---|
-| `modeller_license_missing`, `modeller_license_invalid`, `modeller_not_installed` | error | MODELLER non utilizzabile (stato di `LicenseService`: chiave assente, rifiutata, modulo assente) | senza MODELLER modellazione, loop e allineamento non partono |
-| `dope_unavailable` | warning | analisi di qualità con il DOPE senza MODELLER | l'analisi prosegue senza zDOPE |
-| `template_missing`, `template_chain_missing`, `template_unreadable` | error | template né in libreria né scaricabile, catena assente, file illeggibile | la preparazione fallirebbe |
-| `template_download` | info | assente ma scaricabile da RCSB o AlphaFold DB | serve la rete all'avvio |
-| `twilight_zone` | warning | identità sotto la curva di Rost per le coppie allineate | Rost 1999 (`template_rank.rost_threshold`): omologia non dimostrata |
-| `low_identity` | info | sopra la curva ma sotto il 30% | Baker & Šali 2001: bassa accuratezza, gli errori di allineamento dominano |
-| `low_coverage` | warning | copertura dei template insieme sotto il 40% | soglia della pipeline e confine della fascia scarsa della copertura (`template_rank`) |
-| `template_score_poor` | warning | con `search_job`: punteggio del template sotto 40, con le due componenti più basse | fascia scarsa di `template_rank` |
-| `disorder_uncovered`, `domain_uncovered`, `domain_partial` / `disorder_covered` | warning / info | gli avvisi di `disorder.coverage_assessment` (gruppo `coverage`, il suggerimento sul primo avviso) | F5.5; nessun calcolo duplicato |
-| `plddt_too_few` | error | ritaglio che lascia meno di 30 residui o una catena vuota | come `modeller.prepare_template` (`plddt.MIN_TRIMMED_RESIDUES`) |
-| `plddt_trim_most` / `plddt_trim` | warning / info | il ritaglio toglie più della metà dei residui / qualcuno (con gli intervalli) | AlphaFold confidente solo su una minoranza della catena |
-| `plddt_untrimmed` | warning | ritaglio spento e residui con pLDDT < 70 | vincoli da conformazioni predette con bassa confidenza |
-| `procheck_unavailable`, `prosa_unavailable` | warning se nessuno degli strumenti chiesti gira, altrimenti info | PROCHECK assente; ProSA assente, senza licenza, licenza illeggibile o MAC diverso | l'opzione non avrebbe effetto / l'analisi prosegue |
-| `estimated_time` / `timeout_risk` | info / warning | stima del tempo; costruzione dei modelli (un solo processo) oltre metà del timeout dei processi | incertezza della stima di un fattore 2 |
-| `disk_full_data`, `disk_full_scratch` / `disk_low_*` | error / warning | spazio libero sotto la stima / sotto il massimo fra 1 GiB e 10 volte la stima; dati e scratch sullo stesso disco: una voce con la somma | il salvataggio finale fallirebbe a calcolo finito; 1 GiB per database SQLite con il WAL, cache (fino a 20 MB per voce) e download degli altri job (scelta BioLoom) |
-| `qmean_memory`, `qmean_unavailable` | error, warning con il fallback consentito | `qmean_local.memory_problem` (12 GB per UniRef30_2020_06) o servizio assente; fallback attivo senza consenso o email = errore | come il controllo del job QMEAN |
-| `qmean_remote_disabled`, `email_required` / `qmean_remote`, `qmean_local`, `qmean_busy` | error / info | SWISS-MODEL senza consenso o email; dove si calcola, servizio occupato | |
-| `blast_missing`, `pdbaa_missing`, `mmseqs_missing`, `mmseqs_database_missing` | error | motore locale senza programma o database | |
-| `mmseqs_no_index`, `remote_ncbi`, `ncbi_email`, `alphafold_blast`, `remote_alphafold` | info | ricerca più lenta senza l'indice (12 s invece di 2,3); dati che vanno a NCBI o EBI | misure di MMseqs2 (sopra) |
-| `ncbi_many_searches` / `ncbi_parallel` | warning / info | pipeline con oltre 50 ricerche NCBI (motore NCBI, o AlphaFold DB senza accessione) / più ricerche NCBI insieme | linee guida di NCBI per l'interfaccia URL di BLAST: oltre 50 ricerche di sera o nel fine settimana, una richiesta ogni 10 s |
-| `pipeline_too_long` / `pipeline_alphafold`, `pipeline_disorder` | warning / info | sequenze oltre 5000 residui; sequenze con e senza accessione; sequenze con regioni disordinate lunghe (FoldIndex, fino a 500 000 residui in tutto) | |
-| `rerun_not_reproducible`, `rerun_unsupported`, `package_*`, `rerun_tool_unavailable` / `rerun_version_bioloom`, `rerun_version_image`, `rerun_version_tool`, `rerun_version_library`, `rerun_tool_missing`, `rerun_platform` / `rerun_remote_input`, `package_note` | error / warning / info | riesecuzione (`kind: "rerun"`): calcolo che dipende da servizi remoti o non rieseguibile, pacchetto non valido o scaduto, parametri che la rotta di avvio rifiuterebbe, strumento obbligatorio assente / versioni diverse da quelle del pacchetto / input remoti con la data e note del pacchetto; più licenza MODELLER, PROCHECK e ProSA, durata del calcolo originale, spazio e coda come gli altri calcoli | versioni diverse: avvisi, mai errori (F9.4) |
-| `esmfold_remote_disabled` / `sequence_too_long`, `invalid_sequence`, `accession_required`, `invalid_chain`, `predict_input_required` | error | predizione (F9.3): ESMFold senza il consenso all'invio; la stessa validazione della rotta `POST /api/predict` (sequenza oltre 400 residui o con lettere non standard, accessione mancante per AlphaFold DB, catena assente) | il consenso è un esito a sé, con il suggerimento |
-| `remote_esmfold`, `esmfold_cached`, `remote_alphafold`, `alphafold_in_library`, `predict_no_compare` | info | la sequenza andrà al servizio (rete); predizione già in cache (nessuna richiesta); a EBI va solo l'accessione, o il modello è già in libreria; nessuna struttura da confrontare | nessuna richiesta remota dai controlli: la cache si legge dal disco |
-| `predict_sequence_gaps` / `predict_sequence_seqres` | warning / info | ESMFold con la sequenza della catena: catena interrotta senza una sequenza completa utilizzabile nel file (i tratti si unirebbero; residui vicini alle giunzioni non informativi) / catena interrotta, si invia il SEQRES | suggerimento: incollare la sequenza completa nella finestra |
-| `queue_busy`, `single_model`, `identical_models`, `invalid_accession`, `check_skipped` | info | job attivi ≥ job in parallelo; un solo modello; più modelli con il raffinamento rapidissimo (`a.very_fast()` non perturba le coordinate iniziali: modelli identici, anche fra gli avvisi del risultato); accessione non valida (niente domini); controllo non eseguito | misura in [Prestazioni](#misure-per-i-controlli-preventivi) |
-| `invalid_mutation`, `invalid_scan` | error | notazione, catena, residuo originale o scelta dei residui rifiutati dalla rotta di avvio (stesso messaggio); oltre 50 residui (20 con l'energia) | mutagenesi (F9.2) |
-| `mutation_energy_unavailable` / `mutation_energy` | warning / info | energia chiesta senza OpenMM o PDBFixer (il job prosegue senza) / che cosa misura | |
-| `mutation_ligand_near`, `mutation_break_near`, `scan_skipped` | warning, info, info | gruppo eteroatomico entro 8 Å dai residui da mutare (MODELLER lavora sulla sola proteina); interruzione della catena entro 5 Å; residui esclusi dalla scansione (Gly, Pro, Ala) | |
-
-**Stima del tempo** (secondi; costanti misurate, vedi [Prestazioni](#misure-per-i-controlli-preventivi)):
-preparazione 0,02 + allineamento 0,34 · s + avvio di MODELLER 0,26 + s · (restrizioni 0,46 + M · 2,29 · f) + qualità,
-con s = residui / 76, M modelli, f il fattore del raffinamento (very_fast 0,24, fast 1, normal 1,42, thorough 4,17) e la
-qualità 1,22 · s sul migliore (1,23 senza PROCHECK e ProSA), su tutti i modelli a gruppi di 3. Intervallo: da metà al
-doppio (altri processori, emulazione x86, carico). Pipeline: ⌈elementi / parallelo effettivo⌉ × (modellazione + ricerca
-media), con le ricerche da 1 a 5 minuti per NCBI, 2,3–12 s per MMseqs2, pochi secondi per gli altri. Su 1UBQ (test): 13,9 s
-per 5 modelli con la qualità estesa (misurato 13,89), 9,2 s per un elemento di pipeline (9,13), 11,3 s di costruzione per
-304 residui (11,25).
-
-**Spazio stimato:** risultati 2,5 MiB + residui × (880 × modelli + 3600 × modelli analizzati); scratch in più 2300 × residui
-× modelli per gli intermedi di MODELLER. Pipeline: la somma dei risultati e, per lo scratch, gli elementi più grandi che
-girano insieme.
-
-**Copertura e identità** (`services/coverage.py`): i template della libreria e le righe del PIR hanno anche `identity` e
-`aligned` dallo stesso allineamento della copertura (Smith-Waterman, BLOSUM62, gap 11/1, come la ricerca; per il PIR le
-colonne), che i controlli confrontano con la curva di Rost; per un bersaglio a più catene l'identità viene dalle colonne del
-PIR (`report.alignment_identity`).
-
-**Interfaccia** (`components/Preflight.tsx`, logica in `lib/preflight.ts`):
-
-- `usePreflight(request)`: richiesta 0,6 s dopo l'ultimo cambio (0,8 s nella Pipeline), risposte superate ignorate, nuovi
-  tentativi (5, ogni 4 s) finché un template risulta da scaricare; `check()` ripete i controlli subito.
-- `PreflightPanel`: errori e avvisi come riquadri con il suggerimento, avvisi di copertura con `CoverageAlerts` (una volta
-  sola, dalla verifica della stessa risposta), informazioni in piccolo con la base della stima nel suggerimento.
-- `LaunchButton` (`launchDecision`): disattivato con il motivo se c'è un errore; con avvisi una finestra di conferma
-  («Avvia comunque»); con i controlli ancora in corso li ripete al clic; se i controlli non riescono (server) l'avvio resta
-  possibile, perché la rotta di avvio valida comunque.
-- **Modellazione:** il riquadro sta sopra «Avvia modellazione» e sostituisce la verifica di copertura del riquadro Input
-  (una richiesta invece di due); il corpo della richiesta è lo stesso dell'avvio (`useMemo`). **Pipeline:** sopra «Avvia
-  pipeline». **Procedura guidata:** prima della ricerca (`search`), dell'allineamento (`align2d`) e della modellazione
-  (`model`, con `search_job`). **Confronto con una predizione** (F9.3): nella finestra di avvio, dopo il consenso
-  all'invio (`predict`).
-
-### Procedura guidata (`pages/Wizard.tsx`, `lib/wizard.ts`)
-
-`/wizard`, «Nuovo modello guidato» nella barra laterale e nella Panoramica. Riusa i componenti delle altre pagine
-(`SequencePicker`, `FeatureMap`, `JobPanel` con il flusso in tempo reale, `AlignmentView` aperto in modalità Confidenza con
-il nuovo `initialMode`, `LigandPicker`, `PlddtOption`, `Viewer3D`, `ReportButton`, `compareTargets`) e le rotte esistenti;
-la logica dei passi è in `lib/wizard.ts` (pura, testata).
-
-| Passo | Contenuto | Per andare avanti |
-|---|---|---|
-| 1 Sequenza | incollata, dal progetto, da file o da UniProt (accessione); anteprima di disordine, bassa complessità e domini (`/api/bio/coverage`); «Aggiungi al progetto» | sequenza proteica di 1–5000 residui |
-| 2 Template | motore consigliato (`engineChoices`: RCSB, oppure il motore locale delle Impostazioni se è pronto) con le alternative spiegate e la disponibilità; risultati per punteggio, consigliati preselezionati una volta per ricerca; suggerimento di un altro motore se non ci sono template o il migliore è in zona crepuscolare | almeno un template, una catena per voce PDB |
-| 3 Allineamento | job `align2d` sui template scelti; «Apri nell'Editor PIR» (`/pir?fromjob=`) oppure un documento PIR del progetto (con i template del documento) | allineamento completato o documento scelto |
-| 4 Opzioni | 5 modelli (esempio di base del tutorial di MODELLER), raffinamento Rapido (le impostazioni predefinite di MODELLER; Standard ha la dinamica più lunga `refine.fast`, circa 1,4 volte il tempo, misurato), analisi estesa se PROCHECK o ProSA sono utilizzabili, ligandi se la scelta predefinita trasferisce qualcosa, ritaglio pLDDT a 70 con un template AlphaFold; ogni opzione con la spiegazione (`optionNotes`); i predefiniti si ricalcolano finché l'utente non cambia nulla | controlli preventivi senza errori |
-| 5 Avvio | `JobPanel` del job `model`; a fine calcolo, se lo si stava guardando, ai risultati; un job che non c'è più (bozza o link a un job eliminato o ripulito) mostra l'errore con «Torna alle opzioni» (`missingModelJob`) | modellazione completata |
-| 6 Risultati | modello migliore (DOPE minimo), voto, consenso (dal rapporto di qualità), DOPE, zDOPE, GA341, 3D; Qualità, Confronta con il template, Report, Tutti i modelli | |
-
-- **Stato:** passo e job nell'URL (`?step=&search=&align=&doc=&model=`), il resto (bersaglio, accessione, motore, template,
-  opzioni, scelta dei ligandi) nel browser (`localStorage`, `bioloom.wizard.<progetto>`, letto con `sanitizeDraft`: un
-  valore non valido torna al predefinito). All'apertura la bozza, poi l'URL, che prevale; un link senza bozza (altro
-  browser) riprende bersaglio, motore, template e opzioni dai parametri dei job (`fillFromJobs`).
-- **Passaggi:** un cambio invalida i passi successivi (sequenza diversa → ricerca, template, allineamento e modello;
-  template diversi → allineamento e modello; opzioni cambiate dall'utente → modello); un passo oltre quelli raggiungibili
-  (`reachable`) mostra il più avanzato possibile.
-- **Cronologia:** ogni passo è una voce della cronologia del browser (indietro e avanti cambiano passo); i job nuovi
-  aggiornano l'URL senza voci nuove. Il passaggio automatico ai risultati avviene solo se il job era in corso sotto gli occhi
-  dell'utente: tornando al passo 5 con «indietro» si resta lì (con «Vai ai risultati»).
-
-### Report del modello
-
-`domain/report.py` (HTML e grafici, logica pura) e `services/reports.py` (raccolta dei dati): un file HTML autonomo,
-stampabile in PDF dal browser, generato al volo dai file già salvati del job, senza ricalcoli.
-
-- **Rotte:**
-  - `GET /api/jobs/{id}/report/{modello}` per i job `model`, `loop` e `pipeline` (per la pipeline
-    `items/<idx>_<nome>/<modello>` di un elemento completato) e per il modello rifinito di un job `refine`
-    (`refined_file`);
-  - `GET /api/jobs/{id}/report` per un job `quality`: report ridotto, senza template, allineamento e parametri;
-  - mutagenesi (F9.2): `GET /api/jobs/{id}/report/{modello}` per il mutante o il selvatico riottimizzato di un job
-    `mutate` (sezione "Mutagenesi in silico" e la qualità del modello) e `GET /api/jobs/{id}/report` per un job `alascan`
-    (sezione "Scansione di alanina", niente qualità);
-  - le varianti `POST`, con corpo `{"image_png_base64"}`, incorporano la vista 3D;
-  - `qmean_job=` aggiunge QMEAN con gli stessi controlli della rotta del consenso; `predict_job=` (F9.3) sceglie il
-    confronto con una predizione da includere (senza, il più recente sulla stessa struttura); `download=false`
-    restituisce il file `inline` invece che `attachment`.
-
-  Nome del file: `report_<modello>.html` o `report_qualita_<struttura>.html`, solo `[A-Za-z0-9_.-]`.
-- **Errori:** modello non tra quelli riusciti del job, file che non è un modello (per `refine`: non è il modello
-  rifinito), elemento con un altro nome → 404; job o elemento non completato → 409; nessun modello per un job
-  model/loop/pipeline/refine → 400 `report_model_required`; job di
-  altro tipo, o un file per un'analisi di qualità → 400 `report_unsupported`; immagine non PNG → 400
-  `report_image_invalid`; oltre 3 MB → 413 `report_image_too_large`.
-- **Dati:**
-
-  | Sezione | Da dove |
-  |---|---|
-  | Intestazione | job (titolo, progetto, date); versione di BioLoom; MODELLER dall'`EXPDTA THEORETICAL MODEL, MODELLER 10.8` del modello; metodo DSSP, PROCHECK e ProSA dal rapporto; QMEAN (versione, metodo, locale o SWISS-MODEL) dal job qmean |
-  | Bersaglio | voce `sequence` del PIR (catene separate da '/'); pipeline: riga dell'elemento; loop e quality: residui del rapporto |
-  | Template | job model: template preparati del risultato e metadati della libreria (sorgente, titolo, metodo, risoluzione, pLDDT medio); pipeline: voci del PIR, copia preparata nella cartella dell'elemento (catene, intervallo, `REMARK 999 BIOLOOM PLDDT_TRIM`), righe `TEMPLATE … ALPHAFOLD` del modello e ricerca (motore, identità, copertura, E-value, zona crepuscolare) |
-  | Identità e copertura | ricalcolate sull'allineamento usato da MODELLER: residui identici / colonne con un residuo in entrambe le righe, come `validate_pir` e il `% SEQ ID` di MODELLER (ubiquitina di lievito su 1UBQ: 96,05%); copertura = quelle colonne / residui del bersaglio |
-  | Allineamento | PIR del risultato o `alignment.ali` dell'elemento, a blocchi di 60 colonne: righello, primo e ultimo residuo di ogni riga, residui identici al bersaglio evidenziati, riga di conservazione Clustal (`sequences.consensus_line`) |
-  | Parametri | `options` del risultato; pipeline: `parse_options` dei parametri più motore, E-value e soglie della zona crepuscolare; loop: regione, modelli e dinamica |
-  | Modelli | risultato del job o `models.json` dell'elemento; voto solo per i modelli analizzati |
-  | Qualità | `<modello>.quality.json` (o risultato del job quality); consenso ricomposto con GA341 e zDOPE del modello (`consensus.compute`), oppure dalla rotta del consenso quando c'è QMEAN |
-  | Ligandi e metalli | campo `ligands` del rapporto di qualità; per il modello migliore senza analisi, `ligands.verification` del risultato. Sezione solo se presente: esito, classe, coordinazione con i donatori e le distanze attese, residui entro 4 Å, confronto con il sito del template, motivazione; nei parametri i gruppi trasferiti e da quale template |
-  | Analisi strutturale | ponti disolfuro e interfacce (area, residui, interazioni fra le catene, plausibilità con i limiti) del job `analysis` completato più recente sulla stessa struttura (`AnalysisService.latest`: stessa sorgente, `{job, file}` per i modelli, e stessa impronta del file); la sezione "Analisi strutturale" compare solo se ce ne sono (vedi [Analisi strutturale](#analisi-strutturale)) |
-  | Mutagenesi | job `mutate` e `alascan` (F9.2): dal risultato del job; classe con le motivazioni pesate e l'avvertenza, siti (struttura secondaria, RSA, BLOSUM62, superficie apolare sepolta, interazioni perse, interfaccia), DOPE totale, locale e fra le catene, energia di OpenMM con i riferimenti, metriche del selvatico riottimizzato e del mutante, protocollo e fonti; per la scansione la tabella ordinata, gli esclusi e gli hot spot. Sezioni bilanciate (`doc.section`/`doc.end`) |
-  | Interfacce del complesso | modelli a più catene (F5.3): `complex` del risultato (catene del modello e del template, simmetria) e il confronto delle interfacce del rapporto di qualità del modello (per il migliore senza analisi, quello del risultato): tabella con area (e quella del template), residui conservati, Fnat, iRMS, LRMS, DockQ ed esito, testo motivato per interfaccia e limiti; nei parametri la riga "Simmetria fra catene" (vedi [Complessi e omo-oligomeri](#complessi-e-omo-oligomeri-domainassemblypy-domaincomplexespy)) |
-  | Confronto con una predizione | F9.3: il job `predict` indicato (`predict_job=`, con i controlli della rotta del consenso: un'altra struttura è un 400) oppure il confronto completato più recente sulla stessa struttura (stessa sorgente e impronta; uno che non vale più per il rapporto si tralascia). Sezione "Confronto con una predizione (ESMFold)" bilanciata con l'esito, TM-score, lDDT, GDT-TS, pLDDT, regioni divergenti con la confidenza e le regioni del consenso, note e limiti; consenso con l'accordo con la predizione (vedi [Confronto con un predittore esterno](#confronto-con-un-predittore-esterno-f93)). Senza confronto il report non cambia |
-
-  Un modello senza rapporto di qualità ha il report dei soli risultati di MODELLER, con un avviso.
-- **Struttura del documento:** l'equilibrio delle sezioni è una proprietà di `_Doc`, non di ogni funzione: aprire una
-  sezione con un'altra ancora aperta, chiuderla senza averla aperta, ripetere un id o finire il documento con una sezione
-  aperta solleva `ReportStructureError`. Errore e non chiusura automatica: le sezioni dipendono solo dal codice, quindi
-  uno squilibrio è un errore di programmazione (è successo due volte in un'unione di rami) che il test parametrizzato su
-  ogni tipo di report (modello, loop, pipeline, qualità con e senza disordine, rifinitura, mutagenesi, scansione, con e
-  senza ligandi, complessi, predizione e analisi strutturale) ferma subito, controllando anche id univoci e HTML ben
-  formato con `html.parser`; chiuderle in silenzio nasconderebbe la svista.
-- **Grafici SVG** (generati dal backend, XML ben formato):
-  - Ramachandran: un pannello per classe, come nell'interfaccia (generale con la pre-prolina, glicina, prolina), con i
-    rettangoli favoriti/consentiti di `domain/ramachandran` e un cerchio per residuo con φ e ψ (74 su 76 in 1UBQ); gli
-    outlier sono sopra gli altri punti ed etichettati;
-  - profili per residuo: DOPE (media mobile di MODELLER, soglia media + 1 DS del consenso: picco 73–76 su 1UBQ), QMEAN
-    locale (sotto 0,6), energia ProSA sulla finestra di 10 residui (sopra 0) e pLDDT (linee a 50, 70 e 90). La linea
-    si interrompe tra catene e dove la numerazione salta;
-  - accanto ai profili, il disordine predetto del consenso (F5.5): FoldIndex per residuo con la soglia 0 e, sullo sfondo,
-    le regioni disordinate lunghe (i singoli residui sotto 0 non si segnano); nel consenso una nota con le regioni,
-    "attese poco affidabili";
-  - striscia della struttura secondaria a 3 stati.
-- **Legenda e fonti:** solo le metriche presenti, con le soglie usate da BioLoom, e solo le fonti dei metodi presenti
-  (Šali & Blundell 1993, Shen & Sali 2006, Melo et al. 2002, John & Sali 2003, Benkert et al. 2011, Sippl 1993,
-  Wiederstein & Sippl 2007, Laskowski et al. 1993, Jumper et al. 2021, Tunyasuvunakool et al. 2021, Mariani et al.
-  2013, Ramachandran et al. 1963, Lovell et al. 2003, Word et al. 1999, Kabsch & Sander 1983, Shrake & Rupley 1973,
-  Tien et al. 2013, Rost 1999, Prilusky et al. 2005, Uversky et al. 2000, Kyte & Doolittle 1982, Ward et al. 2004;
-  con l'analisi strutturale Richardson 1981, Krissinel & Henrick 2007, Janin et al. 2008, Lo Conte et al. 1999,
-  Baker & Hubbard 1984, Barlow & Thornton 1983; con le interfacce di un complesso Basu & Wallner 2016, Méndez et al.
-  2003; con il confronto con una predizione Lin et al. 2023, Zhang & Skolnick 2004, Xu & Zhang 2010).
-- **Stampa:** `@page` A4 e regole `@media print`: niente indice, intestazioni delle tabelle ripetute, nessuna
-  interruzione dentro grafici, blocchi di allineamento, riquadri e righe, allineamento e qualità da una pagina nuova,
-  colori conservati (`print-color-adjust: exact`).
-- **Immagine 3D:**
-  - `Viewer3D` espone `handle.pngDataUri()` (3Dmol `pngURI`), che risponde solo con la struttura disegnata e nessun
-    caricamento in corso. Il frontend la invia solo per il modello mostrato dal viewer (in Modellazione il modello
-    selezionato, in Qualità con la scheda 3D aperta) e solo se è un PNG entro 3 MB (`lib/report.ts`); altrimenti il
-    report si genera senza immagine e il motivo compare nell'avviso del salvataggio riuscito ("Report scaricato senza
-    la vista 3D: …", `reportSavedMessage`), non prima della richiesta: un report che poi fallisce mostra solo
-    l'errore. In Pipeline il pulsante Report c'è in ogni riga completata (report dell'elemento anche senza analisi di
-    qualità) e nella finestra «Visualizza», che incorpora la vista corrente.
-  - `decode_png` accetta base64 o un data URI `image/png` e controlla la lunghezza prima di decodificare. Poi verifica
-    firma, blocchi (lunghezza, tipo, CRC-32), IHDR (lati fino a 16384, profondità ammessa per il tipo di colore),
-    almeno un IDAT, IEND finale e nessun dato dopo. Il data URI del report è ricodificato dai byte verificati.
-- **Sicurezza:**
-  - tutti i testi passano da `html.escape`, virgolette comprese: nomi di sequenze e di file, titoli e metadati
-    RCSB/UniProt/AlphaFold, nomi di residui e atomi dei file caricati;
-  - gli attributi contengono solo costanti e numeri, nessun URL viene da dati in ingresso, nessuno script;
-  - `Content-Security-Policy: default-src 'none'; img-src data:; style-src 'unsafe-inline'` sia nel documento (vale
-    anche aperto da disco) sia nella risposta, con `X-Content-Type-Options: nosniff` e `Cache-Control: no-store`.
-- **Pipeline:** `export_zip` aggiunge `report/<nome>.html` per ogni elemento completato (senza immagine), generati e
-  scritti uno alla volta: in memoria c'è al più un report. Un report che non si può generare finisce in
-  `report/non_generati.txt` e non ferma l'esportazione. Il LEGGIMI dello ZIP descrive la cartella.
-  - **Nomi:** `modelli/<nome>.pdb`, `qualita/<nome>.quality.json` e `report/<nome>.html` usano lo stesso nome
-    dell'elemento, unico nell'archivio: il report sta sempre accanto al suo modello. I nomi vengono da
-    `sequences.sanitize_code` (solo `[A-Za-z0-9_-]`); la deduplicazione registra anche i nomi generati ("x", "x",
-    "x_2" → "x", "x_2", "x_2_2"). Un nome ripetuto in un job di una versione precedente diventa nello ZIP quello della
-    cartella dell'elemento (`0002_x_2`). Prima il report passava da `safe_filename`, che toglie i '-' ai bordi: "abc"
-    e "abc-" davano due voci `report/abc.html` e all'estrazione una copriva l'altra.
-
-### Allineamenti
-
-- **Pairwise**: Biopython `PairwiseAligner` (NW/SW, BLOSUM/PAM/GONNET, NUC.4.4), gap terminali gratuiti nel globale.
-- **Multiplo**: Clustal Omega → MAFFT → MUSCLE se installati, altrimenti *center-star* integrato; matrice di identità.
-- **Strutturale**: US-align/TM-align se installati, altrimenti sovrapposizione di Kabsch con ricerca del
-  TM-score massimo (algoritmo del programma TM-score) su un allineamento di sequenza; PDB sovrapposto per il viewer e
-  confronto per residuo (vedi sotto).
-
-### Confronto strutturale (`domain/comparison.py`, `engines/align.structural`)
+Logica in `domain/comparison.py` (F4.1), esecuzione in `engines/align.structural` (job `align` in modalità
+strutturale).
 
 B si sovrappone su A, che è il **riferimento**: GDT e lDDT si misurano sui residui di A. La corrispondenza tra i
 residui è quella dell'allineamento ed è fissata; nessuna metrica la cambia.
@@ -1024,6 +1677,33 @@ metriche che hanno e chiede di rilanciare per il confronto per residuo. Per dist
 `comparison_version` (= `STRUCTURAL_VERSION`), anche quando il confronto per residuo non è riuscito: l'invito a
 rilanciare compare senza coppie e senza `comparison_version`, anche accanto alla nota "Allineamento dipendente dalla
 sequenza…" che il metodo integrato scriveva già prima; un risultato nuovo senza coppie mostra solo la sua nota.
+
+**Interfaccia** (`pages/Compare.tsx`, `components/StructuralComparison.tsx`, `lib/compare.ts`):
+
+- **Un solo componente** per la pagina Confronto e la modalità Strutturale di Allineamenti: usa il job `align`
+  strutturale esistente (`api.structuralAlign`), nessun tipo di job nuovo.
+- **Colorazione:** `comparisonColoring` colora i residui di B della catena B del PDB sovrapposto per distanza (scala
+  continua blu → giallo → rosso tra 0 e 5 Å, saturata oltre: 5 Å è la soglia delle coppie vicine di TM-align) o per
+  lDDT (stessa scala rovesciata su 0–1); i residui di A hanno lo stesso valore nel passaggio del mouse ma il colore fisso
+  del riferimento (grigio chiaro, `ResidueValue.color`). Nessun colore chiaro nella scala, per non confonderlo con A. Per
+  i residui senza coppia vale il colore della catena (`ResidueColoring.chainColors`: A grigio chiaro, B grigio "senza
+  valore"), con i campioni in legenda (`legendExtra`).
+- **Selezione:** clic su grafico, tabella o tratto che devia (almeno 3 coppie consecutive oltre 1, 2 o 4 Å, le soglie
+  del GDT, senza salti della numerazione di A) evidenzia i due residui e centra la vista; clic nel 3D seleziona la
+  coppia (`pairIndexOf`, su catena A o B). Il grafico interrompe la linea dove A ha residui senza coppia. La tabella
+  porta in vista la riga selezionata scorrendo solo il proprio contenitore (`rowScrollDelta`): `scrollIntoView`
+  scorreva anche la pagina e un clic nel 3D portava via il viewer.
+- **Link stabili:** `?a=template:1UBQ&ca=A&b=job:<id>:<file>&cb=&job=` (`encodeSource`/`decodeSource`, catena a parte):
+  «Confronta…» nella tabella dei modelli di Modellazione (`compareTargets`: template usati e altri modelli del job; il
+  modello è B), «Confronta con» nella pagina Qualità (i template del job del modello, o un riferimento a scelta) e «Apri
+  in Confronto» negli Allineamenti. Il link precompila, il confronto parte con «Confronta». Nel selettore della
+  struttura (`StructurePicker`, `lib/picker.ts`) un job che non è tra gli ultimi job di modellazione elencati (una
+  pipeline, un job loop, un job più vecchio) compare in cima «(da un link)», con il suo modello fra le scelte: prima la
+  struttura sembrava non scelta e sceglierne un'altra dall'elenco la azzerava. Un `?job=` che non si carica (job
+  eliminato, link vecchio) mostra l'errore e l'invito a rilanciare (`compareJobView`), e `useJob` smette di
+  interrogare un job che il server non ha (404).
+- **Risultati precedenti** (senza `pairs` e senza `comparison_version`): metriche che hanno, viewer con le catene e un
+  avviso per rilanciare, anche accanto alla nota del metodo integrato.
 
 ### Analisi strutturale
 
@@ -1152,9 +1832,9 @@ più recente della stessa struttura ha disolfuri o interfacce. Il report non ric
   per residuo); "Evidenzia l'interfaccia" per ogni coppia di catene.
 - Link stabile di un'analisi: `/quality?ajob=<id>` (anche «Apri» nella pagina Job).
 
-### Tasche, elettrostatica e rifinitura energetica (F7b, F9.1)
+### Tasche, elettrostatica e rifinitura energetica
 
-Tre calcoli con strumenti nuovi dell'immagine: tasche con **fpocket**, potenziale elettrostatico con **PDB2PQR + APBS**,
+Tre calcoli (F7b, F9.1) con strumenti nuovi dell'immagine: tasche con **fpocket**, potenziale elettrostatico con **PDB2PQR + APBS**,
 rifinitura energetica con **OpenMM + PDBFixer**. Logica pura in `domain/pockets.py`, `domain/electrostatics.py`,
 `domain/refinement.py`; motori in `engines/pockets.py`, `engines/electrostatics.py`, `engines/refine.py` (con
 `engines/refine_worker.py`); job in `services/structure_tools.py` (`pockets`, `electrostatics`) e `services/refine.py`
@@ -1259,7 +1939,7 @@ senza questi strumenti, continua a funzionare.
   −395,3 e −395,6 kJ/mol, RMSD fra i due modelli rifiniti 0,016 Å): con più thread la piattaforma CPU di OpenMM non
   ripete le somme in virgola mobile nello stesso ordine, e la minimizzazione amplifica le differenze dell'ultima cifra
   (con `OPENMM_CPU_THREADS=1` e un thread le esecuzioni coincidono; vedi
-  [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione-f94)).
+  [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione)).
 - **Confronto prima/dopo:** `quality.analyze` (DOPE con MODELLER, senza PROCHECK e ProSA) in parallelo sulla copia
   pulita (prima: stessi residui, senza ligandi né idrogeni) e sul rifinito (dopo); righe di `refinement.compare` (voto,
   Ramachandran favorite e outlier, clashscore, DOPE, zDOPE; "invariato" entro l'arrotondamento dei rapporti); RMSD della
@@ -1321,9 +2001,9 @@ La mappa si scarica da `/api/jobs/{id}/files/potential.dx?download=true`.
 Totale: circa 139 MB in più nei livelli dell'immagine (bioloom:4.1.0 869 MB, immagine di sviluppo 1,04 GB; contenuto
 compresso 215 → 244 MB). I test di questi strumenti si saltano, con il motivo, nelle immagini che non li hanno.
 
-### Mutagenesi in silico e scansione di alanina (F9.2)
+### Mutagenesi in silico e scansione di alanina
 
-Mutanti costruiti con MODELLER, stima qualitativa dell'effetto sulla stabilità, scansione di alanina e varianti di
+Mutanti costruiti con MODELLER (F9.2), stima qualitativa dell'effetto sulla stabilità, scansione di alanina e varianti di
 UniProt. Logica pura in `domain/mutations.py`; motore in `engines/mutate.py` (script di MODELLER, energia con
 `engines/refine.py`); job `mutate` e `alascan` in `services/mutations.py`; rotte in `api/mutations.py`. Nessuno strumento
 nuovo e nessuna dipendenza: MODELLER c'è già, OpenMM e PDBFixer (F9.1) sono facoltativi. FoldX e Rosetta non si usano
@@ -1499,9 +2179,9 @@ calibrata; i predittori dedicati sbagliano il segno di una parte delle mutazioni
 l'incertezza della struttura; il protocollo non considera ligandi, metalli, acqua né movimenti della catena principale
 oltre il residuo mutato.
 
-### Confronto con un predittore esterno (F9.3)
+### Confronto con un predittore esterno
 
-Controllo di plausibilità di un modello per omologia con una predizione indipendente della stessa sequenza: ESMFold
+Controllo di plausibilità (F9.3) di un modello per omologia con una predizione indipendente della stessa sequenza: ESMFold
 (servizio ESM Atlas) oppure, con un'accessione UniProt, il modello di AlphaFold DB già supportato (F5.1). Logica pura in
 `domain/prediction.py`; client in `engines/remote.py`; job `predict` in `services/predict.py`; rotte in `api/predict.py`.
 Nessuna dipendenza nuova, nessuna colonna né tabella SQLite nuova; due impostazioni nuove (`esmfold_remote`,
@@ -1606,7 +2286,7 @@ divergenze che non sono errori).
 **Consenso e report.** Solo se l'utente ha eseguito il confronto: le rotte del consenso accettano `predict_job` (job
 `predict` completato con il confronto, sulla stessa struttura: stessa sorgente e, se c'è, stessa impronta del file;
 altrimenti 400 `predict_source_mismatch` o `predict_job_invalid`, 409 se non completato) e il report del modello include
-il confronto indicato o il più recente (vedi [Consenso](#consenso-tra-i-metodi-e-qualità-per-residuo-domainconsensuspy-domainperresiduepy)
+il confronto indicato o il più recente (vedi [Consenso](#consenso-tra-i-metodi-e-qualità-per-residuo)
 e [Report del modello](#report-del-modello)).
 
 **Rotte** (`api/predict.py`):
@@ -1619,7 +2299,7 @@ e [Report del modello](#report-del-modello)).
 Controlli preventivi (`kind: predict`): consenso, stessa validazione della rotta, rete o cache (nessuna richiesta dai
 controlli), tempo (servizio pubblico misurato da 1 a 19 s, con i tentativi fino a 2 minuti; dalla cache meno di un secondo;
 più il confronto, fino a 5 s a 400 residui) e spazio (circa 2,6 KB per residuo più 64 KB) (vedi [Controlli
-preventivi](#controlli-preventivi-domainpreflightpy-servicespreflightpy)).
+preventivi](#controlli-preventivi)).
 
 **Interfaccia** (`components/Predictor.tsx`, logica in `lib/predict.ts`):
 
@@ -1642,805 +2322,246 @@ preventivi](#controlli-preventivi-domainpreflightpy-servicespreflightpy)).
   In modalità server l'indirizzo è in sola lettura: lo imposta l'amministratore con `BIOLOOM_ESMFOLD_URL` (vedi
   [Sicurezza e privacy](#sicurezza-e-privacy)).
 
-### Ricerca di template
+### Report del modello
 
-- **RCSB** (predefinito): Search API (MMseqs2 lato server) → sequenze di catena via GraphQL → riallineamento
-  Smith-Waterman locale per identità, copertura e coordinate. Ritenta automaticamente i timeout 5xx di RCSB.
-- **NCBI QBlast**: conforme alle linee guida (tool/email, polling ogni 60 s, attesa massima 45 min).
-- **BLAST+ locale**: `blastp` contro `data/databases/pdbaa` (scaricabile e aggiornabile da NCBI con un job).
-- **MMseqs2 locale**: `easy-search -s 7.5` sul database creato da pdbaa (`blastdbcmd` → `createdb`), con
-  l'indice locale se presente.
-- **AlphaFold DB** (modelli predetti, vedi [sotto](#modelli-alphafold-db)): accessione UniProt indicata, oppure
-  proteine Swiss-Prot più simili trovate con NCBI QBlast.
-- **Metadati RCSB degli hit** (motori sul PDB): metodo, risoluzione, titolo e, dalla versione della scelta
-  ragionata, R-free, data di rilascio, ligandi e stato oligomerico (vedi sotto).
-- Template consigliato: punteggio composito più alto (vedi [Scelta ragionata dei
-  template](#scelta-ragionata-dei-template-domaintemplate_rankpy)); a parità di punteggio una struttura sperimentale
-  prima di un modello predetto, poi identità × copertura, la miglior risoluzione, il pLDDT medio più alto. Un modello
-  AlphaFold è un'ipotesi e non un dato: la componente del metodo lo pesa meno, quindi vince solo se allinea
-  chiaramente meglio il bersaglio (prima bastava un punto di identità in più).
+`domain/report.py` (HTML e grafici, logica pura; F4.2) e `services/reports.py` (raccolta dei dati): un file HTML autonomo,
+stampabile in PDF dal browser, generato al volo dai file già salvati del job, senza ricalcoli.
 
-### Scelta ragionata dei template (`domain/template_rank.py`)
+- **Rotte:**
+  - `GET /api/jobs/{id}/report/{modello}` per i job `model`, `loop` e `pipeline` (per la pipeline
+    `items/<idx>_<nome>/<modello>` di un elemento completato) e per il modello rifinito di un job `refine`
+    (`refined_file`);
+  - `GET /api/jobs/{id}/report` per un job `quality`: report ridotto, senza template, allineamento e parametri;
+  - mutagenesi (F9.2): `GET /api/jobs/{id}/report/{modello}` per il mutante o il selvatico riottimizzato di un job
+    `mutate` (sezione "Mutagenesi in silico" e la qualità del modello) e `GET /api/jobs/{id}/report` per un job `alascan`
+    (sezione "Scansione di alanina", niente qualità);
+  - le varianti `POST`, con corpo `{"image_png_base64"}`, incorporano la vista 3D;
+  - `qmean_job=` aggiunge QMEAN con gli stessi controlli della rotta del consenso; `predict_job=` (F9.3) sceglie il
+    confronto con una predizione da includere (senza, il più recente sulla stessa struttura); `download=false`
+    restituisce il file `inline` invece che `attachment`.
 
-Logica pura, testata su hit sintetici dell'ubiquitina di lievito su 1UBQ. Il punteggio si calcola **dopo** la cache
-dei calcoli, a ogni lettura (`search.search` → `rank_hits`): cambiare pesi o scale non richiede di invalidare le
-ricerche.
+  Nome del file: `report_<modello>.html` o `report_qualita_<struttura>.html`, solo `[A-Za-z0-9_.-]`.
+- **Errori:** modello non tra quelli riusciti del job, file che non è un modello (per `refine`: non è il modello
+  rifinito), elemento con un altro nome → 404; job o elemento non completato → 409; nessun modello per un job
+  model/loop/pipeline/refine → 400 `report_model_required`; job di
+  altro tipo, o un file per un'analisi di qualità → 400 `report_unsupported`; immagine non PNG → 400
+  `report_image_invalid`; oltre 3 MB → 413 `report_image_too_large`.
+- **Dati:**
 
-**Punteggio 0–100.** Ogni componente porta il valore grezzo su 0–100 con una funzione lineare a tratti
-(`consensus.piecewise`, saturata fuori dai punti); come nel consenso di qualità la soglia "affidabile" cade a 70 e
-quella "problematica" a 40 (fasce buona ≥ 70, intermedia 40–70, scarsa < 40). Il punteggio è la media pesata delle
-componenti disponibili: un dato assente (motore locale senza metadati, R-free non depositato) non penalizza. Ogni hit
-ha `rank_score`, `rank_band`, `rank_twilight` e `rank_reasons` (per componente `key`, `label`, `score` 0–100 o null,
-`weight`, `text` in italiano).
+  | Sezione | Da dove |
+  |---|---|
+  | Intestazione | job (titolo, progetto, date); versione di BioLoom; MODELLER dall'`EXPDTA THEORETICAL MODEL, MODELLER 10.8` del modello; metodo DSSP, PROCHECK e ProSA dal rapporto; QMEAN (versione, metodo, locale o SWISS-MODEL) dal job qmean |
+  | Bersaglio | voce `sequence` del PIR (catene separate da '/'); pipeline: riga dell'elemento; loop e quality: residui del rapporto |
+  | Template | job model: template preparati del risultato e metadati della libreria (sorgente, titolo, metodo, risoluzione, pLDDT medio); pipeline: voci del PIR, copia preparata nella cartella dell'elemento (catene, intervallo, `REMARK 999 BIOLOOM PLDDT_TRIM`), righe `TEMPLATE … ALPHAFOLD` del modello e ricerca (motore, identità, copertura, E-value, zona crepuscolare) |
+  | Identità e copertura | ricalcolate sull'allineamento usato da MODELLER: residui identici / colonne con un residuo in entrambe le righe, come `validate_pir` e il `% SEQ ID` di MODELLER (ubiquitina di lievito su 1UBQ: 96,05%); copertura = quelle colonne / residui del bersaglio |
+  | Allineamento | PIR del risultato o `alignment.ali` dell'elemento, a blocchi di 60 colonne: righello, primo e ultimo residuo di ogni riga, residui identici al bersaglio evidenziati, riga di conservazione Clustal (`sequences.consensus_line`) |
+  | Parametri | `options` del risultato; pipeline: `parse_options` dei parametri più motore, E-value e soglie della zona crepuscolare; loop: regione, modelli e dinamica |
+  | Modelli | risultato del job o `models.json` dell'elemento; voto solo per i modelli analizzati |
+  | Qualità | `<modello>.quality.json` (o risultato del job quality); consenso ricomposto con GA341 e zDOPE del modello (`consensus.compute`), oppure dalla rotta del consenso quando c'è QMEAN |
+  | Ligandi e metalli | campo `ligands` del rapporto di qualità; per il modello migliore senza analisi, `ligands.verification` del risultato. Sezione solo se presente: esito, classe, coordinazione con i donatori e le distanze attese, residui entro 4 Å, confronto con il sito del template, motivazione; nei parametri i gruppi trasferiti e da quale template |
+  | Analisi strutturale | ponti disolfuro e interfacce (area, residui, interazioni fra le catene, plausibilità con i limiti) del job `analysis` completato più recente sulla stessa struttura (`AnalysisService.latest`: stessa sorgente, `{job, file}` per i modelli, e stessa impronta del file); la sezione "Analisi strutturale" compare solo se ce ne sono (vedi [Analisi strutturale](#analisi-strutturale)) |
+  | Mutagenesi | job `mutate` e `alascan` (F9.2): dal risultato del job; classe con le motivazioni pesate e l'avvertenza, siti (struttura secondaria, RSA, BLOSUM62, superficie apolare sepolta, interazioni perse, interfaccia), DOPE totale, locale e fra le catene, energia di OpenMM con i riferimenti, metriche del selvatico riottimizzato e del mutante, protocollo e fonti; per la scansione la tabella ordinata, gli esclusi e gli hot spot. Sezioni bilanciate (`doc.section`/`doc.end`) |
+  | Interfacce del complesso | modelli a più catene (F5.3): `complex` del risultato (catene del modello e del template, simmetria) e il confronto delle interfacce del rapporto di qualità del modello (per il migliore senza analisi, quello del risultato): tabella con area (e quella del template), residui conservati, Fnat, iRMS, LRMS, DockQ ed esito, testo motivato per interfaccia e limiti; nei parametri la riga "Simmetria fra catene" (vedi [Complessi e omo-oligomeri](#complessi-e-omo-oligomeri)) |
+  | Confronto con una predizione | F9.3: il job `predict` indicato (`predict_job=`, con i controlli della rotta del consenso: un'altra struttura è un 400) oppure il confronto completato più recente sulla stessa struttura (stessa sorgente e impronta; uno che non vale più per il rapporto si tralascia). Sezione "Confronto con una predizione (ESMFold)" bilanciata con l'esito, TM-score, lDDT, GDT-TS, pLDDT, regioni divergenti con la confidenza e le regioni del consenso, note e limiti; consenso con l'accordo con la predizione (vedi [Confronto con un predittore esterno](#confronto-con-un-predittore-esterno)). Senza confronto il report non cambia |
 
-| Componente | Peso | Scala (valore → punteggio) | Fonte |
+  Un modello senza rapporto di qualità ha il report dei soli risultati di MODELLER, con un avviso.
+- **Struttura del documento:** l'equilibrio delle sezioni è una proprietà di `_Doc`, non di ogni funzione: aprire una
+  sezione con un'altra ancora aperta, chiuderla senza averla aperta, ripetere un id o finire il documento con una sezione
+  aperta solleva `ReportStructureError`. Errore e non chiusura automatica: le sezioni dipendono solo dal codice, quindi
+  uno squilibrio è un errore di programmazione (è successo due volte in un'unione di rami) che il test parametrizzato su
+  ogni tipo di report (modello, loop, pipeline, qualità con e senza disordine, rifinitura, mutagenesi, scansione, con e
+  senza ligandi, complessi, predizione e analisi strutturale) ferma subito, controllando anche id univoci e HTML ben
+  formato con `html.parser`; chiuderle in silenzio nasconderebbe la svista.
+- **Grafici SVG** (generati dal backend, XML ben formato):
+  - Ramachandran: un pannello per classe, come nell'interfaccia (generale con la pre-prolina, glicina, prolina), con i
+    rettangoli favoriti/consentiti di `domain/ramachandran` e un cerchio per residuo con φ e ψ (74 su 76 in 1UBQ); gli
+    outlier sono sopra gli altri punti ed etichettati;
+  - profili per residuo: DOPE (media mobile di MODELLER, soglia media + 1 DS del consenso: picco 73–76 su 1UBQ), QMEAN
+    locale (sotto 0,6), energia ProSA sulla finestra di 10 residui (sopra 0) e pLDDT (linee a 50, 70 e 90). La linea
+    si interrompe tra catene e dove la numerazione salta;
+  - accanto ai profili, il disordine predetto del consenso (F5.5): FoldIndex per residuo con la soglia 0 e, sullo sfondo,
+    le regioni disordinate lunghe (i singoli residui sotto 0 non si segnano); nel consenso una nota con le regioni,
+    "attese poco affidabili";
+  - striscia della struttura secondaria a 3 stati.
+- **Legenda e fonti:** solo le metriche presenti, con le soglie usate da BioLoom, e solo le fonti dei metodi presenti
+  (Šali & Blundell 1993, Shen & Sali 2006, Melo et al. 2002, John & Sali 2003, Benkert et al. 2011, Sippl 1993,
+  Wiederstein & Sippl 2007, Laskowski et al. 1993, Jumper et al. 2021, Tunyasuvunakool et al. 2021, Mariani et al.
+  2013, Ramachandran et al. 1963, Lovell et al. 2003, Word et al. 1999, Kabsch & Sander 1983, Shrake & Rupley 1973,
+  Tien et al. 2013, Rost 1999, Prilusky et al. 2005, Uversky et al. 2000, Kyte & Doolittle 1982, Ward et al. 2004;
+  con l'analisi strutturale Richardson 1981, Krissinel & Henrick 2007, Janin et al. 2008, Lo Conte et al. 1999,
+  Baker & Hubbard 1984, Barlow & Thornton 1983; con le interfacce di un complesso Basu & Wallner 2016, Méndez et al.
+  2003; con il confronto con una predizione Lin et al. 2023, Zhang & Skolnick 2004, Xu & Zhang 2010).
+- **Stampa:** `@page` A4 e regole `@media print`: niente indice, intestazioni delle tabelle ripetute, nessuna
+  interruzione dentro grafici, blocchi di allineamento, riquadri e righe, allineamento e qualità da una pagina nuova,
+  colori conservati (`print-color-adjust: exact`).
+- **Immagine 3D:**
+  - `Viewer3D` espone `handle.pngDataUri()` (3Dmol `pngURI`), che risponde solo con la struttura disegnata e nessun
+    caricamento in corso. Il frontend la invia solo per il modello mostrato dal viewer (in Modellazione il modello
+    selezionato, in Qualità con la scheda 3D aperta) e solo se è un PNG entro 3 MB (`lib/report.ts`); altrimenti il
+    report si genera senza immagine e il motivo compare nell'avviso del salvataggio riuscito ("Report scaricato senza
+    la vista 3D: …", `reportSavedMessage`), non prima della richiesta: un report che poi fallisce mostra solo
+    l'errore. In Pipeline il pulsante Report c'è in ogni riga completata (report dell'elemento anche senza analisi di
+    qualità) e nella finestra «Visualizza», che incorpora la vista corrente.
+  - `decode_png` accetta base64 o un data URI `image/png` e controlla la lunghezza prima di decodificare. Poi verifica
+    firma, blocchi (lunghezza, tipo, CRC-32), IHDR (lati fino a 16384, profondità ammessa per il tipo di colore),
+    almeno un IDAT, IEND finale e nessun dato dopo. Il data URI del report è ricodificato dai byte verificati.
+- **Sicurezza:**
+  - tutti i testi passano da `html.escape`, virgolette comprese: nomi di sequenze e di file, titoli e metadati
+    RCSB/UniProt/AlphaFold, nomi di residui e atomi dei file caricati;
+  - gli attributi contengono solo costanti e numeri, nessun URL viene da dati in ingresso, nessuno script;
+  - `Content-Security-Policy: default-src 'none'; img-src data:; style-src 'unsafe-inline'` sia nel documento (vale
+    anche aperto da disco) sia nella risposta, con `X-Content-Type-Options: nosniff` e `Cache-Control: no-store`.
+- **Pipeline:** `export_zip` aggiunge `report/<nome>.html` per ogni elemento completato (senza immagine), generati e
+  scritti uno alla volta: in memoria c'è al più un report. Un report che non si può generare finisce in
+  `report/non_generati.txt` e non ferma l'esportazione. Il LEGGIMI dello ZIP descrive la cartella.
+  - **Nomi:** `modelli/<nome>.pdb`, `qualita/<nome>.quality.json` e `report/<nome>.html` usano lo stesso nome
+    dell'elemento, unico nell'archivio: il report sta sempre accanto al suo modello. I nomi vengono da
+    `sequences.sanitize_code` (solo `[A-Za-z0-9_-]`); la deduplicazione registra anche i nomi generati ("x", "x",
+    "x_2" → "x", "x_2", "x_2_2"). Un nome ripetuto in un job di una versione precedente diventa nello ZIP quello della
+    cartella dell'elemento (`0002_x_2`). Prima il report passava da `safe_filename`, che toglie i '-' ai bordi: "abc"
+    e "abc-" davano due voci `report/abc.html` e all'estrazione una copriva l'altra.
+
+## Funzioni trasversali
+
+Funzioni che attraversano le pagine e i tipi di job: controlli prima dell'avvio, procedura guidata, organizzazione con
+etichette e ricerca, riproducibilità.
+
+### Controlli preventivi
+
+Prima di avviare un calcolo, che cosa lo farebbe fallire o renderebbe il risultato poco affidabile, senza avviare nulla
+(F8a). Regole e soglie, con le fonti, in `domain/preflight.py` (logica pura); i fatti (licenze, strumenti, libreria,
+spazio, servizio QMEAN, job attivi) li raccoglie `services/preflight.PreflightService`, creato a ogni richiesta come
+`CoverageService` (nessun servizio nuovo nel `Core`).
+
+**Rotta** `POST /api/compute/preflight` con `{kind, params, context}`:
+
+- `kind`: `model`, `loop`, `align2d`, `pipeline`, `quality`, `qmean`, `search`, `analysis`, `mutate`, `alascan`, `predict` (F9.3), `rerun` (riesecuzione di un
+  pacchetto caricato, `params` = `{package_id}`: vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione));
+- `params`: lo stesso corpo della rotta di avvio, validato con lo stesso modello Pydantic (`ModelIn`, `PipelineIn`, …):
+  un campo non valido è un esito `error` (`validation_error`), come il 422 dell'avvio, non un 422 dei controlli;
+- `context` (facoltativo): `accession` (domini InterPro, come `/api/bio/coverage`), `search_job` (ricerca da cui vengono i
+  template: punteggio dei template scelti).
+
+Risposta: `ok` (nessun errore), `counts`, `checks` (errori, poi avvisi, poi informazioni, ciascuno `{level, code,
+message, suggestion}` più `group: "coverage"` per gli avvisi di copertura e `template`), `estimate` (`seconds`, `low`,
+`high`, `detail`, `basis`) e, per la modellazione, `coverage` (la verifica completa di `services/coverage.py`).
+
+| Livello | Significato | Interfaccia |
+|---|---|---|
+| `error` | la rotta di avvio o l'handler rifiuterebbero la richiesta, oppure il job fallirebbe di sicuro | pulsante disattivato con il primo errore come motivo |
+| `warning` | parte, ma il risultato rischia di essere poco affidabile o il job di non finire | conferma «Avvia comunque» con l'elenco degli avvisi |
+| `info` | da sapere, senza conseguenze sul risultato | elenco discreto sotto gli avvisi |
+
+- **Stessa validazione dell'avvio:** `modeller.parse_options`, `compute._record`, `_template_specs`,
+  `_apply_ligand_options`, `sequences.validate_pir` con il numero dei template, `PipelineService.validate` (estratta da
+  `submit`), `resolve_structure`, `AnalysisService.validate`, i limiti del loop: un loro errore è un esito `error` con lo
+  stesso codice e lo stesso messaggio (test: per ogni richiesta rifiutata dall'avvio, 400 o job fallito, lo stesso
+  messaggio fra gli errori dei controlli).
+- **Nessun effetto:** niente job, niente download (un template assente con un codice PDB o un id AlphaFold è
+  un'informazione: lo scaricherà il job), richieste remote solo per i domini (UniProt e InterPro con l'accessione, in
+  cache 7 giorni) e per lo stato del servizio QMEAN locale (rete interna, in cache 15 s).
+- **Robustezza:** un fatto che non si legge (template illeggibile durante il ritaglio, ricerca eliminata) diventa
+  `check_skipped` (informazione), mai un errore del server.
+
+**Esiti** (ogni codice ha un test che lo produce e uno che non lo produce, `test_preflight.py`):
+
+| Codice | Livello | Regola | Fonte o motivo |
 |---|---|---|---|
-| Identità | 30 | 0 → 0; curva di Rost pI(L) → 40; max(50%, pI + 10) → 70; 100% → 100 | Rost 1999, Protein Eng 12:85 (eq. 2, n = 0: pI = 480 · L^(−0,32(1+e^(−L/1000))), 100% fino a 11 residui, 19,5% oltre 450); Baker & Šali 2001 (oltre il 50% modelli di alta accuratezza) |
-| Copertura del bersaglio | 30 | lineare 0–100% | frazione del modello con vincoli dal template; 40% (soglia predefinita della pipeline) = confine della fascia scarsa |
-| E-value | 5 | −log10 E: 0 → 0, 2 → 40, 3 → 70, ≥ 10 → 100 | Pearson 2013 (E < 10⁻³ omologia affidabile) |
-| Risoluzione | 12 | raggi X e crio-EM: 1,0 Å → 100, 2,5 → 70, 3,5 → 40, 5,0 → 0; NMR: 60 fisso; predetti: pLDDT 50 → 0, 70 → 40, 90 → 70, 100 → 100 | Wlodawer et al. 2008; fasce di AlphaFold DB (Tunyasuvunakool et al. 2021); NMR scelta BioLoom |
-| R-free | 5 | 0,20 → 100, 0,25 → 70, 0,30 → 40, 0,40 → 0 (solo diffrazione) | Brünger 1992; Kleywegt & Brünger 1996 (oltre 0,40 errori gravi); punti intermedi scelta BioLoom |
-| Metodo | 8 | diffrazione 100, crio-EM 90, NMR 80, altri sperimentali 50, predetto 40 | scelta BioLoom: pesa solo ciò che la risoluzione non dice |
-| Lacune dell'allineamento | 7 | lacuna più lunga 0 → 100, 4 → 90, 8 → 70, 15 → 40, 30 → 0; −2 per ogni lacuna oltre la seconda | Fiser, Do & Šali 2000 (errore dei loop crescente con la lunghezza) |
-| Data di rilascio | 3 | 1990 → 40, 2008 → 80, 2014 → 100 | R-free dal 1992, dati sperimentali obbligatori dal 2008, rapporti di validazione wwPDB dal 2014 (Read et al. 2011; Gore et al. 2017) |
-| Ligandi e cofattori | 0 | informativo: olo (codici senza acqua e additivi di cristallizzazione) o apo | — |
-| Stato oligomerico | 0 | informativo: assemblaggio biologico 1 | — |
+| `modeller_license_missing`, `modeller_license_invalid`, `modeller_not_installed` | error | MODELLER non utilizzabile (stato di `LicenseService`: chiave assente, rifiutata, modulo assente) | senza MODELLER modellazione, loop e allineamento non partono |
+| `dope_unavailable` | warning | analisi di qualità con il DOPE senza MODELLER | l'analisi prosegue senza zDOPE |
+| `template_missing`, `template_chain_missing`, `template_unreadable` | error | template né in libreria né scaricabile, catena assente, file illeggibile | la preparazione fallirebbe |
+| `template_download` | info | assente ma scaricabile da RCSB o AlphaFold DB | serve la rete all'avvio |
+| `twilight_zone` | warning | identità sotto la curva di Rost per le coppie allineate | Rost 1999 (`template_rank.rost_threshold`): omologia non dimostrata |
+| `low_identity` | info | sopra la curva ma sotto il 30% | Baker & Šali 2001: bassa accuratezza, gli errori di allineamento dominano |
+| `low_coverage` | warning | copertura dei template insieme sotto il 40% | soglia della pipeline e confine della fascia scarsa della copertura (`template_rank`) |
+| `template_score_poor` | warning | con `search_job`: punteggio del template sotto 40, con le due componenti più basse | fascia scarsa di `template_rank` |
+| `disorder_uncovered`, `domain_uncovered`, `domain_partial` / `disorder_covered` | warning / info | gli avvisi di `disorder.coverage_assessment` (gruppo `coverage`, il suggerimento sul primo avviso) | F5.5; nessun calcolo duplicato |
+| `plddt_too_few` | error | ritaglio che lascia meno di 30 residui o una catena vuota | come `modeller.prepare_template` (`plddt.MIN_TRIMMED_RESIDUES`) |
+| `plddt_trim_most` / `plddt_trim` | warning / info | il ritaglio toglie più della metà dei residui / qualcuno (con gli intervalli) | AlphaFold confidente solo su una minoranza della catena |
+| `plddt_untrimmed` | warning | ritaglio spento e residui con pLDDT < 70 | vincoli da conformazioni predette con bassa confidenza |
+| `procheck_unavailable`, `prosa_unavailable` | warning se nessuno degli strumenti chiesti gira, altrimenti info | PROCHECK assente; ProSA assente, senza licenza, licenza illeggibile o MAC diverso | l'opzione non avrebbe effetto / l'analisi prosegue |
+| `estimated_time` / `timeout_risk` | info / warning | stima del tempo; costruzione dei modelli (un solo processo) oltre metà del timeout dei processi | incertezza della stima di un fattore 2 |
+| `disk_full_data`, `disk_full_scratch` / `disk_low_*` | error / warning | spazio libero sotto la stima / sotto il massimo fra 1 GiB e 10 volte la stima; dati e scratch sullo stesso disco: una voce con la somma | il salvataggio finale fallirebbe a calcolo finito; 1 GiB per database SQLite con il WAL, cache (fino a 20 MB per voce) e download degli altri job (scelta BioLoom) |
+| `qmean_memory`, `qmean_unavailable` | error, warning con il fallback consentito | `qmean_local.memory_problem` (12 GB per UniRef30_2020_06) o servizio assente; fallback attivo senza consenso o email = errore | come il controllo del job QMEAN |
+| `qmean_remote_disabled`, `email_required` / `qmean_remote`, `qmean_local`, `qmean_busy` | error / info | SWISS-MODEL senza consenso o email; dove si calcola, servizio occupato | |
+| `blast_missing`, `pdbaa_missing`, `mmseqs_missing`, `mmseqs_database_missing` | error | motore locale senza programma o database | |
+| `mmseqs_no_index`, `remote_ncbi`, `ncbi_email`, `alphafold_blast`, `remote_alphafold` | info | ricerca più lenta senza l'indice (12 s invece di 2,3); dati che vanno a NCBI o EBI | misure di MMseqs2 in [Flusso dei dati](#flusso-dei-dati-e-file-temporanei) |
+| `ncbi_many_searches` / `ncbi_parallel` | warning / info | pipeline con oltre 50 ricerche NCBI (motore NCBI, o AlphaFold DB senza accessione) / più ricerche NCBI insieme | linee guida di NCBI per l'interfaccia URL di BLAST: oltre 50 ricerche di sera o nel fine settimana, una richiesta ogni 10 s |
+| `pipeline_too_long` / `pipeline_alphafold`, `pipeline_disorder` | warning / info | sequenze oltre 5000 residui; sequenze con e senza accessione; sequenze con regioni disordinate lunghe (FoldIndex, fino a 500 000 residui in tutto) | |
+| `rerun_not_reproducible`, `rerun_unsupported`, `package_*`, `rerun_tool_unavailable` / `rerun_version_bioloom`, `rerun_version_image`, `rerun_version_tool`, `rerun_version_library`, `rerun_tool_missing`, `rerun_platform` / `rerun_remote_input`, `package_note` | error / warning / info | riesecuzione (`kind: "rerun"`): calcolo che dipende da servizi remoti o non rieseguibile, pacchetto non valido o scaduto, parametri che la rotta di avvio rifiuterebbe, strumento obbligatorio assente / versioni diverse da quelle del pacchetto / input remoti con la data e note del pacchetto; più licenza MODELLER, PROCHECK e ProSA, durata del calcolo originale, spazio e coda come gli altri calcoli | versioni diverse: avvisi, mai errori (F9.4) |
+| `esmfold_remote_disabled` / `sequence_too_long`, `invalid_sequence`, `accession_required`, `invalid_chain`, `predict_input_required` | error | predizione (F9.3): ESMFold senza il consenso all'invio; la stessa validazione della rotta `POST /api/predict` (sequenza oltre 400 residui o con lettere non standard, accessione mancante per AlphaFold DB, catena assente) | il consenso è un esito a sé, con il suggerimento |
+| `remote_esmfold`, `esmfold_cached`, `remote_alphafold`, `alphafold_in_library`, `predict_no_compare` | info | la sequenza andrà al servizio (rete); predizione già in cache (nessuna richiesta); a EBI va solo l'accessione, o il modello è già in libreria; nessuna struttura da confrontare | nessuna richiesta remota dai controlli: la cache si legge dal disco |
+| `predict_sequence_gaps` / `predict_sequence_seqres` | warning / info | ESMFold con la sequenza della catena: catena interrotta senza una sequenza completa utilizzabile nel file (i tratti si unirebbero; residui vicini alle giunzioni non informativi) / catena interrotta, si invia il SEQRES | suggerimento: incollare la sequenza completa nella finestra |
+| `queue_busy`, `single_model`, `identical_models`, `invalid_accession`, `check_skipped` | info | job attivi ≥ job in parallelo; un solo modello; più modelli con il raffinamento rapidissimo (`a.very_fast()` non perturba le coordinate iniziali: modelli identici, anche fra gli avvisi del risultato); accessione non valida (niente domini); controllo non eseguito | misura in [Prestazioni](#misure-per-i-controlli-preventivi) |
+| `invalid_mutation`, `invalid_scan` | error | notazione, catena, residuo originale o scelta dei residui rifiutati dalla rotta di avvio (stesso messaggio); oltre 50 residui (20 con l'energia) | mutagenesi (F9.2) |
+| `mutation_energy_unavailable` / `mutation_energy` | warning / info | energia chiesta senza OpenMM o PDBFixer (il job prosegue senza) / che cosa misura | |
+| `mutation_ligand_near`, `mutation_break_near`, `scan_skipped` | warning, info, info | gruppo eteroatomico entro 8 Å dai residui da mutare (MODELLER lavora sulla sola proteina); interruzione della catena entro 5 Å; residui esclusi dalla scansione (Gly, Pro, Ala) | |
 
-- **Pesi:** identità e copertura pesano uguale (l'identità dice quanto è accurata la parte con template, la copertura
-  quanta parte ne ha uno): un template completo al 40% batte uno quasi identico che copre metà del bersaglio, uno in
-  zona crepuscolare no. La qualità sperimentale pesa sui dettagli, non sul ripiegamento; l'E-value dipende già da
-  identità e lunghezza.
-- **Identità sulla curva di Rost:** l'identità confrontata con la curva è quella sulle coppie allineate (colonne con
-  un residuo in entrambe le righe, come in Rost), che per allineamenti con lacune è un po' più alta di quella della
-  tabella (sulla lunghezza dell'allineamento); la motivazione riporta il valore e i residui allineati. La formula
-  pubblicata scende fino a circa 420 residui e poi risale di pochi centesimi verso 19,5%.
-- **Regola della zona crepuscolare** (scelta BioLoom): sotto la curva la copertura conta al più quanto l'identità;
-  un template in zona crepuscolare resta al massimo intermedio (0,3 × 40 + 0,3 × 40 + 0,4 × 100 = 64).
-- **Valori di riferimento** (test): ubiquitina di lievito su 1UBQ (73 identici su 76, 1,8 Å, 1987, senza R-free):
-  identità 97,6 (curva di Rost 33,2% per 76 residui), risoluzione 84, data 40, **punteggio 95,3**; lo stesso
-  allineamento a 3,8 Å con R-free 0,33 dà 87,5, una struttura a 1,5 Å al 35,5% di identità 82,0; NMR 90,6; il
-  modello AlphaFold con pLDDT 88,6 89,8 (la struttura sperimentale vince, la sola metà del bersaglio no).
+**Stima del tempo** (secondi; costanti misurate, vedi [Prestazioni](#misure-per-i-controlli-preventivi)):
+preparazione 0,02 + allineamento 0,34 · s + avvio di MODELLER 0,26 + s · (restrizioni 0,46 + M · 2,29 · f) + qualità,
+con s = residui / 76, M modelli, f il fattore del raffinamento (very_fast 0,24, fast 1, normal 1,42, thorough 4,17) e la
+qualità 1,22 · s sul migliore (1,23 senza PROCHECK e ProSA), su tutti i modelli a gruppi di 3. Intervallo: da metà al
+doppio (altri processori, emulazione x86, carico). Pipeline: ⌈elementi / parallelo effettivo⌉ × (modellazione + ricerca
+media), con le ricerche da 1 a 5 minuti per NCBI, 2,3–12 s per MMseqs2, pochi secondi per gli altri. Su 1UBQ (test): 13,9 s
+per 5 modelli con la qualità estesa (misurato 13,89), 9,2 s per un elemento di pipeline (9,13), 11,3 s di costruzione per
+304 residui (11,25).
 
-**Template complementari** (`select_complementary`, fino a `max_templates`, predefinito 3):
+**Spazio stimato:** risultati 2,5 MiB + residui × (880 × modelli + 3600 × modelli analizzati); scratch in più 2300 × residui
+× modelli per gli intermedi di MODELLER. Pipeline: la somma dei risultati e, per lo scratch, gli elementi più grandi che
+girano insieme.
 
-1. il primo è il migliore (`sort_key`, lo stesso di `best_template`);
-2. i successivi, in ordine di merito, si scartano se sono in zona crepuscolare o in fascia scarsa; entrano se coprono
-   almeno 10 residui del bersaglio non coperti; altrimenti si scartano se ridondanti (identità reciproca > 95% su
-   almeno 10 residui in comune con uno scelto); altrimenti entrano se migliorano l'identità locale (+20 punti sulla
-   finestra centrata di 9 residui, come la modalità Confidenza) in almeno 10 residui; altrimenti si scartano.
+**Copertura e identità** (`services/coverage.py`): i template della libreria e le righe del PIR hanno anche `identity` e
+`aligned` dallo stesso allineamento della copertura (Smith-Waterman, BLOSUM62, gap 11/1, come la ricerca; per il PIR le
+colonne), che i controlli confrontano con la curva di Rost; per un bersaglio a più catene l'identità viene dalle colonne del
+PIR (`report.alignment_identity`).
 
-| Soglia | Valore | Motivo |
+**Interfaccia** (`components/Preflight.tsx`, logica in `lib/preflight.ts`):
+
+- `usePreflight(request)`: richiesta 0,6 s dopo l'ultimo cambio (0,8 s nella Pipeline), risposte superate ignorate, nuovi
+  tentativi (5, ogni 4 s) finché un template risulta da scaricare; `check()` ripete i controlli subito.
+- `PreflightPanel`: errori e avvisi come riquadri con il suggerimento, avvisi di copertura con `CoverageAlerts` (una volta
+  sola, dalla verifica della stessa risposta), informazioni in piccolo con la base della stima nel suggerimento.
+- `LaunchButton` (`launchDecision`): disattivato con il motivo se c'è un errore; con avvisi una finestra di conferma
+  («Avvia comunque»); con i controlli ancora in corso li ripete al clic; se i controlli non riescono (server) l'avvio resta
+  possibile, perché la rotta di avvio valida comunque.
+- **Modellazione:** il riquadro sta sopra «Avvia modellazione» e sostituisce la verifica di copertura del riquadro Input
+  (una richiesta invece di due); il corpo della richiesta è lo stesso dell'avvio (`useMemo`). **Pipeline:** sopra «Avvia
+  pipeline». **Procedura guidata:** prima della ricerca (`search`), dell'allineamento (`align2d`) e della modellazione
+  (`model`, con `search_job`). **Confronto con una predizione** (F9.3): nella finestra di avvio, dopo il consenso
+  all'invio (`predict`).
+
+### Procedura guidata
+
+Pagina `pages/Wizard.tsx` (F8a).
+
+`/wizard`, «Nuovo modello guidato» nella barra laterale e nella Panoramica. Riusa i componenti delle altre pagine
+(`SequencePicker`, `FeatureMap`, `JobPanel` con il flusso in tempo reale, `AlignmentView` aperto in modalità Confidenza con
+il nuovo `initialMode`, `LigandPicker`, `PlddtOption`, `Viewer3D`, `ReportButton`, `compareTargets`) e le rotte esistenti;
+la logica dei passi è in `lib/wizard.ts` (pura, testata).
+
+| Passo | Contenuto | Per andare avanti |
 |---|---|---|
-| Template al massimo | 3 (2–5) | Larsson et al. 2008: con MODELLER due o tre template scelti bene migliorano in media il modello, di più non aiuta |
-| Residui nuovi | 10 | un tratto più corto MODELLER lo ricostruisce come un loop con accuratezza in genere accettabile (Fiser et al. 2000) |
-| Ridondanza | identità reciproca > 95% | a quell'identità le strutture sono quasi uguali (Chothia & Lesk 1986: RMSD del nucleo circa 0,45 Å) |
-| Guadagno locale | +20 punti su 9 residui | 2 residui identici in più nella finestra |
-
-- **Confronto transitivo:** le posizioni sul bersaglio e l'identità reciproca vengono dagli allineamenti della
-  ricerca (`query_aligned`, `subject_aligned`, `query_start`), senza scaricare le strutture: il filtro di ridondanza
-  è di sola sequenza. Un TM-score > 0,9 fra i candidati richiederebbe di scaricarli tutti; oltre il 95% di identità le
-  strutture sono comunque quasi uguali, e due template strutturalmente simili ma divergenti in sequenza non sono
-  ridondanti come informazione (vincoli indipendenti). Senza le righe dell'allineamento si usano gli intervalli.
-- **Costrutto più lungo:** un candidato quasi identico a uno scelto nella regione comune entra se copre almeno 10
-  residui nuovi (porta vincoli dove non ce ne sono; nella regione comune i vincoli coincidono), con una nota.
-- **Regioni con pochi residui in comune:** un complementare con meno di 10 residui del bersaglio in comune con
-  ciascuno dei template già scelti, e di un'altra voce PDB (le catene della stessa voce condividono le coordinate), ha
-  nella motivazione l'avviso che l'orientamento relativo delle regioni non è vincolato (nessun vincolo di distanza fra
-  residui di template diversi) e `unanchored: true`. La modellazione ripete l'avviso sull'allineamento usato (sotto).
-- **Risultato:** `templates` (con `role` principale/complementare, `reason`, `new_residues`, `ranges`,
-  `unanchored` per i complementari), `excluded`
-  (con `reason`), `not_examined` (oltre il massimo), `coverage` e `covered_residues` dell'insieme. Costo: identità
-  locale con somme prefisse, calcolata una volta per template scelto (400 candidati su 1000 residui: 0,12 s
-  misurati nel container di test).
-
-**Ricerca (`handle_search`):** ogni hit ha punteggio e motivazioni, il risultato ha `best` (con il nuovo punteggio) e
-`suggested` (selezione con 3 template al massimo). Il log riporta i template consigliati.
-
-**Metadati RCSB** (`remote.rcsb_metadata`): la query GraphQL chiede anche `refine { ls_R_factor_R_free pdbx_refine_id
-}` (R-free dell'affinamento a raggi X se ce ne sono più) e `assemblies { pdbx_struct_assembly { id oligomeric_details
-oligomeric_count } rcsb_struct_symmetry { kind oligomeric_state } }` (assemblaggio 1, che non è sempre il primo
-dell'elenco, e la sua simmetria globale: "Monomer", "Homo 2-mer"). Campi verificati sul servizio reale (settembre
-2026, `test_remote.py` con `-m network`: 3IU0 R-free 0,244, 1UBQ senza R-free, 4HHB "Hetero 4-mer"). Negli hit:
-`rfree`, `released`, `ligands`, `oligomeric_state`, `oligomeric_count` (`remote.hit_metadata`).
-
-- **Cache delle risposte:** le voci hanno `version: 2`. Una voce senza versione (scritta prima, senza R-free) si
-  riscarica; se RCSB non risponde si usa lo stesso, segnata `stale`, e la ricerca che la usa è parziale (non entra
-  nella cache dei calcoli): un computer senza rete non perde metodo e risoluzione già noti.
-- **Risposte GraphQL con soli errori** (query rifiutata): errore del servizio, non più un elenco vuoto che diventava
-  "nessun template trovato".
-- **Cache dei calcoli:** il descrittore della ricerca ha `version: 2` (`SEARCH_VERSION`) per i motori sul PDB, e il
-  risultato `search_version`; `accept` scarta anche alla lettura una voce senza. Le ricerche della versione precedente
-  hanno un'altra chiave e si rifanno (i motori remoti scadevano comunque dopo 7 giorni); il motore `alphafold` non
-  cambia e tiene le sue voci.
-
-**Pipeline, modalità `multi`** (`template_mode: "multi"`, `max_templates` 2–5, predefinito 3): per ogni sequenza la
-ricerca e poi `select_complementary`; `run_modeling` riceve tutti i template scelti.
-
-- **Campi dell'elemento:** `template` = gli id separati da virgole, `identity` ed `evalue` del principale, `coverage`
-  = copertura dell'insieme (anche per il filtro della zona crepuscolare); nelle metriche `templates` (ruolo e
-  motivazione), `combined_coverage`, `excluded_templates`. Il log dell'elemento ha una riga per template scelto ed
-  escluso (le prime 10). Nessuna colonna nuova: lo schema SQLite non cambia.
-- **Interfaccia:** la colonna Template elenca i template (complementari segnati), con le motivazioni nel suggerimento;
-  il report dell'elemento dice "più template complementari (al massimo N)".
-
-### Più template: `salign` o `align2d` uniti sul bersaglio
-
-Con più template lo script di allineamento esegue `salign` (template fra loro, poi il bersaglio sul loro profilo:
-il metodo del tutorial di MODELLER) e, per ogni template, `align2d` del bersaglio (`alignment_pair_<n>.ali`); se
-`salign` solleva un'eccezione lo script prosegue. `domain/multitemplate.choose` confronta per ogni template i residui
-identici al bersaglio con `salign` e con `align2d`:
-
-- se `salign` ne perde più della metà per un template (allineamento spostato: scende verso l'identità casuale, mentre
-  fra due buoni allineamenti le identità differiscono di pochi residui; sotto 5 identici il confronto non vale) o non
-  è riuscito, si usa l'unione degli `align2d` sul bersaglio (`merge_on_target`): ogni template resta allineato come
-  nel suo allineamento a coppie, le inserzioni dei template vanno in colonne con un gap nel bersaglio. Il file PAP di
-  `salign` si toglie;
-- altrimenti resta `salign`, come prima;
-- template a più catene o con ligandi ('/' e '.' da tenere in colonna) non si uniscono: resta `salign`; se un template
-  risulta spostato (`displaced` nella scelta) il messaggio è un **avviso** del job (`warnings` del risultato della
-  modellazione e dell'allineamento align2d, pagina Modellazione, sezione Avvisi del report), non solo una riga del log:
-  il modello è costruito su un allineamento che BioLoom sa probabilmente spostato (con i frammenti di 1UBQ, TM-score
-  0,35). Il job non fallisce: l'allineamento si può correggere nell'Editor PIR.
-
-La scelta è nel log del job. Misurato con due frammenti di 1UBQ come template dell'ubiquitina di lievito
-(`test_template_rank.py`): con il solo `salign` il frammento 30–76 finiva allineato dal residuo 1 del bersaglio e il
-modello aveva TM-score 0,35 rispetto a 1UBQ (voto D); con gli `align2d` uniti 0,998 (frammenti 1–50 e 30–76) e 0,997
-(1–40 e 41–76, disgiunti ma nello stesso sistema di riferimento), come con 1UBQ intero (0,998). Con due template
-completi (1UBQ e una copia) `salign` è coerente e resta.
-
-**Orientamento relativo non vincolato** (`multitemplate.unanchored`, su ogni allineamento usato da MODELLER, anche
-quello dell'utente, e sull'align2d con più template): i template della stessa voce (stesso id: catene dello stesso
-file) condividono il sistema di riferimento; due voci sono *ancorate* se i loro template coprono almeno 10 residui del
-bersaglio in comune (`MIN_ANCHOR`, come `MIN_SHARED` della selezione). Se le voci ancorate fra loro formano più di un
-insieme, MODELLER costruisce ogni regione dal suo template e le unisce solo con la stereochimica del tratto che le
-collega: la posizione reciproca delle regioni (fra domini, per esempio) non viene da nessun template ed è in pratica
-arbitraria. Avviso nel risultato, nel log e nel report («Orientamento relativo non vincolato: UBQN_A (residui 1–40 del
-bersaglio) e UBQR_A (residui 41–76 del bersaglio) vengono da strutture diverse…»; test con MODELLER su 1–40 di 1UBQ e
-41–76 di una sua copia ruotata e traslata). Due frammenti dello stesso file caricati come template diversi (come nel
-test dei frammenti disgiunti sopra) hanno l'avviso anche se in realtà condividono le coordinate: BioLoom non può
-saperlo.
-
-### Modelli AlphaFold DB
-
-Per le proteine senza struttura sperimentale omologa un modello di AlphaFold DB (EBI) fa da template o da
-riferimento. È sempre segnato come **modello predetto, non struttura sperimentale**.
-
-- **Client** (`engines/remote.py`): `GET https://alphafold.ebi.ac.uk/api/prediction/{accessione}`, con l'accessione
-  controllata dalla regex ufficiale di UniProtKB (isoforme escluse) prima di ogni richiesta. Il parser è tollerante:
-  identificativo da `entryId` o `modelEntityId`, versione da `latestVersion`, dagli URL (`_vN`) o da `allVersions`,
-  intervallo da `uniprotStart/End` o `sequenceStart/End`, sequenza del frammento anche ritagliata dalla sequenza
-  UniProt intera, pLDDT medio da `globalMetricValue` (0–100, altrimenti nullo). Le voci senza id `AF-<ACC>-F<n>`
-  (complessi) si scartano; a parità di id resta la versione più recente. Risposte in cache 7 giorni
-  (`data/cache/alphafold`, come UniProt), nuovi tentativi sui 5xx, 404 o nessuna voce = `alphafold_not_found`
-  ("nessun modello per l'accessione…", per esempio proteine oltre 2700 residui, escluse da AlphaFold DB). Download
-  del PDB, oppure del mmCIF se il PDB manca, solo da URL `https://alphafold.ebi.ac.uk/files/…` e con controllo che
-  il file contenga coordinate (non una pagina d'errore).
-- **Libreria** (`TemplateLibrary.fetch_alphafold`, `POST /api/templates/alphafold` con `{"accession"}`, anche
-  `AF-<ACC>-F2` per i frammenti delle proteine lunghe): id `AF-<ACC>-F<n>` (compatibile con `normalize_id`), file
-  originale intatto (HEADER/TITLE/REMARK di AlphaFold e pLDDT nella colonna B-factor), meta con `source: "alphafold"`,
-  `predicted: true`, `note`, `plddt_mean`, `plddt_fractions` (dal file) e `alphafold` (versione, frammento,
-  intervallo UniProt, gene, organismo, URL del PAE). Un modello già in libreria non genera richieste. Il download
-  riceve l'annullamento del job (`fetch_alphafold(check=, log=)`): i tentativi verso EBI e le loro pause si fermano,
-  e anche l'attesa di un altro elemento di pipeline che sta scaricando lo stesso modello (lock per template preso a
-  intervalli di 0,5 s con il controllo dell'annullamento; chi si sveglia dopo l'annullamento non riscarica).
-- **Riconoscimento dei modelli AlphaFold** (`plddt.predictor`, nome storico `is_alphafold_model`, unico per libreria,
-  rapporto di qualità, copia preparata del template e, dalla F9.3, predizioni di ESMFold: vedi [Confronto con un
-  predittore esterno](#confronto-con-un-predittore-esterno-f93)): i valori della colonna B-factor (tutti gli atomi degli
-  amminoacidi) stanno in 0–100 e non sono tutti nulli, e
-  - l'intestazione ha i segni certi di AlphaFold DB (`is_alphafold_text`): TITLE "ALPHAFOLD … PREDICTION" senza
-    EXPDTA (sempre presente nelle strutture sperimentali), oppure ModelCIF con `_ma_qa_metric` e il nome AlphaFold
-    senza `_exptl.method`;
-  - oppure il nome segue lo schema di AlphaFold DB, `AF-<accessione UniProt>-F<n>[-model_v<k>]` (file scaricati,
-    caricati con prefisso, id di libreria e loro copie `AF-…_A.pdb`), e l'intestazione non dichiara un'altra
-    origine (`declares_other_origin`: EXPDTA, `_exptl.method`, anche in forma di loop, oppure `REMARK   6 MODELLER`).
-
-  Non contano le menzioni di AlphaFold altrove (per esempio `REMARK 200 STARTING MODEL: ALPHAFOLD` di una struttura
-  risolta per sostituzione molecolare): i B-factor di una struttura sperimentale o di un modello MODELLER non vanno
-  mai presi per pLDDT. Un file di AlphaFold caricato dall'utente diventa `predicted` con lo stesso criterio. Il
-  predittore riconosciuto (`predictor`: `alphafold` o `esmfold`) si salva nei metadati e dà il nome nei testi
-  (`plddt.predicted_text`: log della preparazione, note dei risultati, controlli preventivi del ritaglio, report,
-  distintivi dell'interfaccia; riga `REMARK 999 BIOLOOM TEMPLATE <codice> ALPHAFOLD|ESMFOLD|PREDICTED …` del
-  modello): una predizione di ESMFold usata come template non si chiama mai AlphaFold, e un modello predetto senza
-  predittore noto né nome di AlphaFold DB è «modello predetto». I
-  metadati registrati prima di questi campi (senza `predicted`) si completano alla prima lettura (`_meta`: elenco,
-  dettaglio e `is_predicted` passano di lì) con `predicted`, `plddt_mean` e `plddt_fractions`, e si riscrivono: la
-  libreria e l'interfaccia (badge, opzione della soglia pLDDT) vedono quello che vede la modellazione.
-- **Motore `alphafold`** (`engines/search.py`): AlphaFold DB non ha una ricerca per sequenza.
-  - Con l'accessione (`uniprot` di `/api/search`, precompilato dall'interfaccia per le sequenze importate da UniProt;
-    nella pipeline dall'intestazione FASTA `sp|ACC|NOME` o `tr|ACC|NOME`) si usano i modelli di quell'accessione.
-    Nella pagina Ricerca l'accessione precompilata segue la sequenza da cui viene: incollando o caricando un'altra
-    sequenza si toglie, a meno che l'utente non l'abbia scritta a mano; un FASTA incollato con l'intestazione di
-    UniProt la precompila. Nella Pipeline «Usa le sequenze del progetto» scrive `sp|ACC|NOME` (`tr|` per le voci non
-    revisionate) per le sequenze importate da UniProt, così non passano da NCBI.
-  - Senza, NCBI QBlast su `swissprot` (`ncbi_blast(database="swissprot")`); le accessioni vengono da `sp|P0CG48.1|…`
-    o dall'accessione NCBI con versione (`P0CG48.1`), nell'ordine di BLAST e senza ripetizioni, e si prendono i
-    modelli delle prime 10.
-  - Per ogni modello: Smith-Waterman (`align.pairwise`, BLOSUM62, gap 11/1) del bersaglio sulla sequenza del modello;
-    identità e positivi sulla lunghezza dell'allineamento, copertura = tratto del bersaglio allineato, come gli altri
-    motori. E-value di BLAST se l'accessione viene da lì, altrimenti Karlin-Altschul sul solo confronto a coppie
-    (indicativo). Hit con `source: "alphafold"`, `predicted`, `plddt`, `template_id = pdb_id = AF-<ACC>-F<n>`, catena A.
-  - Cache dei calcoli con il TTL dei motori remoti (7 giorni); l'accessione entra nella chiave solo per questo
-    motore (le chiavi degli altri non cambiano).
-  - Esiti: con l'accessione indicata il candidato è uno solo, quindi nessun modello (404, `alphafold_not_found`) o
-    EBI non disponibile fanno fallire il job con il messaggio di AlphaFold DB, invece di "0 template trovati". Senza
-    accessione una proteina senza modello si salta (esito definitivo); EBI non disponibile per alcune proteine rende
-    il risultato parziale (niente cache), per tutte fa fallire il job come gli errori di RCSB e NCBI. Il risultato
-    ha `notes` (proteine senza modello, proteine senza risposta) che la pagina Ricerca mostra, anche al posto del
-    suggerimento sull'E-value quando non ci sono modelli; nella pipeline finiscono nell'errore dell'elemento.
-  - Nella pipeline (`template_mode: auto`) funziona come gli altri: il modello scelto si scarica nella libreria
-    prima della modellazione (`_prepare_templates` scarica da RCSB i codici di 4 caratteri e da AlphaFold DB gli id
-    `AF-…`).
-- **Ritaglio per pLDDT** (`domain/plddt.py`, `modeller.prepare_template`): per i template predetti, opzioni di
-  modellazione `plddt_trim` (predefinita accesa) e `plddt_min` (predefinita 70, 0–100), anche nella pipeline. Il
-  pLDDT è il B-factor del C-alfa. Fasce di AlphaFold DB (Tunyasuvunakool et al., Nature 596:590, 2021), estremo
-  inferiore compreso: ≥ 90 molto alta, 70–90 confidente, 50–70 bassa, < 50 molto bassa (spesso disordine). Sotto 70
-  lo scheletro non è affidabile e, come template, trasferirebbe vincoli su conformazioni non predette con confidenza.
-  - Si tolgono i residui con pLDDT < soglia; il template preparato, la sua sequenza e primo/ultimo residuo sono
-    quelli ritagliati, con i record descrittivi di AlphaFold (o un TITLE "ALPHAFOLD … PREDICTION" se il file non li
-    ha, come un mmCIF) e una riga `REMARK 999 BIOLOOM PLDDT_TRIM`: la copia resta riconoscibile come modello
-    AlphaFold qualunque sia il nome. La copia di una struttura non AlphaFold conserva invece il suo EXPDTA (o lo
-    riceve dal `_exptl.method` del mmCIF), così i suoi B-factor non passano per pLDDT.
-  - **Frammenti isolati** (`plddt.MIN_FRAGMENT = 5`): dopo la soglia si tolgono anche i tratti sopra soglia più
-    corti di 5 residui contigui (nel file e nella numerazione) accanto ad almeno un residuo tolto. Cinque residui sono
-    il minimo per un giro d'elica α con il legame i→i+4; il pLDDT misura solo la confidenza locale, e la posizione di
-    un tratto più corto in mezzo a regioni disordinate (che dice il PAE, non il pLDDT) darebbe a MODELLER
-    restrizioni da un punto arbitrario. Un tratto corto delimitato solo dalle estremità della catena resta. Il
-    risultato separa i conteggi (`removed_threshold`, `removed_fragments`, `min_fragment`; `removed` è il totale).
-  - Minimo 30 residui rimasti (`plddt_too_few`): circa la dimensione dei più piccoli domini che si ripiegano da soli
-    (HP35 della villina, dominio WW, zinc finger C2H2); sotto, il template è un frammento e align2d non è affidabile.
-  - **Allineamento automatico**: MODELLER legge il template ritagliato, quindi i residui tolti sono gap del template.
-  - **PIR dell'utente** (`_normalize_pir`): una riga scritta sul modello completo viene riportata sul ritaglio (residui
-    tolti → gap, intervallo al primo/ultimo residuo rimasto, colonne di soli gap eliminate); una riga già ritagliata
-    resta com'è; una riga diversa da entrambe è un errore chiaro. `align2d` (Editor PIR) allinea sul modello intero.
-  - Log ("rimossi 11 residui con pLDDT < 70 (1–5:A, 71–76:A), restano 65 di 76", con "… e 4 in frammenti isolati
-    di meno di 5 residui" se ce ne sono), risultato (`templates[].plddt`,
-    `plddt_removed`, avviso "modello predetto"), `REMARK 999 BIOLOOM TEMPLATE … ALPHAFOLD PLDDT<70 REMOVED 11` nel
-    modello e, nella pipeline, `template_predicted`/`plddt_removed` nelle metriche dell'elemento.
-  - Le strutture sperimentali non si ritagliano mai.
-
-### Ligandi, cofattori e metalli (`domain/ligands.py`)
-
-Il trasferimento dei gruppi eteroatomici dal template al modello è selettivo e viene verificato dopo la modellazione.
-
-- **Prima di questa versione** l'opzione `hetatm` scriveva tutti gli eteroatomi nella copia preparata, ma lo script di
-  allineamento non leggeva gli HETATM e l'intervallo del template finiva sull'ultimo residuo: MODELLER ignorava i
-  gruppi e il modello non ne aveva (verificato con MODELLER 10.8 su `ubq_zn.pdb`). La casella «Ligandi» del singolo
-  template non attivava nemmeno `env.io.hetatm`.
-- **Classificazione** (`classify`, `candidates`), nel dettaglio del template (`GET /api/templates/{id}` → `ligands`,
-  `ANALYSIS_VERSION` 3: le analisi in cache si ricalcolano) e nella scelta della Modellazione. Le acque non compaiono.
-
-  | Classe | Criterio | Per default |
-  |---|---|---|
-  | metallo | un solo atomo di un elemento metallico (colonna element, altrimenti il nome: ZN, FE2, CU1…) | sì; no per Na⁺, K⁺ e altri monovalenti (spesso dal tampone) |
-  | cofattore noto | codice CCD in `COFACTORS`: HEM, HEC, HEA, FAD, FMN, NAD, NAI, NAP, NDP, ATP, ADP, AMP, ANP, GTP, GDP, GNP, SAM, SAH, PLP, PMP, COA, ACO, TPP, TDP, BTN, LPA, FES, SF4, F3S, CLA, BCL, RET, B12, CNC, PQQ, H4B, MGD | sì |
-  | additivo | `COMMON_ADDITIVES` di `domain/structure` più glicoli, tamponi, crioprotettori e piccoli anioni (MPD, PG4, PGE, EPE, MES, TRS, CIT, BME, ACY, IMD, SCN, AZI…) | no, con la motivazione: di solito senza ruolo biologico (come le esclusioni di BioLiP, Yang et al. 2013) |
-  | residuo modificato | ha N, CA e C dello scheletro e un legame peptidico (C–N ≤ 1,9 Å) con il residuo precedente o seguente della catena (MSE, SEP, TPO…); mai un nome di `COFACTORS` | mai trasferibile: fa parte della catena |
-  | altro ligando | tutto il resto (inibitori, zuccheri, amminoacidi liberi legati come substrato…) | sì |
-
-  Il legame peptidico distingue i residui modificati da SAM, SAH e dagli amminoacidi liberi, che hanno gli stessi
-  atomi N, CA e C ma non sono nella catena: prima erano «residui modificati», quindi non trasferibili, esclusi dalla
-  scelta predefinita e dalla verifica e contati come proteina nei contatti. L'esito si conserva nel residuo (`xtra`):
-  la verifica lo chiede per ogni atomo vicino.
-
-- **Opzioni di modellazione:** `hetatm` attiva i ligandi per tutti i template con la scelta predefinita; `ligands` è
-  l'elenco `[{template, chain, resnum, resname}]` dei gruppi da trasferire, esattamente quelli, e attiva i template che
-  cita (un template attivo senza voci non trasferisce nulla). Con più template il `template` è obbligatorio; un template
-  non scelto, un gruppo che non c'è o un residuo modificato sono errori chiari (`invalid_ligand`, `ligand_not_found`,
-  `ligand_not_transferable`). I valori sono validati (regex, al massimo 100) e non entrano mai negli script. Il
-  riferimento del template conserva `hetatm` (Pipeline con template fisso). Nella pipeline con ricerca automatica vale
-  solo `hetatm`: i template non si conoscono prima (400 `invalid_ligand`).
-- **Copia preparata** (`modeller.prepare_template`): solo i gruppi scelti, spostati in fondo alla loro catena
-  nell'ordine del file; le selenometionine restano come prima (MET) con i ligandi attivi. Il risultato ha
-  `ligand_groups` (gruppi trasferiti con il sito nel file originale: donatori dei metalli, acque comprese, e legami
-  covalenti) e `ligands_excluded` (gli altri gruppi delle catene, con il motivo); il log li elenca. La chiave di
-  `PreparedTemplates` comprende la scelta.
-- **PIR** (`pir_with_ligands`, per l'allineamento automatico e per quello dell'utente): MODELLER, con
-  `env.io.hetatm = True`, legge ogni gruppo HETATM come residuo `.` (BLK) e lo copia nel modello solo se anche il
-  bersaglio ha `.` nella stessa colonna. Verificato con MODELLER 10.8: con `.` in entrambe le righe lo Zn arriva nel
-  modello, con `-` nel bersaglio no; `.` vale anche per i gruppi a cui `restyp.lib` dà un codice proprio (`z` per lo
-  Zn).
-  1. I `.` già presenti (PIR dell'utente, allineamento salvato da una modellazione precedente) diventano gap e le colonne
-     rimaste vuote si tolgono, con un avviso se non coincidono con la scelta: la scelta è quella delle opzioni.
-  2. Per ogni catena con gruppi trasferiti si aggiungono le colonne dei gruppi alla fine del tratto di quella catena
-     (prima del `/`): `.` nel template e nel bersaglio, `-` negli altri template. **Più template con lo stesso
-     gruppo nello stesso sito** (due globine con l'eme, due omologhi con lo stesso Zn: capita con la modalità `multi`
-     e con la scelta predefinita della Modellazione) condividono la colonna: `.` in ciascuno di quei template e un solo
-     `.` nel bersaglio, quindi un solo gruppo nel modello, vincolato da tutti. Prima ogni template aveva la sua colonna
-     e il modello aveva due Zn a 2,6 Å (o due porfirine sovrapposte), senza avvisi. Stesso gruppo = stesso nome e sito
-     in comune: i residui dei donatori dei metalli e dei legami covalenti (altrimenti quelli entro 4 Å, `contacts` di
-     `ligand_groups`), riportati attraverso le righe del PIR sulle colonne con un residuo del bersaglio (servono i
-     numeri dei residui della copia preparata, `_chain_ids`). L'associazione rispetta in ogni riga l'ordine dei gruppi
-     nel file (MODELLER legge i `.` di un template in quell'ordine) e unisce più gruppi possibile (programmazione
-     dinamica, `_match_slots`); un gruppo senza corrispondente ha una colonna nuova prima di quella del gruppo unito
-     che lo segue nello stesso template. Con due template che hanno gli stessi gruppi in ordine opposto se ne unisce
-     solo uno. Una nota dice quali gruppi sono stati uniti.
-  3. L'intervallo del template si aggiorna: fine sull'ultimo gruppo (se l'ultima catena ne ha), `+N` ricontato, una
-     fine che indicava un eteroatomo tolto torna sull'ultimo residuo.
-
-  Errore chiaro se i `/` del template e del bersaglio non sono nelle stesse colonne o se la voce del template non
-  comprende tutti i residui di una catena con ligandi (i gruppi stanno dopo l'ultimo residuo). Lo script dei modelli
-  imposta `env.io.hetatm = True` solo se almeno un gruppo è trasferito.
-- **Verifica** (`evaluate`), per ogni gruppo eteroatomico non d'acqua (i residui modificati no):
-
-  | Controllo | Regola | Esito |
-  |---|---|---|
-  | contatti | residui della proteina con un atomo pesante entro 4 Å | nessuno: da controllare |
-  | scontri | atomi pesanti a meno di 2,2 Å dalla proteina o da un altro gruppo, escluse la coordinazione (metallo–donatore nella sfera) e i legami covalenti (somma dei raggi covalenti + 0,45 Å) che il template ha con il residuo allineato; senza template la distanza di legame è un «possibile legame covalente» | problematico |
-  | donatori dei metalli | N, O, S (His, Cys, Met, Asp/Glu, Asn/Gln, Ser/Thr/Tyr, scheletro, acqua, altri ligandi) entro la distanza attesa + 0,5 Å | nessuno: problematico |
-  | distanze | attesa ± 0,25 Å nella norma, oltre «lunga»/«corta», sotto attesa − 0,5 Å «troppo corta» | da controllare / problematico |
-  | donatore insolito | categoria senza distanza attesa per il metallo (es. Ca–N(His)), N non imidazolico | da controllare |
-  | numero di coordinazione | fuori dall'intervallo tipico, contando le acque del template non trasferite | da controllare |
-  | geometria | gRMSD oltre 13,5° o posizioni vacanti oltre il 25% (CheckMyMetal) | da controllare |
-  | geometria | gRMSD oltre 21,5° | problematico |
-  | sito del template | meno di tutti i donatori della proteina conservati; meno della metà | da controllare; problematico |
-
-  **Distanze attese** (Å), verificate a settembre 2026 (`REFERENCE_DISTANCES`; test
-  `test_reference_distances_match_the_sources`):
-
-  - Na, Mg, K, Ca, Mn, Fe, Co, Cu, Zn: tabella «Metal-donor atom target distances (revised July 2006)» di Harding
-    (2006, Acta Cryst. D62:678–682), dal sito dell'autrice (`tanna.bch.ed.ac.uk/newtargs_06.html`, copia del
-    29/04/2009 nell'Internet Archive; il PDF della rivista non era raggiungibile), basata sul CSD e sulle strutture
-    proteiche a ≤ 1,25 Å. Tutti i valori coincidono con quelli di BioLoom. Le stelle (★) sono l'affidabilità indicata
-    dalla tabella (`REFERENCE_RELIABILITY`): ★★★ deviazione standard ~0,05 Å, ★★ 0,10, ★ 0,15–0,20, nessuna stella la
-    meno affidabile.
-  - Ni (assente in Harding): Tabella 3 di Zheng et al. (2017, CheckMyMetal, distanze del CSD), letta nel testo
-    completo di Europe PMC (PMC5349434): O dell'acqua 2,08(6); O legato a un carbonio 2,07(7) (moda più lunga; l'altra
-    è 1,86), usato per Asp/Glu e per lo scheletro; N 2,09(7) (moda più lunga; l'altra 1,89); S 2,18(3).
-  - Bazayeva et al. (2024, Acta Cryst. D80:362–376, MetalPDB a < 1,5 Å) non trovano differenze significative con
-    Harding et al. (2010) entro la dispersione (carbonile dello scheletro dei metalli alcalini e alcalino-terrosi
-    entro 0,05 Å; Zn–N(His) 2,05 ± 0,06 per Nδ1 e 2,03 ± 0,07 Å per Nε2). I loro valori per residuo sono nel
-    materiale supplementare, non consultato: nessun valore di BioLoom viene da lì.
-  - Donatori senza colonna propria, dalle note della tabella di Harding: Asn/Gln come Asp/Glu monodentato (prima di
-    questa verifica BioLoom usava lo scheletro); O, N e S dei ligandi come l'O dell'Asn (quindi Asp/Glu), l'N dell'His
-    e l'S della Cys. Scelte di BioLoom non verificate su una fonte: Ser/Thr/Tyr con il valore dell'acqua (per Harding
-    Ser/Thr stanno fra acqua e carbossilato, Tyr circa 0,1 Å sotto il carbossilato) e Met con quello della Cys.
-
-  | Metallo | O acqua | O Asp/Glu | O scheletro | N His | S Cys | Numero di coordinazione tipico |
-  |---|---|---|---|---|---|---|
-  | Na | 2,41 ★★ | 2,41 ★★ | 2,38 ★★ | — | — | 4–7 |
-  | Mg | 2,07 ★★★ | 2,07 ★★ | 2,26 | — | — | 5–6 |
-  | K | 2,81 ★ | 2,82 ★ | 2,74 ★ | — | — | 5–8 |
-  | Ca | 2,39 ★★ | 2,36 ★★ | 2,36 ★★ | — | — | 6–8 |
-  | Mn | 2,19 ★★★ | 2,15 ★★★ | 2,19 | 2,21 ★★ | 2,35 | 4–6 |
-  | Fe | 2,09 ★★ | 2,04 ★★ | 2,04 | 2,16 ★ | 2,30 ★★★ | 4–6 |
-  | Co | 2,09 ★★ | 2,05 ★★★ | 2,08 | 2,14 ★★ | 2,25 ★ | 4–6 |
-  | Ni (CSD) | 2,08 | 2,07 | 2,07 | 2,09 | 2,18 | 4–6 |
-  | Cu | 2,13 | 1,99 ★ | 2,04 | 2,02 ★★ | 2,15 | 3–6 |
-  | Zn | 2,09 ★★★ | 1,99 ★★★ | 2,07 | 2,03 ★★★ | 2,31 ★★ | 4–6 |
-
-  Gli intervalli del numero di coordinazione seguono quanto riportano le fonti (Zheng et al. 2017: Mg ottaedrico
-  stretto, siti con meno o più di 6 donatori rari; Na di solito 6, a volte 5 o 4; K di solito ottaedrico. Bazayeva et
-  al. 2024: Zn con 4 donatori nel 61% dei siti); gli estremi sono una scelta di BioLoom. Altri metalli (Cd, Hg…): donatori entro 3,0 Å, geometria, esito
-  al più «da controllare».
-- **Geometria** (`geometry`, come CheckMyMetal, Zheng et al. 2017, con le geometrie ideali confrontate per angoli di
-  Kuppuraj et al. 2009): per le geometrie ideali con m posizioni, da n a n + 2 (al massimo 7: lineare, trigonale
-  planare, tetraedrica, quadrato planare, bipiramide trigonale, piramide a base quadrata, ottaedrica, bipiramide
-  pentagonale), si cerca l'assegnazione degli n donatori che minimizza lo scarto quadratico medio fra gli angoli
-  donatore–metallo–donatore osservati e ideali (gRMSD); le posizioni libere sono vacanti. Vince la gRMSD minima; entro
-  1° quella con meno vacanze (tre donatori di un tetraedro: tetraedrica con una vacanza, non trigonale planare).
-- **Confronto con il sito del template** (modellazione, `template_contexts`): le colonne del PIR usato da MODELLER
-  legano i residui del template (dalla copia preparata, dal residuo iniziale dell'intervallo) a quelli del modello, e
-  i `.` legano i gruppi. Ogni residuo che coordina il metallo nel template è *conservato* (il residuo allineato lo
-  coordina nel modello), *perso*, *sostituito* (da un residuo che non coordina con la catena laterale), *non allineato*
-  o *non modellato* (catena o tratto fuori dall'allineamento). Le acque del template non si trasferiscono: si contano
-  per il numero di coordinazione («1 (3 con 2 acque del template, non trasferite)»). Un allineamento che non
-  corrisponde al modello o alla copia preparata lascia la verifica senza confronto, con una nota.
-- **Dove:** `quality.analyze` aggiunge `ligands` (senza template) se la struttura ha gruppi eteroatomici non d'acqua;
-  `run_modeling` lo ricalcola con il confronto per ogni modello analizzato, mette il riepilogo nel modello
-  (`models[].ligands`: gruppi, esito peggiore, conteggi) e nel risultato `ligands` (`transferred`, `verification` del
-  modello migliore anche senza analisi di qualità), scrive `REMARK 999 BIOLOOM LIGANDS n ZN:A101 …` e avvisa se il
-  modello ha meno gruppi di quelli trasferiti. `transferred`, il REMARK e l'avviso contano i gruppi del modello (i `.`
-  del bersaglio, `ligands.model_groups`): un gruppo di più template compare una volta, con `template` = i codici
-  separati da virgole, il numero del template principale e i gruppi di ciascun template in `sources`. Il confronto
-  con il sito del template usa il principale (il primo). Un errore inatteso della verifica va nel log e non fa fallire il job.
-  Voto e consenso non cambiano.
-- **Valori di riferimento** (test in `test_ligands.py`):
-  - `ubq_zn.pdb`: Zn con NE2 di His68 (2,10 Å, attesa 2,03) e due acque (2,10 Å, attesa 2,09), angoli 67,2°, 81,1° e
-    90,0°: piramide a base quadrata con 2 posizioni vacanti, gRMSD 14,1° → «da controllare» (numero di coordinazione 3
-    su 4–6, geometria distorta, vacanze 40%);
-  - lo Zn spostato a 0,9 Å dal CB di Leu43 → «problematico» (scontro);
-  - modello dell'ubiquitina di lievito (MODELLER, 1 modello `very_fast`) con il solo Zn trasferito da `ubq_zn.pdb` più
-    un SO₄ escluso: Zn A77 a 2,10 Å da NE2 di His68, sito del template conservato (1 su 1), 2 acque non trasferite →
-    numero di coordinazione 1 (3) → «da controllare»; lo stesso PIR con i ligandi spenti perde il `.` con un avviso e il
-    modello non ha HETATM;
-  - due copie di `ubq_zn.pdb` come template, scelta predefinita: una colonna `.` condivisa, un solo HETATM Zn nel
-    modello, `transferred` con `ZNA_A, ZNB_A`.
-- **Limiti:** i gruppi di una catena senza residui proteici non sono trasferibili (si trasferiscono con la catena
-  scelta); il carbonio non è considerato donatore (CO e CN⁻ legati al ferro dell'eme risultano scontri); i codici
-  minuscoli di `restyp.lib` in un PIR dell'utente (`z`, `h`, `w`) vengono letti in maiuscolo come amminoacidi: per i
-  ligandi si usa `.`; il raffinamento dei loop di un modello non legge gli HETATM (MODELLER predefinito), quindi i
-  ligandi non passano ai modelli di loop.
-
-### Complessi e omo-oligomeri (`domain/assembly.py`, `domain/complexes.py`)
-
-Modelli con più catene (F5.3): assemblaggio biologico del template, bersaglio a una sequenza per catena, restrizioni di
-simmetria fra catene uguali e confronto delle interfacce del modello con quelle del template. Logica pura in `domain/`,
-nessuna dipendenza nuova (Biopython e numpy).
-
-**Assemblaggi biologici** (`domain/assembly.py`). Il file del PDB contiene l'unità asimmetrica; l'assemblaggio si genera
-con gli operatori dichiarati nel file, qui, invece di scaricare da RCSB l'assemblaggio già generato
-(`<ID>-assembly<N>.cif`): funziona anche senza rete, con i file già in libreria e con quelli caricati, e i nomi delle catene
-seguono una regola nota (quelli di RCSB, "A-2", non sono identificativi PDB di un carattere).
-
-- **Lettura:** mmCIF (`pdbx_struct_assembly`, `pdbx_struct_assembly_gen`, `pdbx_struct_oper_list`) oppure REMARK 350 del
-  PDB (BIOMOLECULE, AUTHOR/SOFTWARE DETERMINED…, APPLY THE FOLLOWING TO CHAINS con le righe AND CHAINS, BIOMT1–3; i numeri
-  BIOMT di gruppi diversi sono operatori diversi). La libreria scarica da RCSB in formato PDB, quindi il REMARK 350 è il caso
-  più comune. Nel mmCIF le catene dei generatori sono `label_asym_id` (proteina, ligandi e acque hanno asym diversi),
-  mentre Biopython raggruppa per `auth_asym_id`: ogni residuo del primo modello riceve il suo `label_asym_id`
-  dall'`atom_site`, e un generatore prende esattamente i residui elencati.
-- **Espressioni degli operatori** (dizionario PDBx): "1", "1,2,5", "1-4", "(1-4)" e il prodotto cartesiano "(1,2)(3,4)",
-  applicato da destra a sinistra (x' = M1·(M3·x + t3) + t1); al massimo 1000 combinazioni per generatore.
-- **Nomi delle catene:** copie nell'ordine dei generatori, degli operatori e delle catene del file; la prima copia di ogni
-  catena dell'autore tiene il nome (se di un carattere), le altre prendono il primo carattere libero di A–Z, a–z, 0–9 non
-  tenuto da una prima copia (catene A e B, due operatori per A: A, C = A·2, B). Ogni catena ha origine, operatore e
-  `identity` (coordinate del file così come sono) nel risultato e nelle righe `REMARK 999 BIOLOOM ASSEMBLY CHAIN`.
-- **Limiti:** 62 catene (identificativi di un carattere) e 99 999 atomi (numerazione del PDB); oltre, l'assemblaggio si
-  elenca con il motivo ma non si importa. Prima posizione alternativa degli atomi, primo modello del file.
-- **Libreria** (`TemplateLibrary.assemblies`, `import_assembly`): `GET /api/templates/{id}/assemblies` (stato oligomerico,
-  catene generate con l'origine, `buildable`, `identity_only`) e `POST /api/templates/{id}/assemblies/{n}` → template
-  `<ID>_ASM<n>` in PDB, con titolo, metodo e risoluzione del file d'origine e `assembly` nei metadati (template d'origine,
-  assemblaggio, catene, impronta SHA-256 del file d'origine). L'id non si tronca: oltre i 40 caratteri l'id d'origine si
-  accorcia e prende un'impronta (`<inizio>_<6 cifre di SHA-1 dell'id>_ASM<n>`, `assembly_template_id`), così gli
-  assemblaggi 1, 2 e 10 di un id lungo restano template distinti. L'assemblaggio chiesto si verifica prima (404 se il file
-  non lo dichiara). Un'importazione già fatta dello stesso assemblaggio dallo stesso file si riusa (`cached`); se il file
-  d'origine cambia, si rigenera; un template con quel nome che non è lo stesso assemblaggio dello stesso template dà 409.
-  Importazioni concorrenti dello stesso assemblaggio: un lock per template, una sola costruzione. Un assemblaggio non ha
-  assemblaggi propri; i modelli AlphaFold non ne hanno.
-
-**Bersaglio a più catene** (`complexes.parse_target`, opzione `complex` di `POST /api/model` e `/api/align2d`):
-`{name, chains: [{template_chain, sequence | same_as, name}]}` su un solo template (o assemblaggio), le cui catene
-diventano quelle della corrispondenza, nell'ordine (`TemplateSpec.keep_order`: la copia preparata ha le catene in
-quell'ordine, così i '/' del PIR si corrispondono). Errori chiari (400) prima di accodare il job: una sola catena, catena
-del template ripetuta o non valida, sequenza mancante, `same_as` verso una catena assente o senza sequenza propria, più
-template, limiti.
-
-| Limite | Valore | Motivo |
-|---|---|---|
-| Catene | da 2 a 12 | omo-oligomeri comuni fino ai dodecameri; oltre (capsidi, ferritine a 24 catene) una sequenza per catena non è pratica, e l'analisi delle interfacce cresce con le coppie di catene a contatto (fino a 66) |
-| Residui in tutto | 3000 | tempo di MODELLER per modello misurato in crescita un po' più che lineare con i residui (tabella sotto): con 3000 residui 5 modelli "accurati" (3–5 volte più lenti del "rapido") restano nel timeout predefinito dei job (120 min), con 5000 (il limite di una catena singola) no |
-
-**Allineamento per catena** (`modeller.build_complex_alignment_script`, `complexes.merge_chain_alignments`): `align2d` di
-ogni catena del bersaglio sul segmento FIRST:X–LAST:X della sua catena del template; le righe si uniscono con '/', che
-stanno quindi nelle stesse colonne, e l'intervallo del template va dal primo residuo della prima catena all'ultimo
-dell'ultima. Il log riporta per catena residui allineati e identità. La stessa funzione è l'anteprima della pagina
-(`/api/align2d` con `complex`: `chains` nel risultato).
-
-**PIR a più catene** (`complexes.check_chains`, `sequences.validate_pir`): MODELLER 10.8 tollera i '/' in colonne diverse e
-perfino una voce di template senza '/' su due catene (verificato: il modello si costruisce, con le catene fuse o un residuo
-di una catena allineato all'altra). BioLoom quindi:
-
-- nella modalità Complesso rifiuta (400 `invalid_pir`) '/' in colonne diverse fra template e bersaglio e una voce di
-  template con un numero di tratti diverso dalle catene del suo intervallo; con un PIR dell'utente nella modalità
-  Complesso le catene del bersaglio devono essere le sequenze del complesso;
-- con un PIR qualunque dà gli stessi controlli come avvisi (`validate_pir`: "Separatori di catena ('/') … in colonne
-  diverse da quelle del bersaglio").
-
-Le colonne '.' dei ligandi (`ligands.pir_with_ligands`) restano compatibili: si aggiungono alla fine del tratto di ogni
-catena in tutte le righe, i '/' non si spostano.
-
-**Modello** (`ComputeService._complex_plan`, `modeller.build_model_script`): per ogni bersaglio con più catene (anche da un
-PIR) le catene del modello prendono i nomi del template principale (il primo con una catena di fronte a ogni catena del
-bersaglio e i '/' nelle stesse colonne; altrimenti A, B, C… con un avviso), con i residui numerati da 1 in ogni catena
-(`rename_segments` in `special_patches`; MODELLER di suo numera di seguito, 77–152 per la seconda catena). Un bersaglio a
-catena singola non cambia (catena A, come prima). `REMARK 999 BIOLOOM CHAINS 2 A=A B=B` nei modelli analizzati.
-
-**Simmetria** (opzioni `symmetry`, `symmetry_weight` da 0 escluso a 10, predefinito 1): le catene del bersaglio con la
-stessa sequenza formano un gruppo e ogni catena è vincolata alla prima con `restraints.symmetry.append(Symmetry(s1, s2,
-peso))` sui C-alfa dei residui standard (`only_std_residues().only_atom_types('CA')`), come nell'esempio del manuale di
-MODELLER ("Building a model with symmetry restraints", peso 1,0). La restrizione penalizza le differenze fra le distanze
-interne corrispondenti delle due selezioni (Šali & Blundell 1993): rende uguali le catene, non impone la disposizione, che
-viene dal template. Le selezioni devono avere gli stessi atomi: per questo solo catene identiche (MODELLER altrimenti
-fallisce, "Number of selected atoms … is not the same", verificato). Richiesta senza catene uguali: avviso, nessuna
-restrizione. `REMARK 999 BIOLOOM SYMMETRY CA WEIGHT 1 A,B`.
-
-**Confronto delle interfacce** (`complexes.assess`, in `<modello>.quality.json` → `complex` e, per il modello migliore
-anche senza analisi di qualità, nel risultato `complex.assessment`; `models[].complex` = esito e DockQ minimo):
-
-| Misura | Definizione | Fonte |
-|---|---|---|
-| Interfacce del modello e del template | `domain/interfaces` (ΔSASA > 1 Å², area = metà dell'area sepolta), interfacce del template calcolate una volta per job | Krissinel & Henrick 2007 |
-| Corrispondenza | residuo del template → residuo del modello dalle colonne del PIR usato da MODELLER (lettere del template sulla copia preparata dal residuo iniziale, lettere del bersaglio sui residui del modello); catena del template → catena del modello per maggioranza | |
-| Residui conservati | residui d'interfaccia del template il cui residuo allineato è d'interfaccia nella coppia corrispondente del modello (non allineati contati a parte) | |
-| Fnat | contatti fra residui del template (atomi pesanti entro 5 Å) presenti fra i residui corrispondenti del modello | CAPRI, Méndez et al. 2003 |
-| iRMS | RMSD degli atomi N, CA, C, O dei residui entro 10 Å dall'altra catena nel template, dopo la loro sovrapposizione | Méndez et al. 2003; Basu & Wallner 2016 |
-| LRMS | RMSD dello scheletro della catena più corta dopo la sovrapposizione della più lunga (ricettore) | idem |
-| DockQ | (Fnat + 1/(1 + (iRMS/1,5)²) + 1/(1 + (LRMS/8,5)²)) / 3; ≥ 0,80 alta, ≥ 0,49 media, ≥ 0,23 accettabile, sotto non riprodotta | Basu & Wallner, PLoS ONE 11:e0161879, 2016 |
-
-- **Coppie confrontate:** solo quelle del template con le due catene nell'intervallo della sua voce del PIR
-  (`residue_map` → `span`): la copia preparata può avere altre catene scelte (es. A, B e C con un PIR da A a B), che non
-  sono modellate; una nota le elenca. Una catena dell'intervallo allineata solo a gap non ha una catena del modello (`?`
-  nel testo). Un errore inatteso dell'analisi diventa una riga del log e il modello resta senza confronto: non fa fallire
-  la modellazione (l'annullamento del job invece passa); nei risultati il modello migliore senza confronto lo dice
-  («Analisi delle interfacce non riuscita…: vedi il log del job»).
-- **Esito motivato:** classe di DockQ con il testo ("Interfaccia del template riprodotta: DockQ 0,97 (alta; Fnat 1,00, iRMS
-  0,35 Å, LRMS 1,66 Å); residui d'interfaccia del template conservati 75% (6 su 8); area 117 Å² contro 123 Å² del template
-  (95%)"); "non sono più a contatto" se le catene corrispondenti del modello non si toccano; un'interfaccia del modello che
-  il template non ha è "nuova" (contatto creato dalla modellazione, da verificare). Esito del modello = il peggiore.
-- **Limiti** (nel risultato e nel report): il template non è la struttura vera del complesso del bersaglio; DockQ misura la
-  fedeltà all'interfaccia del template, non l'accuratezza. Le coppie si confrontano anche con residui mutati. Un contatto
-  cristallino piccolo resta piccolo: vale la plausibilità dell'area di `domain/interfaces`.
-- **Costo:** due analisi delle interfacce per modello (modello e, una volta, template) più le interazioni; le ricerche dei
-  contatti usano un albero sugli atomi di una catena e una ricerca per atomo dell'altra.
-
-**Valori di riferimento** (test in `test_assembly.py`, `test_complexes.py`):
-
-| Caso | Valore |
-|---|---|
-| mmCIF sintetico (1UBQ, asym A, più due acque asym B nella stessa catena dell'autore) con identità + rotazione C2 | catene A e B; B coincide con la catena B di `ubq_dimer.pdb` entro 0,01 Å; le acque seguono la loro catena; interfaccia 122,9 Å² come il dimero |
-| stesso file, generatore con il solo asym A / espressione "(1,2)(3)" | acque escluse / copie "1×3" e "2×3" con la traslazione applicata per prima |
-| 1UBQ (REMARK 350) | un assemblaggio monomerico, catena A, solo identità |
-| dimero contro sé stesso (catene rinominate, numeri spostati di 100) | 5 contatti entro 5 Å, 8 residui d'interfaccia (S57, D58, N60, Q62 per catena), Fnat 1, iRMS 0, LRMS 0, DockQ 1 |
-| catena B spostata di 3 Å | LRMS 3,00 Å, Fnat 0,80 (4 su 5), iRMS 1,37 Å, DockQ 0,745 → media |
-| catena B allontanata di 30 Å | area 0, Fnat 0, LRMS 30 Å → non riprodotta, "non sono più a contatto" |
-| MODELLER: omodimero dell'ubiquitina di lievito su `ubq_dimer.pdb`, 2 modelli "rapidi", simmetria | catene A e B numerate da 1, RMSD dei C-alfa fra le catene dopo la sovrapposizione 0,03 Å (senza simmetria 0,63 Å), DockQ 0,97 (alta), 75% dei residui d'interfaccia conservati, area 117 contro 123 Å²; job in 14 s con l'analisi del migliore |
-
-**Tempi di MODELLER con più catene** (copie di `ubq_dimer.pdb`, raffinamento "rapido", container di test con altri test
-in esecuzione sulla stessa macchina: valori indicativi):
-
-| Catene | Residui | 1 modello | 2 modelli | Per modello |
-|---|---|---|---|---|
-| 2 | 152 | 7,5 s | 13,9 s | 6,4 s |
-| 4 | 304 | 10,9 s | 18,8 s | 7,9 s |
-| 8 | 608 | 22,3 s | 42,3 s | 20,0 s |
-
-**Interfaccia** (`components/ComplexInput.tsx`, `ComplexResults.tsx`, `AssembliesCard.tsx`, logica in `lib/complex.ts`):
-
-- **Libreria template:** scheda "Assemblaggi biologici" (stato, catene con l'origine, «Importa come template»); per un
-  assemblaggio importato la sua origine e «Modella il complesso»; pulsante «Complesso» per i template a più catene; badge
-  "assemblaggio" nell'elenco.
-- **Modellazione → Complesso** (`?cmplx=<template>` dalla libreria): template (con download da RCSB e importazione degli
-  assemblaggi), una riga per catena (dal progetto, incollata o «stessa di…»; le catene del template con la stessa sequenza
-  partono già come «stessa della catena …»), conteggi e limiti come il backend (`complexRequest`), simmetria con il peso,
-  anteprima dell'allineamento per catena in modalità Confidenza. Gli avvisi di copertura del bersaglio non si calcolano in
-  questa modalità.
-- **Risultati:** riquadro "Complesso" (catene del modello e del template, simmetria, tabella del confronto con DockQ ed
-  esito; clic su una riga = testo dell'esito e interfaccia centrata nel 3D) e 3D colorato per catena con i residui
-  d'interfaccia conservati (verde), solo nel modello (arancione) e persi (rosso). Per un modello diverso dal migliore il
-  confronto viene dal suo rapporto di qualità, se analizzato. Badge "interfacce: …" nella tabella dei modelli.
-
-### Cache dei calcoli (`core/cache.py`)
-
-Ricerche di template e allineamenti multipli e strutturali non si rifanno se la stessa richiesta è già stata
-calcolata: rilanciare una pipeline con le stesse sequenze e altre opzioni di modellazione salta tutte le
-ricerche. Il pairwise è istantaneo e non passa dalla cache.
-
-- **Dove:** un file JSON per voce in `data/cache/compute/<operazione>/<chiave>.json` (`search`,
-  `align_multiple`, `align_structural`). Sta nella cartella dati e viaggia con la chiavetta. La pulizia automatica
-  la tratta come le risposte remote (30 giorni). In Impostazioni → Spazio l'occupazione è mostrata a parte.
-- **Chiave:** SHA-256 del JSON canonico (chiavi ordinate) con operazione, versione del formato della cache e di
-  BioLoom, input normalizzati, parametri e timbro delle dipendenze:
-
-  | Operazione | Input e parametri | Timbro |
-  |---|---|---|
-  | ricerca | sequenza (maiuscole, senza spazi), motore, E-value, risultati massimi, taxid (solo NCBI), accessione UniProt (solo AlphaFold DB), versione del formato dei risultati (2, motori sul PDB: vedi [Scelta ragionata dei template](#scelta-ragionata-dei-template-domaintemplate_rankpy)) | BLAST+ e MMseqs2: dimensione e data di tutti i file del database (`pdbaa.*`, `pdbaa_h*`), eseguibile (percorso, dimensione, data), uso dell'indice veloce MMseqs2 |
-  | multiplo | nomi e sequenze nell'ordine dato, tipo (proteina/acido nucleico), programma effettivo (`auto` risolto) | eseguibile di Clustal Omega/MAFFT/MUSCLE |
-  | strutturale | SHA-256 del contenuto e formato dei due file, catene, programma effettivo, versione del risultato (2: con il confronto per residuo) | eseguibile di TM-align/US-align |
-
-  Il nome delle strutture non entra nella chiave (un file caricato di nuovo ha un prefisso casuale): gli `ids`
-  del risultato si riapplicano dopo la lettura.
-- **Scadenza:** 7 giorni per RCSB, NCBI e AlphaFold DB (il PDB cambia ogni settimana, Swiss-Prot e AlphaFold DB con
-  le loro versioni); per i motori locali decide il timbro del
-  database e la pulizia a 30 giorni. Una voce "dal futuro" di oltre un giorno (orologio di un altro computer) non
-  vale.
-- **Valore:** risultato del motore e testo dei file che il calcolo ha scritto nella cartella di lavoro
-  (`query.fasta`, `mmseqs_hits.m8`, `msa_input/output.fasta`, `mobile.pdb`, `target.pdb` e i file di TM-align).
-  Un risultato dalla cache ricrea gli stessi file del job. Nel caso strutturale il testo del PDB sovrapposto è nel
-  risultato (`superposed_pdb`) e il job lo riscrive come `superposed.pdb`. Oltre 20 MB di file, o con file non
-  testuali, il risultato non entra in cache.
-- **Cosa non entra:** calcoli falliti, job annullati, risultati parziali (ricerca locale senza i metadati RCSB,
-  output di TM-align non riconosciuto o senza la mappatura dei residui). Con `accept` una voce trovata ma incompleta
-  (risultato strutturale senza il confronto per residuo) è un mancato riscontro e il nuovo calcolo la sostituisce.
-- **Lettura tollerante:** un file assente, corrotto, di un altro formato, con chiave diversa o scaduto è un
-  mancato riscontro, mai un errore. Anche un errore di scrittura (disco pieno) non fa fallire il calcolo. I percorsi
-  dei file da ricreare passano da `safe_join` e non possono uscire dalla cartella di lavoro.
-- **Concorrenza:** due calcoli identici in parallelo (pipeline) possono calcolare entrambi. La scrittura atomica
-  lascia comunque una voce valida.
-- **Controllo:** il parametro `use_cache` (predefinito `true`) di `/api/search`, `/api/align` e `/api/pipeline`
-  corrisponde nell'interfaccia a "Ricalcola ignorando la cache": con `false` si ricalcola e la voce viene
-  sostituita. L'impostazione `compute_cache` (predefinita accesa; le impostazioni precedenti la ricevono accesa)
-  disattiva letture e scritture. La verifica dell'installazione ricalcola sempre (`use_cache=False`), perché deve
-  eseguire davvero gli strumenti.
-- **Provenienza:** un risultato riusato ha `cached: true` e `cached_at` (data ISO del calcolo), e il log del job
-  riporta "Risultato dalla cache del …". Nella pipeline la data finisce nelle metriche dell'elemento
-  (`search_cached_at`, badge "cache" nella tabella) e il risultato del job conta le ricerche riusate
-  (`search_cache_hits`).
-
-### Prestazioni
-
-Profilazione dei job con MODELLER reale (F1.2, F1.3) e ottimizzazioni applicate solo dove la misura dava un guadagno.
-Lo strumento è `tests/perf_timing.py`, fuori dalla suite: `scripts/test.sh backend tests/perf_timing.py -s`.
-
-- **Cosa misura:** `test_profile` avvolge con monkeypatch le funzioni dei passi (nessuna modifica al codice misurato)
-  e misura il tempo reale del job dall'avvio alla chiusura dell'esecuzione (`JobManager._execute`); i tempi dei
-  singoli modelli vengono dai marcatori `@@BIOLOOM` di `model.py`. `test_paired` alterna due varianti nello stesso
-  processo (A B A B …), così il carico della macchina pesa allo stesso modo su entrambe. `test_profile_modeller_startup`
-  misura il costo fisso di un processo MODELLER.
-- **Condizioni:**
-  - container di test `bioloom-test:4.1.0` (MODELLER 10.8, mkdssp 4.2.2, PROCHECK; ProSA senza licenza, quindi si
-    ferma subito con l'avviso);
-  - Docker Desktop su Windows 11, 4 CPU logiche (Intel i3-1115G4: 2 core con hyper-threading) e 5,7 GB per Docker;
-  - template 1UBQ (catena A) e bersaglio ubiquitina di lievito (76 residui, 96 % di identità), ricerca simulata
-    (un hit 1UBQ), raffinamento `fast`;
-  - "prima" = codice a0e410b, "dopo" = questa versione, lanciati alternati per scenario (due giri da 3 esecuzioni
-    ciascuno). Si riporta la mediana, in secondi; il minimo differisce di meno di 0,5 s. Un primo giro con altri
-    container di test attivi sulla stessa macchina dava tempi fino a +40 % su tutti i passi, per entrambe le versioni:
-    per questo gli scenari sono alternati e i confronti fini sono accoppiati nello stesso processo.
-
-**Scomposizione di un job model** (5 modelli, qualità sul migliore con PROCHECK e ProSA, come nella pagina
-Modellazione):
-
-| Passo | Prima | Dopo |
-|---|---|---|
-| Preparazione del template | 0,02 | 0,02 |
-| Script di allineamento (`align.py`, align2d) | 0,33 | 0,34 |
-| Costruzione: avvio di MODELLER e lettura | 0,24 | 0,26 |
-| Costruzione: restrizioni e modello 1 | 2,75 | 2,76 |
-| Costruzione: ognuno dei 4 modelli successivi | 2,29 | 2,29 |
-| **Costruzione dei modelli (`model.py`)** | **12,23** | **12,14** |
-| Analisi: lettura della struttura | 0,00 | 0,01 |
-| Analisi: Ramachandran | 0,01 | 0,24 ¹ |
-| Analisi: clash | 0,01 | 0,20 ¹ |
-| Analisi: mkdssp (prima con `mkdssp --version` a ogni analisi) | 0,17 | 0,30 ¹ |
-| Analisi: SASA (Shrake-Rupley) | 0,11 | 0,27 ¹ |
-| Analisi: DOPE di MODELLER | 0,98 | 1,20 ¹ |
-| Analisi: PROCHECK | 0,22 | 0,41 ¹ |
-| Analisi: ProSA (senza licenza) | 0,01 | 0,12 ¹ |
-| Analisi: consenso | 0,00 | 0,00 |
-| **Analisi di qualità (tempo reale)** | **1,50** | **1,22** |
-| Iniezione dei REMARK, rapporto JSON, salvataggio (scratch → dati) | 0,01 | 0,01 |
-| **Job intero** | **14,18** | **13,89** |
-
-¹ In parallelo: durata del passo mentre gira insieme agli altri (GIL per i calcoli Python, core condivisi). Conta il
-tempo reale dell'analisi, che scende verso quello del passo più lungo (il DOPE).
-
-**Scenari** (tempo reale del job):
-
-| Scenario | Prima | Dopo | Differenza |
-|---|---|---|---|
-| Job model, 5 modelli, qualità sul migliore con PROCHECK e ProSA | 14,18 | 13,89 | −2 % (analisi 1,50 → 1,22) |
-| Job model, 5 modelli, qualità su tutti con PROCHECK e ProSA | 20,05 | 17,11 | −15 % (fase di qualità ² 7,64 → 4,54) |
-| Elemento di pipeline, 3 modelli, qualità senza PROCHECK e ProSA (come la pagina Pipeline) | 9,30 | 9,13 | −2 % (analisi 1,40 → 1,23) |
-| Job di qualità su 1UBQ (DOPE, PROCHECK, ProSA) | 1,48 | 1,25 | −16 % |
-| Pipeline di 4 sequenze, stesso template mmCIF di 4560 residui (60 catene), 1 modello `very_fast`, senza qualità, 2 in parallelo | 9,38 | 5,64 | −40 % (preparazione, somma sugli elementi: 9,37 → 2,07) |
-
-² Tempo del job dopo template, allineamento e costruzione dei modelli: analisi, REMARK e salvataggio.
-
-**Confronti accoppiati** (`test_paired`, stesso processo, varianti alternate):
-
-| Confronto | Varianti (mediana; minimo) |
-|---|---|
-| Analisi di 1UBQ, 5 coppie | in serie come prima 1,50 (1,41); in parallelo 1,17 (1,12) |
-| Analisi di un modello di MODELLER, 5 coppie | in serie 1,54 (1,38); in parallelo 1,19 (1,13) |
-| Qualità su tutti i 5 modelli, fase di qualità, 3 terne | 1 modello alla volta 6,07; 2 insieme 4,90; 3 insieme 4,26 |
-| Pipeline di 4 sequenze sul template grande, 3 coppie | senza cache dei template 9,00; con cache 5,53 |
-
-**Avvio di MODELLER** (costo fisso di ogni processo): interprete e preambolo della licenza 0,03 s; `import modeller`
-ed `Environ()` 0,21 s; più le librerie di DOPE 0,28 s; DOPE completa di 1UBQ 0,95 s.
-
-**Cosa si è applicato:**
-
-1. **Passi dell'analisi in parallelo** (`quality.analyze`, vedi [Validazione di qualità](#validazione-di-qualità-enginesqualitypy)):
-   −0,3 s per analisi (−22 % nei confronti accoppiati). Il limite è il DOPE, circa 1 s, di cui 0,28 s di avvio.
-2. **Modelli in parallelo con la qualità "Su tutti i modelli"**: 3 insieme (`QUALITY_MODELS_PARALLEL`), perché su 4
-   CPU logiche 3 batte 2 (4,26 contro 4,90 s) e oltre non ci sono modelli abbastanza lunghi da sovrapporre. Non si va
-   oltre i job paralleli delle Impostazioni.
-3. **mkdssp da `ctx.run`**: lo stesso comando di Biopython, con un processo in meno a ogni analisi (la versione si
-   chiede una volta), sotto il budget di CPU, annullabile e con timeout. Prima Biopython lo lanciava da sé, fuori da
-   ogni controllo del JobManager.
-4. **Template preparati riusati nella pipeline** (`services/compute.PreparedTemplates`): `prepare_template` legge
-   tutta la struttura anche per una catena. Per 1UBQ costa 0,02 s, e il guadagno è nullo; per un mmCIF di 4560 residui
-   circa 1 s, 2 s con due elementi in parallelo (GIL). Con la cache un solo elemento prepara, gli altri copiano il
-   file.
-   - **Chiave:** id del template; file della libreria (percorso, dimensione, data di modifica in ns); catene;
-     ligandi (attivazione e gruppi scelti, None = scelta predefinita); soglia del ritaglio pLDDT (None senza ritaglio).
-   - **Vita e spazio:** la cache vive un'esecuzione, in `.tmp/templates` dello scratch, e si svuota a fine pipeline.
-   - **Concorrenza ed errori:** un lock per chiave con attesa annullabile; le preparazioni fallite non si conservano.
-   - **Tracce:** il log segna "(preparazione riusata da un elemento precedente)" e un riepilogo finale; il risultato ha
-     `templates_prepared` e `templates_reused`.
-
-**Valutato e non applicato:**
-
-- **Più sequenze in un unico processo MODELLER** (proposta iniziale della F1.2): escluso, per tenere separati errori e
-  log di ogni elemento. Il guadagno massimo sarebbe l'avvio dei processi (0,21–0,28 s su 9 s per elemento).
-- **Costruzione dei modelli su più processi:** è il passo che pesa di più (86 % del job model, 81 % dell'elemento di
-  pipeline). Resta seriale per tre motivi:
-  - **Riproducibilità:** `automodel` non reimposta il generatore casuale per modello. Lo stato passa dal modello k al
-    k+1, quindi, a parità di seme, dividere i modelli fra processi darebbe modelli diversi da quelli di prima, e
-    dipendenti dalla suddivisione.
-  - **Pipeline:** gli elementi girano già in parallelo.
-  - **Budget di CPU:** dal JobManager (F1.4).
-  - **Possibile evoluzione:** una proposta futura potrà usare semi dichiarati per modello, registrati nel risultato.
-- **(c) Riletture della struttura:** l'analisi legge ogni modello una volta sola. Le altre letture misurate sono
-  trascurabili: la struttura in analisi (0,00–0,01 s), il template 1UBQ (0,01 s), il consenso calcolato due volte
-  (0,00 s). Nessun guadagno misurabile.
-- **(d) DOPE di più modelli in un solo script:** servirebbe solo alla qualità "Su tutti i modelli"; con "Solo sul
-  modello migliore" e nella pipeline il DOPE è uno.
-  - **Guadagno:** l'avvio pesa 0,28 s su 0,95 s, quindi un solo script risparmierebbe al massimo 4 × 0,28 ≈ 1,1 s di
-    CPU. Con 2 core fisici sono circa 0,5 s di tempo reale sulla fase di qualità da 4,26 s (stima, non misurata).
-  - **Costo:** il DOPE dei 5 modelli diventerebbe seriale in un solo processo (≈ 0,3 + 5 × 0,65 ≈ 3,6 s), mentre ora
-    si divide su 3 corsie. Un modello illeggibile fermerebbe il DOPE di tutti.
-  - **Esito:** guadagno piccolo e incerto, non vale la perdita dell'isolamento per modello.
-- **Un pool o un limite di CPU proprio:** i pool di `core/parallel.Steps` appartengono al singolo calcolo e servono
-  solo ad aspettare più passi insieme. Ogni processo passa da `JobContext.run`, quindi il budget di CPU condiviso del
-  JobManager (F1.4) governa anche i passi paralleli, senza un secondo limitatore.
-
-#### Misure per i controlli preventivi
-
-`test_preflight_calibration` (`scripts/test.sh backend tests/perf_timing.py -s -k preflight_calibration`, stesse condizioni
-di sopra, con altri container di test attivi: i tempi assoluti sono circa il 3% più alti della tabella, per questo le stime
-usano i rapporti con i valori della tabella). Mediana di 3 giri, varianti alternate nello stesso processo.
-
-| Raffinamento (2 modelli, 76 residui) | `model.py` | Restrizioni + modello 1 | Modello successivo | Rapporto con fast (media dei 2 modelli) |
-|---|---|---|---|---|
-| very_fast (`a.very_fast()`) | 1,84 | 0,95 | 0,58 | 0,24 |
-| fast (predefiniti di AutoModel: `autosched.normal`, 200 iterazioni, `refine.very_fast`) | 5,31 | 2,73 | 2,31 | 1 |
-| normal (come fast, dinamica `refine.fast`) | 7,26 | 3,38 | 3,69 | 1,42 |
-| thorough (`autosched.slow`, 300 iterazioni, `refine.slow`, ciclo ripetuto 2 volte) | 19,87 | 9,88 | 9,65 | 4,17 |
-
-Il rapporto (`REFINEMENT_FACTOR`) è il tempo di `model.py` meno avvio e restrizioni (0,72 s), diviso per quello di fast:
-la media dei due modelli. Sul solo modello successivo vale 0,25, 1,60 e 4,18; con la dinamica `refine.fast` il tempo
-cambia di più da un modello all'altro (3,38 s il primo, restrizioni comprese, 3,69 il secondo).
-
-**Perché questi livelli.** Fino alla versione precedente "normal" (nessuna impostazione) e "fast" (`md_level =
-refine.very_fast`) erano la stessa ottimizzazione: in MODELLER 10.8 `refine.very_fast` è già il predefinito di AutoModel
-(sorgente di `modeller/automodel/automodel.py`, `set_defaults`). Una prova con MODELLER reale (1UBQ, 76 residui, 3
-modelli, 2 giri) ha misurato per modello: predefiniti 2,20 s; programma VTFM `autosched.fast` 2,32 s; `autosched.fast`
-con 100 iterazioni 2,24 s; `autosched.slow` con 300 iterazioni 2,52 s; dinamica `refine.fast` 3,63 s. Il programma
-dell'ottimizzazione VTFM non cambia il tempo in modo misurabile, la dinamica sì: per questo "fast" resta il predefinito di
-MODELLER (il livello proposto dall'interfaccia, che quindi non cambia) e "normal" ha la ricottura più lunga
-`refine.fast`. "very_fast" è `a.very_fast()`, che non perturba le coordinate iniziali (`rand_method = None`): nella
-stessa prova i modelli erano identici (stesso DOPE, RMSD 0 Å), e con la perturbazione rimessa erano diversi ma molto
-peggiori (DOPE −6853 contro −7621) perché 50 iterazioni non bastano a recuperarla; BioLoom lascia il metodo di MODELLER
-e avvisa (controlli preventivi e risultato) che i modelli sono uguali. "thorough" segue l'esempio del manuale senza
-`max_molpdf = 1e6`, più basso del predefinito di MODELLER 10.8 (1e7). Tutti i livelli scrivono le impostazioni per
-esteso nello script (`REFINEMENT_SCRIPT`), così non dipendono dai predefiniti di una versione futura.
-
-| Bersaglio (1 modello fast) | `model.py` | Secondi per residuo |
-|---|---|---|
-| 76 residui (1 catena) | 2,93 | 0,0386 |
-| 152 residui (2 catene) | 5,61 | 0,0369 |
-| 304 residui (4 catene) | 11,25 | 0,0370 |
-
-Bersagli a più catene di ubiquitina di lievito su copie di 1UBQ traslate di 40 Å (ogni catena con i contatti di una
-proteina globulare, nessuno fra le catene): il tempo cresce in proporzione ai residui.
-
-| Spazio (5 modelli fast, analisi estesa del migliore) | 76 residui | 304 residui |
-|---|---|---|
-| modelli PDB | 329 KiB | 1308 KiB |
-| rapporto di qualità | 60 KiB | 209 KiB |
-| altro (PROCHECK, log, allineamento, script) | 2714 KiB | 3344 KiB |
-| **risultati** | **3103 KiB** | **4861 KiB** |
-| intermedi di MODELLER (scratch, "Conserva file intermedi") | 855 KiB | 3168 KiB |
-### Migrazioni dello schema (`core/db.py`)
-
-Lo schema SQLite ha una versione in `meta.schema_version`. `SCHEMA` è lo schema di base (versione 1, quello di prima
-delle migrazioni) e `MIGRATIONS` elenca i passaggi successivi (`Migration(versione, descrizione, istruzioni)`).
-All'apertura `Database._migrate`:
-
-1. esegue lo schema di base (`IF NOT EXISTS`, come ha sempre fatto) e legge la versione; un database **di una versione
-   più recente** di BioLoom non si apre (`MigrationError`: le sue tabelle potrebbero avere vincoli che questa versione
-   non conosce);
-2. se ci sono migrazioni da applicare a un database esistente, fa prima una **copia di sicurezza** in
-   `backups/bioloom.schema<N>.<data>.db` con l'API di backup di SQLite: la copia passa dalla connessione e contiene anche
-   le pagine ancora nel WAL (una copia del solo file le perderebbe; verificato con un database della versione 1 lasciato
-   con le righe solo nel WAL) e funziona con il lock esclusivo. Si scrive con un nome temporaneo, si verifica con
-   `PRAGMA quick_check` e solo dopo prende il nome definitivo; se non riesce (disco pieno, cartella non scrivibile) la
-   migrazione non parte e l'avvio si ferma con il motivo. Un database nuovo non ha copia;
-3. applica ogni migrazione in **una transazione** con la nuova `schema_version` scritta nella stessa transazione: un
-   errore a metà annulla tutto (anche il DDL, transazionale in SQLite) e il file resta alla versione precedente, con dati
-   e tabelle di prima; l'avvio si ferma con `MigrationError`, che dice a quale versione è rimasto e dov'è la copia.
-
-Le istruzioni sono **idempotenti** (`IF NOT EXISTS`): la versione 4.1.0, aperta sulla stessa cartella dati dopo la
-nuova, riscrive `schema_version` a 1 a ogni avvio, e al ritorno la migrazione riparte su tabelle già presenti senza
-errori e senza perdere etichette (provato). Le copie restano in `backups/` (una per migrazione: sono rare) e si possono
-cancellare a mano. Il log dell'avvio riporta le migrazioni applicate e la copia.
-
-| Versione | Migrazione |
-|---|---|
-| 1 | schema di base: `meta`, `projects`, `sequences`, `documents`, `jobs`, `pipeline_items` |
-| 2 | etichette e preferiti: tabelle `tags` (tipo, id, etichetta) e `favorites` (tipo, id), indice per etichetta, trigger di pulizia su `projects`, `sequences`, `jobs` |
-
-### Etichette, preferiti e ricerca globale (F8b)
+| 1 Sequenza | incollata, dal progetto, da file o da UniProt (accessione); anteprima di disordine, bassa complessità e domini (`/api/bio/coverage`); «Aggiungi al progetto» | sequenza proteica di 1–5000 residui |
+| 2 Template | motore consigliato (`engineChoices`: RCSB, oppure il motore locale delle Impostazioni se è pronto) con le alternative spiegate e la disponibilità; risultati per punteggio, consigliati preselezionati una volta per ricerca; suggerimento di un altro motore se non ci sono template o il migliore è in zona crepuscolare | almeno un template, una catena per voce PDB |
+| 3 Allineamento | job `align2d` sui template scelti; «Apri nell'Editor PIR» (`/pir?fromjob=`) oppure un documento PIR del progetto (con i template del documento) | allineamento completato o documento scelto |
+| 4 Opzioni | 5 modelli (esempio di base del tutorial di MODELLER), raffinamento Rapido (le impostazioni predefinite di MODELLER; Standard ha la dinamica più lunga `refine.fast`, circa 1,4 volte il tempo, misurato), analisi estesa se PROCHECK o ProSA sono utilizzabili, ligandi se la scelta predefinita trasferisce qualcosa, ritaglio pLDDT a 70 con un template AlphaFold; ogni opzione con la spiegazione (`optionNotes`); i predefiniti si ricalcolano finché l'utente non cambia nulla | controlli preventivi senza errori |
+| 5 Avvio | `JobPanel` del job `model`; a fine calcolo, se lo si stava guardando, ai risultati; un job che non c'è più (bozza o link a un job eliminato o ripulito) mostra l'errore con «Torna alle opzioni» (`missingModelJob`) | modellazione completata |
+| 6 Risultati | modello migliore (DOPE minimo), voto, consenso (dal rapporto di qualità), DOPE, zDOPE, GA341, 3D; Qualità, Confronta con il template, Report, Tutti i modelli | |
+
+- **Stato:** passo e job nell'URL (`?step=&search=&align=&doc=&model=`), il resto (bersaglio, accessione, motore, template,
+  opzioni, scelta dei ligandi) nel browser (`localStorage`, `bioloom.wizard.<progetto>`, letto con `sanitizeDraft`: un
+  valore non valido torna al predefinito). All'apertura la bozza, poi l'URL, che prevale; un link senza bozza (altro
+  browser) riprende bersaglio, motore, template e opzioni dai parametri dei job (`fillFromJobs`).
+- **Passaggi:** un cambio invalida i passi successivi (sequenza diversa → ricerca, template, allineamento e modello;
+  template diversi → allineamento e modello; opzioni cambiate dall'utente → modello); un passo oltre quelli raggiungibili
+  (`reachable`) mostra il più avanzato possibile.
+- **Cronologia:** ogni passo è una voce della cronologia del browser (indietro e avanti cambiano passo); i job nuovi
+  aggiornano l'URL senza voci nuove. Il passaggio automatico ai risultati avviene solo se il job era in corso sotto gli occhi
+  dell'utente: tornando al passo 5 con «indietro» si resta lì (con «Vai ai risultati»).
+
+### Etichette, preferiti e ricerca globale
+
+Fase F8b: etichette e stella dei preferiti su progetti, job, sequenze e template, ricerca globale.
 
 **Etichette e stella** (`domain/labels.py`, `services/labels.py`, rotte in `api/labels.py`). Progetti, job, sequenze e
 template possono avere etichette (al più 20) e la stella dei preferiti. Chiave: tipo di elemento e id (per i template
@@ -2504,10 +2625,29 @@ l'id normalizzato della libreria, maiuscolo); un vincolo CHECK ammette solo i qu
   spariscono, mai operatori; nei LIKE `%`, `_` e `\` sono protetti con `ESCAPE`; tutto passa come parametro. Richiesta al
   più 200 caratteri e 8 parole.
 
-### Riproducibilità: pacchetti e riesecuzione (F9.4)
+**Interfaccia:**
+
+- **Ricerca globale** (`components/GlobalSearch.tsx`, `lib/search.ts`): campo «Cerca…» nella barra in alto, Ctrl+K / ⌘K
+  o `/`. Risultati raggruppati come li ordina il server, con le parole trovate evidenziate (`highlightParts`, stessa
+  regola del backend); ↑/↓ (Ctrl+Home/End, PagSu/PagGiù) scelgono, Invio apre, Esc chiude. Finché la risposta per il
+  testo attuale non arriva (150 ms di attesa più la richiesta) le voci di prima restano attenuate e Invio aspetta la
+  risposta giusta per aprirne la prima voce (`enterAction`), invece di aprire una voce della ricerca precedente.
+  `#etichetta` cerca solo fra gli elementi con quell'etichetta, `tipo:job` (o `in:`, nomi italiani e inglesi, anche più
+  tipi) limita i gruppi, mostrati con il nome italiano (`TYPE_LABEL`: «sequenze», «progetti»…); scelta un'etichetta, la
+  ricerca diventa `#etichetta` (con `tipo:` in italiano). Senza testo mostra i preferiti. Aprire un risultato di un altro progetto
+  lo rende prima il progetto attivo (`resultTarget`); `/sequences?id=` e `/templates?id=&tag=` scelgono l'elemento.
+- **Etichette e stella** (`components/Labels.tsx`, `lib/tags.ts`): stella e chip negli elenchi di job, template e
+  sequenze e nel dialogo «Progetti» della barra in alto (preferiti in cima, filtro); `LabelEditor` (stella, chip con la ×,
+  campo con l'etichetta normalizzata mostrata mentre si scrive e i suggerimenti di quelle già usate) nei dettagli e,
+  per il progetto attivo, nella Panoramica. L'elenco della pagina è la fonte dei dati: il dettaglio riceve stella ed
+  etichette dell'elemento (`itemLabels`) e si riallinea quando cambiano (stella cliccata nella riga, dialogo
+  «Progetti»); un elemento fuori dall'elenco (filtro, limite dei job) le legge dal server. Filtro per etichetta o preferiti (`LabelFilterSelect`) negli elenchi di job e
+  template, nell'URL (`?tag=`), così un link lo conserva; un clic su un chip filtra per quell'etichetta.
+
+### Riproducibilità: pacchetti e riesecuzione
 
 Un job completato si esporta in un **pacchetto di riproducibilità** (ZIP) che lo documenta per intero e che BioLoom sa
-**rieseguire**, confrontando poi i risultati con quelli del pacchetto. Regole pure in `domain/reproducibility.py`
+**rieseguire**, confrontando poi i risultati con quelli del pacchetto (F9.4). Regole pure in `domain/reproducibility.py`
 (limiti e controlli dell'archivio, impronta del manifest, oscuramento, confronto, testi), versioni degli strumenti in
 `engines/versions.py`, pacchetti e job `rerun` in `services/reproducibility.py`, rotte in `api/reproducibility.py`,
 comando in `cli.py`.
@@ -2693,12 +2833,188 @@ job originale del pacchetto è un link solo se esiste in questa installazione (u
 il job eliminato, lo mostra come testo); la pagina Job mostra «Job non trovato in questa installazione» per un id che
 non c'è. `/rerun?job=<id>` apre una riesecuzione («Apri risultati» nella pagina Job).
 
-## Frontend (`frontend/`)
+## Prestazioni
+
+Profilazione dei job con MODELLER reale (F1.2, F1.3) e ottimizzazioni applicate solo dove la misura dava un guadagno.
+Lo strumento è `tests/perf_timing.py`, fuori dalla suite: `scripts/test.sh backend tests/perf_timing.py -s`.
+
+- **Cosa misura:** `test_profile` avvolge con monkeypatch le funzioni dei passi (nessuna modifica al codice misurato)
+  e misura il tempo reale del job dall'avvio alla chiusura dell'esecuzione (`JobManager._execute`); i tempi dei
+  singoli modelli vengono dai marcatori `@@BIOLOOM` di `model.py`. `test_paired` alterna due varianti nello stesso
+  processo (A B A B …), così il carico della macchina pesa allo stesso modo su entrambe. `test_profile_modeller_startup`
+  misura il costo fisso di un processo MODELLER.
+- **Condizioni:**
+  - container di test `bioloom-test:4.1.0` (MODELLER 10.8, mkdssp 4.2.2, PROCHECK; ProSA senza licenza, quindi si
+    ferma subito con l'avviso);
+  - Docker Desktop su Windows 11, 4 CPU logiche (Intel i3-1115G4: 2 core con hyper-threading) e 5,7 GB per Docker;
+  - template 1UBQ (catena A) e bersaglio ubiquitina di lievito (76 residui, 96 % di identità), ricerca simulata
+    (un hit 1UBQ), raffinamento `fast`;
+  - "prima" = codice a0e410b, "dopo" = questa versione, lanciati alternati per scenario (due giri da 3 esecuzioni
+    ciascuno). Si riporta la mediana, in secondi; il minimo differisce di meno di 0,5 s. Un primo giro con altri
+    container di test attivi sulla stessa macchina dava tempi fino a +40 % su tutti i passi, per entrambe le versioni:
+    per questo gli scenari sono alternati e i confronti fini sono accoppiati nello stesso processo.
+
+**Scomposizione di un job model** (5 modelli, qualità sul migliore con PROCHECK e ProSA, come nella pagina
+Modellazione):
+
+| Passo | Prima | Dopo |
+|---|---|---|
+| Preparazione del template | 0,02 | 0,02 |
+| Script di allineamento (`align.py`, align2d) | 0,33 | 0,34 |
+| Costruzione: avvio di MODELLER e lettura | 0,24 | 0,26 |
+| Costruzione: restrizioni e modello 1 | 2,75 | 2,76 |
+| Costruzione: ognuno dei 4 modelli successivi | 2,29 | 2,29 |
+| **Costruzione dei modelli (`model.py`)** | **12,23** | **12,14** |
+| Analisi: lettura della struttura | 0,00 | 0,01 |
+| Analisi: Ramachandran | 0,01 | 0,24 ¹ |
+| Analisi: clash | 0,01 | 0,20 ¹ |
+| Analisi: mkdssp (prima con `mkdssp --version` a ogni analisi) | 0,17 | 0,30 ¹ |
+| Analisi: SASA (Shrake-Rupley) | 0,11 | 0,27 ¹ |
+| Analisi: DOPE di MODELLER | 0,98 | 1,20 ¹ |
+| Analisi: PROCHECK | 0,22 | 0,41 ¹ |
+| Analisi: ProSA (senza licenza) | 0,01 | 0,12 ¹ |
+| Analisi: consenso | 0,00 | 0,00 |
+| **Analisi di qualità (tempo reale)** | **1,50** | **1,22** |
+| Iniezione dei REMARK, rapporto JSON, salvataggio (scratch → dati) | 0,01 | 0,01 |
+| **Job intero** | **14,18** | **13,89** |
+
+¹ In parallelo: durata del passo mentre gira insieme agli altri (GIL per i calcoli Python, core condivisi). Conta il
+tempo reale dell'analisi, che scende verso quello del passo più lungo (il DOPE).
+
+**Scenari** (tempo reale del job):
+
+| Scenario | Prima | Dopo | Differenza |
+|---|---|---|---|
+| Job model, 5 modelli, qualità sul migliore con PROCHECK e ProSA | 14,18 | 13,89 | −2 % (analisi 1,50 → 1,22) |
+| Job model, 5 modelli, qualità su tutti con PROCHECK e ProSA | 20,05 | 17,11 | −15 % (fase di qualità ² 7,64 → 4,54) |
+| Elemento di pipeline, 3 modelli, qualità senza PROCHECK e ProSA (come la pagina Pipeline) | 9,30 | 9,13 | −2 % (analisi 1,40 → 1,23) |
+| Job di qualità su 1UBQ (DOPE, PROCHECK, ProSA) | 1,48 | 1,25 | −16 % |
+| Pipeline di 4 sequenze, stesso template mmCIF di 4560 residui (60 catene), 1 modello `very_fast`, senza qualità, 2 in parallelo | 9,38 | 5,64 | −40 % (preparazione, somma sugli elementi: 9,37 → 2,07) |
+
+² Tempo del job dopo template, allineamento e costruzione dei modelli: analisi, REMARK e salvataggio.
+
+**Confronti accoppiati** (`test_paired`, stesso processo, varianti alternate):
+
+| Confronto | Varianti (mediana; minimo) |
+|---|---|
+| Analisi di 1UBQ, 5 coppie | in serie come prima 1,50 (1,41); in parallelo 1,17 (1,12) |
+| Analisi di un modello di MODELLER, 5 coppie | in serie 1,54 (1,38); in parallelo 1,19 (1,13) |
+| Qualità su tutti i 5 modelli, fase di qualità, 3 terne | 1 modello alla volta 6,07; 2 insieme 4,90; 3 insieme 4,26 |
+| Pipeline di 4 sequenze sul template grande, 3 coppie | senza cache dei template 9,00; con cache 5,53 |
+
+**Avvio di MODELLER** (costo fisso di ogni processo): interprete e preambolo della licenza 0,03 s; `import modeller`
+ed `Environ()` 0,21 s; più le librerie di DOPE 0,28 s; DOPE completa di 1UBQ 0,95 s.
+
+**Cosa si è applicato:**
+
+1. **Passi dell'analisi in parallelo** (`quality.analyze`, vedi [Validazione di qualità](#validazione-di-qualità)):
+   −0,3 s per analisi (−22 % nei confronti accoppiati). Il limite è il DOPE, circa 1 s, di cui 0,28 s di avvio.
+2. **Modelli in parallelo con la qualità "Su tutti i modelli"**: 3 insieme (`QUALITY_MODELS_PARALLEL`), perché su 4
+   CPU logiche 3 batte 2 (4,26 contro 4,90 s) e oltre non ci sono modelli abbastanza lunghi da sovrapporre. Non si va
+   oltre i job paralleli delle Impostazioni.
+3. **mkdssp da `ctx.run`**: lo stesso comando di Biopython, con un processo in meno a ogni analisi (la versione si
+   chiede una volta), sotto il budget di CPU, annullabile e con timeout. Prima Biopython lo lanciava da sé, fuori da
+   ogni controllo del JobManager.
+4. **Template preparati riusati nella pipeline** (`services/compute.PreparedTemplates`): `prepare_template` legge
+   tutta la struttura anche per una catena. Per 1UBQ costa 0,02 s, e il guadagno è nullo; per un mmCIF di 4560 residui
+   circa 1 s, 2 s con due elementi in parallelo (GIL). Con la cache un solo elemento prepara, gli altri copiano il
+   file.
+   - **Chiave:** id del template; file della libreria (percorso, dimensione, data di modifica in ns); catene;
+     ligandi (attivazione e gruppi scelti, None = scelta predefinita); soglia del ritaglio pLDDT (None senza ritaglio).
+   - **Vita e spazio:** la cache vive un'esecuzione, in `.tmp/templates` dello scratch, e si svuota a fine pipeline.
+   - **Concorrenza ed errori:** un lock per chiave con attesa annullabile; le preparazioni fallite non si conservano.
+   - **Tracce:** il log segna "(preparazione riusata da un elemento precedente)" e un riepilogo finale; il risultato ha
+     `templates_prepared` e `templates_reused`.
+
+**Valutato e non applicato:**
+
+- **Più sequenze in un unico processo MODELLER** (proposta iniziale della F1.2): escluso, per tenere separati errori e
+  log di ogni elemento. Il guadagno massimo sarebbe l'avvio dei processi (0,21–0,28 s su 9 s per elemento).
+- **Costruzione dei modelli su più processi:** è il passo che pesa di più (86 % del job model, 81 % dell'elemento di
+  pipeline). Resta seriale per tre motivi:
+  - **Riproducibilità:** `automodel` non reimposta il generatore casuale per modello. Lo stato passa dal modello k al
+    k+1, quindi, a parità di seme, dividere i modelli fra processi darebbe modelli diversi da quelli di prima, e
+    dipendenti dalla suddivisione.
+  - **Pipeline:** gli elementi girano già in parallelo.
+  - **Budget di CPU:** dal JobManager (F1.4).
+  - **Possibile evoluzione:** una proposta futura potrà usare semi dichiarati per modello, registrati nel risultato.
+- **(c) Riletture della struttura:** l'analisi legge ogni modello una volta sola. Le altre letture misurate sono
+  trascurabili: la struttura in analisi (0,00–0,01 s), il template 1UBQ (0,01 s), il consenso calcolato due volte
+  (0,00 s). Nessun guadagno misurabile.
+- **(d) DOPE di più modelli in un solo script:** servirebbe solo alla qualità "Su tutti i modelli"; con "Solo sul
+  modello migliore" e nella pipeline il DOPE è uno.
+  - **Guadagno:** l'avvio pesa 0,28 s su 0,95 s, quindi un solo script risparmierebbe al massimo 4 × 0,28 ≈ 1,1 s di
+    CPU. Con 2 core fisici sono circa 0,5 s di tempo reale sulla fase di qualità da 4,26 s (stima, non misurata).
+  - **Costo:** il DOPE dei 5 modelli diventerebbe seriale in un solo processo (≈ 0,3 + 5 × 0,65 ≈ 3,6 s), mentre ora
+    si divide su 3 corsie. Un modello illeggibile fermerebbe il DOPE di tutti.
+  - **Esito:** guadagno piccolo e incerto, non vale la perdita dell'isolamento per modello.
+- **Un pool o un limite di CPU proprio:** i pool di `core/parallel.Steps` appartengono al singolo calcolo e servono
+  solo ad aspettare più passi insieme. Ogni processo passa da `JobContext.run`, quindi il budget di CPU condiviso del
+  JobManager (F1.4) governa anche i passi paralleli, senza un secondo limitatore.
+
+### Misure per i controlli preventivi
+
+`test_preflight_calibration` (`scripts/test.sh backend tests/perf_timing.py -s -k preflight_calibration`, stesse condizioni
+di sopra, con altri container di test attivi: i tempi assoluti sono circa il 3% più alti della tabella, per questo le stime
+usano i rapporti con i valori della tabella). Mediana di 3 giri, varianti alternate nello stesso processo.
+
+| Raffinamento (2 modelli, 76 residui) | `model.py` | Restrizioni + modello 1 | Modello successivo | Rapporto con fast (media dei 2 modelli) |
+|---|---|---|---|---|
+| very_fast (`a.very_fast()`) | 1,84 | 0,95 | 0,58 | 0,24 |
+| fast (predefiniti di AutoModel: `autosched.normal`, 200 iterazioni, `refine.very_fast`) | 5,31 | 2,73 | 2,31 | 1 |
+| normal (come fast, dinamica `refine.fast`) | 7,26 | 3,38 | 3,69 | 1,42 |
+| thorough (`autosched.slow`, 300 iterazioni, `refine.slow`, ciclo ripetuto 2 volte) | 19,87 | 9,88 | 9,65 | 4,17 |
+
+Il rapporto (`REFINEMENT_FACTOR`) è il tempo di `model.py` meno avvio e restrizioni (0,72 s), diviso per quello di fast:
+la media dei due modelli. Sul solo modello successivo vale 0,25, 1,60 e 4,18; con la dinamica `refine.fast` il tempo
+cambia di più da un modello all'altro (3,38 s il primo, restrizioni comprese, 3,69 il secondo).
+
+**Perché questi livelli.** Prima della F8a "normal" (nessuna impostazione) e "fast" (`md_level =
+refine.very_fast`) erano la stessa ottimizzazione: in MODELLER 10.8 `refine.very_fast` è già il predefinito di AutoModel
+(sorgente di `modeller/automodel/automodel.py`, `set_defaults`). Una prova con MODELLER reale (1UBQ, 76 residui, 3
+modelli, 2 giri) ha misurato per modello: predefiniti 2,20 s; programma VTFM `autosched.fast` 2,32 s; `autosched.fast`
+con 100 iterazioni 2,24 s; `autosched.slow` con 300 iterazioni 2,52 s; dinamica `refine.fast` 3,63 s. Il programma
+dell'ottimizzazione VTFM non cambia il tempo in modo misurabile, la dinamica sì: per questo "fast" resta il predefinito di
+MODELLER (il livello proposto dall'interfaccia, che quindi non cambia) e "normal" ha la ricottura più lunga
+`refine.fast`. "very_fast" è `a.very_fast()`, che non perturba le coordinate iniziali (`rand_method = None`): nella
+stessa prova i modelli erano identici (stesso DOPE, RMSD 0 Å), e con la perturbazione rimessa erano diversi ma molto
+peggiori (DOPE −6853 contro −7621) perché 50 iterazioni non bastano a recuperarla; BioLoom lascia il metodo di MODELLER
+e avvisa (controlli preventivi e risultato) che i modelli sono uguali. "thorough" segue l'esempio del manuale senza
+`max_molpdf = 1e6`, più basso del predefinito di MODELLER 10.8 (1e7). Tutti i livelli scrivono le impostazioni per
+esteso nello script (`REFINEMENT_SCRIPT`), così non dipendono dai predefiniti di una versione futura.
+
+| Bersaglio (1 modello fast) | `model.py` | Secondi per residuo |
+|---|---|---|
+| 76 residui (1 catena) | 2,93 | 0,0386 |
+| 152 residui (2 catene) | 5,61 | 0,0369 |
+| 304 residui (4 catene) | 11,25 | 0,0370 |
+
+Bersagli a più catene di ubiquitina di lievito su copie di 1UBQ traslate di 40 Å (ogni catena con i contatti di una
+proteina globulare, nessuno fra le catene): il tempo cresce in proporzione ai residui.
+
+| Spazio (5 modelli fast, analisi estesa del migliore) | 76 residui | 304 residui |
+|---|---|---|
+| modelli PDB | 329 KiB | 1308 KiB |
+| rapporto di qualità | 60 KiB | 209 KiB |
+| altro (PROCHECK, log, allineamento, script) | 2714 KiB | 3344 KiB |
+| **risultati** | **3103 KiB** | **4861 KiB** |
+| intermedi di MODELLER (scratch, "Conserva file intermedi") | 855 KiB | 3168 KiB |
+
+## Frontend
 
 React 19 + TypeScript + Vite, nessuna libreria UI esterna: componenti propri (`components/ui.tsx`), grafici SVG
 (`components/charts.tsx`: Ramachandran, profili per residuo con striscia di struttura secondaria, heatmap,
 mappa delle feature UniProt), viewer 3D 3Dmol.js caricato su richiesta con rilascio del contesto WebGL.
-Il client API (`api/client.ts`) e i tipi (`api/types.ts`) sono l'unico punto di contatto con il backend.
+Il client API (`api/client.ts`) e i tipi (`api/types.ts`) sono l'unico punto di contatto con il backend. Le parti di
+interfaccia delle singole funzioni sono descritte nelle loro sezioni (paragrafi **Interfaccia**).
+
+| Cartella (`frontend/src/`) | Contenuto |
+|---|---|
+| radice | `main.tsx` (tema applicato prima del primo render), `App.tsx` (rotte e accesso con chiave), `styles.css` (variabili CSS e temi) |
+| `api/` | `client.ts` (tutte le chiamate al backend) e `types.ts` (tipi delle risposte) |
+| `pages/` | una pagina per rotta (tabella sotto), caricata su richiesta |
+| `components/` | componenti condivisi (`ui`, `charts`, `Viewer3D`, `JobPanel`, `Pickers`, `AlignmentView`, `Layout`, `GlobalSearch`, `Labels`, `Preflight`, `ReportButton`, `ReproButton`, `FileLoad`, `ErrorBoundary`…) e riquadri delle funzioni (`StructuralAnalysis`, `StructureTools`, `Refinement`, `Mutagenesis`, `Predictor`, `ComplexInput`, `ComplexResults`, `AssembliesCard`, `LigandPicker`, `LigandsPanel`, `CoverageAlerts`…) |
+| `lib/` | logica pura con i test accanto (`*.test.ts`), più gli hook (`hooks.ts`, `useJob`) e i contesti di progetto e notifiche (`context.tsx`) |
 
 **Qualità per residuo nel 3D e confidenza degli allineamenti:**
 
@@ -2732,51 +3048,8 @@ Il client API (`api/client.ts`) e i tipi (`api/types.ts`) sono l'unico punto di 
     bersaglio non coperti. Una traccia riassuntiva sopra l'allineamento elenca le regioni in numerazione del
     bersaglio.
 
-**Confronto strutturale (`pages/Compare.tsx`, `components/StructuralComparison.tsx`, `lib/compare.ts`):**
+**Navigazione, tema, scorciatoie e liste lunghe:**
 
-- **Un solo componente** per la pagina Confronto e la modalità Strutturale di Allineamenti: usa il job `align`
-  strutturale esistente (`api.structuralAlign`), nessun tipo di job nuovo.
-- **Colorazione:** `comparisonColoring` colora i residui di B della catena B del PDB sovrapposto per distanza (scala
-  continua blu → giallo → rosso tra 0 e 5 Å, saturata oltre: 5 Å è la soglia delle coppie vicine di TM-align) o per
-  lDDT (stessa scala rovesciata su 0–1); i residui di A hanno lo stesso valore nel passaggio del mouse ma il colore fisso
-  del riferimento (grigio chiaro, `ResidueValue.color`). Nessun colore chiaro nella scala, per non confonderlo con A. Per
-  i residui senza coppia vale il colore della catena (`ResidueColoring.chainColors`: A grigio chiaro, B grigio "senza
-  valore"), con i campioni in legenda (`legendExtra`).
-- **Selezione:** clic su grafico, tabella o tratto che devia (almeno 3 coppie consecutive oltre 1, 2 o 4 Å, le soglie
-  del GDT, senza salti della numerazione di A) evidenzia i due residui e centra la vista; clic nel 3D seleziona la
-  coppia (`pairIndexOf`, su catena A o B). Il grafico interrompe la linea dove A ha residui senza coppia. La tabella
-  porta in vista la riga selezionata scorrendo solo il proprio contenitore (`rowScrollDelta`): `scrollIntoView`
-  scorreva anche la pagina e un clic nel 3D portava via il viewer.
-- **Link stabili:** `?a=template:1UBQ&ca=A&b=job:<id>:<file>&cb=&job=` (`encodeSource`/`decodeSource`, catena a parte):
-  «Confronta…» nella tabella dei modelli di Modellazione (`compareTargets`: template usati e altri modelli del job; il
-  modello è B), «Confronta con» nella pagina Qualità (i template del job del modello, o un riferimento a scelta) e «Apri
-  in Confronto» negli Allineamenti. Il link precompila, il confronto parte con «Confronta». Nel selettore della
-  struttura (`StructurePicker`, `lib/picker.ts`) un job che non è tra gli ultimi job di modellazione elencati (una
-  pipeline, un job loop, un job più vecchio) compare in cima «(da un link)», con il suo modello fra le scelte: prima la
-  struttura sembrava non scelta e sceglierne un'altra dall'elenco la azzerava. Un `?job=` che non si carica (job
-  eliminato, link vecchio) mostra l'errore e l'invito a rilanciare (`compareJobView`), e `useJob` smette di
-  interrogare un job che il server non ha (404).
-- **Risultati precedenti** (senza `pairs` e senza `comparison_version`): metriche che hanno, viewer con le catene e un
-  avviso per rilanciare, anche accanto alla nota del metodo integrato.
-
-**Ricerca globale, etichette, tema, scorciatoie e liste lunghe (F8b):**
-
-- **Ricerca globale** (`components/GlobalSearch.tsx`, `lib/search.ts`): campo «Cerca…» nella barra in alto, Ctrl+K / ⌘K
-  o `/`. Risultati raggruppati come li ordina il server, con le parole trovate evidenziate (`highlightParts`, stessa
-  regola del backend); ↑/↓ (Ctrl+Home/End, PagSu/PagGiù) scelgono, Invio apre, Esc chiude. Finché la risposta per il
-  testo attuale non arriva (150 ms di attesa più la richiesta) le voci di prima restano attenuate e Invio aspetta la
-  risposta giusta per aprirne la prima voce (`enterAction`), invece di aprire una voce della ricerca precedente.
-  `#etichetta` cerca solo fra gli elementi con quell'etichetta, `tipo:job` (o `in:`, nomi italiani e inglesi, anche più
-  tipi) limita i gruppi, mostrati con il nome italiano (`TYPE_LABEL`: «sequenze», «progetti»…); scelta un'etichetta, la
-  ricerca diventa `#etichetta` (con `tipo:` in italiano). Senza testo mostra i preferiti. Aprire un risultato di un altro progetto
-  lo rende prima il progetto attivo (`resultTarget`); `/sequences?id=` e `/templates?id=&tag=` scelgono l'elemento.
-- **Etichette e stella** (`components/Labels.tsx`, `lib/tags.ts`): stella e chip negli elenchi di job, template e
-  sequenze e nel dialogo «Progetti» della barra in alto (preferiti in cima, filtro); `LabelEditor` (stella, chip con la ×,
-  campo con l'etichetta normalizzata mostrata mentre si scrive e i suggerimenti di quelle già usate) nei dettagli e,
-  per il progetto attivo, nella Panoramica. L'elenco della pagina è la fonte dei dati: il dettaglio riceve stella ed
-  etichette dell'elemento (`itemLabels`) e si riallinea quando cambiano (stella cliccata nella riga, dialogo
-  «Progetti»); un elemento fuori dall'elenco (filtro, limite dei job) le legge dal server. Filtro per etichetta o preferiti (`LabelFilterSelect`) negli elenchi di job e
-  template, nell'URL (`?tag=`), così un link lo conserva; un clic su un chip filtra per quell'etichetta.
 - **Schermi stretti** (≤ 760 px): la barra laterale (pagine, tema, Tasti, Disconnetti, Esci) si apre come pannello sopra
   la pagina dal pulsante del menu nella barra in alto (`Layout`, classe `nav-open`) e si chiude scegliendo una pagina,
   con Esc, con la ✕ o toccando fuori; le griglie (`grid-2`…`grid-5`) passano a una colonna.
@@ -2797,448 +3070,487 @@ Il client API (`api/client.ts`) e i tipi (`api/types.ts`) sono l'unico punto di 
 
 Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni risultato ha un link stabile.
 
-| Pagina | Funzione |
+| Pagina (`pages/`) | Funzione |
 |---|---|
-| Panoramica | flusso guidato, esempi, motori disponibili, risorse del computer; stella ed etichette del progetto attivo |
-| Nuovo modello guidato | `/wizard`: sequenza → template → allineamento → opzioni → avvio → risultati, con i controlli preventivi prima di ogni calcolo e lo stato nell'URL e nel browser (vedi [Procedura guidata](#procedura-guidata-pageswizardtsx-libwizardts)); Modellazione e Pipeline hanno gli stessi controlli sopra il pulsante di avvio |
-| Sequenze | import FASTA/UniProt, proprietà ProtParam, predizione GOR, annotazioni UniProt/InterPro/PDB; mappa di disordine (FoldIndex), bassa complessità (SEG), domini InterPro e GOR; stella ed etichette (`?id=` sceglie la sequenza) |
-| Ricerca template | RCSB/NCBI/locale/AlphaFold DB (accessione UniProt facoltativa, precompilata dalle sequenze UniProt), tabella ordinabile (predefinito: punteggio), colonna Punteggio con fascia e motivazioni (suggerimento; per componente nella riga espansa, sopra l'allineamento dell'hit), riquadro dei template consigliati (principale e complementari, esclusi con il motivo) con «Usa i consigliati per la modellazione» (`lib/templateRank.modelingLink`: un `t=ID:CATENA` per template), righe consigliate evidenziate, download, "modella con"; badge "modello predetto" e pLDDT; nota "dalla cache (data)" e ricalcolo ignorando la cache; per ogni hit gli avvisi su regioni disordinate e domini fuori dal tratto allineato |
-| Libreria template | download RCSB e "Da AlphaFold DB (UniProt)", upload PDB/mmCIF, catene, residui mancanti, ligandi classificati (metallo, cofattore noto, additivo, altro ligando, residuo modificato), DSSP, 3D; badge "AlphaFold", pLDDT medio e fasce di confidenza; assemblaggi biologici (REMARK 350, `pdbx_struct_assembly`) con lo stato oligomerico e «Importa come template» (`<ID>_ASM<n>`), badge "assemblaggio"; stella, etichette e filtro (`?tag=`), preferiti in cima |
-| Allineamenti | pairwise, multiplo, strutturale (con il confronto per residuo e «Apri in Confronto»); esportazione FASTA/Clustal/PIR; salvataggio nel progetto; cache per multiplo e strutturale |
-| Editor PIR | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
-| Modellazione | input automatico, da PIR o «Complesso» (template o assemblaggio, una sequenza per catena anche «stessa della catena …», simmetria, anteprima dell'allineamento per catena; nei risultati confronto delle interfacce con DockQ e 3D colorato per catena e interfaccia), parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); avvisi prima del lancio su regioni disordinate e domini non coperti dai template, con suggerimento; modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job; «Trasferisci ligandi, cofattori e metalli dai template» con la scelta dei gruppi (additivi e ioni del tampone deselezionati per default, `LigandPicker`, che usa le analisi già lette dal selettore dei template anche dopo un download; una lettura non riuscita si mostra con «Riprova», un 404 di un template in download si riprova da sé, e sotto «Avvia modellazione» si dice quale template blocca) e la verifica del modello migliore; «Rifinisci» (OpenMM) per ogni modello e per una struttura qualunque, con i risultati prima/dopo; «Mutagenesi» (mutazioni, varianti di UniProt, scansione di alanina) per ogni modello e per una struttura qualunque, con i risultati del mutante o della scansione; «Confronta con una predizione (ESMFold)» per il modello scelto (F9.3) |
-| Qualità | voto, consenso tra i metodi (discordanze, regioni problematiche, disordine predetto come segnale informativo), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura; sezione Ligandi e metalli (esiti, coordinazione, confronto con il sito del template): il clic su un gruppo lo mostra nel 3D con i residui coordinanti e le linee di coordinazione (`LigandsPanel`, `lib/ligands.ts`; ioni metallici sempre a sfere); scheda Interazioni (analisi strutturale: legami H, ponti salini, disolfuri, aromatiche, interfacce, conservazione; `?ajob=`); schede Tasche (fpocket, `?pjob=`) ed Elettrostatica (PDB2PQR + APBS, `?ejob=`); scheda Mutagenesi (mutazioni e scansione di alanina della struttura del rapporto, cronologia); «Confronta con una predizione (ESMFold)» con l'esito motivato e il confronto per residuo, incluso nel consenso e nel report (`?prjob=`, F9.3) |
-| Confronto | `/compare?a=&ca=&b=&cb=&job=`: B sovrapposta ad A (riferimento), metriche (TM-score su A e su B, RMSD, RMSD entro 5 Å, GDT-TS, GDT-HA, lDDT, lunghezza allineata), 3D con B colorata per distanza (0 → ≥ 5 Å) o lDDT e A in grigio chiaro, grafico di distanza e lDDT per posizione, tratti che deviano, tabella per coppia; clic ovunque → coppia evidenziata nel 3D |
-| Pipeline batch | multi-FASTA → modelli validati, template da ricerca automatica, «Più template complementari» (N da 2 a 5) o fissi (casella «Ligandi» del template solo se la scelta predefinita trasferisce qualcosa dalle catene scelte, con i gruppi esclusi nel suggerimento: `lib/ligands.defaultTransfer`); filtro zona crepuscolare, tabella paginata (template usati elencati, motivazioni nel suggerimento), CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
-| Job | log e file di ogni calcolo; ripresa delle pipeline fallite o annullate; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione e la posizione di quelli in coda ("2° in coda"); stella, etichette e filtro per etichetta o preferiti (`?tag=`); «Pacchetto riproducibile» e «Riesegui da pacchetto» |
-| Riesegui da pacchetto | `/rerun`: caricamento e verifica di un pacchetto, anteprima del manifest con le versioni, controlli preventivi, avvio, rapporto del confronto; `?job=` apre una riesecuzione (vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione-f94)) |
-| Impostazioni | schede Generale (esecuzione, QMEAN, email, consenso e indirizzo di ESMFold), Licenze (MODELLER, ProSA, PROCHECK), Database (pdbaa, MMseqs2, UniClust30), Strumenti (verifica dell'installazione), Spazio e file temporanei (con la cache dei calcoli) |
-| Login | solo in modalità server, quando l'API risponde 401 |
+| Panoramica (`/`) | flusso guidato, esempi, motori disponibili, risorse del computer; stella ed etichette del progetto attivo |
+| Nuovo modello guidato (`/wizard`) | sequenza → template → allineamento → opzioni → avvio → risultati, con i controlli preventivi prima di ogni calcolo e lo stato nell'URL e nel browser (vedi [Procedura guidata](#procedura-guidata)); Modellazione e Pipeline hanno gli stessi controlli sopra il pulsante di avvio |
+| Sequenze (`/sequences`) | import FASTA/UniProt, proprietà ProtParam, predizione GOR, annotazioni UniProt/InterPro/PDB; mappa di disordine (FoldIndex), bassa complessità (SEG), domini InterPro e GOR; stella ed etichette (`?id=` sceglie la sequenza) |
+| Ricerca template (`/search`) | RCSB/NCBI/locale/AlphaFold DB (accessione UniProt facoltativa, precompilata dalle sequenze UniProt), tabella ordinabile (predefinito: punteggio), colonna Punteggio con fascia e motivazioni (suggerimento; per componente nella riga espansa, sopra l'allineamento dell'hit), riquadro dei template consigliati (principale e complementari, esclusi con il motivo) con «Usa i consigliati per la modellazione» (`lib/templateRank.modelingLink`: un `t=ID:CATENA` per template), righe consigliate evidenziate, download, "modella con"; badge "modello predetto" e pLDDT; nota "dalla cache (data)" e ricalcolo ignorando la cache; per ogni hit gli avvisi su regioni disordinate e domini fuori dal tratto allineato |
+| Libreria template (`/templates`) | download RCSB e "Da AlphaFold DB (UniProt)", upload PDB/mmCIF, catene, residui mancanti, ligandi classificati (metallo, cofattore noto, additivo, altro ligando, residuo modificato), DSSP, 3D; badge "AlphaFold", pLDDT medio e fasce di confidenza; assemblaggi biologici (REMARK 350, `pdbx_struct_assembly`) con lo stato oligomerico e «Importa come template» (`<ID>_ASM<n>`), badge "assemblaggio"; stella, etichette e filtro (`?tag=`), preferiti in cima |
+| Allineamenti (`/alignment`) | pairwise, multiplo, strutturale (con il confronto per residuo e «Apri in Confronto»); esportazione FASTA/Clustal/PIR; salvataggio nel progetto; cache per multiplo e strutturale |
+| Editor PIR (`/pir`) | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
+| Modellazione (`/modeling`) | input automatico, da PIR o «Complesso» (template o assemblaggio, una sequenza per catena anche «stessa della catena …», simmetria, anteprima dell'allineamento per catena; nei risultati confronto delle interfacce con DockQ e 3D colorato per catena e interfaccia), parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); avvisi prima del lancio su regioni disordinate e domini non coperti dai template, con suggerimento; modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job; «Trasferisci ligandi, cofattori e metalli dai template» con la scelta dei gruppi (additivi e ioni del tampone deselezionati per default, `LigandPicker`, che usa le analisi già lette dal selettore dei template anche dopo un download; una lettura non riuscita si mostra con «Riprova», un 404 di un template in download si riprova da sé, e sotto «Avvia modellazione» si dice quale template blocca) e la verifica del modello migliore; «Rifinisci» (OpenMM) per ogni modello e per una struttura qualunque, con i risultati prima/dopo; «Mutagenesi» (mutazioni, varianti di UniProt, scansione di alanina) per ogni modello e per una struttura qualunque, con i risultati del mutante o della scansione; «Confronta con una predizione (ESMFold)» per il modello scelto (F9.3) |
+| Qualità (`/quality`) | voto, consenso tra i metodi (discordanze, regioni problematiche, disordine predetto come segnale informativo), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura; sezione Ligandi e metalli (esiti, coordinazione, confronto con il sito del template): il clic su un gruppo lo mostra nel 3D con i residui coordinanti e le linee di coordinazione (`LigandsPanel`, `lib/ligands.ts`; ioni metallici sempre a sfere); scheda Interazioni (analisi strutturale: legami H, ponti salini, disolfuri, aromatiche, interfacce, conservazione; `?ajob=`); schede Tasche (fpocket, `?pjob=`) ed Elettrostatica (PDB2PQR + APBS, `?ejob=`); scheda Mutagenesi (mutazioni e scansione di alanina della struttura del rapporto, cronologia); «Confronta con una predizione (ESMFold)» con l'esito motivato e il confronto per residuo, incluso nel consenso e nel report (`?prjob=`, F9.3) |
+| Confronto (`/compare`) | `?a=&ca=&b=&cb=&job=`: B sovrapposta ad A (riferimento), metriche (TM-score su A e su B, RMSD, RMSD entro 5 Å, GDT-TS, GDT-HA, lDDT, lunghezza allineata), 3D con B colorata per distanza (0 → ≥ 5 Å) o lDDT e A in grigio chiaro, grafico di distanza e lDDT per posizione, tratti che deviano, tabella per coppia; clic ovunque → coppia evidenziata nel 3D |
+| Pipeline batch (`/pipeline`) | multi-FASTA → modelli validati, template da ricerca automatica, «Più template complementari» (N da 2 a 5) o fissi (casella «Ligandi» del template solo se la scelta predefinita trasferisce qualcosa dalle catene scelte, con i gruppi esclusi nel suggerimento: `lib/ligands.defaultTransfer`); filtro zona crepuscolare, tabella paginata (template usati elencati, motivazioni nel suggerimento), CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
+| Job (`/jobs`) | log e file di ogni calcolo; ripresa delle pipeline fallite, annullate o completate con elementi falliti; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione e la posizione di quelli in coda ("2° in coda"); stella, etichette e filtro per etichetta o preferiti (`?tag=`); «Pacchetto riproducibile» e «Riesegui da pacchetto» |
+| Riesegui da pacchetto (`/rerun`) | caricamento e verifica di un pacchetto, anteprima del manifest con le versioni, controlli preventivi, avvio, rapporto del confronto; `?job=` apre una riesecuzione (vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione)) |
+| Impostazioni (`/settings`) | schede Generale (esecuzione, QMEAN, email, consenso e indirizzo di ESMFold), Licenze (MODELLER, ProSA, PROCHECK), Database (pdbaa, MMseqs2, UniClust30), Strumenti (verifica dell'installazione), Spazio e file temporanei (cache dei calcoli, file intermedi di MODELLER, pulizia) |
+| Login (`Login.tsx`, senza rotta) | solo in modalità server, quando l'API risponde 401 |
 
 ## Sicurezza e privacy
 
+**Protezioni.**
+
 - **Porta:** in locale è pubblicata solo su `127.0.0.1`.
 - **Server:** con `BIOLOOM_AUTH=on` tutte le API (e `/docs`) richiedono la chiave d'accesso, tramite
-  cookie HttpOnly firmato o header Bearer, con ritardo sui tentativi falliti.
+  cookie HttpOnly firmato o header Bearer, con ritardo sui tentativi falliti; il middleware controlla anche le rotte di
+  streaming prima che il flusso parta.
 - **Arresto dall'interfaccia:** solo con `BIOLOOM_ALLOW_SHUTDOWN=1` (preset locale).
-- **Richieste in uscita:** tutte verso indirizzi fissi e identificatori validati, tranne il servizio ESMFold. In
-  modalità server il suo indirizzo lo sceglie l'amministratore (`BIOLOOM_ESMFOLD_URL` in `server.env`, vuoto = servizio
-  pubblico): `PUT /api/settings` rifiuta un altro `esmfold_url` (403 `esmfold_url_locked`) e quello salvato in
-  `settings.json` non vale (`SettingsStore` con `server`). La richiesta a ESMFold non segue i reindirizzamenti, e il corpo
-  di una risposta d'errore entra nel messaggio del job solo dal servizio pubblico (gli altri vanno nel log del server).
 - **Container:** gira senza root (`setpriv` all'utente proprietario di `/data`). QMEAN non ha accesso al
   socket di Docker e usa i database in sola lettura.
 - **Licenze:** in `data/licenses` con permessi 0600, mascherate nelle risposte API, mai nelle immagini. Il
   messaggio d'errore di MODELLER, che ripete la chiave, viene mascherato.
 - **Percorsi:** passano tutti da `safe_join` e da identificatori validati; nessun endpoint di navigazione
   del filesystem.
-- **Upload:** limitati (50 MB, `BIOLOOM_MAX_UPLOAD_MB`) e validati come strutture prima dell'uso. Gli
-  archivi pdbaa si estraggono con filtro `data` e solo file senza percorso.
+- **Upload:** limitati (50 MB, `BIOLOOM_MAX_UPLOAD_MB`; 20 MB per i file di sequenze e allineamenti, 200 MB
+  decompressi; 256 MB per un pacchetto di riproducibilità) e validati come strutture prima dell'uso. Gli archivi pdbaa
+  si estraggono con filtro `data` e solo file senza percorso.
+- **File caricati:** sequenze e allineamenti (`/api/files/sequences`) vengono solo letti e non salvati. Le
+  strutture (`/api/files/structure`) vanno tra gli upload, validate e soggette alla pulizia automatica.
 - **Script MODELLER:** generati con valori validati (regex per residui e atomi, numeri con limiti) e
   `repr()`.
 - **CSV esportati:** con neutralizzazione delle formule.
 - **Report HTML:** testi sempre escapati, nessuno script né risorsa esterna, CSP nel documento e nella risposta,
   immagine accettata solo come PNG verificato (vedi [Report del modello](#report-del-modello)).
-- **Privacy:** le coordinate lasciano il computer solo per QMEAN su SWISS-MODEL, scelto o come fallback, e
-  sempre con il consenso esplicito all'invio. QMEAN locale, BLAST+ e MMseqs2 non usano la rete.
-- **AlphaFold DB:** l'importazione nella libreria e il motore `alphafold` inviano a EBI (alphafold.ebi.ac.uk) solo
-  l'accessione UniProt, mai la sequenza né le coordinate. Senza accessione il motore invia la sequenza a NCBI
-  (QBlast su Swiss-Prot), come il motore `ncbi`; nella pipeline ciò vale per le sequenze senza intestazione FASTA di
-  UniProt. I file si scaricano solo da URL `https://alphafold.ebi.ac.uk/files/…`, qualunque URL contenga la risposta.
-- **Disordine e domini:** disordine e bassa complessità si calcolano nel container, senza rete. Per i domini, solo con
-  un'accessione UniProt, a UniProt e InterPro (EBI) va l'accessione, mai la sequenza.
-- **ESMFold (F9.3):** il confronto con una predizione invia al servizio ESMFold (predefinito
-  `api.esmatlas.com`, Meta; un altro indirizzo nelle Impostazioni) la **sequenza** di una catena, mai le coordinate, e
-  solo con il consenso esplicito (`esmfold_remote`, spento per default anche per le cartelle dati esistenti): il
-  pulsante lo chiede prima dei controlli e dell'avvio spiegando che cosa parte e verso dove, la rotta lo verifica (403,
-  nessuna richiesta) e l'handler di nuovo all'esecuzione; si revoca in Impostazioni → Generale. La risposta (al più 20
-  MB) si verifica prima di essere salvata come file del job; la predizione resta nella cache remota della cartella dati
-  per 30 giorni. Con AlphaFold DB va a EBI solo l'accessione, come per l'importazione nella libreria. I dati della
-  libreria di ESM Atlas sono distribuiti con licenza CC-BY 4.0 (intestazione del file, conservata).
-- **File caricati:** sequenze e allineamenti (`/api/files/sequences`) vengono solo letti e non salvati. Le
-  strutture (`/api/files/structure`) vanno tra gli upload, validate e soggette alla pulizia automatica.
 - **Pacchetti di riproducibilità:** nell'esportazione chiavi di licenza, email, chiave d'accesso e percorsi locali
   vengono sostituiti e ogni file è ricontrollato; il pacchetto caricato è un input non fidato (percorsi, collegamenti,
   duplicati, bombe di decompressione, impronta del manifest, checksum, parametri validati come all'avvio) e nessuno
-  script del pacchetto si estrae né si esegue (vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione-f94)).
+  script del pacchetto si estrae né si esegue (vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione)).
+
+**Richieste in uscita** (`engines/remote.py`, tranne il download di pdbaa in `services/databases.py`). Tutte vanno a
+indirizzi fissi con identificatori validati (codici PDB, accessioni UniProt con la regex ufficiale, isoforme escluse),
+tranne il servizio ESMFold, il cui indirizzo è un'impostazione. QMEAN locale, BLAST+, MMseqs2, l'analisi di qualità, le
+analisi strutturali, la rifinitura e la mutagenesi non usano la rete; l'interfaccia non carica risorse esterne.
+
+| Servizio | Dati inviati | Quando | Controlli |
+|---|---|---|---|
+| RCSB Search (`search.rcsb.org`) | sequenza | motore `rcsb` | nuovi tentativi sui 5xx |
+| RCSB file e GraphQL (`files.rcsb.org`, `data.rcsb.org`) | codici PDB | download dei template, metadati degli hit di tutti i motori sul PDB (`rcsb_metadata`, anche per BLAST+ e MMseqs2) | metadati in cache 30 giorni |
+| NCBI QBlast (`blast.ncbi.nlm.nih.gov`) | sequenza, `tool=BioLoom` e l'email di contatto se impostata | motore `ncbi`; motore `alphafold` senza accessione (database `swissprot`); nella pipeline le sequenze senza intestazione FASTA di UniProt | linee guida di NCBI (stato al più una volta al minuto, attesa massima 45 min); avvisi dei controlli preventivi oltre 50 ricerche |
+| UniProt (`rest.uniprot.org`) | accessione o testo cercato | importazione, annotazioni, domini sul bersaglio, varianti della mutagenesi | cache 7 giorni |
+| InterPro (`www.ebi.ac.uk/interpro`) | accessione UniProt, mai la sequenza | domini (pagina Sequenze, `/api/bio/coverage`, controlli preventivi) | cache 7 giorni; disordine e bassa complessità si calcolano nel container |
+| AlphaFold DB (`alphafold.ebi.ac.uk`) | accessione UniProt, mai la sequenza né le coordinate | importazione nella libreria, motore `alphafold`, predizione `alphafold` | file scaricati solo da URL `https://alphafold.ebi.ac.uk/files/…`, qualunque URL contenga la risposta; cache 7 giorni |
+| SWISS-MODEL QMEAN (`swissmodel.expasy.org`) | coordinate del modello ed email | QMEAN remoto, scelto o come fallback | consenso esplicito all'invio (`qmean_remote`) ed email obbligatori |
+| ESMFold (`esmfold_url`, predefinito `api.esmatlas.com` di Meta) | sequenza di una catena, mai le coordinate | job `predict` con ESMFold | consenso esplicito (sotto); nessun reindirizzamento seguito; risposta al più 20 MB, verificata prima di essere salvata; cache 30 giorni |
+| NCBI FTP (`ftp.ncbi.nlm.nih.gov`) | nulla: solo download | job `db_update_pdbaa` | estrazione con filtro `data` |
+
+- **ESMFold (F9.3):** il consenso (`esmfold_remote`) è spento per default, anche per le cartelle dati esistenti; il
+  pulsante lo chiede prima dei controlli e dell'avvio spiegando che cosa parte e verso dove, la rotta lo verifica (403,
+  nessuna richiesta) e l'handler di nuovo all'esecuzione; si revoca in Impostazioni → Generale. In modalità server
+  l'indirizzo lo sceglie l'amministratore (`BIOLOOM_ESMFOLD_URL` in `server.env`, vuoto = servizio pubblico):
+  `PUT /api/settings` rifiuta un altro `esmfold_url` (403 `esmfold_url_locked`) e quello salvato in `settings.json` non
+  vale (`SettingsStore` con `server`). Il corpo di una risposta d'errore entra nel messaggio del job solo dal servizio
+  pubblico (gli altri vanno nel log del server). I dati della libreria di ESM Atlas sono distribuiti con licenza CC-BY 4.0
+  (intestazione del file, conservata).
+- **AlphaFold DB:** senza accessione il motore invia la sequenza a NCBI (QBlast su Swiss-Prot), come il motore `ncbi`.
 
 ## Test
 
-- **`backend/tests` (pytest), circa 400 test,** eseguiti sia nativamente sia nel container:
-  - dominio, job manager, API, generazione script, MODELLER end-to-end;
-  - ripresa dei job e delle pipeline (`test_jobs.py`, `test_pipeline_resume.py`): solo gli elementi non
-    conclusi, riavvio simulato, ambito "solo i falliti", pipeline completate con falliti, file vecchi eliminati,
-    richieste concorrenti, nuovo annullamento, progresso, elementi completati solo a file salvati (disco pieno,
-    modelli mancanti), eliminazione concorrente a una ripresa;
-  - flusso dati: scratch, salvataggio definitivo, intermedi, blocco SQLite, pulizia, gruppi di processi;
-  - licenze e accesso;
-  - parser di PROCHECK e ProSA tarati su output reali di 1UBQ;
-  - MMseqs2 e QMEAN locale con worker simulato;
-  - riconoscimento di tutti i formati di UniClust30 (`test_uniclust_discovery.py`);
-  - scelta della versione e fallback su SWISS-MODEL (`test_qmean_fallback.py`), memoria richiesta dal database
-    (12 GB misurati per UniRef30_2020_06, stima per le altre versioni, giudizio del worker, tolleranza del 95%): job
-    fallito subito o fallback con 8 GB, partenza con 11,7 GB; due QMEAN locali eseguiti uno alla volta, il secondo in
-    coda con posizione e fase, senza bloccare il pool "io"; QMEAN su SWISS-MODEL senza esclusione, e nemmeno senza
-    servizio locale (due fallback insieme, nessuna fase di coda); servizio locale restituito prima del fallback (un
-    secondo QMEAN locale parte e finisce mentre il primo aspetta SWISS-MODEL); nota sulla memoria con l'esito
-    (`memory_required.sufficient`, anche quando decide il giudizio del worker);
-  - lettura dei formati di sequenza e caricamento di strutture (`test_fileformats.py`);
-  - consenso tra i metodi (`test_consensus.py`):
-    - scale, pesi, fasce, metodi mancanti, discordanze;
-    - segnali per residuo, regioni con tolleranza, confini di catena e numerazione;
-    - QMEAN e ProSA per residuo;
-    - 1UBQ con le uscite reali di MODELLER (`dope_1ubq.profile`), PROCHECK e ProSA;
-    - rotta con QMEAN simulato (stessa struttura, altra struttura, template sostituito con lo stesso id, job non
-      QMEAN o non completato) e modelli MODELLER simulati;
-    - riconoscimento del pLDDT (intestazione AlphaFold sintetica, ModelCIF, nome di AlphaFold DB, file normale,
-      valori fuori scala; strutture sperimentali con `REMARK 200 STARTING MODEL: ALPHAFOLD` o
-      `_pdbx_initial_refinement_model` AlphaFold, modello MODELLER con un nome `AF-…`) e stesso esito per libreria,
-      rapporto di qualità e copia preparata del template sugli stessi file;
-  - AlphaFold DB (`test_alphafold.py`, EBI simulato con `httpx.MockTransport`, NCBI con monkeypatch): parser della
-    risposta (campi mancanti, più voci e frammenti, versioni, URL estranei), 404, accessioni non valide senza
-    richieste, cache e nuovi tentativi, download PDB/mmCIF, libreria (id, meta, record originali, frammenti, file
-    caricati, metadati precedenti completati alla prima lettura), annullamento durante i tentativi del download e
-    durante l'attesa dello stesso modello, motore con accessione e con BLAST simulato (estrazione delle accessioni,
-    identità 96,1% e copertura su 1UBQ contro l'ubiquitina di lievito; accessione senza modello o EBI non
-    disponibile = job fallito con il motivo, risultati parziali con le note e senza cache), cache dei calcoli,
-    `best_template` a parità, ritaglio per pLDDT su 1UBQ con B-factor riscritti (11 residui tolti, soglia compresa,
-    minimo 30, frammenti isolati di 1 e 3 residui tolti e di 6 tenuti), PIR riportato sul ritaglio, pipeline
-    (accessioni da `sp|` e `tr|`) e, con MODELLER, modellazione e pipeline con template ritagliato;
-  - cache dei calcoli (`test_compute_cache.py`): riscontri senza rieseguire i motori (simulati), invalidazione per
-    parametri, sequenza, timbro del database o dello strumento, scadenza, file corrotti, job falliti e annullati,
-    riuso nella pipeline e scritture concorrenti;
-  - confronto strutturale (`test_comparison.py`, integrato e TM-align/US-align veri dell'immagine): lDDT calcolato a
-    mano (tre Cα, residuo senza corrispondente, raggio e soglie esclusi), invarianza al moto rigido, GDT massimizzato
-    per soglia (due gruppi rigidi), 1UBQ contro sé stessa e contro una copia ruotata e traslata (TM 1, GDT 100, lDDT 1,
-    matrice e PDB sovrapposto con A e B al loro posto), tratto 31–37 spostato di 6 Å (distanze e lDDT bassi solo lì,
-    valori di riferimento), catena A contro B di `ubq_dimer.pdb`, residuo inserito (35A) e Cα mancante (lDDT uguale
-    alla formula ricavata a parte), accordo fra i percorsi, colonne non allineate di TM-align (tratto a 12 Å), uscite
-    anomale simulate (residui che non corrispondono, matrice mancante), lettura delle due forme della matrice e
-    invalidazione delle voci di cache precedenti;
-  - tempo residuo e flussi SSE (`test_live.py`): formule dell'ETA (arrotondamento, soglie, mai negativa), pipeline con
-    durate note e dopo una ripresa, job con progresso; notifiche fra thread; righe intere del log; flusso di un job
-    con TestClient (stato, log contiguo, fine, offset, 404, ripresa), limite dei flussi, flusso dell'elenco (job,
-    elementi di pipeline, filtro per progetto, eliminazioni, heartbeat), chiusura all'arresto, accesso con chiave
-    (401 senza cookie, 200 con cookie o Bearer); con un server uvicorn vero: eventi mentre il job è fermo,
-    chiusura dopo `end`, posto liberato alla disconnessione del client, arresto non bloccato dai flussi aperti.
-    I test aspettano le condizioni, non tempi fissi: un flusso in attesa di notifiche (`ChangeFeed.waiting`) ha
-    già inviato tutto ciò che era stato pubblicato prima;
-  - coda con priorità e budget di CPU (`test_scheduling.py`), con processi veri che scrivono inizio e fine: mai più
-    processi contemporanei degli slot (da job diversi e da thread dello stesso job), annullamento durante l'attesa,
-    timeout non consumato dall'attesa e ancora valido per il processo, impostazione dei job in parallelo cambiata
-    senza riavvio (budget e pool "cpu"), programmi multi-thread su più slot (fissi ed elastici: questi prendono subito
-    gli slot liberi), processi di I/O fuori dal budget, ordine
-    per priorità senza sorpassi, invecchiamento con un orologio simulato (budget e coda: una richiesta di pipeline
-    servita entro 2 livelli anche con richieste interattive continue, FIFO a parità di priorità effettiva), fase "In
-    attesa di CPU libera" (job, elemento di pipeline, figlio senza fase, passi in parallelo),
-    ordine di esecuzione per tipo con un solo worker e FIFO a parità, risorsa esclusiva restituita prima della fine
-    (il job successivo parte, la chiusura non libera la risorsa presa da un altro), ripresa che torna al suo posto,
-    annullamento e
-    ripresa di un job in coda, job in coda all'arresto marcati da `recover`, eventi invariati, posizione nel flusso
-    dell'elenco, pipeline con 4 elementi in parallelo su 2 slot senza deadlock;
-  - analisi in parallelo e template preparati (`test_parallel_quality.py`): `Steps` (ordine dei risultati diverso da
-    quello di conclusione, modalità seriale, passo fallito isolato, annullamento durante l'attesa con passi in coda che
-    non partono); rapporto in parallelo identico a quello seriale su 1UBQ (favorite 95,9 %, clashscore 1,66, zDOPE
-    −2,73, PROCHECK core 95,5 %), `ubq_dimer.pdb`, `ubq_zn.pdb` e un modello di MODELLER; avvisi dei passi falliti
-    uguali, nello stesso ordine, e passo lento non bloccato; annullamento con tre processi veri da 60 s tutti terminati
-    in pochi secondi e nessun thread rimasto; mkdssp solo da `ctx.run` con la stessa assegnazione del percorso di
-    Biopython; prefissi dei passi nel log; qualità "all" con 3 modelli insieme uguale a quella seriale; cache dei
-    template (copia per elemento, chiave con template, catene, ligandi e soglia pLDDT, file sostituito, errori non
-    conservati, elementi concorrenti, attesa annullabile) e pipeline di 4 sequenze con una sola preparazione;
-  - report del modello (`test_report.py`, MODELLER simulato con le coordinate e il profilo DOPE reali di 1UBQ, più un
-    test con MODELLER reale): tutte le sezioni; identità 96,1% dell'ubiquitina di lievito su 1UBQ, voto 98,9,
-    consenso 99,6; SVG ben formati con 74 punti di Ramachandran e il picco DOPE 73–76; escape di `<script>`, `"` e `&`
-    in titoli, nomi, metadati, residui e atomi; PNG valido incorporato, PNG malformati (firma, CRC, troncati, dati
-    dopo IEND, senza IDAT, altri tipi) e oltre 3 MB rifiutati; modelli non del job, falliti, job non completato;
-    loop; report di un job quality con QMEAN simulato (70–76 sotto 0,6); ZIP della pipeline con un report per
-    elemento completato e rotta del report di un elemento; nomi unici nello ZIP ("abc" e "abc-", "x", "x", "x_2", job
-    precedenti con nomi ripetuti); nomi di file sicuri;
-  - scelta ragionata dei template (`test_template_rank.py`, RCSB simulato con monkeypatch e `httpx.MockTransport`):
-    curva di Rost (valori a 76, 100, 250, 450 residui, asintoto); punteggio dell'ubiquitina di lievito su 1UBQ (95,3)
-    con ogni componente; alta identità a bassa risoluzione e R-free alto contro alta risoluzione al 35,5%; NMR e
-    crio-EM; modello predetto (pLDDT, metodo, sperimentale che vince a parità e perde con metà copertura); copertura
-    parziale; zona crepuscolare dipendente dalla lunghezza e copertura limitata dall'identità; lacune; scala
-    dell'E-value; metadati assenti che non penalizzano; ligandi e stato oligomerico informativi; selezione
-    complementare (due metà → entrambe, quasi identici → uno solo, frammenti sovrapposti, costrutto più lungo,
-    guadagno di identità locale, zona crepuscolare, limite, senza righe dell'allineamento, 400 candidati su 1000
-    residui); metadati RCSB con R-free e assemblaggio 1, voci di cache vecchie riscaricate o usate senza rete, risposte
-    GraphQL con soli errori; ricerca con punteggi e consigliati anche dalla cache, voci di cache della versione
-    precedente non lette, metadati vecchi che non entrano in cache; pipeline multi (template passati a MODELLER,
-    colonne, metriche, log, validazione di `max_templates`, filtro sulla copertura dell'insieme); unione degli
-    `align2d` sul bersaglio e scelta fra `salign` e `align2d`; con MODELLER reale due frammenti di 1UBQ (sovrapposti e
-    disgiunti) → modello completo a TM-score > 0,95 e due template completi che tengono `salign`;
-  - ligandi, cofattori e metalli (`test_ligands.py`): classificazione (ZN metallo, HOH esclusa, GOL e SO4 additivi, HEM
-    cofattore, Na⁺ monovalente, MSE residuo modificato) anche nel dettaglio del template; geometrie ideali e incomplete;
-    sito Zn di `ubq_zn.pdb` (valori di riferimento), Zn spostato nella proteina (scontro), distanze lunghe e troppo corte;
-    copia preparata con i soli gruppi scelti in fondo alla catena e il sito del file originale; chiave dei template
-    preparati che cambia con la scelta; opzioni (validazione, template obbligatorio con più template, pipeline
-    automatica); colonne '.' del PIR (automatico, fine esplicita e "+N", '.' dell'utente tolti, catene, più template,
-    errori); confronto con il sito del template (conservato, sostituito, non allineato, allineamento che non
-    corrisponde); rapporto di qualità e report HTML solo con ligandi; con MODELLER, ubiquitina di lievito su
-    `ubq_zn.pdb` con il solo Zn trasferito (PIR, HETATM, verifica, report) e lo stesso PIR con i ligandi spenti;
-  - disordine e domini (`test_disorder.py`, UniProt e InterPro simulati con `httpx.MockTransport`): formula di FoldIndex
-    calcolata a mano (I, K, A, cariche opposte, X, B), finestra centrata e accorciata alle estremità, FoldIndex globale
-    dell'ubiquitina uguale a quello dal GRAVY di Biopython (+0,090), ubiquitina ordinata (frazione 0) e perché la finestra
-    fissa al bordo sbaglierebbe, α-sinucleina 98–140 (tolleranza 90–105 sull'inizio), regioni di 30 residui con 3
-    tollerati, validazione (5000 residui compresi, 5001 no, acidi nucleici, FASTA con più record); SEG con entropia e P0
-    calcolate a mano, tratto poli-Q esatto, X, fusione dei segmenti; domini InterPro fusi e superfamiglie di riserva;
-    avvisi di copertura (disordine scoperto per metà, coperto, domini coperti, parziali, scoperti, suggerimenti);
-    consenso con le regioni `expected` (metà dei residui) senza variazione di punteggio, segnali e regioni rispetto a una
-    sequenza ordinata, 1UBQ, dimero e sito Zn; report con il profilo di FoldIndex, le regioni evidenziate e le fonti; rotte
-    `/api/bio/disorder` (errori 400 e 422) e `/api/bio/coverage` con template della libreria, InterPro e cache, tratto di
-    UniProt e sequenza diversa, servizi non raggiungibili, accessione sconosciuta o non valida, intervalli della ricerca,
-    PIR, template non valutabili, template AlphaFold con il ritaglio pLDDT, verifiche concorrenti sullo stesso template
-    senza analisi in cache;
-  - analisi strutturale (`test_interactions.py`, `test_interfaces.py`, `test_conservation.py`, `test_analysis_api.py`):
-    legami idrogeno di elica e foglietto di 1UBQ con il confronto con il DSSP integrato, ponti salini noti verificati
-    sulle coordinate del file, idrogeni espliciti, geometrie sintetiche (disolfuro, ponte salino, legame idrogeno sugli
-    atomi pesanti, coppia elencata una volta, NH₂ posizionati, π-stacking, catione-π) e soglie; interfaccia simmetrica e
-    piccola di `ubq_dimer.pdb`, ΔSASA mai negativa, coppie solo fra catene vicine, terza catena, bande di plausibilità,
-    annullamento fra i calcoli della SASA; pesi di Henikoff e punteggi calcolati a mano, gap, mappatura su 1UBQ (anche
-    con code e inserzioni nella riga), scelta della riga, catene multiple, allineamenti non validi; prestazioni su 4816
-    atomi; job e rotte (allineamento da testo, da sequenze non allineate e da un job; errori; analisi più recente per
-    sorgente e impronta; job concorrenti), sezione del report (dimero sì, 1UBQ no, modelli di un job, escape);
-  - mutagenesi (`test_mutations.py`): notazione (forme a una e tre lettere, inserzioni, catena omessa o senza
-    identificativo, errori), verifica sulla struttura (residuo originale sbagliato, catena inesistente, ligando, residuo
-    ripetuto), copia per MODELLER (tratti alle interruzioni, MSE → MET, catena senza nome, ripristino dei nomi),
-    intorni e gruppi vicini, indicatori su mutanti grezzi di 1UBQ, regole della classificazione e soglie di DOPE ed
-    energia, hot spot, frammenti di riferimento, scansione (elenco, intervalli, esclusi, limiti, ordine, CSV), varianti
-    di UniProt simulate con la mappatura della numerazione (anche con le ripetizioni) e la cache, controlli preventivi,
-    rotte e priorità. Con MODELLER: K48R su 1UBQ (Arg 48, resto invariato, neutra o incerta, report, cronologia),
-    I30P (destabilizzante, elica), scansione di 3 residui ordinata, D58A sul dimero (DOPE fra le catene), catena senza
-    identificativo con un'interruzione, annullamento durante MODELLER; con OpenMM l'energia di K48R. Correzioni della
-    revisione: catena «AA» di un mmCIF (siti, partner, residui ottimizzati e frammenti con la lettera dei modelli, e con
-    MODELLER mutagenesi e scansione completate con le etichette «AA:…»), hot spot con RSA 0 nel complesso (probabile) e
-    RSA ignota (non sepolto), notazione canonica con la catena senza identificativo accanto alla catena B (parametri del
-    job, varianti di UniProt, rilettura all'esecuzione), tasche di un template sostituito rifiutate;
-  - tasche, elettrostatica e rifinitura (`test_pockets.py`, `test_electrostatics.py`, `test_refine.py`): parser sulle
-    uscite reali di fpocket (4 tasche di 1UBQ, ordine per druggability, sfere = sfere dichiarate, baricentro) e di
-    PDB2PQR (carica netta 0, residui carichi per tipo, His68 con HD1); griglia come psize (97 × 97 × 129, le dimensioni
-    usate da APBS), passo allargato oltre il tetto, input di APBS con ogni parametro; mappe OpenDX sintetiche nel formato
-    di APBS e interpolazione esatta su un campo lineare; punti di Shrake-Rupley (atomo isolato, sovrapposti, sepolto);
-    potenziale per residuo su 1UBQ con una mappa lineare; copia pulita di tasche ed elettrostatica con MSE e SEP scritte
-    come HETATM (tenute, MSE → MET, nessun avviso di gruppi esclusi); elettrostatica con PDB2PQR e APBS simulati su una
-    catena senza identificativo (cariche e potenziali per residuo, catena originale nel risultato), lettera libera per la
-    catena senza nome accanto a una catena A, SEP tolta da PDB2PQR con il suo avviso; costanti e unità del protocollo,
-    copia pulita della rifinitura (Zn escluso, TER all'interruzione 34/38, anche con la catena senza identificativo e
-    nessun legame 29–35 nella topologia di PDBFixer), confronto prima/dopo e RMSD (spostamento noto di un Cα); report del
-    modello rifinito (sezioni, energia per componente, protocollo, fonti; solo il file rifinito); rilevamento delle librerie
-    senza importarle e messaggi degli strumenti mancanti; job falliti con il motivo senza gli strumenti, validazione
-    delle rotte prima della coda, priorità. Con gli strumenti (immagine di sviluppo): fpocket su 1UBQ (stesse tasche
-    dell'uscita salvata, file conservati, `/latest`) e su `ubq_zn.pdb` (Zn escluso con avviso); PDB2PQR + APBS su 1UBQ
-    (carica |q| ≤ 1, tutte le Lys esposte positive, almeno 5 Glu su 6 negative, medie separate di oltre 1,5 kT/e,
-    residui sepolti senza valore, `.dx` scaricabile, PARSE e AMBER) e annullamento durante APBS (processo terminato);
-    rifinitura di 1UBQ con χ1 di Ile30 ruotato (energia diminuita, RMSD < 0,5 Å, clashscore non peggiore, REMARK,
-    rapporto di qualità), con 0,5 ps di dinamica, idrogeni e un'interruzione della catena (nessun residuo ricostruito,
-    34 e 38 non legati) e annullamento durante la dinamica (processo terminato);
-  - verifica dell'installazione (anche fpocket, PDB2PQR + APBS e OpenMM: "ok" se ci sono, "non disponibile" altrimenti).
-  - complessi e omo-oligomeri (`test_assembly.py`, `test_complexes.py`): espressioni degli operatori (elenchi, intervalli,
-    prodotti, errori, limite delle combinazioni) e prodotti applicati da destra a sinistra; mmCIF sintetico con identità +
-    rotazione C2 → la catena B di `ubq_dimer.pdb` entro 0,01 Å, acque della stessa catena dell'autore incluse o escluse
-    secondo l'asym, prodotti "(1,2)(3)"; REMARK 350 di 1UBQ e con righe AND CHAINS, BIOMT incompleti, nomi delle copie
-    (catene riservate, catene di più caratteri), limite delle 62 catene, PDB generato con intestazione, REMARK e stessa
-    interfaccia; rotte della libreria (elenco, importazione, riuso, rigenerazione con il file cambiato, assemblaggio di un
-    assemblaggio, errori, importazioni concorrenti); bersaglio a più catene (`same_as`, errori della corrispondenza, limiti
-    di 12 catene e 3000 residui compresi), gruppi di simmetria, unione degli allineamenti per catena, coerenza delle catene
-    di un PIR (errore nella modalità Complesso, avviso altrimenti), script con simmetria e nomi delle catene, peso validato,
-    copia preparata nell'ordine del bersaglio, nomi e simmetria del piano del modello; confronto delle interfacce (dimero
-    contro sé stesso con catene rinominate e numeri spostati, moto rigido, catena spostata di 3 Å con DockQ dalla formula,
-    catene non più a contatto, interfaccia nuova, PIR che non corrisponde, template a tre catene con un PIR da A a B,
-    catena allineata solo a gap, errore inatteso dell'analisi che non fa fallire il job), sezione del report bilanciata
-    con l'escape; id degli assemblaggi senza troncamento (assemblaggi 1, 2 e 3 di un template di 37 caratteri distinti,
-    409 per un omonimo che è un altro assemblaggio);
-    rotte con complessi non validi (nessun job accodato); con MODELLER l'anteprima per catena e l'omodimero dell'ubiquitina
-    di lievito con e senza simmetria (catene, numerazione, RMSD fra le catene, DockQ, REMARK, report) e dallo stesso PIR;
-  - controlli preventivi (`test_preflight.py`, licenze, strumenti, spazio e worker QMEAN simulati): ogni codice con un caso
-    che lo produce e uno che non lo produce; curva di Rost (33,2% a 76 residui, 20,0% a 300) e soglia di Baker & Šali;
-    stime contro le misure (job model 13,89 s, elemento di pipeline 9,13 s, i quattro livelli di raffinamento distinti
-    e in ordine, 304 residui, byte dei risultati e degli intermedi); modelli identici con «rapidissimo»; ubiquitina di lievito su 1UBQ senza errori né avvisi (identità 96,1%, copertura 100%) e nessun job
-    avviato; 1UBQ al 25% di identità (zona crepuscolare), bersaglio con una coda disordinata (copertura e disordine), PIR a
-    una e a due catene, template assenti, scaricabili o con una catena sbagliata (nessun download), ritaglio pLDDT
-    (11 residui, 25 rimasti, più della metà, ritaglio spento), timeout, spazio, PROCHECK e ProSA (licenza, MAC), coda,
-    punteggio dalla ricerca, stessa validazione della rotta di avvio (stesso messaggio), controlli concorrenti; QMEAN con 8 e
-    11,7 GiB per UniRef30_2020_06 e fallback; motori di ricerca, pipeline con 51 ricerche NCBI, accessioni AlphaFold,
-    sequenze lunghe e disordinate, spazio;
-  - migrazioni (`test_migrations.py`), con un database della versione 1 generato da `db.SCHEMA` con dati in tutte le
-    tabelle: passaggio alla 2 senza righe perse né cambiate, copia di sicurezza integra con lo schema 1 (anche con le
-    righe rimaste solo nel WAL), riapertura senza nuove copie, migrazione ripetuta dopo che la versione 4.1.0 ha riscritto
-    `schema_version` a 1 (etichette conservate), errore a metà della migrazione (database, tabelle e versione invariati),
-    errore nella migrazione successiva (resta la precedente), nessuna migrazione senza copia, database nuovo, schema più
-    recente rifiutato, seconda istanza, trigger di pulizia (anche in cascata) e vincolo sui tipi, avvio dell'applicazione
-    su una cartella dati della versione 1, scritture concorrenti;
-  - etichette e preferiti (`test_labels.py`): normalizzazione (forme equivalenti, accenti composti e scomposti, "zn2+",
-    32 caratteri, caratteri rifiutati), rotte per i quattro tipi, errori (404, 422, 400, limite di 20), preferiti, elenchi
-    con `tags`/`favorite` e filtri `?tag=`/`?favorite=` (job filtrati prima del limite), pulizia alla cancellazione di
-    sequenze, progetti (job e sequenze in cascata), job e template (anche cancellati a mano dalla cartella; cartella
-    assente non toccata), aggiunte concorrenti (limite rispettato, stessa etichetta una volta), template eliminato
-    durante l'aggiunta;
-  - confronto con un predittore esterno (`test_predict.py`, ESMFold e AlphaFold DB simulati con `httpx.MockTransport`
-    nel formato reale del servizio): client (pLDDT su 0–1 riportato a 0–100 e su 0–100 lasciato com'è, TITLE aggiunto se
-    manca, 404/413/400/429/503/tempo scaduto con il codice e i tentativi giusti, nuovo tentativo riuscito, risposte non
-    valide, troppo grandi o di un'altra sequenza, sequenza troppo lunga, con lettere non standard, corta o vuota senza
-    richieste, 400 residui compresi, cache per sequenza e servizio, indirizzi non validi); consenso (impostazioni
-    precedenti e valori strani → spento senza azzerare le altre, rotta delle impostazioni, 403 senza job né richieste,
-    job accodato senza consenso fallito senza invio); validazione prima della coda; riconoscitore unico (ESMFold sì, file
-    grezzo 0–1, EXPDTA, MODELLER, REMARK, altro TITLE e mmCIF no, AlphaFold ancora sì; 1UBQ, `ubq_dimer.pdb`, `ubq_zn.pdb`
-    no; rapporto di qualità, libreria «Modello predetto (ESMFold)» e copia preparata con il ritaglio e il TITLE);
-    plausibilità su 1UBQ con il tratto 31–37 spostato (predizione sicura → divergenze locali, incerta → concordano, copia
-    identica, incrocio con il consenso), ripiegamento diverso, non conclusivo, regioni con tolleranza, confini di catena e
-    di numerazione, scala ed errori del file; consenso identico senza confronto, metodo con peso 0,25 e punteggio dalla
-    formula, residui segnalati agli indici del rapporto, regioni e segnali invariati, metodo fra i mancanti se non
-    conclusivo, discordanza con il voto, regione problematica marcata; priorità e pool; job end-to-end (file
-    riconosciuto dall'analisi di qualità, più recente, cache al secondo job), AlphaFold DB, tre job insieme con una cache
-    valida; rotte del consenso e del report (sezione bilanciata, citazioni, struttura diversa 400, job non predict o senza
-    confronto 400), markup della sezione con l'escape; controlli preventivi (consenso, lunghezza, accessione, cache,
-    tempi, nessuna richiesta remota); sequenza di una catena interrotta con una MSE (giunzioni, SEQRES che corrisponde,
-    che non corrisponde o troppo lungo, numerazione che salta senza residui mancanti), giunzioni mai divergenti, job con
-    il SEQRES (sequenza completa inviata) e senza (avviso nei controlli e nel risultato); template di ESMFold chiamato
-    ESMFold in log, note, REMARK, report e controlli preventivi;
-  - ricerca globale (`test_global_search.py`, ogni test con FTS5 e con LIKE): parole e query FTS5/LIKE con escape,
-    tabella dei punteggi, organismo dalle intestazioni PDB/mmCIF, ordine per pertinenza (Chinasi 13, «Chinasi di
-    lievito» 7, descrizione 1,5), accenti e maiuscole, accessione, gruppi (documento per nome, job per tipo, template per
-    id, titolo e organismo), limite e `truncated`, 22 richieste con caratteri speciali e tentativi di iniezione SQL e FTS5
-    (tabelle intatte, nessun risultato "tutto"), operatori come parole, indice allineato a modifiche, eliminazioni e
-    cascate, template aggiunti e tolti a mano dalla cartella, gruppo delle etichette e filtro `tag`, preferiti in testa e
-    senza testo, stessi risultati dai due motori, indice di 10 000 job, ripiego senza FTS5 e nessun oggetto FTS5 nel file;
-    ogni tipo di job registrato con un'etichetta uguale a quella del frontend, job dei tipi nuovi trovati per etichetta
-    («rifinitura», «tasche», «mutagenesi», …) con FTS5 e con LIKE;
-  - riproducibilità (`test_reproducibility.py`): nomi pericolosi (`..`, assoluti, unità di Windows, barre rovesciate,
-    nascosti, riservati, profondità), collegamenti simbolici, file speciali, duplicati anche per maiuscole, cifratura,
-    bomba di decompressione (4 MB di zeri, circa 1000:1) e limiti di numero e dimensione; impronta del manifest
-    (parametri cambiati, formato più recente, percorsi non validi); oscuramento (segreti senza maiuscole, percorsi solo
-    all'inizio, «https://data.rcsb.org» intatto); confronto delle coordinate di 1UBQ senza sovrapposizione (660 atomi,
-    traslazione di 0,5 Å → RMSD 0,5; un atomo spostato di 0,66 Å → RMSD 0,66/√660 e scarto massimo con l'atomo; 0,001 Å
-    entro la tolleranza; acque mancanti), data di MODELLER ignorata, JSON e testi con la tolleranza, esito, avvisi sulle
-    versioni, versioni lette dai programmi; pacchetto di un'analisi di qualità (manifest, checksum di ogni file, input,
-    LEGGIMI), nessun segreto in nessun file con chiave MODELLER, email e chiave d'accesso del test scritte anche nel log
-    (controllo programmatico che elenca solo i file), file grande comprimibile salvato senza compressione, errori (job
-    in esecuzione 409, tipo non supportato, inesistente); ricerca RCSB simulata: input remoti con la data e riesecuzione
-    rifiutata; manifest alterato, checksum errato, file non dichiarati o mancanti, ZIP non valido, path traversal,
-    collegamento simbolico e bomba rifiutati senza scrivere nulla né creare job; script del pacchetto mai estratti;
-    riesecuzione identica di qualità, allineamento strutturale (file caricato poi eliminato) e analisi strutturale
-    (job di allineamento eliminato), con anteprima, controlli preventivi (stima, pacchetto scaduto, corpo non valido) e
-    due avvii concorrenti dello stesso pacchetto; versione diversa come avviso; tipo non rieseguibile e parametri non
-    validi in un manifest risigillato; pacchetto caricato eliminato dalla pulizia dopo 24 ore; comando `rerun` in un
-    sottoprocesso con una cartella dati temporanea (codice 0 e rapporto; 2 con un checksum errato); con MODELLER
-    modellazione (seme −8123, script, template preparati, PIR) rieseguita identica e, con un altro seme, diversa con
-    RMSD e DOPE quantificati, e align2d identico; con OpenMM rifinitura identica con un thread. Correzioni della
-    revisione: manifest risigillati di forma inattesa (`environment.libraries`/`tools` elenchi, `python` oggetto, `notes`
-    numero, `remote` di testi, durata testuale, `rerun` elenco) rifiutati con `package_manifest_invalid` in anteprima,
-    controlli preventivi e avvio, parametri liberi di una ricerca senza errore interno; codici 2 («Riesecuzione non
-    riuscita: …») e 1 del comando; esito «compatibile» con risultati simulati entro e oltre le tolleranze scientifiche
-    (catena principale, energia, file mancante, classe della mutagenesi cambiata); con MODELLER pacchetto e riesecuzione
-    di K48R e della scansione di una tasca (tasche dal pacchetto dopo l'eliminazione del job); pacchetto del confronto con
-    ESMFold rifiutato come non riproducibile, con la predizione come input remoto datato;
-  - report (`test_report.py`): ogni tipo di report e le sezioni facoltative con sezioni bilanciate e mai annidate, id
-    univoci e HTML ben formato (`html.parser`); `_Doc` rifiuta sezioni annidate, chiuse due volte, ripetute o aperte a
-    fine documento;
-  - verifica dell'installazione.
+**Conteggi** (contati il 2 ottobre 2026 con `scripts/test.sh backend --collect-only -q` nell'immagine `bioloom:4.1.0` e con
+`npx vitest run`):
 
-  `pytest -m network` prova i servizi reali. Oltre a 1UBQ, `tests/data` contiene strutture sintetiche generate
-  da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con interfaccia di contatto) e `ubq_zn.pdb` (sito Zn²⁺
-  su His68 e due acque).
-- **`frontend/src/**/*.test.ts(x)` (vitest):**
-  - parser PIR e formattazione (compresa la nota "dalla cache");
-  - logica QMEAN locale/remoto/fallback e avvisi delle licenze;
-  - pulsanti di ripresa delle pipeline e ricarica del job quando cambia stato, dopo l'annullamento e dopo la
-    ripresa;
-  - posizione in coda ("2° in coda", solo per i job in coda), slot di calcolo in uso (`format.test.ts`), memoria del
-    servizio QMEAN rispetto al requisito, con l'esito del server (sufficiente, insufficiente, al limite, 11,7 GB su 12,
-    giudizio "ok" del worker al posto di una stima più alta: `status.test.ts`);
-  - tempo residuo leggibile (`fmtEta`); scelta fra flusso e polling, riconnessione con backoff, timeout di
-    connessione, fine del flusso, flusso condiviso dell'elenco, ricomposizione del log (anche con polling e flusso
-    sovrapposti) e aggiornamento degli elenchi, anche dopo una ricarica lenta, niente polling per un job che il server
-    non ha (404) (`live.test.ts`, con flussi e timer finti);
-  - decodifica dei file, chiave MODELLER da file, vincoli da e verso file;
-  - scale di colore e legende (`colorscale.test.ts`, fasce con limite escluso o compreso), conversione del rapporto
-    nei valori per residuo, pLDDT compreso con le fasce del backend (`residueColoring.test.ts`), residui
-    problematici e struttura del rapporto mostrato (`qualityReport.test.ts`), confidenza degli allineamenti
-    (`alignConfidence.test.ts`);
-  - confronto strutturale (`compare.test.ts`): sorgenti nei link (andata e ritorno, valori non validi), destinazioni
-    di «Confronta…» dai modelli, scala delle distanze saturata a 5 Å, colore fisso di A e colore per catena, coppia di
-    un residuo scelto nel 3D, interruzioni del grafico (salti e codici di inserzione), tratti che deviano, ordinamento e
-    filtro della tabella, lettura del TM-score, scorrimento del solo contenitore della tabella alla riga selezionata,
-    risultati di versioni precedenti riconosciuti da `comparison_version` (non dall'assenza di una nota), job del link
-    non trovato nella pagina Confronto;
-  - selettore della struttura di un job (`picker.test.ts`): job e modello arrivati da un link (elemento di pipeline,
-    job loop, job non tra gli ultimi 30) restano visibili come scelti, risultati senza elenco dei modelli;
-  - azioni degli elementi di pipeline (`PipelineItemActions.test.tsx`, markup statico di `react-dom/server`): report
-    del modello in ogni riga completata, disattivato per le altre, e report con la vista 3D dalla finestra
-    «Visualizza».
-  - AlphaFold (`alphafold.test.ts`): accessioni e id `AF-…`, accessione precompilata che segue la sequenza,
-    intestazioni `sp|`/`tr|` della pipeline, fasce di pLDDT, quando mostrare la soglia, riepilogo del ritaglio
-    (anche con i frammenti isolati).
-  - report (`report.test.ts`): vista 3D inviata solo se è un PNG entro 3 MB, motivo della vista mancante solo
-    nell'avviso del salvataggio riuscito, nome del file da Content-Disposition (senza percorsi) e nome di riserva come
-    quello del server.
-  - scelta dei template (`templateRank.test.ts`): fasce come nel backend, righe e ordine delle motivazioni, tooltip,
-    ruoli dei consigliati (anche per i risultati precedenti, dal solo `best`), collegamento alla Modellazione con un
-    template per `t`, numero di template della modalità multi, template e suggerimento di un elemento di pipeline.
-  - riproducibilità (`rerun.test.ts`): tipi con un pacchetto e rieseguibili, contenuto per ruolo, versioni nel pacchetto
-    e qui (differenze, strumenti assenti o non usati), parametri leggibili, richiesta dei controlli preventivi solo per un
-    pacchetto rieseguibile, valori e differenze formattati, ordine e dettaglio dei file del confronto (RMSD, numeri oltre
-    la tolleranza, testi, struttura), nota sulle tolleranze; mutagenesi e scansione rieseguibili, predizione solo
-    esportabile; esito «compatibile» con le righe dei controlli delle tolleranze scientifiche.
-  - ligandi (`ligands.test.ts`): candidati delle catene scelte, additivi e ioni monovalenti deselezionati per
-    default, residui modificati non selezionabili, scelte dell'utente conservate, analisi in cache precedenti, testi
-    della coordinazione, linee metallo → donatore colorate per esito (con sfera per le acque) e residui evidenziati.
-  - disordine e domini (`disorder.test.ts`, `CoverageAlerts.test.tsx`): tracce della mappa (disordine, bassa
-    complessità, domini solo con l'accessione, GOR con il colore dello stato, tracce vuote), sintesi, accessione del
-    bersaglio (sequenza del progetto o intestazione `sp|`), richieste di Modellazione (template senza catene esclusi, PIR,
-    soglia pLDDT) e Ricerca (un intervallo per hit), ordine degli avvisi, badge degli hit, riga di sintesi; markup degli
-    avvisi e della mappa.
-  - analisi strutturale (`interactions.test.ts`): righe uniformi delle interazioni, filtri per catena e per residuo
-    (una lettera come catena o amminoacido, codici di inserzione, testo libero), residui da evidenziare, scale della
-    conservazione e dell'interfaccia (soglia di 1 Å² esclusa), opzioni di colorazione, richiesta dell'allineamento e
-    FASTA da un file letto dal server.
-  - mutagenesi (`mutations.test.ts`, `Mutagenesis.test.tsx`): notazione come il backend, aggiunta delle varianti senza
-    doppioni, richieste di mutagenesi e scansione con i controlli preventivi, testi di DOPE, energia e sito, link a
-    Qualità e Confronto (selvatico riottimizzato e originale come A), filtri e colorazione della scansione per classe con
-    gli esclusi, varianti di UniProt (applicabili prima, filtri, ricerca) e cronologia (stato in italiano); stato della
-    scelta delle tasche (in lettura, errore, nessun calcolo, in corso, non riuscito, pronto); siti nel 3D con la catena
-    dei modelli; markup dei risultati del mutante (classe, segnali pesati, siti, link, avvertenza) e della scansione
-    (ordine, esclusi, CSV).
-  - tasche, elettrostatica e rifinitura (`pockets.test.ts`, `electrostatics.test.ts`, `refine.test.ts`): soglia di
-    druggability, colori per posto, residuo condiviso fra due tasche, tasca scelta, sfere e centri, tasca di un residuo;
-    scala ±5 kT/e saturata, kT/e in mV, colori per segno e residui sepolti, residui estremi e cariche per tipo;
-    richiesta della rifinitura, link a Qualità e Confronto (originale come A), differenze ed esiti, energia; job
-    conservato per struttura e strumenti mancanti da `/api/system/info`.
-  - complessi (`complex.test.ts`, `ComplexResults.test.tsx`): righe per catena con «stessa della catena …» proposta per le
-    catene uguali, sequenze pulite, richiesta del complesso con gli errori del backend (corrispondenza incompleta, limiti
-    compresi), simmetria solo con catene uguali, allineamento per catena dell'anteprima, colorazione per catena con i
-    residui d'interfaccia conservati, nuovi e persi, residui da centrare, testi degli assemblaggi; markup della tabella del
-    confronto.
-  - controlli preventivi e procedura guidata (`preflight.test.ts`, `Preflight.test.tsx`, `wizard.test.ts`): esiti per
-    livello e copertura a parte, decisione del pulsante (bloccato, conferma, pronto, in corso, non riuscito), testi e tempi
-    come il backend, richieste di Modellazione e Pipeline; markup del riquadro (copertura una volta sola); validazione della
-    sequenza, preselezione dei consigliati una volta per ricerca, una catena per voce PDB, invalidazione dei passi
-    successivi, motore consigliato, opzioni predefinite e spiegazioni, richieste delle rotte, passi raggiungibili, URL
-    (andata e ritorno, valori non validi, indietro del browser), bozza non valida, ripresa da un link senza bozza, risultati.
-  - confronto con una predizione (`predict.test.ts`, `Predictor.test.tsx`): consenso chiesto solo per ESMFold e solo se
-    manca (anche con le impostazioni non ancora lette), testo del consenso, indirizzo effettivo del servizio, richiesta e
-    controlli preventivi, limite di 400 residui come il backend, job seguito (scelto, in corso, più recente), esito,
-    metriche e origine, link a Qualità e Confronto (modello come A), nota del consenso; markup dei risultati (esito con il
-    tono, regioni, link, escape, senza confronto); oltre 400 residui nessun consenso né avvio (sequenza incollata o
-    catena), sequenza completa incollata (FASTA o testo) nella richiesta; markup della finestra di avvio (avviso oltre il
-    limite, campo della sequenza); distintivo del predittore dei template (ESMFold, AlphaFold, generico).
-  - F8b: finestra della virtualizzazione (`virtual.test.ts`: soglia, posizioni con altezza fissa e per indice, righe
-    visibili con margine e spaziatori, fondo e scorrimento oltre il fondo, blocchi dell'allineamento, riga selezionata
-    portata in vista sotto l'intestazione fissa e nei limiti), scelta del tema (`theme.test.ts`: valori salvati vecchi e
-    nuovi, valori illeggibili, tema del sistema, ciclo, tema prima del render), ricerca da tastiera (`search.test.ts`:
-    `#etichetta`, `tipo:`, testo, chiave della richiesta, elenco piatto, frecce con giro e pagine, destinazioni,
-    evidenza), scorciatoie (`shortcuts.test.ts`: Ctrl+K e ⌘K, `/`, `?`, `g` + lettera, campi di testo e dialoghi
-    aperti), etichette (`tags.test.ts`: stessa normalizzazione del backend, filtro degli elenchi).
-- **Profilazione:** `scripts/test.sh backend tests/perf_timing.py -s` (fuori dalla suite, vedi
-  [Prestazioni](#prestazioni)).
+| Suite | File | Test |
+|---|---|---|
+| backend, `backend/tests` (pytest) | 42 | 1117 nella suite predefinita (41 file), più i 4 di `test_remote.py` (marcatore `network`, esclusi da `addopts`: `pytest -m network`) |
+| frontend, `frontend/src/**/*.test.ts(x)` (vitest) | 40 | 352 |
+
+I test che richiedono MODELLER, PROCHECK, ProSA o gli strumenti dell'immagine di sviluppo (fpocket, PDB2PQR, APBS,
+OpenMM, PDBFixer) si saltano da soli, con il motivo, dove mancano (`requires_modeller` e le condizioni degli strumenti):
+il numero di quelli eseguiti dipende quindi dall'immagine e dalla chiave di MODELLER. Oltre a 1UBQ, `tests/data`
+contiene uscite reali di MODELLER (`dope_1ubq.profile`), PROCHECK, ProSA, fpocket e PDB2PQR su 1UBQ e le strutture
+sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con interfaccia di contatto) e `ubq_zn.pdb`
+(sito Zn²⁺ su His68 e due acque).
+
+**Esecuzione:**
+
+- `scripts/test.sh`: ruff, pytest nell'immagine con MODELLER reale, typecheck e vitest. La CI
+  (`.github/workflows/ci.yml`) esegue gli stessi controlli in tre job: test rapidi in Python puro senza strumenti esterni,
+  frontend (typecheck, vitest, build) e immagine completa costruita con i test al suo interno.
 - **Immagine di sviluppo:** per provare strumenti nuovi senza toccare l'immagine dell'avviatore,
   `docker build -f docker/Dockerfile -t bioloom:dev .` e `BIOLOOM_BASE_IMAGE=bioloom:dev scripts/test.sh` (test in
   `bioloom-test:bioloom-dev`).
-- **Esecuzione:** `scripts/test.sh` (ruff, pytest nell'immagine con MODELLER reale, typecheck e vitest). La CI
-  (`.github/workflows/ci.yml`) esegue gli stessi controlli: test rapidi senza strumenti esterni, frontend, e
-  immagine completa con i test al suo interno.
+- **Profilazione:** `scripts/test.sh backend tests/perf_timing.py -s` (fuori dalla suite, vedi [Prestazioni](#prestazioni)).
 - **Verifica nel container:** `python -m bioloom.selftest` (o Impostazioni → Strumenti).
 - **Verifica di QMEAN senza il disco reale:** mini-database creato con
   `docker/qmean/tests/make_mini_uniclust.sh` (punteggi non significativi).
+
+**Backend** (numero di test fra parentesi):
+
+- **API, dominio e MODELLER:** `test_api.py` (11: salute, progetti, sequenze e documenti, path traversal, libreria,
+  allineamenti e qualità come job, errori di validazione leggibili e in italiano, paginazione degli elementi di
+  pipeline); `test_sequences.py` (8: FASTA, validazione, PIR, zona crepuscolare, Clustal, proprietà);
+  `test_structure_quality.py` (10: catene e header, Ramachandran di riferimento, clashscore senza falsi positivi
+  covalenti, DSSP integrato, GOR, voto, Kabsch e TM-score, center-star, rapporto senza DOPE); `test_modeller.py` (14:
+  script validi, livelli di raffinamento con impostazioni distinte e predefinito di MODELLER, opzioni non valide,
+  preparazione dei template, modellazione end-to-end); `test_search.py` (5: parsing di BLAST, client NCBI simulato,
+  nuovi tentativi su RCSB); `test_synthetic_data.py` (2: le strutture sintetiche restano valide).
+- **Job e ripresa:** `test_jobs.py` (12) e `test_pipeline_resume.py` (13): successo, errori, annullamento e timeout,
+  riavvio simulato; solo gli elementi non conclusi, ambito "solo i falliti", pipeline completate con falliti, file
+  vecchi eliminati, richieste concorrenti, nuovo annullamento, progresso, elementi completati solo a file salvati (disco
+  pieno, modelli mancanti), eliminazione concorrente a una ripresa, stato finale scritto anche se il salvataggio non
+  riesce.
+- **Flusso dei dati** (`test_dataflow.py`, 11): scratch, salvataggio definitivo, intermedi, blocco SQLite (seconda
+  istanza), pulizia, gruppi di processi, archivi su file temporanei.
+- **Licenze e accesso** (`test_licenses_auth.py`, 10): chiave MODELLER (fonti, formato, prova prima del salvataggio),
+  LicenseDB di ProSA, chiave d'accesso, modalità server, arresto consentito dal solo avviatore.
+- **Strumenti esterni** (`test_engines_extra.py`, 10): parser di PROCHECK e ProSA tarati su output reali di 1UBQ,
+  MMseqs2, QMEAN locale con worker simulato, strumenti mancanti come avvisi, verifica dell'installazione (anche fpocket,
+  PDB2PQR + APBS e OpenMM: "ok" se ci sono, "non disponibile" altrimenti).
+- **UniClust30 e QMEAN:** `test_uniclust_discovery.py` (11): riconoscimento di tutti i formati, scelta della versione,
+  copie interrotte, archivi e formato MMseqs2, cs219 convertiti e copia locale validi finché il disco non cambia, limite
+  di profondità, filesystem dei mount, stima della memoria, un thread con la memoria al limite.
+  `test_qmean_fallback.py` (19): scelta della versione e fallback su SWISS-MODEL, migrazione della modalità "auto",
+  memoria richiesta dal database (12 GB misurati per UniRef30_2020_06, stima per le altre versioni, giudizio del worker,
+  tolleranza del 95%): job fallito subito o fallback con 8 GB, partenza con 11,7 GB; due QMEAN locali eseguiti uno alla
+  volta, il secondo in coda con posizione e fase, senza bloccare il pool "io"; QMEAN su SWISS-MODEL senza esclusione, e
+  nemmeno senza servizio locale (due fallback insieme, nessuna fase di coda); servizio locale restituito prima del
+  fallback (un secondo QMEAN locale parte e finisce mentre il primo aspetta SWISS-MODEL); nota sulla memoria con l'esito
+  (`memory_required.sufficient`, anche quando decide il giudizio del worker).
+- **File** (`test_fileformats.py`, 8): lettura dei formati di sequenza (FASTA anche allineato, PIR, Clustal, Stockholm,
+  GenBank con le CDS, SwissProt, codifiche e compressione) e caricamento di strutture usabili come sorgente.
+- **Consenso** (`test_consensus.py`, 69):
+  - scale, pesi, fasce, metodi mancanti, discordanze;
+  - segnali per residuo, regioni con tolleranza, confini di catena e numerazione;
+  - QMEAN e ProSA per residuo;
+  - 1UBQ con le uscite reali di MODELLER (`dope_1ubq.profile`), PROCHECK e ProSA;
+  - rotta con QMEAN simulato (stessa struttura, altra struttura, template sostituito con lo stesso id, job non
+    QMEAN o non completato) e modelli MODELLER simulati;
+  - riconoscimento del pLDDT (intestazione AlphaFold sintetica, ModelCIF, nome di AlphaFold DB, file normale,
+    valori fuori scala; strutture sperimentali con `REMARK 200 STARTING MODEL: ALPHAFOLD` o
+    `_pdbx_initial_refinement_model` AlphaFold, modello MODELLER con un nome `AF-…`) e stesso esito per libreria,
+    rapporto di qualità e copia preparata del template sugli stessi file.
+- **AlphaFold DB** (`test_alphafold.py`, 50; EBI simulato con `httpx.MockTransport`, NCBI con monkeypatch): parser della
+  risposta (campi mancanti, più voci e frammenti, versioni, URL estranei), 404, accessioni non valide senza
+  richieste, cache e nuovi tentativi, download PDB/mmCIF, libreria (id, meta, record originali, frammenti, file
+  caricati, metadati precedenti completati alla prima lettura), annullamento durante i tentativi del download e
+  durante l'attesa dello stesso modello, motore con accessione e con BLAST simulato (estrazione delle accessioni,
+  identità 96,1% e copertura su 1UBQ contro l'ubiquitina di lievito; accessione senza modello o EBI non
+  disponibile = job fallito con il motivo, risultati parziali con le note e senza cache), cache dei calcoli,
+  `best_template` a parità, ritaglio per pLDDT su 1UBQ con B-factor riscritti (11 residui tolti, soglia compresa,
+  minimo 30, frammenti isolati di 1 e 3 residui tolti e di 6 tenuti), PIR riportato sul ritaglio, pipeline
+  (accessioni da `sp|` e `tr|`) e, con MODELLER, modellazione e pipeline con template ritagliato.
+- **Cache dei calcoli** (`test_compute_cache.py`, 39): riscontri senza rieseguire i motori (simulati), invalidazione per
+  parametri, sequenza, timbro del database o dello strumento, scadenza, file corrotti, job falliti e annullati,
+  riuso nella pipeline e scritture concorrenti.
+- **Confronto strutturale** (`test_comparison.py`, 29; integrato e TM-align/US-align veri dell'immagine): lDDT calcolato
+  a mano (tre Cα, residuo senza corrispondente, raggio e soglie esclusi), invarianza al moto rigido, GDT massimizzato
+  per soglia (due gruppi rigidi), 1UBQ contro sé stessa e contro una copia ruotata e traslata (TM 1, GDT 100, lDDT 1,
+  matrice e PDB sovrapposto con A e B al loro posto), tratto 31–37 spostato di 6 Å (distanze e lDDT bassi solo lì,
+  valori di riferimento), catena A contro B di `ubq_dimer.pdb`, residuo inserito (35A) e Cα mancante (lDDT uguale
+  alla formula ricavata a parte), accordo fra i percorsi, colonne non allineate di TM-align (tratto a 12 Å), uscite
+  anomale simulate (residui che non corrispondono, matrice mancante), lettura delle due forme della matrice e
+  invalidazione delle voci di cache precedenti.
+- **Tempo residuo e flussi SSE** (`test_live.py`, 22): formule dell'ETA (arrotondamento, soglie, mai negativa), pipeline
+  con durate note e dopo una ripresa, job con progresso; notifiche fra thread; righe intere del log; flusso di un job
+  con TestClient (stato, log contiguo, fine, offset, 404, ripresa), limite dei flussi, flusso dell'elenco (job,
+  elementi di pipeline, filtro per progetto, eliminazioni, heartbeat), chiusura all'arresto, accesso con chiave
+  (401 senza cookie, 200 con cookie o Bearer); con un server uvicorn vero: eventi mentre il job è fermo,
+  chiusura dopo `end`, posto liberato alla disconnessione del client, arresto non bloccato dai flussi aperti.
+  I test aspettano le condizioni, non tempi fissi: un flusso in attesa di notifiche (`ChangeFeed.waiting`) ha
+  già inviato tutto ciò che era stato pubblicato prima.
+- **Coda con priorità e budget di CPU** (`test_scheduling.py`, 30), con processi veri che scrivono inizio e fine: mai più
+  processi contemporanei degli slot (da job diversi e da thread dello stesso job), annullamento durante l'attesa,
+  timeout non consumato dall'attesa e ancora valido per il processo, impostazione dei job in parallelo cambiata
+  senza riavvio (budget e pool "cpu"), programmi multi-thread su più slot (fissi ed elastici: questi prendono subito
+  gli slot liberi), processi di I/O fuori dal budget, ordine per priorità senza sorpassi, invecchiamento con un orologio
+  simulato (budget e coda: una richiesta di pipeline servita entro 2 livelli anche con richieste interattive continue,
+  FIFO a parità di priorità effettiva), fase "In attesa di CPU libera" (job, elemento di pipeline, figlio senza fase,
+  passi in parallelo), ordine di esecuzione per tipo con un solo worker e FIFO a parità, risorsa esclusiva restituita
+  prima della fine (il job successivo parte, la chiusura non libera la risorsa presa da un altro), ripresa che torna al
+  suo posto, annullamento e ripresa di un job in coda, job in coda all'arresto marcati da `recover`, eventi invariati,
+  posizione nel flusso dell'elenco, pipeline con 4 elementi in parallelo su 2 slot senza deadlock.
+- **Analisi in parallelo e template preparati** (`test_parallel_quality.py`, 23): `Steps` (ordine dei risultati diverso
+  da quello di conclusione, modalità seriale, passo fallito isolato, annullamento durante l'attesa con passi in coda che
+  non partono); rapporto in parallelo identico a quello seriale su 1UBQ (favorite 95,9 %, clashscore 1,66, zDOPE
+  −2,73, PROCHECK core 95,5 %), `ubq_dimer.pdb`, `ubq_zn.pdb` e un modello di MODELLER; avvisi dei passi falliti
+  uguali, nello stesso ordine, e passo lento non bloccato; annullamento con tre processi veri da 60 s tutti terminati
+  in pochi secondi e nessun thread rimasto; mkdssp solo da `ctx.run` con la stessa assegnazione del percorso di
+  Biopython; prefissi dei passi nel log; qualità "all" con 3 modelli insieme uguale a quella seriale; cache dei
+  template (copia per elemento, chiave con template, catene, ligandi e soglia pLDDT, file sostituito, errori non
+  conservati, elementi concorrenti, attesa annullabile) e pipeline di 4 sequenze con una sola preparazione.
+- **Report del modello** (`test_report.py`, 53; MODELLER simulato con le coordinate e il profilo DOPE reali di 1UBQ, più
+  un test con MODELLER reale): tutte le sezioni; identità 96,1% dell'ubiquitina di lievito su 1UBQ, voto 98,9,
+  consenso 99,6; SVG ben formati con 74 punti di Ramachandran e il picco DOPE 73–76; escape di `<script>`, `"` e `&`
+  in titoli, nomi, metadati, residui e atomi; PNG valido incorporato, PNG malformati (firma, CRC, troncati, dati
+  dopo IEND, senza IDAT, altri tipi) e oltre 3 MB rifiutati; modelli non del job, falliti, job non completato;
+  loop; report di un job quality con QMEAN simulato (70–76 sotto 0,6); ZIP della pipeline con un report per
+  elemento completato e rotta del report di un elemento; nomi unici nello ZIP ("abc" e "abc-", "x", "x", "x_2", job
+  precedenti con nomi ripetuti); nomi di file sicuri; ogni tipo di report e le sezioni facoltative con sezioni bilanciate
+  e mai annidate, id univoci e HTML ben formato (`html.parser`); `_Doc` rifiuta sezioni annidate, chiuse due volte,
+  ripetute o aperte a fine documento.
+- **Scelta ragionata dei template** (`test_template_rank.py`, 40; RCSB simulato con monkeypatch e `httpx.MockTransport`):
+  curva di Rost (valori a 76, 100, 250, 450 residui, asintoto); punteggio dell'ubiquitina di lievito su 1UBQ (95,3)
+  con ogni componente; alta identità a bassa risoluzione e R-free alto contro alta risoluzione al 35,5%; NMR e
+  crio-EM; modello predetto (pLDDT, metodo, sperimentale che vince a parità e perde con metà copertura); copertura
+  parziale; zona crepuscolare dipendente dalla lunghezza e copertura limitata dall'identità; lacune; scala
+  dell'E-value; metadati assenti che non penalizzano; ligandi e stato oligomerico informativi; selezione
+  complementare (due metà → entrambe, quasi identici → uno solo, frammenti sovrapposti, costrutto più lungo,
+  guadagno di identità locale, zona crepuscolare, limite, senza righe dell'allineamento, 400 candidati su 1000
+  residui); metadati RCSB con R-free e assemblaggio 1, voci di cache vecchie riscaricate o usate senza rete, risposte
+  GraphQL con soli errori; ricerca con punteggi e consigliati anche dalla cache, voci di cache della versione
+  precedente non lette, metadati vecchi che non entrano in cache; pipeline multi (template passati a MODELLER,
+  colonne, metriche, log, validazione di `max_templates`, filtro sulla copertura dell'insieme); unione degli
+  `align2d` sul bersaglio e scelta fra `salign` e `align2d`; con MODELLER reale due frammenti di 1UBQ (sovrapposti e
+  disgiunti) → modello completo a TM-score > 0,95 e due template completi che tengono `salign`.
+- **Ligandi, cofattori e metalli** (`test_ligands.py`, 27): classificazione (ZN metallo, HOH esclusa, GOL e SO4 additivi,
+  HEM cofattore, Na⁺ monovalente, MSE residuo modificato) anche nel dettaglio del template; geometrie ideali e
+  incomplete; sito Zn di `ubq_zn.pdb` (valori di riferimento), Zn spostato nella proteina (scontro), distanze lunghe e
+  troppo corte; copia preparata con i soli gruppi scelti in fondo alla catena e il sito del file originale; chiave dei
+  template preparati che cambia con la scelta; opzioni (validazione, template obbligatorio con più template, pipeline
+  automatica); colonne '.' del PIR (automatico, fine esplicita e "+N", '.' dell'utente tolti, catene, più template,
+  errori); confronto con il sito del template (conservato, sostituito, non allineato, allineamento che non
+  corrisponde); rapporto di qualità e report HTML solo con ligandi; distanze di riferimento uguali alle fonti; con
+  MODELLER, ubiquitina di lievito su `ubq_zn.pdb` con il solo Zn trasferito (PIR, HETATM, verifica, report) e lo stesso
+  PIR con i ligandi spenti.
+- **Disordine e domini** (`test_disorder.py`, 48; UniProt e InterPro simulati con `httpx.MockTransport`): formula di
+  FoldIndex calcolata a mano (I, K, A, cariche opposte, X, B), finestra centrata e accorciata alle estremità, FoldIndex
+  globale dell'ubiquitina uguale a quello dal GRAVY di Biopython (+0,090), ubiquitina ordinata (frazione 0) e perché la
+  finestra fissa al bordo sbaglierebbe, α-sinucleina 98–140 (tolleranza 90–105 sull'inizio), regioni di 30 residui con 3
+  tollerati, validazione (5000 residui compresi, 5001 no, acidi nucleici, FASTA con più record); SEG con entropia e P0
+  calcolate a mano, tratto poli-Q esatto, X, fusione dei segmenti; domini InterPro fusi e superfamiglie di riserva;
+  avvisi di copertura (disordine scoperto per metà, coperto, domini coperti, parziali, scoperti, suggerimenti);
+  consenso con le regioni `expected` (metà dei residui) senza variazione di punteggio, segnali e regioni rispetto a una
+  sequenza ordinata, 1UBQ, dimero e sito Zn; report con il profilo di FoldIndex, le regioni evidenziate e le fonti; rotte
+  `/api/bio/disorder` (errori 400 e 422) e `/api/bio/coverage` con template della libreria, InterPro e cache, tratto di
+  UniProt e sequenza diversa, servizi non raggiungibili, accessione sconosciuta o non valida, intervalli della ricerca,
+  PIR, template non valutabili, template AlphaFold con il ritaglio pLDDT, verifiche concorrenti sullo stesso template
+  senza analisi in cache.
+- **Analisi strutturale** (`test_interactions.py` 15, `test_interfaces.py` 10, `test_conservation.py` 14,
+  `test_analysis_api.py` 19): legami idrogeno di elica e foglietto di 1UBQ con il confronto con il DSSP integrato, ponti
+  salini noti verificati sulle coordinate del file, idrogeni espliciti, geometrie sintetiche (disolfuro, ponte salino,
+  legame idrogeno sugli atomi pesanti, coppia elencata una volta, NH₂ posizionati, π-stacking, catione-π) e soglie;
+  interfaccia simmetrica e piccola di `ubq_dimer.pdb`, ΔSASA mai negativa, coppie solo fra catene vicine, terza catena,
+  bande di plausibilità, annullamento fra i calcoli della SASA; pesi di Henikoff e punteggi calcolati a mano, gap,
+  mappatura su 1UBQ (anche con code e inserzioni nella riga), scelta della riga, catene multiple, allineamenti non
+  validi, selenocisteina e pirrolisina; prestazioni su 4816 atomi; job e rotte (allineamento da testo, da sequenze non
+  allineate e da un job; errori; analisi più recente per sorgente e impronta; job concorrenti), sezione del report
+  (dimero sì, 1UBQ no, modelli di un job, escape).
+- **Tasche, elettrostatica e rifinitura** (`test_pockets.py` 11, `test_electrostatics.py` 19, `test_refine.py` 12): parser
+  sulle uscite reali di fpocket (4 tasche di 1UBQ, ordine per druggability, sfere = sfere dichiarate, baricentro) e di
+  PDB2PQR (carica netta 0, residui carichi per tipo, His68 con HD1); griglia come psize (97 × 97 × 129, le dimensioni
+  usate da APBS), passo allargato oltre il tetto, input di APBS con ogni parametro; mappe OpenDX sintetiche nel formato
+  di APBS e interpolazione esatta su un campo lineare; punti di Shrake-Rupley (atomo isolato, sovrapposti, sepolto);
+  potenziale per residuo su 1UBQ con una mappa lineare; copia pulita di tasche ed elettrostatica con MSE e SEP scritte
+  come HETATM (tenute, MSE → MET, nessun avviso di gruppi esclusi); elettrostatica con PDB2PQR e APBS simulati su una
+  catena senza identificativo (cariche e potenziali per residuo, catena originale nel risultato), lettera libera per la
+  catena senza nome accanto a una catena A, SEP tolta da PDB2PQR con il suo avviso; costanti e unità del protocollo,
+  copia pulita della rifinitura (Zn escluso, TER all'interruzione 34/38, anche con la catena senza identificativo e
+  nessun legame 29–35 nella topologia di PDBFixer), confronto prima/dopo e RMSD (spostamento noto di un Cα); report del
+  modello rifinito (sezioni, energia per componente, protocollo, fonti; solo il file rifinito); rilevamento delle
+  librerie senza importarle e messaggi degli strumenti mancanti; job falliti con il motivo senza gli strumenti,
+  validazione delle rotte prima della coda, priorità. Con gli strumenti (immagine di sviluppo): fpocket su 1UBQ (stesse
+  tasche dell'uscita salvata, file conservati, `/latest`) e su `ubq_zn.pdb` (Zn escluso con avviso); PDB2PQR + APBS su
+  1UBQ (carica |q| ≤ 1, tutte le Lys esposte positive, almeno 5 Glu su 6 negative, medie separate di oltre 1,5 kT/e,
+  residui sepolti senza valore, `.dx` scaricabile, PARSE e AMBER) e annullamento durante APBS (processo terminato);
+  rifinitura di 1UBQ con χ1 di Ile30 ruotato (energia diminuita, RMSD < 0,5 Å, clashscore non peggiore, REMARK,
+  rapporto di qualità), con 0,5 ps di dinamica, idrogeni e un'interruzione della catena (nessun residuo ricostruito,
+  34 e 38 non legati) e annullamento durante la dinamica (processo terminato).
+- **Mutagenesi** (`test_mutations.py`, 51): notazione (forme a una e tre lettere, inserzioni, catena omessa o senza
+  identificativo, errori), verifica sulla struttura (residuo originale sbagliato, catena inesistente, ligando, residuo
+  ripetuto), copia per MODELLER (tratti alle interruzioni, MSE → MET, catena senza nome, ripristino dei nomi), intorni e
+  gruppi vicini, indicatori su mutanti grezzi di 1UBQ, regole della classificazione e soglie di DOPE ed energia, hot spot
+  (anche con RSA 0 nel complesso, probabile, e con RSA ignota, non sepolto), frammenti di riferimento, scansione (elenco,
+  intervalli, esclusi, limiti, ordine, CSV), varianti di UniProt simulate con la mappatura della numerazione (anche con
+  le ripetizioni) e la cache, notazione canonica con la catena senza identificativo accanto alla catena B (parametri del
+  job, varianti di UniProt, rilettura all'esecuzione), catena «AA» di un mmCIF (siti, partner, residui ottimizzati e
+  frammenti con la lettera dei modelli), tasche di un template sostituito rifiutate, controlli preventivi, rotte e
+  priorità. Con MODELLER: K48R su 1UBQ (Arg 48, resto invariato, neutra o incerta, report, cronologia), I30P
+  (destabilizzante, elica), scansione di 3 residui ordinata, D58A sul dimero (DOPE fra le catene), catena senza
+  identificativo con un'interruzione, mutagenesi e scansione di una catena «AA» con le etichette «AA:…», annullamento
+  durante MODELLER; con OpenMM l'energia di K48R.
+- **Confronto con un predittore esterno** (`test_predict.py`, 74; ESMFold e AlphaFold DB simulati con
+  `httpx.MockTransport` nel formato reale del servizio): client (pLDDT su 0–1 riportato a 0–100 e su 0–100 lasciato
+  com'è, TITLE aggiunto se manca, 404/413/400/429/503/tempo scaduto con il codice e i tentativi giusti, nuovo tentativo
+  riuscito, risposte non valide, troppo grandi o di un'altra sequenza, sequenza troppo lunga, con lettere non standard,
+  corta o vuota senza richieste, 400 residui compresi, cache per sequenza e servizio, indirizzi non validi); consenso
+  all'invio (impostazioni precedenti e valori strani → spento senza azzerare le altre, rotta delle impostazioni, 403
+  senza job né richieste, job accodato senza consenso fallito senza invio); validazione prima della coda; riconoscitore
+  unico (ESMFold sì, file grezzo 0–1, EXPDTA, MODELLER, REMARK, altro TITLE e mmCIF no, AlphaFold ancora sì; 1UBQ,
+  `ubq_dimer.pdb`, `ubq_zn.pdb` no; rapporto di qualità, libreria «Modello predetto (ESMFold)» e copia preparata con il
+  ritaglio e il TITLE); plausibilità su 1UBQ con il tratto 31–37 spostato (predizione sicura → divergenze locali,
+  incerta → concordano, copia identica, incrocio con il consenso), ripiegamento diverso, non conclusivo, regioni con
+  tolleranza, confini di catena e di numerazione, scala ed errori del file; consenso identico senza confronto, metodo
+  con peso 0,25 e punteggio dalla formula, residui segnalati agli indici del rapporto, regioni e segnali invariati,
+  metodo fra i mancanti se non conclusivo, discordanza con il voto, regione problematica marcata; priorità e pool; job
+  end-to-end (file riconosciuto dall'analisi di qualità, più recente, cache al secondo job), AlphaFold DB, tre job
+  insieme con una cache valida; rotte del consenso e del report (sezione bilanciata, citazioni, struttura diversa 400,
+  job non predict o senza confronto 400), markup della sezione con l'escape; controlli preventivi (consenso, lunghezza,
+  accessione, cache, tempi, nessuna richiesta remota); sequenza di una catena interrotta con una MSE (giunzioni, SEQRES
+  che corrisponde, che non corrisponde o troppo lungo, numerazione che salta senza residui mancanti), giunzioni mai
+  divergenti, job con il SEQRES (sequenza completa inviata) e senza (avviso nei controlli e nel risultato); template di
+  ESMFold chiamato ESMFold in log, note, REMARK, report e controlli preventivi.
+- **Complessi e omo-oligomeri** (`test_assembly.py` 34, `test_complexes.py` 40): espressioni degli operatori (elenchi,
+  intervalli, prodotti, errori, limite delle combinazioni) e prodotti applicati da destra a sinistra; mmCIF sintetico con
+  identità + rotazione C2 → la catena B di `ubq_dimer.pdb` entro 0,01 Å, acque della stessa catena dell'autore incluse
+  o escluse secondo l'asym, prodotti "(1,2)(3)"; REMARK 350 di 1UBQ e con righe AND CHAINS, BIOMT incompleti, nomi delle
+  copie (catene riservate, catene di più caratteri), limite delle 62 catene, PDB generato con intestazione, REMARK e
+  stessa interfaccia; rotte della libreria (elenco, importazione, riuso, rigenerazione con il file cambiato,
+  assemblaggio di un assemblaggio, errori, importazioni concorrenti); id degli assemblaggi senza troncamento
+  (assemblaggi 1, 2 e 3 di un template di 37 caratteri distinti, 409 per un omonimo che è un altro assemblaggio);
+  bersaglio a più catene (`same_as`, errori della corrispondenza, limiti di 12 catene e 3000 residui compresi), gruppi
+  di simmetria, unione degli allineamenti per catena, coerenza delle catene di un PIR (errore nella modalità Complesso,
+  avviso altrimenti), script con simmetria e nomi delle catene, peso validato, copia preparata nell'ordine del
+  bersaglio, nomi e simmetria del piano del modello; confronto delle interfacce (dimero contro sé stesso con catene
+  rinominate e numeri spostati, moto rigido, catena spostata di 3 Å con DockQ dalla formula, catene non più a contatto,
+  interfaccia nuova, PIR che non corrisponde, template a tre catene con un PIR da A a B, catena allineata solo a gap,
+  errore inatteso dell'analisi che non fa fallire il job), sezione del report bilanciata con l'escape; rotte con
+  complessi non validi (nessun job accodato); con MODELLER l'anteprima per catena e l'omodimero dell'ubiquitina di
+  lievito con e senza simmetria (catene, numerazione, RMSD fra le catene, DockQ, REMARK, report) e dallo stesso PIR.
+- **Controlli preventivi** (`test_preflight.py`, 63; licenze, strumenti, spazio e worker QMEAN simulati): ogni codice con
+  un caso che lo produce e uno che non lo produce; curva di Rost (33,2% a 76 residui, 20,0% a 300) e soglia di Baker &
+  Šali; stime contro le misure (job model 13,89 s, elemento di pipeline 9,13 s, i quattro livelli di raffinamento
+  distinti e in ordine, 304 residui, byte dei risultati e degli intermedi); modelli identici con «rapidissimo»;
+  ubiquitina di lievito su 1UBQ senza errori né avvisi (identità 96,1%, copertura 100%) e nessun job avviato; 1UBQ al 25%
+  di identità (zona crepuscolare), bersaglio con una coda disordinata (copertura e disordine), PIR a una e a due catene,
+  template assenti, scaricabili o con una catena sbagliata (nessun download), ritaglio pLDDT (11 residui, 25 rimasti, più
+  della metà, ritaglio spento), timeout, spazio, PROCHECK e ProSA (licenza, MAC), coda, punteggio dalla ricerca, stessa
+  validazione della rotta di avvio (stesso messaggio), controlli concorrenti; QMEAN con 8 e 11,7 GiB per
+  UniRef30_2020_06 e fallback; motori di ricerca, pipeline con 51 ricerche NCBI, accessioni AlphaFold, sequenze lunghe e
+  disordinate, spazio.
+- **Migrazioni** (`test_migrations.py`, 14), con un database della versione 1 generato da `db.SCHEMA` con dati in tutte
+  le tabelle: passaggio alla 2 senza righe perse né cambiate, copia di sicurezza integra con lo schema 1 (anche con le
+  righe rimaste solo nel WAL), riapertura senza nuove copie, migrazione ripetuta dopo che la versione 4.1.0 ha
+  riscritto `schema_version` a 1 (etichette conservate), errore a metà della migrazione (database, tabelle e versione
+  invariati), errore nella migrazione successiva (resta la precedente), nessuna migrazione senza copia, database nuovo,
+  schema più recente rifiutato, seconda istanza, trigger di pulizia (anche in cascata) e vincolo sui tipi, avvio
+  dell'applicazione su una cartella dati della versione 1, scritture concorrenti.
+- **Etichette e preferiti** (`test_labels.py`, 35): normalizzazione (forme equivalenti, accenti composti e scomposti,
+  "zn2+", 32 caratteri, caratteri rifiutati), rotte per i quattro tipi, errori (404, 422, 400, limite di 20), preferiti,
+  elenchi con `tags`/`favorite` e filtri `?tag=`/`?favorite=` (job filtrati prima del limite), pulizia alla
+  cancellazione di sequenze, progetti (job e sequenze in cascata), job e template (anche cancellati a mano dalla
+  cartella; cartella assente non toccata), aggiunte concorrenti (limite rispettato, stessa etichetta una volta),
+  template eliminato durante l'aggiunta.
+- **Ricerca globale** (`test_global_search.py`, 73; ogni test con FTS5 e con LIKE): parole e query FTS5/LIKE con escape,
+  tabella dei punteggi, organismo dalle intestazioni PDB/mmCIF, ordine per pertinenza (Chinasi 13, «Chinasi di
+  lievito» 7, descrizione 1,5), accenti e maiuscole, accessione, gruppi (documento per nome, job per tipo, template per
+  id, titolo e organismo), limite e `truncated`, 22 richieste con caratteri speciali e tentativi di iniezione SQL e FTS5
+  (tabelle intatte, nessun risultato "tutto"), operatori come parole, indice allineato a modifiche, eliminazioni e
+  cascate, template aggiunti e tolti a mano dalla cartella, gruppo delle etichette e filtro `tag`, preferiti in testa e
+  senza testo, stessi risultati dai due motori, indice di 10 000 job, ripiego senza FTS5 e nessun oggetto FTS5 nel file;
+  ogni tipo di job registrato con un'etichetta uguale a quella del frontend, job dei tipi nuovi trovati per etichetta
+  («rifinitura», «tasche», «mutagenesi», …) con FTS5 e con LIKE.
+- **Riproducibilità** (`test_reproducibility.py`, 59): nomi pericolosi (`..`, assoluti, unità di Windows, barre
+  rovesciate, nascosti, riservati, profondità), collegamenti simbolici, file speciali, duplicati anche per maiuscole,
+  cifratura, bomba di decompressione (4 MB di zeri, circa 1000:1) e limiti di numero e dimensione; impronta del manifest
+  (parametri cambiati, formato più recente, percorsi non validi); manifest risigillati di forma inattesa
+  (`environment.libraries`/`tools` elenchi, `python` oggetto, `notes` numero, `remote` di testi, durata testuale,
+  `rerun` elenco) rifiutati con `package_manifest_invalid` in anteprima, controlli preventivi e avvio, parametri liberi
+  di una ricerca senza errore interno; oscuramento (segreti senza maiuscole, percorsi solo all'inizio,
+  «https://data.rcsb.org» intatto); confronto delle coordinate di 1UBQ senza sovrapposizione (660 atomi, traslazione di
+  0,5 Å → RMSD 0,5; un atomo spostato di 0,66 Å → RMSD 0,66/√660 e scarto massimo con l'atomo; 0,001 Å entro la
+  tolleranza; acque mancanti), data di MODELLER ignorata, JSON e testi con la tolleranza, esito (anche «compatibile» con
+  risultati simulati entro e oltre le tolleranze scientifiche: catena principale, energia, file mancante, classe della
+  mutagenesi cambiata), avvisi sulle versioni, versioni lette dai programmi; pacchetto di un'analisi di qualità
+  (manifest, checksum di ogni file, input, LEGGIMI), nessun segreto in nessun file con chiave MODELLER, email e chiave
+  d'accesso del test scritte anche nel log (controllo programmatico che elenca solo i file), file grande comprimibile
+  salvato senza compressione, errori (job in esecuzione 409, tipo non supportato, inesistente); ricerca RCSB simulata:
+  input remoti con la data e riesecuzione rifiutata; manifest alterato, checksum errato, file non dichiarati o mancanti,
+  ZIP non valido, path traversal, collegamento simbolico e bomba rifiutati senza scrivere nulla né creare job; script
+  del pacchetto mai estratti; riesecuzione identica di qualità, allineamento strutturale (file caricato poi eliminato) e
+  analisi strutturale (job di allineamento eliminato), con anteprima, controlli preventivi (stima, pacchetto scaduto,
+  corpo non valido) e due avvii concorrenti dello stesso pacchetto; versione diversa come avviso; tipo non rieseguibile
+  e parametri non validi in un manifest risigillato; pacchetto caricato eliminato dalla pulizia dopo 24 ore; comando
+  `rerun` in un sottoprocesso con una cartella dati temporanea (codice 0 e rapporto; 1 se diverso; 2 con un checksum
+  errato e «Riesecuzione non riuscita: …»); con MODELLER modellazione (seme −8123, script, template preparati, PIR)
+  rieseguita identica e, con un altro seme, diversa con RMSD e DOPE quantificati, align2d identico, pacchetto e
+  riesecuzione di K48R e della scansione di una tasca (tasche dal pacchetto dopo l'eliminazione del job); con OpenMM
+  rifinitura identica con un thread; pacchetto del confronto con ESMFold rifiutato come non riproducibile, con la
+  predizione come input remoto datato.
+- **Servizi reali** (`test_remote.py`, 4, solo con `-m network`): ricerca RCSB dell'ubiquitina, voce e domini UniProt,
+  metadati RCSB con R-free e stato oligomerico.
+
+**Frontend** (logica pura in `lib/`, markup statico dei componenti con `react-dom/server`; numero di test fra
+parentesi):
+
+- **Formati, file e stato:** `pir.test.ts` (3: parser PIR, identità e copertura, formattazione); `files.test.ts` (8:
+  decodifica dei file, chiave MODELLER da file, vincoli da e verso file, nomi dei record); `format.test.ts` (16: numeri
+  all'italiana, nota "dalla cache", ricerche riusate, posizione in coda "2° in coda" solo per i job in coda, slot di
+  calcolo in uso, tempo residuo leggibile `fmtEta`); `status.test.ts` (23: logica QMEAN locale/remoto/fallback e memoria
+  del servizio rispetto al requisito con l'esito del server — sufficiente, insufficiente, al limite, 11,7 GB su 12,
+  giudizio "ok" del worker al posto di una stima più alta —, avvisi delle licenze, pulsanti di ripresa delle pipeline e
+  ricarica del job dopo l'annullamento e dopo la ripresa); `ui.test.tsx` (2: numeri all'italiana nei componenti).
+- **Tempo reale** (`live.test.ts`, 21, con flussi e timer finti): scelta fra flusso e polling, riconnessione con backoff,
+  timeout di connessione, fine del flusso, flusso condiviso dell'elenco, ricomposizione del log (anche con polling e
+  flusso sovrapposti) e aggiornamento degli elenchi, anche dopo una ricarica lenta, niente polling per un job che il
+  server non ha (404).
+- **Colori e qualità per residuo:** `colorscale.test.ts` (9: scale e legende, fasce con limite escluso o compreso),
+  `residueColoring.test.ts` (12: conversione del rapporto nei valori per residuo, pLDDT con le fasce del backend),
+  `qualityReport.test.ts` (5: residui problematici e struttura del rapporto mostrato), `alignConfidence.test.ts` (9:
+  confidenza degli allineamenti).
+- **Confronto strutturale** (`compare.test.ts`, 17): sorgenti nei link (andata e ritorno, valori non validi),
+  destinazioni di «Confronta…» dai modelli, scala delle distanze saturata a 5 Å, colore fisso di A e colore per catena,
+  coppia di un residuo scelto nel 3D, interruzioni del grafico (salti e codici di inserzione), tratti che deviano,
+  ordinamento e filtro della tabella, lettura del TM-score, scorrimento del solo contenitore della tabella alla riga
+  selezionata, risultati di versioni precedenti riconosciuti da `comparison_version` (non dall'assenza di una nota), job
+  del link non trovato nella pagina Confronto. `picker.test.ts` (7): job e modello arrivati da un link (elemento di
+  pipeline, job loop, job non tra gli ultimi 30) restano visibili come scelti, risultati senza elenco dei modelli.
+- **Pipeline e report:** `PipelineItemActions.test.tsx` (3): report del modello in ogni riga completata, disattivato per
+  le altre, e report con la vista 3D dalla finestra «Visualizza». `report.test.ts` (9): vista 3D inviata solo se è un PNG
+  entro 3 MB, motivo della vista mancante solo nell'avviso del salvataggio riuscito, nome del file da
+  Content-Disposition (senza percorsi) e nome di riserva come quello del server.
+- **Template:** `alphafold.test.ts` (15): accessioni e id `AF-…`, accessione precompilata che segue la sequenza,
+  intestazioni `sp|`/`tr|` della pipeline, fasce di pLDDT, quando mostrare la soglia, riepilogo del ritaglio (anche con i
+  frammenti isolati). `templateRank.test.ts` (8): fasce come nel backend, righe e ordine delle motivazioni, tooltip, ruoli
+  dei consigliati (anche per i risultati precedenti, dal solo `best`), collegamento alla Modellazione con un template per
+  `t`, numero di template della modalità multi, template e suggerimento di un elemento di pipeline. `ligands.test.ts`
+  (10): candidati delle catene scelte, additivi e ioni monovalenti deselezionati per default, residui modificati non
+  selezionabili, scelte dell'utente conservate, analisi in cache precedenti, testi della coordinazione, linee metallo →
+  donatore colorate per esito (con sfera per le acque) e residui evidenziati.
+- **Disordine e domini** (`disorder.test.ts` 10, `CoverageAlerts.test.tsx` 3): tracce della mappa (disordine, bassa
+  complessità, domini solo con l'accessione, GOR con il colore dello stato, tracce vuote), sintesi, accessione del
+  bersaglio (sequenza del progetto o intestazione `sp|`), richieste di Modellazione (template senza catene esclusi, PIR,
+  soglia pLDDT) e Ricerca (un intervallo per hit), ordine degli avvisi, badge degli hit, riga di sintesi; markup degli
+  avvisi e della mappa.
+- **Analisi strutturale** (`interactions.test.ts` 14, `StructuralAnalysis.test.tsx` 3): righe uniformi delle interazioni,
+  filtri per catena e per residuo (una lettera come catena o amminoacido, codici di inserzione, testo libero), residui da
+  evidenziare, scale della conservazione e dell'interfaccia (soglia di 1 Å² esclusa), opzioni di colorazione, richiesta
+  dell'allineamento e FASTA da un file letto dal server; markup della vista (tabella dei legami idrogeno, interfaccia e
+  avvisi, catene che non si toccano, file della struttura per il viewer).
+- **Tasche, elettrostatica e rifinitura** (`pockets.test.ts` 6, `electrostatics.test.ts` 4, `refine.test.ts` 6): soglia
+  di druggability, colori per posto, residuo condiviso fra due tasche, tasca scelta, sfere e centri, tasca di un residuo;
+  scala ±5 kT/e saturata, kT/e in mV, colori per segno e residui sepolti, residui estremi e cariche per tipo; richiesta
+  della rifinitura, link a Qualità e Confronto (originale come A), differenze ed esiti, energia; job conservato per
+  struttura e strumenti mancanti da `/api/system/info`.
+- **Mutagenesi** (`mutations.test.ts` 11, `Mutagenesis.test.tsx` 2): notazione come il backend, aggiunta delle varianti
+  senza doppioni, richieste di mutagenesi e scansione con i controlli preventivi, testi di DOPE, energia e sito, link a
+  Qualità e Confronto (selvatico riottimizzato e originale come A), filtri e colorazione della scansione per classe con
+  gli esclusi, varianti di UniProt (applicabili prima, filtri, ricerca) e cronologia (stato in italiano); stato della
+  scelta delle tasche (in lettura, errore, nessun calcolo, in corso, non riuscito, pronto); siti nel 3D con la catena
+  dei modelli; markup dei risultati del mutante (classe, segnali pesati, siti, link, avvertenza) e della scansione
+  (ordine, esclusi, CSV).
+- **Complessi** (`complex.test.ts` 14, `ComplexResults.test.tsx` 4): righe per catena con «stessa della catena …» proposta
+  per le catene uguali, sequenze pulite, richiesta del complesso con gli errori del backend (corrispondenza incompleta,
+  limiti compresi), simmetria solo con catene uguali, allineamento per catena dell'anteprima, colorazione per catena con
+  i residui d'interfaccia conservati, nuovi e persi, residui da centrare, testi degli assemblaggi; markup della tabella
+  del confronto.
+- **Controlli preventivi e procedura guidata** (`preflight.test.ts` 9, `Preflight.test.tsx` 3, `wizard.test.ts` 20): esiti
+  per livello e copertura a parte, decisione del pulsante (bloccato, conferma, pronto, in corso, non riuscito), testi e
+  tempi come il backend, richieste di Modellazione e Pipeline; markup del riquadro (copertura una volta sola);
+  validazione della sequenza, preselezione dei consigliati una volta per ricerca, una catena per voce PDB,
+  invalidazione dei passi successivi, motore consigliato, opzioni predefinite e spiegazioni, richieste delle rotte, passi
+  raggiungibili, URL (andata e ritorno, valori non validi, indietro del browser), bozza non valida, ripresa da un link
+  senza bozza, risultati.
+- **Confronto con una predizione** (`predict.test.ts` 10, `Predictor.test.tsx` 4): consenso chiesto solo per ESMFold e
+  solo se manca (anche con le impostazioni non ancora lette), testo del consenso, indirizzo effettivo del servizio,
+  richiesta e controlli preventivi, limite di 400 residui come il backend, job seguito (scelto, in corso, più recente),
+  esito, metriche e origine, link a Qualità e Confronto (modello come A), nota del consenso; markup dei risultati (esito
+  con il tono, regioni, link, escape, senza confronto); oltre 400 residui nessun consenso né avvio (sequenza incollata o
+  catena), sequenza completa incollata (FASTA o testo) nella richiesta; markup della finestra di avvio (avviso oltre il
+  limite, campo della sequenza); distintivo del predittore dei template (ESMFold, AlphaFold, generico).
+- **Riproducibilità** (`rerun.test.ts`, 11): tipi con un pacchetto e rieseguibili, contenuto per ruolo, versioni nel
+  pacchetto e qui (differenze, strumenti assenti o non usati), parametri leggibili, richiesta dei controlli preventivi
+  solo per un pacchetto rieseguibile, valori e differenze formattati, ordine e dettaglio dei file del confronto (RMSD,
+  numeri oltre la tolleranza, testi, struttura), nota sulle tolleranze; mutagenesi e scansione rieseguibili, predizione
+  solo esportabile; esito «compatibile» con le righe dei controlli delle tolleranze scientifiche.
+- **Navigazione, tema, ricerca ed etichette:** `virtual.test.ts` (5: soglia, posizioni con altezza fissa e per indice,
+  righe visibili con margine e spaziatori, fondo e scorrimento oltre il fondo, blocchi dell'allineamento, riga
+  selezionata portata in vista sotto l'intestazione fissa e nei limiti), `theme.test.ts` (5: valori salvati vecchi e
+  nuovi, valori illeggibili, tema del sistema, ciclo, tema prima del render), `search.test.ts` (14: `#etichetta`,
+  `tipo:`, testo, chiave della richiesta, elenco piatto, frecce con giro e pagine, destinazioni, evidenza),
+  `shortcuts.test.ts` (6: Ctrl+K e ⌘K, `/`, `?`, `g` + lettera, campi di testo e dialoghi aperti), `tags.test.ts` (8:
+  stessa normalizzazione del backend, filtro degli elenchi), `Layout.test.tsx` (3: pulsante del menu e barra laterale
+  sugli schermi stretti, griglia dei passi della Panoramica).
 
 ## Non portato dalla v3
 
