@@ -540,7 +540,8 @@ table.table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .modal-head .modal-tools { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .modal-head .modal-tools + .btn-icon { margin-left: 0; }
 .modal-body { padding: 16px 18px; }
-.modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border); }
+/* come l'intestazione, i pulsanti restano visibili anche quando il contenuto di una finestra lunga scorre */
+.modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border); position: sticky; bottom: 0; background: var(--panel); z-index: var(--z-overlay); }
 .toasts { position: fixed; right: 18px; bottom: 18px; display: grid; gap: 8px; z-index: var(--z-toast); }
 .toast { background: var(--panel-3); border: 1px solid var(--border-strong); border-left: 4px solid var(--ok); border-radius: 10px; padding: 10px 14px; box-shadow: var(--shadow); max-width: 420px; cursor: pointer; font-size: 13px; white-space: pre-line; color: var(--text); animation: pop-in 0.16s ease-out; }
 .toast-err { border-left-color: var(--err); }
