@@ -41,7 +41,8 @@ implementazione](PIANO_IMPLEMENTAZIONE.md).
   - risultato: [report del modello](#report-del-modello)
 - [Funzioni trasversali](#funzioni-trasversali): [controlli preventivi](#controlli-preventivi) ·
   [procedura guidata](#procedura-guidata) · [etichette, preferiti e ricerca globale](#etichette-preferiti-e-ricerca-globale) ·
-  [riproducibilità: pacchetti e riesecuzione](#riproducibilità-pacchetti-e-riesecuzione)
+  [riproducibilità: pacchetti e riesecuzione](#riproducibilità-pacchetti-e-riesecuzione) ·
+  [eliminazione di progetti e pulizia dei job](#eliminazione-di-progetti-e-pulizia-dei-job)
 - [Prestazioni](#prestazioni): [misure per i controlli preventivi](#misure-per-i-controlli-preventivi)
 - [Frontend](#frontend)
 - [Sicurezza e privacy](#sicurezza-e-privacy)
@@ -82,8 +83,9 @@ Le versioni degli strumenti sono fissate in `docker/Dockerfile` e `backend/requi
 ```
 data/
   bioloom.db          progetti, sequenze, documenti, job, elementi di pipeline, etichette e preferiti (SQLite, WAL esclusivo, schema versionato)
-  backups/            copie di sicurezza di bioloom.db fatte prima di ogni migrazione dello schema
+  backups/            copie di sicurezza di bioloom.db fatte prima di ogni migrazione dello schema (mai eliminate da sole)
   jobs/<id>/          params.json, job.log, result.json e i soli risultati (niente intermedi MODELLER)
+  jobs/.deleting-<id>/   resto di un job eliminato (o mai accodato) con file ancora in uso, tolto dalla pulizia automatica
   jobs/.rerun-incoming/  pacchetti di riproducibilità in arrivo, spostati nel job alla sua creazione
   templates/          libreria globale (ID.pdb|cif + ID.meta.json + ID.analysis.json in cache)
   uploads/            strutture caricate per l'analisi (pulizia automatica)
@@ -99,6 +101,13 @@ data/
 Nel container `BIOLOOM_DATA_DIR=/data`, `BIOLOOM_SCRATCH_DIR=/scratch` e `BIOLOOM_CACHE_DIR=/cache`. Fuori da Docker
 (sviluppo con `python bioloom.py`) la cartella dati è `data/` del repository, lo scratch `data/.scratch` e la cache locale
 `data/.localcache`, salvo le stesse variabili.
+
+I risultati dei job (`jobs/<id>`) si eliminano solo a mano: dal dettaglio del job, con «Pulisci job…» nella pagina
+Job o «Elimina job…» in Impostazioni → Spazio e file temporanei, oppure eliminando il progetto (vedi [Eliminazione di
+progetti e pulizia dei job](#eliminazione-di-progetti-e-pulizia-dei-job)). `backups/` non si elimina mai da sola: lo
+spazio occupato la mostra. Il file `bioloom.db` non si restringe dopo un'eliminazione di massa: nessun VACUUM, per
+scelta (servirebbe circa il doppio dello spazio del database e bloccherebbe l'unica connessione); SQLite riusa le
+pagine liberate per i dati nuovi.
 
 ### Flusso dei dati e file temporanei
 
@@ -124,15 +133,29 @@ Nel container `BIOLOOM_DATA_DIR=/data`, `BIOLOOM_SCRATCH_DIR=/scratch` e `BIOLOO
   sui bind mount di Docker Desktop e su exFAT, e impedisce a una seconda istanza di aprire la stessa
   cartella dati (errore chiaro). Lo schema ha una versione e si aggiorna all'avvio con migrazioni non distruttive,
   dopo una copia di sicurezza in `backups/` (vedi [Migrazioni dello schema](#migrazioni-dello-schema)).
-- **Pulizia automatica** (`services/housekeeping.py`), all'avvio, ogni 24 ore e con «Pulisci ora» in Impostazioni →
-  Spazio e file temporanei (`POST /api/system/cleanup`):
+- **Pulizia automatica** (`services/housekeeping.py`), all'avvio, ogni 24 ore e con «Pulisci file temporanei» in
+  Impostazioni → Spazio e file temporanei (`POST /api/system/cleanup`):
   - upload più vecchi dei giorni impostati (`uploads_retention_days`, predefinito 30; 0 = mai);
   - cache remota e cache dei calcoli oltre i 30 giorni (`CACHE_MAX_AGE_DAYS`, più del TTL più lungo), più i file
     temporanei di scritture interrotte;
-  - scratch orfano (cartelle di job non attivi) e file di `scratch/tmp` oltre le 24 ore, come i pacchetti caricati per
-    una riesecuzione.
+  - scratch orfano (cartelle di job non attivi: si conservano tutti i job attivi, letti in SQL senza limite di numero,
+    e quelli con l'esecuzione o una ripresa ancora in corso, `busy`) e file di `scratch/tmp` oltre le 24 ore, come i
+    pacchetti caricati per una riesecuzione;
+  - resti di job già eliminati dall'utente: le cartelle `jobs/.deleting-<id>` rimaste per file in uso, solo se la riga
+    del job non c'è più (`JobManager.purge_tombstones`, chiave `jobs` del rapporto, byte in `freed_bytes`).
 
-  Risultati dei job, libreria dei template, database e licenze non vengono mai toccati.
+  Risultati dei job, libreria dei template, database e licenze non vengono mai toccati. Nessun passo elimina cartelle
+  `jobs/<id>` senza riga: dopo un ripristino del database da `backups/` o una copia parziale della cartella dati
+  (`Database` crea in silenzio un file nuovo se manca) sarebbero risultati veri. Un elemento che non si riesce a
+  eliminare (file in uso) non ferma la pulizia e non si conta (si riprova alla volta successiva); se un passo fallisce
+  (per esempio una cartella illeggibile) i resti dei job eliminati si tolgono comunque, e la pulizia all'avvio non
+  impedisce mai l'avvio. Il rapporto ha le chiavi `uploads`, `cache`, `scratch`, `jobs`, `freed_bytes` e `at`, con i
+  soli elementi eliminati davvero; `GET /api/system/storage` mostra anche `backups` (solo lettura).
+- **Eliminazione e pulizia manuale (job e progetti):** i risultati dei job si eliminano solo su richiesta e con
+  conferma: un job dal dettaglio (`DELETE /api/jobs/{id}`), i job terminati in blocco con «Pulisci job…» (criteri,
+  anteprima, ciclo a tempo) e un progetto con tutti i suoi job dal dialogo «Progetti». L'eliminazione è atomica sul
+  disco (cartella rinominata in `.deleting-<id>` prima del DELETE della riga) e dice se qualcosa è rimasto
+  (`leftover`); vedi [Eliminazione di progetti e pulizia dei job](#eliminazione-di-progetti-e-pulizia-dei-job).
 - **Processi esterni:** ognuno ha il proprio gruppo di processi; annullamento e timeout terminano anche i
   figli (mafft e PROCHECK sono script). Il timeout dei job vale per tutti gli strumenti. I processi di calcolo
   prendono gli slot del budget di CPU condiviso fra i job (vedi [Coda con priorità e budget di
@@ -187,9 +210,9 @@ il worker QMEAN (`docker/qmean/`: `qmean_worker.py`, `uniclust.py`, `run_qmean_w
 | `errors` | errori applicativi con codice e stato HTTP, serializzati in modo uniforme |
 | `eta` | stima del tempo residuo |
 | `events` | notifiche in-process dei cambiamenti dei job |
-| `jobs` | `JobManager`, `JobContext`, scratch e salvataggio definitivo |
+| `jobs` | `JobManager`, `JobContext`, scratch e salvataggio definitivo, eliminazione atomica sul disco (`.deleting-<id>`) |
 | `parallel` | passi indipendenti di un calcolo su un pool locale di thread (`Steps`, vedi [Prestazioni](#prestazioni)) |
-| `storage` | scritture atomiche, `safe_join`, identificatori validati |
+| `storage` | scritture atomiche, `safe_join`, identificatori validati, rimozione di cartelle con esito (`remove_tree`), dimensioni con un tempo massimo (`dir_size_until`) |
 
 **`domain/`**
 
@@ -258,6 +281,7 @@ il worker QMEAN (`docker/qmean/`: `qmean_worker.py`, `uniclust.py`, `run_qmean_w
 | `databases` | pdbaa, MMseqs2, stato di UniClust30; job dei database |
 | `globalsearch` | ricerca globale |
 | `housekeeping` | pulizia automatica e spazio occupato |
+| `jobcleanup` | pulizia di massa dei job (criteri, anteprima, ciclo a tempo), uso ed eliminazione dei progetti con i loro job (vedi [Eliminazione di progetti e pulizia dei job](#eliminazione-di-progetti-e-pulizia-dei-job)) |
 | `labels` | etichette e preferiti |
 | `licenses` | chiave MODELLER, licenza ProSA, stato di PROCHECK |
 | `live` | flussi Server-Sent Events dei job |
@@ -284,12 +308,12 @@ il worker QMEAN (`docker/qmean/`: `qmean_worker.py`, `uniclust.py`, `run_qmean_w
 | `databases` | `/api/databases` | stato e job dei database |
 | `deps` | — | dipendenze condivise (servizi, lettura limitata degli upload) |
 | `files` | `/api/files` | sequenze e strutture da file, strutture caricate |
-| `jobs` | `/api/jobs` | elenco, stato, eventi, log, file, annullamento, ripresa, eliminazione, qualità, consenso, report, PyMOL, archivio |
+| `jobs` | `/api/jobs` | elenco, stato, eventi, log, file, annullamento, ripresa, eliminazione (con byte liberati e resti), pulizia di massa con anteprima (`/cleanup`, `/cleanup/preview`), qualità, consenso, report, PyMOL, archivio |
 | `labels` | `/api/tags`, `/api/favorites`, `/api/search` | etichette, preferiti e ricerca globale (`GET /api/search`) |
 | `licenses` | `/api/licenses` | MODELLER e ProSA |
 | `mutations` | `/api` | mutagenesi, scansione di alanina, varianti, cronologia |
 | `predict` | `/api` | confronto con un predittore esterno |
-| `projects` | `/api/projects` | progetti, sequenze, documenti |
+| `projects` | `/api/projects` | progetti, sequenze, documenti; uso di un progetto (`/{id}/usage`) ed eliminazione con tutti i suoi job |
 | `reproducibility` | `/api/jobs` | pacchetto di un job, anteprima e riesecuzione di un pacchetto |
 | `structure_tools` | `/api` | tasche, elettrostatica, rifinitura e i più recenti per struttura |
 | `system` | `/api` | salute, informazioni, risorse, spazio, verifica, pulizia, esempi, impostazioni, arresto |
@@ -340,7 +364,23 @@ Tutti i calcoli passano dal `JobManager` (priorità di ogni tipo nella [coda](#c
   l'esecuzione precedente o la preparazione di una ripresa abbiano finito, poi cancella la riga con un
   `DELETE … WHERE status IN ('completed','failed','cancelled')`. Un job ripreso nel frattempo non si elimina
   (409) e, dopo l'eliminazione, una ripresa riceve 404: niente job eliminati mentre ripartono, né cartelle
-  orfane.
+  orfane;
+- l'eliminazione è atomica sul disco: sotto il lock la cartella `jobs/<id>` si rinomina in `jobs/.deleting-<id>`
+  prima del DELETE. Se il rinomino non riesce (file in uso sull'host) il job resta intero, riga e file, con un 409; se
+  il DELETE non riesce il rinomino si annulla (fino a 3 tentativi; se nessuno riesce la cartella resta in
+  `.deleting-<id>` accanto alla riga, e la pulizia automatica la riporta in `jobs/<id>` se quel nome è libero, mai la
+  elimina). Fuori dal lock
+  la cartella rinominata si misura e si rimuove: la risposta dice i byte liberati e `leftover` (rimossa solo in parte;
+  il resto lo toglie la pulizia automatica). Con
+  `only_if` (la pulizia di massa) una condizione in più sulle colonne di `jobs` (stella, etichette, età, pipeline
+  riprendibili) si valuta prima di toccare il disco e di nuovo nello stesso DELETE (vedi [Eliminazione di progetti e
+  pulizia dei job](#eliminazione-di-progetti-e-pulizia-dei-job));
+- `submit` verifica il progetto nello stesso INSERT (`INSERT … SELECT … WHERE ? IS NULL OR EXISTS (progetto)`, un solo
+  statement): un progetto inesistente o appena eliminato dà 404 «Progetto non trovato.», mai un job orfano, e
+  `project_id` vuoto (campo vuoto di un form) vale «nessun progetto». Se qualcosa fallisce prima dell'accodamento
+  (INSERT o preparazione) la riga `queued` mai accodata si cancella e la cartella si rimuove; quello che non si riesce a
+  togliere (file in uso) passa in `.deleting-<id>` e lo toglie la pulizia automatica. L'errore originale arriva sempre
+  al chiamante, anche se questa pulizia non riesce.
 
 ### Coda con priorità e budget di CPU
 
@@ -2424,7 +2464,7 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
 ## Funzioni trasversali
 
 Funzioni che attraversano le pagine e i tipi di job: controlli prima dell'avvio, procedura guidata, organizzazione con
-etichette e ricerca, riproducibilità.
+etichette e ricerca, riproducibilità, eliminazione dei progetti e pulizia dei job.
 
 ### Controlli preventivi
 
@@ -2577,6 +2617,12 @@ l'id normalizzato della libreria, maiuscolo); un vincolo CHECK ammette solo i qu
   stanno su file: la libreria avvisa dopo l'eliminazione (`TemplateLibrary.subscribe`), e `prune_templates` toglie
   all'avvio e prima dei conteggi le etichette dei template spariti per altre vie (file cancellati a mano); non tocca
   nulla se la cartella della libreria non esiste.
+- **Pulizia dei job:** «Pulisci job…» conserva per impostazione predefinita i job con la stella o con etichette
+  (`keep_favorites`, `keep_tagged`), leggendo `favorites` e `tags` nella selezione e di nuovo nel DELETE di ogni job: una
+  stella aggiunta fra la selezione e l'eliminazione salva il job. Le etichette contano solo come «conserva»: il filtro
+  `?tag=` della pagina Job non restringe la pulizia. Eliminando un progetto, stella ed etichette dei suoi job non lo
+  salvano: la conferma dice quanti sono (vedi [Eliminazione di progetti e pulizia
+  dei job](#eliminazione-di-progetti-e-pulizia-dei-job)).
 - **Concorrenza:** controllo dell'elemento, limite e inserimento nella stessa transazione della connessione unica: due
   aggiunte concorrenti non superano il limite, la stessa etichetta aggiunta da più richieste resta una, e un elemento
   eliminato nel frattempo non riceve etichette orfane (per i template, eliminati fra controllo e inserimento, una verifica
@@ -2833,6 +2879,294 @@ job originale del pacchetto è un link solo se esiste in questa installazione (u
 il job eliminato, lo mostra come testo); la pagina Job mostra «Job non trovato in questa installazione» per un id che
 non c'è. `/rerun?job=<id>` apre una riesecuzione («Apri risultati» nella pagina Job).
 
+### Eliminazione di progetti e pulizia dei job
+
+Due capacità **manuali**, scelte e confermate dall'utente, per non accumulare file inutili: la pulizia dei job
+terminati con criteri espliciti e l'eliminazione di un progetto con tutti i suoi job. Nessuna eliminazione automatica
+dei risultati dei job, né all'avvio, né nel passo giornaliero, né con «Pulisci file temporanei»: la pulizia automatica
+toglie solo i resti `.deleting-<id>` di job che l'utente ha già eliminato (vedi [Flusso dei
+dati](#flusso-dei-dati-e-file-temporanei)). Logica in `services/jobcleanup.py` (`JobCleanup`, creato in `build_core`
+con `stopping` = `Core.shutting_down`, come i flussi SSE), eliminazione di un job e `submit` in `core/jobs.py`, progetto
+sostitutivo in `services/projects.py` (`delete_if_unused`), rotte in `api/jobs.py` e `api/projects.py`. Nessuna
+migrazione: tabelle, cascate e trigger esistenti.
+
+**Rotte** (dietro la chiave d'accesso come le altre; risposte 200 con un oggetto, errori `{"error": {code, message,
+details?}}` in italiano):
+
+| Rotta | Risposta |
+|---|---|
+| `GET /api/projects/{id}/usage` | sola lettura, per la conferma: `id`, `name`, `created_at`, `updated_at`, `sequences`, `documents`, `jobs` (`total`, `active`, `starred`, `tagged`, `resumable`, `by_status` con gli stati presenti, attivi compresi), `bytes`, `bytes_complete`; conteggi da SQL su tutti i job del progetto |
+| `DELETE /api/projects/{id}` | completa e sincrona: `deleted`, `jobs_deleted`, `freed_bytes`, `leftover` (cartelle rimosse solo in parte), `replacement` (il progetto vuoto creato perché era l'ultimo, nel formato di `GET /api/projects/{id}`, altrimenti null) |
+| `POST /api/jobs/cleanup/preview` | sola lettura: `matched`, `bytes`, `bytes_complete`, `by_status`, `by_kind`, `protected` (risparmiati da stella o etichette), `resumable` (pipeline riprendibili risparmiate, 0 con `include_resumable`), `sample` (i 5 più vecchi che verrebbero eliminati: `id`, `kind`, `title`, `status`, `finished_at`), `as_of` (l'istante usato come «adesso», UTC al secondo nel formato `…+00:00`, da ripassare all'esecuzione confermata) |
+| `POST /api/jobs/cleanup` | una chiamata a tempo: `deleted`, `skipped` (ripresi, in uso, già eliminati o non più corrispondenti ai criteri, per esempio per una stella aggiunta o perché terminati di nuovo dopo `as_of`: non è un errore), `errors` (eccezioni inattese su un job, contate senza interrompere), `freed_bytes`, `leftover`, `remaining` (corrispondenti non ancora esaminati) |
+| `DELETE /api/jobs/{id}` | `deleted`, `freed_bytes`, `leftover` (0 o 1) |
+| `POST /api/system/cleanup` · `GET /api/system/storage` | in più `jobs` (resti `.deleting-*` eliminati, i loro byte in `freed_bytes`) · `backups` (solo mostrata) |
+
+Le due rotte della pulizia sono dichiarate dopo `/events` e prima di `/{job_id}`. Corpo comune (`CleanupIn`), **senza
+valori predefiniti per ambito e stati**:
+
+| Campo | Valori |
+|---|---|
+| `scope` | obbligatorio: `project` (un progetto) o `all` (tutti, compresi i job senza progetto o con un progetto che non esiste più) |
+| `project_id` | obbligatorio con `project`, vietato con `all` (anche vuoto); progetto inesistente 404 |
+| `statuses` | obbligatorio, sottoinsieme non vuoto di `completed`, `failed`, `cancelled` (duplicati tolti); uno stato attivo è un errore |
+| `kinds` | null = tutti i tipi; altrimenti un elenco non vuoto di identificatori, non confrontati con i tipi registrati (righe vecchie con tipi non più registrati) |
+| `older_than_days` | null = qualsiasi età; altrimenti un intero da 0 a 36 500 (booleani, testi e decimali rifiutati) |
+| `keep_favorites`, `keep_tagged` | predefiniti true; solo `true` o `false` (`"no"`, `0` o null sono un errore, mai un «no») |
+| `include_resumable` | predefinito false: escluse le pipeline fallite o annullate con almeno un elemento completato (riprendibili); solo `true` o `false` |
+| `max_seconds` | solo `/cleanup`, predefinito 15 (anche con null); un numero si limita in silenzio a 1–25; booleani, testi, elenchi e valori non finiti sono un errore |
+| `as_of` | facoltativo: l'`as_of` dell'anteprima confermata, un istante ISO 8601 con il fuso orario (anche con `Z`), portato in UTC e al secondo; senza fuso, illeggibile, non testo o più di un minuto nel futuro è un errore. Fa da «adesso» per l'età e nessun job terminato dopo corrisponde; null = adesso, senza limite superiore |
+
+Tutti i campi di `CleanupIn` sono tipizzati largo (`Any`) e li valida `JobCleanup.criteria` (`max_seconds` lo valida
+`run`): ogni valore non valido, anche null o di un altro tipo JSON (`scope` null, `statuses` come testo, `"no"` al
+posto di `false`), è un 400 `invalid_cleanup` con il motivo in italiano, mai un 422 di Pydantic in inglese. Solo un
+corpo che non è un oggetto JSON, o che manca, ha il 422 `validation_error` generico.
+
+**Selezione.** Frammenti SQL sulle colonne di `jobs`, senza alias, così lo stesso testo vale per la selezione, i
+conteggi e la condizione del DELETE (`only_if`): stella (`favorites`), etichette (`tags`), pipeline riprendibili
+(`kind='pipeline'`, `failed` o `cancelled`, un elemento di `pipeline_items` `completed`) ed età
+`julianday(COALESCE(finished_at, updated_at, created_at)) < julianday(?)`: in pratica la fine del job, altrimenti
+l'ultimo aggiornamento (`updated_at` non è mai NULL); il limite è «adesso» meno N giorni, calcolato in Python (mai
+`datetime('now')` di SQLite), e una data illeggibile (NULL per `julianday`) conserva il job. «Adesso» è `as_of` se il
+corpo lo indica, altrimenti l'ora UTC, sempre al secondo; con `as_of` si aggiunge `julianday(COALESCE(finished_at,
+updated_at, created_at)) < julianday(as_of)`, che vale per la selezione, per la condizione del DELETE e per i conteggi
+di protetti e riprendibili. Il confronto è stretto perché le date sono al secondo: un job terminato nello stesso secondo
+dell'anteprima, forse dopo la sua lettura, si risparmia (l'esito può dire un job in meno dell'anteprima) invece di
+rischiare di eliminarlo senza averlo mostrato. I job che corrispondono ai filtri (stati, progetto, tipi, età, `as_of`) si dividono in tre
+parti disgiunte: **da eliminare** (non protetti e, senza `include_resumable`, non riprendibili), **protetti** (stella o
+etichette, secondo i `keep_*` attivi) e **riprendibili** risparmiati.
+
+**Anteprima** (`preview`): una SELECT di `rowid, id, kind, title, status, finished_at, updated_at` (mai `params` né
+`result`, grandi per le pipeline) in ordine di creazione; `matched`, `by_status`, `by_kind` e `sample` si ricavano in
+Python, `protected` e `resumable` con due `COUNT(*)`; `as_of` è l'istante usato come «adesso». I byte si sommano con
+`dir_size_until` entro `BYTES_SECONDS` (3 s): se il tempo scade `bytes_complete` è false e `bytes` è un minimo
+(«almeno»). Le dimensioni misurate per intero si ricordano per (id, `updated_at`), che per un job terminato non cambia,
+e si sommano sempre; il tempo va alle cartelle non ancora misurate, prima quelle mai provate, poi quelle «lente» (una
+volta non finite in tempo), dalla provata meno di recente. Una cartella interrotta dal tempo conta con i byte letti
+fin lì e passa in fondo; quelle non raggiunte contano 0 (ognuna delle due memorie tiene al più 50 000 voci, oltre si
+svuotano entrambe). Ripetendo l'anteprima o l'uso del progetto diventa quindi esatta la dimensione di ogni cartella che
+da sola si misura entro 3 s, perché a ogni chiamata almeno una cartella viene misurata per intero o passa in fondo; una
+cartella che da sola richiede di più resta parziale a ogni chiamata e `bytes_complete` resta false.
+
+**Esecuzione** (`run`): un ciclo a tempo senza stato, da ripetere finché `remaining` è 0. L'interfaccia ripassa a ogni
+chiamata l'`as_of` dell'anteprima confermata: l'età si calcola da quell'istante e un job terminato dopo (anche mentre
+il ciclo gira, o ripreso e terminato di nuovo) non corrisponde più, né nella SELECT né nel DELETE. Il limite è solo nel
+tempo: un job con una data illeggibile o nel futuro può comparire in un'anteprima senza limite d'età ma non si elimina,
+mentre stella ed etichette si rileggono a ogni DELETE (una tolta dopo l'anteprima rende eliminabile il job). Senza
+`as_of` vale l'ora di ogni chiamata, senza limite superiore: è il caso dello svuotamento di un progetto da eliminare,
+che deve essere completo.
+
+```
+scadenza = adesso + max_seconds (1–25); cursore = 0
+finché non ci si ferma:
+    righe = SELECT rowid, id FROM jobs WHERE rowid > cursore AND <da eliminare> ORDER BY rowid LIMIT 50
+    nessuna riga → esaurito
+    per ogni riga:
+        arresto del server → stop (la riga non è esaminata: resta in remaining)
+        cursore = rowid
+        busy(id), esecuzione o ripresa in corso → skipped, senza l'attesa di 10 s
+        delete(id, only_if=<da eliminare>) → deleted, freed_bytes, leftover
+            Conflict o NotFound → skipped · altra eccezione → errors, stampata nel log del server
+        tempo scaduto → stop (controllato dopo il tentativo: ogni chiamata esamina almeno un job)
+remaining = 0 se esaurito, altrimenti COUNT dei job da eliminare con rowid > cursore
+```
+
+- **Terminazione del client:** il cursore sul `rowid` non riesamina un job nella stessa chiamata e i saltati non entrano
+  in `remaining`, quindi un job non eliminabile non tiene vivo il ciclo; il client si ferma comunque dopo 2 risposte di
+  fila senza eliminazioni.
+- **Criteri rivalutati nel DELETE:** la condizione di selezione passa a `JobManager.delete` come `only_if`, valutata prima
+  di toccare il disco e di nuovo nello stesso DELETE: una stella o un'etichetta aggiunte nel frattempo (`add_tag` e
+  `set_favorite` non prendono il lock del `JobManager`), o una nuova fine del job dopo `as_of`, salvano il job, contato
+  fra i saltati.
+- **Byte:** `freed_bytes` conta solo i job eliminati senza eccezioni, senza i byte rimasti nelle cartelle `leftover`. Il
+  lock del database non si tiene mai durante un'eliminazione e non ci sono elenchi `IN (…)` con migliaia di id.
+- **Perché un ciclo a tempo e non un job in background:** un job di pulizia occuperebbe uno slot del pool dietro le
+  pipeline lunghe, proprio quando serve spazio, comparirebbe nell'elenco che sta svuotando e lascerebbe riga e cartella
+  proprie. Il ciclo è idempotente e sicuro se la scheda si chiude; due schede insieme si saltano a vicenda (un job già
+  eliminato dall'altra è un saltato), senza un lock «una pulizia alla volta».
+
+**Eliminazione di un job** (`JobManager.delete(job_id, *, only_if=None) -> Deleted(freed_bytes, leftover)`):
+
+1. controlli di sempre: job inesistente 404, attivo 409, attesa (fino a 10 s) della chiusura dell'esecuzione o della
+   preparazione di una ripresa;
+2. il job si rilegge, perché durante l'attesa il lock è rilasciato: ripreso nel frattempo 409 («Il job è stato ripreso
+   nel frattempo…»), sparito 404;
+3. con `only_if`, `SELECT 1 … AND (<condizione>)`: se il job non corrisponde più, 409 «Il job non corrisponde più ai
+   criteri della pulizia.» senza toccare il disco;
+4. se la pulizia automatica sta togliendo un resto con lo stesso nome, 409 «I file del job si stanno già eliminando:
+   riprova tra qualche secondo.»;
+5. sotto il lock il nome entra in `_removing`. Se c'è `.deleting-<id>` e non `jobs/<id>`, la cartella del job è rimasta
+   lì da un rinomino inverso non riuscito: vale come già spostata. Altrimenti un `.deleting-<id>` di un tentativo
+   precedente si toglie e `os.replace(jobs/<id>, jobs/.deleting-<id>)`; se il rinomino non riesce, 409 «I file del job
+   sono in uso (antivirus, Esplora risorse o un programma che li ha aperti): chiudili e riprova.» e il job resta intero;
+6. `DELETE … WHERE id=? AND status IN (terminali) [AND (<condizione>)]`; se non elimina la riga il rinomino si annulla
+   (fino a 3 tentativi, con pause di 0,05 e 0,1 s: un antivirus può bloccarlo per un istante), poi 404 (eliminato
+   altrove) o 409 (non più corrispondente, oppure ripreso);
+7. fuori dal lock: evento `deleted` con il progetto, chiusura del log (così una ripresa concorrente non la aspetta),
+   misura e rimozione di `.deleting-<id>`, nome tolto da `_removing`, rimozione dello scratch del job.
+
+`remove_tree` (`core/storage.py`) restituisce se non è rimasto nulla e non lascia mai uscire un errore
+dell'eliminazione, neanche per un file singolo. Quando un file o una cartella non si elimina dà al proprietario i
+permessi che servono (lettura e scrittura sul file; lettura, scrittura e accesso sulla cartella da eliminare e su
+quella che lo contiene, se è dentro l'albero) e riprova una volta: i permessi si aggiungono e non si tolgono mai, i
+collegamenti simbolici non si seguono e un'apertura o una lettura non riuscita si lascia com'è. Una cartella da cui
+qualcosa non si è potuto togliere si riprova fino a 3 volte, con pause di 0,1 e 0,2 s.
+
+`purge_tombstones` (pulizia automatica) toglie le cartelle `jobs/.deleting-<id>` che nessuna eliminazione sta
+rimuovendo (stesso insieme `_removing`; controllo e prenotazione sotto il lock, atomici rispetto a `delete`), e solo se
+la riga del job non c'è più. Se la riga c'è ancora (DELETE mancato e rinomino inverso non riuscito, o arresto brusco
+fra il rinomino e il DELETE) la cartella è del job, anche con la stella: torna in `jobs/<id>` se quel nome è libero,
+altrimenti resta dov'è con un messaggio nel log; mai eliminata. Anche una riga che non si riesce a verificare lascia la
+cartella dov'è. Restituisce le cartelle tolte per intero e i byte liberati (anche quelli di una rimozione parziale); una
+cartella sparita fra l'elenco e il lock non si conta. Nessuna euristica di età: le `.deleting-<id>` le creano solo
+`delete` e `submit` (resto di un job mai accodato); `.rerun-incoming` e le cartelle `jobs/<id>`, con o senza riga, non
+si toccano.
+
+**Eliminazione di un progetto** (`delete_project`, chiamata da `Core.delete_project`):
+
+```
+progetto = projects.get(id)                                    400 identificatore non valido, 404
+guardia: id già in eliminazione → 409 delete_in_progress, altrimenti lo si aggiunge
+per al più 3 passate (PROJECT_PASSES):
+    attivi = COUNT dei job del progetto in coda, in esecuzione o in annullamento (su tutto il progetto)
+    attivi > 0 → 409 project_active_jobs, details {active, jobs_deleted}   (jobs_deleted 0 alla prima passata)
+    budget = numero dei job del progetto all'inizio della passata
+    finché budget > 0:
+        ids = SELECT id FROM jobs WHERE project_id=? ORDER BY rowid LIMIT min(200, budget)   sempre dall'inizio, mai OFFSET
+        per ogni id: arresto del server → 503 shutting_down · budget − 1 · delete(id):
+            NotFound → avanti · Conflict → 409 project_busy, details {jobs_deleted}
+    delete_if_unused(id) → eliminato: risposta
+409 project_busy («Il progetto continua a ricevere nuovi job: …»)
+alla fine, comunque vada: id tolto dalla guardia
+```
+
+`ProjectService.delete_if_unused` lavora in una sola transazione, che tiene il lock del database:
+`DELETE FROM projects WHERE id=? AND NOT EXISTS (SELECT 1 FROM jobs WHERE project_id=?)`; se non elimina nulla, 404 se
+il progetto non c'è più, altrimenti una nuova passata; se elimina l'ultimo progetto ne inserisce uno vuoto, «Nuovo
+progetto» («Creato automaticamente: BioLoom richiede almeno un progetto.»), restituito come `replacement`. Sequenze e
+documenti vanno via in cascata, etichette e stella con i trigger. `ensure_default` resta all'avvio.
+
+- **Nulla eliminato con job attivi all'inizio:** il controllo SQL, su tutti i job del progetto, precede il primo
+  DELETE, quindi un 409 `project_active_jobs` alla prima passata non ha eliminato nulla (`jobs_deleted` 0). Se invece
+  un job inviato durante l'eliminazione è attivo alla passata successiva, l'eliminazione si ferma lì con lo stesso 409:
+  i job già eliminati restano eliminati, il progetto resta, e `details.jobs_deleted` e il messaggio («(k job già
+  eliminati)») dicono quanti.
+- **Nessun job orfano:** la riga del progetto si cancella solo se nessun job la referenzia, e `submit` rifiuta i progetti
+  inesistenti; entrambi sono statement singoli serializzati dal lock del database: o vince l'INSERT e il DELETE ritenta
+  alla passata successiva, o vince il DELETE e l'INSERT riceve 404.
+- **Sempre almeno un progetto:** due eliminazioni degli ultimi due progetti si serializzano nella transazione; la prima
+  vede ancora l'altro progetto, la seconda nessuno e crea il sostituto: ne resta esattamente uno, mai zero né due.
+- **Eliminazione parziale dichiarata:** un job in uso o ripreso interrompe con 409 `project_busy`; i job già eliminati
+  restano eliminati, il progetto resta e il messaggio lo dice. Lo stato è coerente e la richiesta si può ripetere.
+- **Nessun ciclo infinito:** ogni passata esamina al più i job che il progetto aveva al suo inizio, così una sorgente
+  continua di job nuovi finisce in `project_busy` dopo 3 passate (o prima in `project_active_jobs`, se un job nuovo è
+  ancora attivo all'inizio di una passata) invece di tenere occupata la richiesta.
+- **Una richiesta per progetto:** una seconda eliminazione dello stesso progetto riceve subito 409 `delete_in_progress`,
+  senza occupare un thread ad aspettare; progetti diversi non si aspettano a vicenda.
+
+**Ordine dei lock:** guardia di `JobCleanup` → `JobManager._lock` → `Database._lock`, mai al contrario. La guardia
+protegge solo l'appartenenza all'insieme dei progetti in eliminazione e non si tiene mai durante una chiamata ad altri
+componenti; `JobManager.delete` non si chiama mai dentro `db.transaction()`.
+
+**Errori:**
+
+| Codice | Stato | Quando |
+|---|---|---|
+| `invalid_cleanup` | 400 | ambito mancante o non valido, `project_id` mancante con `project` o presente con `all`, stati vuoti, attivi («I job in coda o in esecuzione non si eliminano: annullali prima.») o sconosciuti, `kinds` vuoto o non valido, età non intera o fuori intervallo, sì/no diversi da `true`/`false`, `max_seconds` non numerico, `as_of` non valido o nel futuro; anche null o un altro tipo JSON |
+| `invalid_identifier`, `not_found` | 400, 404 | id del progetto non valido o inesistente (uso, eliminazione, ambito della pulizia) |
+| `project_active_jobs` | 409 | il progetto ha job in coda, in esecuzione o in annullamento: «… annullali prima di eliminarlo»; `details` `{active, jobs_deleted}`: alla prima passata nulla è stato eliminato (0), dopo (un job partito durante l'eliminazione) i job già eliminati restano tali e il messaggio lo dice |
+| `project_busy` | 409 | un job del progetto è in uso o è stato ripreso nel frattempo, oppure il progetto continua a ricevere job (`details.jobs_deleted`) |
+| `delete_in_progress` | 409 | un'altra eliminazione dello stesso progetto è in corso |
+| `shutting_down` | 503 | arresto del server durante l'eliminazione di un progetto: il messaggio dice quanti job sono stati eliminati e che il progetto resta (l'interfaccia lo mostra come esito certo, non da verificare) |
+| `conflict` | 409 | un singolo job (dettaglio): attivo, ancora in chiusura o ripreso, file in uso, resto ancora in rimozione; nella pulizia questi casi, e il job non più corrispondente, sono `skipped` |
+
+**Coperto e non coperto.** L'eliminazione toglie le righe di `jobs`, le cartelle `jobs/<id>`, etichette e stelle
+(trigger), gli elementi di pipeline (cascata), lo scratch del job e i resti `.deleting-*`. Restano fuori, con motivo:
+
+- `jobs/.rerun-incoming` (svuotata all'avvio; il pacchetto in arrivo si toglie in `finally`); lo scratch (`recover`
+  all'avvio e pulizia automatica); gli upload (globali, a età, senza legame con job o progetti: la conferma lo dice);
+  `cache/compute` (testi, non percorsi; scade dopo 30 giorni); i template (nessun riferimento ai job); `backups/` (rete
+  di sicurezza, solo mostrata nello spazio occupato);
+- il file `bioloom.db` e il WAL non si restringono (nessun VACUUM automatico, vedi [Cartella dati](#cartella-dati));
+- i job completati possono essere la sorgente di altri job (strutture `{type: "job"}`, consenso con `qmean_job` e
+  `predict_job`): la conferma lo dice e i completati richiedono «Ho capito»;
+- le cartelle `jobs/<id>` già senza riga restano dove sono: nessuna scansione, né automatica né manuale (con un database
+  perso o ripristinato sembrerebbero rifiuti); i job con un `project_id` che non esiste più si raggiungono solo con
+  l'ambito «Tutti i progetti»;
+- `DELETE /api/projects/{id}` chiamata direttamente su un progetto con migliaia di job è una richiesta lunga, che in
+  modalità server può superare il timeout di un proxy: l'interfaccia lo evita svuotando prima il progetto;
+- il rinomino della cartella è provato sul filesystem Linux dei test; sul bind mount di Docker Desktop, su exFAT e con
+  file tenuti aperti dall'host Windows il ripiego è il 409 «in uso» che lascia il job intero, da verificare sullo stack
+  reale con una copia dei dati.
+
+**Interfaccia** (logica in `lib/cleanup.ts`, pura e testata con chiamate e timer finti; i componenti la ricevono via
+props):
+
+- **Pagina Job:** «Pulisci job…» (cestino, accanto a «Riesegui da pacchetto») apre `JobCleanupDialog` con l'ambito e il
+  tipo filtrati nella pagina; il filtro `?tag=` si ignora. A fine esecuzione, qualunque esito, si ricaricano elenco e
+  conteggi dei progetti, e il job aperto si deseleziona solo se il suo stato risponde 404 (l'assenza dall'elenco,
+  limitato a 200 e filtrato, non prova l'eliminazione). Il cestino del dettaglio (`aria-label` «Elimina il job») è
+  protetto dal doppio clic e avvisa se è rimasto qualcosa (`leftover`).
+- **Criteri** (`JobCleanupDialog`): ripartono dai valori sicuri a ogni apertura, senza `localStorage`: falliti e annullati
+  (completati mai preselezionati), «oltre 7 giorni» (un job fallito da pochi minuti è probabilmente in diagnosi), stella
+  ed etichette conservate, pipeline riprendibili escluse. Ambito «Questo progetto (nome)», disattivato senza un progetto
+  attivo, o «Tutti i progetti»; `buildCleanupRequest` non costruisce alcuna richiesta senza stati o con «Questo progetto»
+  senza un progetto noto: mai «tutti i progetti» al posto di un id sconosciuto. «Questo progetto» è il progetto attivo
+  all'apertura del dialogo (`cleanupTarget`): se intanto l'attivo cambia (per esempio rileggendo i progetti al ritorno
+  sulla scheda), l'ambito diventa non disponibile, «Questo progetto (nome, non più attivo)», con una nota che invita a
+  riaprire il dialogo o a scegliere «Tutti i progetti», e non passa mai all'altro progetto. Con «Completati» un avviso
+  (risultati usati da altri job) e la casella «Ho capito» obbligatoria, che si azzera a ogni cambio dell'ambito o del
+  progetto (`cleanupTargetKey`, `resetUnderstood`).
+- **Anteprima** (`makePreviewLoop`): 400 ms dopo l'ultimo cambio, una sola richiesta in volo con la più recente in coda,
+  risposte di criteri superati scartate (`criteriaKey`); mentre si ricalcola resta l'ultima, attenuata (`aria-busy`).
+  Mostra «42 job, 1,4 GB» («almeno» con i byte parziali), i conteggi per stato se gli stati sono più d'uno, le
+  pipeline riprendibili escluse, i job conservati per stella o etichette e i 5 più vecchi. «Elimina N job (X MB)» è
+  attivo solo con l'anteprima pronta per i criteri attuali e almeno un job (`canRun`).
+- **Esecuzione** (`runCleanup`): la richiesta è quella dell'anteprima confermata con il suo `as_of`
+  (`cleanupRunRequest`, ripassato a ogni chiamata: un job terminato dopo l'anteprima non si elimina); chiamate
+  strettamente in sequenza con `max_seconds` 5; eliminati, byte e resti si sommano, saltati ed errori sono quelli
+  dell'ultima chiamata (i saltati si ritrovano a ogni chiamata). Fine con `done` (`remaining` 0), `stopped`
+  («Interrompi», fra una chiamata e l'altra), `stalled` (2 risposte di fila senza eliminazioni), `capped` (10 000
+  chiamate) o `error` (totali parziali con il messaggio, mai un'eccezione): anche una risposta che non è un oggetto con
+  conteggi numerici non negativi («Risposta del server non valida per la pulizia.», così un corpo vuoto non vale mai
+  «finito») o un'eccezione di una callback. Barra accessibile (`Progress` con `label`) e «Eliminati 120 di 840 job ·
+  liberati 1,4 GB» in una regione `aria-live`. Il riepilogo chiama i saltati «job saltati: in uso, ripresi, già
+  eliminati altrove o non più corrispondenti ai criteri (per esempio per una stella o un'etichetta aggiunta nel
+  frattempo)», con il tono di avviso: non è un errore, ma non tutto ciò che corrispondeva è stato eliminato. Durante
+  l'esecuzione Esc, la X e lo sfondo chiedono l'interruzione invece di chiudere e il dialogo resta aperto fino al
+  riepilogo; se si smonta (cambio di pagina) il ciclo si ferma alla chiamata successiva. Il dialogo esce sempre
+  dall'esecuzione e `onCleaned` parte una sola volta, qualunque esito. «Interrompi» prende il posto della conferma e
+  ignora il secondo clic di un doppio clic su «Elimina».
+- **Dialogo «Progetti»** (`ProjectsDialog`): un cestino in ogni riga (`aria-label` «Elimina il progetto <nome>») apre la
+  vista «Elimina il progetto» nello stesso `Modal` (niente dialoghi annidati: ogni `Modal` ascolta Esc sulla finestra, e
+  un Esc li chiuderebbe tutti). La vista (`ProjectDeleteView`) mostra l'uso del progetto, letto all'apertura e dopo un
+  rifiuto, mai a intervalli: nome, date, «3 sequenze, 1 documento, 120 job, 1,4 GB», che cosa va via per sempre, quanti
+  job con la stella, con etichette e pipeline riprendibili sono compresi, che i file caricati non appartengono ai
+  progetti e, sull'ultimo progetto, che ne verrà creato uno vuoto. Con job attivi il motivo e «Vai ai job», senza
+  conferma; un progetto vuoto si conferma con un clic (focus su «Annulla»); altrimenti si scrive il nome
+  (`nameMatches`: maiuscole, spazi in più e forme Unicode non contano). Il bottone distruttivo non ha mai il focus
+  iniziale.
+- **Eliminazione** (`deleteProjectFlow`): prima lo svuotamento con la pulizia a tempo (`drainRequest`: il progetto, tutti
+  e tre gli stati terminali, stella, etichette e pipeline riprendibili comprese, qualsiasi età, senza `as_of`, quindi
+  completo), interrompibile; poi `DELETE /api/projects/{id}`, che resta completo e autorevole (ricontrolla gli attivi
+  ed elimina i job rimasti). «Interrompi» (o Esc, la X, lo sfondo, il cambio di pagina) durante lo svuotamento impedisce
+  sempre il DELETE, anche quando l'ultima chiamata, che non si interrompe a metà, ha eliminato tutti i job: il progetto,
+  le sue sequenze e i suoi documenti restano, e il dialogo lo dice. Esiti: eliminato (notifica con i job e i byte dello
+  svuotamento e del DELETE, il sostituto e gli eventuali resti; elenco riletto e, se era il progetto attivo, ritorno a
+  «/»: il provider sta fuori dal router); svuotamento incompleto o interrotto, 4xx o 503 `shutting_down` sul DELETE
+  (esito certo, il progetto resta: messaggio nel dialogo, con i job già eliminati dallo svuotamento, uso riletto, nome
+  da riscrivere); rete o altri 5xx sul DELETE (esito incerto, verificato rileggendo elenco e uso, mai una notifica di
+  fallimento). Il dialogo esce sempre dallo stato «in corso», anche per un'eccezione inattesa, che si tratta come esito
+  incerto. Notifiche, elenco e navigazione valgono anche a dialogo chiuso.
+- **Impostazioni → Spazio e file temporanei:** il pulsante della pulizia automatica è «Pulisci file temporanei» (le
+  azioni che eliminano risultati hanno altri nomi e stanno in un riquadro a parte) e la sua notifica conta i resti di
+  job eliminati; il riquadro «Job e progetti» mostra lo spazio dei risultati dei job e «Elimina job…» (dialogo con
+  «Tutti i progetti»); fra le voci dello spazio occupato «Copie di sicurezza del database».
+- **Progetto attivo** (`ProjectProvider`, `lib/projectSelection.pickProjectId`): dopo ogni rilettura dell'elenco resta
+  quello attuale se c'è ancora, altrimenti il primo, altrimenti nessuno (un elenco vuoto non lascia mai l'id eliminato);
+  l'elenco si rilegge anche quando la scheda torna visibile, così un progetto eliminato in un'altra scheda non resta
+  offerto. Il progetto attivo non si sincronizza fra le schede.
+
 ## Prestazioni
 
 Profilazione dei job con MODELLER reale (F1.2, F1.3) e ottimizzazioni applicate solo dove la misura dava un guadagno.
@@ -3013,8 +3347,8 @@ interfaccia delle singole funzioni sono descritte nelle loro sezioni (paragrafi 
 | radice | `main.tsx` (tema applicato prima del primo render), `App.tsx` (rotte e accesso con chiave), `styles.css` (variabili CSS e temi) |
 | `api/` | `client.ts` (tutte le chiamate al backend) e `types.ts` (tipi delle risposte) |
 | `pages/` | una pagina per rotta (tabella sotto), caricata su richiesta |
-| `components/` | componenti condivisi (`ui`, `charts`, `Viewer3D`, `JobPanel`, `Pickers`, `AlignmentView`, `Layout`, `GlobalSearch`, `Labels`, `Preflight`, `ReportButton`, `ReproButton`, `FileLoad`, `ErrorBoundary`…) e riquadri delle funzioni (`StructuralAnalysis`, `StructureTools`, `Refinement`, `Mutagenesis`, `Predictor`, `ComplexInput`, `ComplexResults`, `AssembliesCard`, `LigandPicker`, `LigandsPanel`, `CoverageAlerts`…) |
-| `lib/` | logica pura con i test accanto (`*.test.ts`), più gli hook (`hooks.ts`, `useJob`) e i contesti di progetto e notifiche (`context.tsx`) |
+| `components/` | componenti condivisi (`ui`, `charts`, `Viewer3D`, `JobPanel`, `Pickers`, `AlignmentView`, `Layout`, `GlobalSearch`, `Labels`, `Preflight`, `ReportButton`, `ReproButton`, `FileLoad`, `ErrorBoundary`, `ProjectsDialog`, `JobCleanupDialog`…) e riquadri delle funzioni (`StructuralAnalysis`, `StructureTools`, `Refinement`, `Mutagenesis`, `Predictor`, `ComplexInput`, `ComplexResults`, `AssembliesCard`, `LigandPicker`, `LigandsPanel`, `CoverageAlerts`…) |
+| `lib/` | logica pura con i test accanto (`*.test.ts`, per esempio `cleanup.ts` per la pulizia dei job e l'eliminazione dei progetti, `projectSelection.ts` per il progetto attivo), più gli hook (`hooks.ts`, `useJob`) e i contesti di progetto e notifiche (`context.tsx`) |
 
 **Qualità per residuo nel 3D e confidenza degli allineamenti:**
 
@@ -3083,9 +3417,9 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 | Qualità (`/quality`) | voto, consenso tra i metodi (discordanze, regioni problematiche, disordine predetto come segnale informativo), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura; sezione Ligandi e metalli (esiti, coordinazione, confronto con il sito del template): il clic su un gruppo lo mostra nel 3D con i residui coordinanti e le linee di coordinazione (`LigandsPanel`, `lib/ligands.ts`; ioni metallici sempre a sfere); scheda Interazioni (analisi strutturale: legami H, ponti salini, disolfuri, aromatiche, interfacce, conservazione; `?ajob=`); schede Tasche (fpocket, `?pjob=`) ed Elettrostatica (PDB2PQR + APBS, `?ejob=`); scheda Mutagenesi (mutazioni e scansione di alanina della struttura del rapporto, cronologia); «Confronta con una predizione (ESMFold)» con l'esito motivato e il confronto per residuo, incluso nel consenso e nel report (`?prjob=`, F9.3) |
 | Confronto (`/compare`) | `?a=&ca=&b=&cb=&job=`: B sovrapposta ad A (riferimento), metriche (TM-score su A e su B, RMSD, RMSD entro 5 Å, GDT-TS, GDT-HA, lDDT, lunghezza allineata), 3D con B colorata per distanza (0 → ≥ 5 Å) o lDDT e A in grigio chiaro, grafico di distanza e lDDT per posizione, tratti che deviano, tabella per coppia; clic ovunque → coppia evidenziata nel 3D |
 | Pipeline batch (`/pipeline`) | multi-FASTA → modelli validati, template da ricerca automatica, «Più template complementari» (N da 2 a 5) o fissi (casella «Ligandi» del template solo se la scelta predefinita trasferisce qualcosa dalle catene scelte, con i gruppi esclusi nel suggerimento: `lib/ligands.defaultTransfer`); filtro zona crepuscolare, tabella paginata (template usati elencati, motivazioni nel suggerimento), CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
-| Job (`/jobs`) | log e file di ogni calcolo; ripresa delle pipeline fallite, annullate o completate con elementi falliti; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione e la posizione di quelli in coda ("2° in coda"); stella, etichette e filtro per etichetta o preferiti (`?tag=`); «Pacchetto riproducibile» e «Riesegui da pacchetto» |
+| Job (`/jobs`) | log e file di ogni calcolo; ripresa delle pipeline fallite, annullate o completate con elementi falliti; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione e la posizione di quelli in coda ("2° in coda"); stella, etichette e filtro per etichetta o preferiti (`?tag=`); «Pacchetto riproducibile» e «Riesegui da pacchetto»; eliminazione di un job dal dettaglio e «Pulisci job…» per i job terminati in blocco, con criteri, anteprima e conferma (vedi [Eliminazione di progetti e pulizia dei job](#eliminazione-di-progetti-e-pulizia-dei-job)) |
 | Riesegui da pacchetto (`/rerun`) | caricamento e verifica di un pacchetto, anteprima del manifest con le versioni, controlli preventivi, avvio, rapporto del confronto; `?job=` apre una riesecuzione (vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione)) |
-| Impostazioni (`/settings`) | schede Generale (esecuzione, QMEAN, email, consenso e indirizzo di ESMFold), Licenze (MODELLER, ProSA, PROCHECK), Database (pdbaa, MMseqs2, UniClust30), Strumenti (verifica dell'installazione), Spazio e file temporanei (cache dei calcoli, file intermedi di MODELLER, pulizia) |
+| Impostazioni (`/settings`) | schede Generale (esecuzione, QMEAN, email, consenso e indirizzo di ESMFold), Licenze (MODELLER, ProSA, PROCHECK), Database (pdbaa, MMseqs2, UniClust30), Strumenti (verifica dell'installazione), Spazio e file temporanei (spazio occupato con le copie di sicurezza del database, «Pulisci file temporanei», cache dei calcoli, file intermedi di MODELLER, riquadro «Job e progetti» con «Elimina job…») |
 | Login (`Login.tsx`, senza rotta) | solo in modalità server, quando l'API risponde 401 |
 
 ## Sicurezza e privacy
@@ -3147,13 +3481,13 @@ analisi strutturali, la rifinitura e la mutagenesi non usano la rete; l'interfac
 
 ## Test
 
-**Conteggi** (contati il 2 ottobre 2026 con `scripts/test.sh backend --collect-only -q` nell'immagine `bioloom:4.1.0` e con
+**Conteggi** (contati il 5 ottobre 2026 con `scripts/test.sh backend --collect-only -q` nell'immagine `bioloom:4.1.0` e con
 `npx vitest run`):
 
 | Suite | File | Test |
 |---|---|---|
-| backend, `backend/tests` (pytest) | 42 | 1117 nella suite predefinita (41 file), più i 4 di `test_remote.py` (marcatore `network`, esclusi da `addopts`: `pytest -m network`) |
-| frontend, `frontend/src/**/*.test.ts(x)` (vitest) | 40 | 352 |
+| backend, `backend/tests` (pytest) | 43 | 1215 nella suite predefinita (42 file), più i 4 di `test_remote.py` (marcatore `network`, esclusi da `addopts`: `pytest -m network`) |
+| frontend, `frontend/src/**/*.test.ts(x)` (vitest) | 44 | 417 |
 
 I test che richiedono MODELLER, PROCHECK, ProSA o gli strumenti dell'immagine di sviluppo (fpocket, PDB2PQR, APBS,
 OpenMM, PDBFixer) si saltano da soli, con il motivo, dove mancano (`requires_modeller` e le condizioni degli strumenti):
@@ -3192,6 +3526,42 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
   riesce.
 - **Flusso dei dati** (`test_dataflow.py`, 11): scratch, salvataggio definitivo, intermedi, blocco SQLite (seconda
   istanza), pulizia, gruppi di processi, archivi su file temporanei.
+- **Eliminazione di progetti e pulizia dei job** (`test_cleanup.py`, 98; job inseriti direttamente nel database con una
+  cartella di dimensione nota, e dopo ogni eliminazione il controllo che non restino job orfani, cartelle di job senza
+  riga, etichette o stelle di elementi spariti, elementi di pipeline senza job né resti `.deleting-*`):
+  - `submit`: progetto inesistente (404, nessuna riga né cartella), progetto vuoto = nessun progetto, preparazione
+    fallita senza riga né cartella (stessa eccezione), resto non rimovibile passato in `.deleting-<id>` e tolto dalla
+    pulizia automatica, pulizia che solleva senza nascondere l'errore originale, invii continui in un progetto mentre
+    lo si elimina;
+  - un job: rimozione con i resti e le pause solo fra i tentativi, errori di `remove_tree` che non escono mai (aperture
+    e letture fallite lasciate com'erano, file in sola lettura sbloccato, nessuna cartella resa illeggibile, file
+    singolo con permessi o eliminazione rifiutati), byte liberati, cartella in uso (409, job intero), rimozione parziale
+    con il resto tolto dalla pulizia automatica, resto in rimozione saltato, resto di un job che ha ancora la riga mai
+    eliminato (torna al suo posto, o resta se il nome è occupato), resto sparito non contato, cartella rimasta nel resto
+    trattata come quella del job, rinomino inverso riprovato, condizione `only_if` non più vera al controllo o solo nel
+    DELETE (rinomino annullato), cartelle senza riga, `ref` e `.rerun-incoming` mai toccate dalla pulizia automatica,
+    elemento non eliminabile che non ferma la pulizia né si conta, scratch di tutti i job attivi (anche oltre 500) e di
+    quelli ancora in chiusura conservato, avvio che non si ferma per una pulizia iniziale guasta, `backups` nello spazio
+    e mai eliminata, misura delle cartelle a tempo;
+  - progetti: uso (515 job, attivi, stella, etichette, pipeline riprendibili, byte, 404, 400, sola lettura), 620 job
+    eliminati con 30 job di un altro progetto e 5 globali intatti, job attivo più vecchio dietro 600 completati (409,
+    nulla eliminato, `jobs_deleted` 0), job partito durante l'eliminazione (409 `project_active_jobs` con i 3 job già
+    eliminati nei dettagli e nel messaggio), etichette, sequenze e documenti, «Nuovo progetto» al posto dell'ultimo, job
+    ripreso (409 `project_busy` con i job già eliminati, poi ripetibile), job che compaiono durante l'eliminazione (uno
+    solo: riuscita; uno nuovo per ogni job eliminato: 409 dopo 3 passate), seconda richiesta (409 `delete_in_progress`
+    subito), ultimi due progetti eliminati insieme (ne resta esattamente uno, 5 volte), arresto (503);
+  - pulizia: anteprima in sola lettura uguale all'esecuzione, filtri (8 casi: stati, età con le date di fine, di
+    aggiornamento e illeggibili, tipi, progetti e «tutti» con job senza progetto o con un progetto inesistente, stella,
+    etichette), stati attivi rifiutati e job attivi mai toccati, ambito esplicito (400 per entrambe le rotte, 404),
+    tipi ed età non validi (7 casi), valori null o di un altro tipo (18 casi, anche `"no"` al posto di `false` con un job
+    con la stella: sempre 400 `invalid_cleanup`, mai 422, nulla eliminato), `max_seconds` null e limitato, `as_of` non
+    valido (8 casi per entrambe le rotte), portato in UTC e al secondo, «adesso» del limite d'età, esecuzione che non va
+    oltre l'anteprima confermata (un job fallito dopo e uno ripreso e fallito di nuovo restano; senza `as_of` si
+    eliminano), byte dell'anteprima che convergono oltre una cartella lenta, pipeline riprendibili escluse per
+    impostazione predefinita, protetti ed esempi, stella aggiunta fra selezione e DELETE, 2500 job in un ciclo di
+    chiamate, un job per chiamata con l'orologio che salta 10 s a ogni lettura, job in uso saltato senza attesa e che
+    non tiene vivo il ciclo, job sparito, errore contato senza interrompere, eventi, etichette e ricerca globale, byte
+    senza i resti, rotte (400, non 404 o 405) e chiave d'accesso (401).
 - **Licenze e accesso** (`test_licenses_auth.py`, 10): chiave MODELLER (fonti, formato, prova prima del salvataggio),
   LicenseDB di ProSA, chiave d'accesso, modalità server, arresto consentito dal solo avviatore.
 - **Strumenti esterni** (`test_engines_extra.py`, 10): parser di PROCHECK e ProSA tarati su output reali di 1UBQ,
@@ -3543,6 +3913,27 @@ parentesi):
   solo per un pacchetto rieseguibile, valori e differenze formattati, ordine e dettaglio dei file del confronto (RMSD,
   numeri oltre la tolleranza, testi, struttura), nota sulle tolleranze; mutagenesi e scansione rieseguibili, predizione
   solo esportabile; esito «compatibile» con le righe dei controlli delle tolleranze scientifiche.
+- **Eliminazione di progetti e pulizia dei job** (`cleanup.test.ts` 45, `projectSelection.test.ts` 3,
+  `JobCleanupDialog.test.tsx` 8, `ProjectsDialog.test.tsx` 9; chiamate e timer finti): valori predefiniti sicuri,
+  ordine degli stati e «Ho capito» azzerato togliendo i completati, nessuna richiesta senza stati o con «Questo
+  progetto» senza un progetto (mai «tutti» al suo posto), nessun `project_id` con «Tutti i progetti», chiave dei criteri
+  (senza `max_seconds` né `as_of`); conferma possibile solo con l'anteprima pronta per i criteri attuali (superata,
+  vuota, in corso, in errore, completati senza «Ho capito»); esecuzione con l'`as_of` dell'anteprima pronta per i
+  criteri attuali, mai di un'altra; «Questo progetto» fissato all'apertura (non segue un nuovo progetto attivo, elenco
+  non ancora letto, «Ho capito» azzerato al cambio di destinazione); anteprima con debounce (tre richieste ravvicinate →
+  una chiamata, una sola in volo con la più recente alla fine, risposta superata scartata, criteri uguali, richiesta
+  nulla, errore e «Riprova», arresto); ciclo a tempo (somme, saltati dell'ultima chiamata, `max_seconds` 5, `as_of` in
+  ogni chiamata, fine a `remaining` 0, «Interrompi» fra le chiamate, `stalled`, errore con i totali parziali, risposta
+  senza la forma attesa ed eccezione di una callback come `error`, tetto di chiamate), avanzamento, riepiloghi (con i
+  job saltati e i loro motivi) e tono per ogni esito; plurali, nome da scrivere (spazi, maiuscole, forme Unicode),
+  blocco con job attivi, svuotamento senza eccezioni, notifica con e senza progetto sostitutivo, flusso
+  dell'eliminazione (senza job solo il DELETE, svuotamento poi DELETE, svuotamento incompleto o con una risposta non
+  valida senza DELETE, «Interrompi» durante l'ultima chiamata dello svuotamento senza DELETE, 409 e 503
+  `shutting_down` rifiutati, rete o altri 5xx da verificare); progetto attivo dopo la rilettura (presente, assente,
+  elenco vuoto → nessuno); markup del dialogo della pulizia (predefiniti, conferma, progetto attivo cambiato dopo
+  l'apertura, avviso dei completati, barra accessibile e regione annunciata, interruzione, riepilogo come stato o come
+  alert) e della conferma dell'eliminazione (job attivi, progetto vuoto con il focus su «Annulla», nome da scrivere,
+  byte parziali, ultimo progetto, in corso, errori, nome accessibile del cestino, mai la parola «cestino» nel testo).
 - **Navigazione, tema, ricerca ed etichette:** `virtual.test.ts` (5: soglia, posizioni con altezza fissa e per indice,
   righe visibili con margine e spaziatori, fondo e scorrimento oltre il fondo, blocchi dell'allineamento, riga
   selezionata portata in vista sotto l'intestazione fissa e nei limiti), `theme.test.ts` (5: valori salvati vecchi e

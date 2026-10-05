@@ -179,7 +179,7 @@ export interface Timers {
   clear(handle: unknown): void;
 }
 
-const realTimers: Timers = {
+export const realTimers: Timers = {
   set: (fn, ms) => setTimeout(fn, ms),
   clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };

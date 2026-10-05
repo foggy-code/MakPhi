@@ -301,6 +301,8 @@ def test_job_manager_publishes_state_log_and_deletion(tmp_path):
     try:
         mgr.register("demo", lambda ctx, p: ctx.log("ciao") or ctx.progress(0.5, "metà") or {})
         start = mgr.events.version
+        db.execute("INSERT INTO projects(id, name, description, created_at, updated_at) VALUES ('p1','P','',?,?)",
+                   ("2026-01-01T00:00:00+00:00",) * 2)  # submit rifiuta i progetti inesistenti
         job_id = mgr.submit("demo", {}, project_id="p1")["id"]
 
         def published() -> list[str]:

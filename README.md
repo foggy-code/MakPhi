@@ -302,7 +302,25 @@ per ogni sequenza completata (cartella `report/`, senza vista 3D).
   falliti**.
 - **Job:** ogni calcolo è un job, con log e file nella pagina **Job**, aggiornati in tempo reale, e un link stabile.
   Rilanciando una pipeline con le stesse sequenze e altre opzioni di modellazione, le ricerche già fatte vengono dalla
-  [cache dei calcoli](#dove-stanno-i-dati).
+  [cache dei calcoli](#dove-stanno-i-dati). Un job terminato si elimina dal suo dettaglio (cestino), con tutti i suoi
+  file.
+- **Pulisci job…** (pagina **Job**, oppure **Elimina job…** in Impostazioni → Spazio e file temporanei): elimina in
+  blocco i job terminati che non servono più. Scegli l'ambito (il progetto attivo quando apri il dialogo, oppure tutti
+  i progetti), gli stati (falliti e annullati già scelti; i completati solo spuntando **Ho capito**, perché i loro
+  risultati possono servire ad altri job), l'età (predefinita: oltre 7 giorni) e il tipo. I job con la stella o con
+  etichette e le pipeline che si possono ancora riprendere restano, salvo che tu lo chieda con le caselle del dialogo.
+  Un'anteprima dice quanti job e quanto spazio vanno via e quali sono i più vecchi; dopo la conferma la pulizia procede
+  a blocchi di pochi secondi, con l'avanzamento e **Interrompi**, e non elimina i job terminati dopo l'anteprima. I job
+  in coda o in esecuzione non si toccano mai; il riepilogo dice anche quanti job sono stati saltati (in uso, ripresi o
+  cambiati nel frattempo, per esempio con una stella aggiunta).
+- **Eliminare un progetto:** nel dialogo **Progetti** (in alto), il cestino della riga. La conferma mostra che cosa va
+  via per sempre (sequenze, documenti, job con i loro file e lo spazio che occupano, compresi quelli con la stella o con
+  etichette) e, se il progetto non è vuoto, chiede di scriverne il nome. Con job in coda o in esecuzione non si può:
+  prima vanno annullati (**Vai ai job**). I job si eliminano a blocchi, con l'avanzamento e **Interrompi**: se
+  interrompi, il progetto, le sue sequenze e i suoi documenti restano (i job già eliminati no). Eliminando l'ultimo
+  progetto BioLoom ne crea uno vuoto, «Nuovo progetto», perché ne serve sempre almeno uno.
+- **File in uso:** se un file di un job è aperto in un altro programma (antivirus, Esplora risorse), il job non si
+  elimina e BioLoom chiede di chiuderlo; i resti di un job già eliminato li toglie **Pulisci file temporanei**.
 - **Priorità:** ricerche, allineamenti, analisi di qualità e strutturali, tasche, elettrostatica, QMEAN, mutagenesi e
   predizioni partono prima di modellazioni, loop, rifiniture, scansioni di alanina e riesecuzioni, e questi prima di
   pipeline e aggiornamenti dei database; a parità, in ordine di creazione. Un job che aspetta da molto sale di priorità,
@@ -401,9 +419,14 @@ esterno.
 - **Risultati:** a fine calcolo in `data/` vengono salvati solo i risultati; i file intermedi di MODELLER restano fuori,
   salvo l'impostazione che li conserva (Impostazioni → Spazio e file temporanei). Non staccare la chiavetta mentre BioLoom
   è in funzione.
-- **Pulizia automatica** (all'avvio, ogni 24 ore e con **Pulisci ora** in Impostazioni → Spazio e file temporanei, che
-  mostra anche lo spazio occupato): file caricati più vecchi dei giorni impostati (predefinito 30), voci di cache oltre i
-  30 giorni, file temporanei rimasti. Risultati dei job, libreria template, database e licenze non vengono mai toccati.
+- **Pulizia automatica** (all'avvio, ogni 24 ore e con **Pulisci file temporanei** in Impostazioni → Spazio e file
+  temporanei, che mostra anche lo spazio occupato): file caricati più vecchi dei giorni impostati (predefinito 30), voci
+  di cache oltre i 30 giorni, file temporanei rimasti, resti di job che hai già eliminato (file che erano in uso).
+  Risultati dei job, libreria template, database e licenze non vengono mai toccati.
+- **Eliminazione manuale:** i risultati dei job si eliminano solo a mano e con conferma: un job dal suo dettaglio, molti
+  insieme con **Pulisci job…**, un progetto intero dal dialogo **Progetti** ([sopra](#pipeline-job-e-coda-dei-calcoli)).
+  Non si può annullare: quello che elimini non si recupera. Lo spazio liberato è quello dei file dei job; il file del
+  database non si restringe.
 - **Cache dei calcoli:** ricerche di template e allineamenti multipli e strutturali già calcolati con gli stessi dati e
   parametri non si rifanno, e il risultato riporta **dalla cache (data)**. Le ricerche su RCSB, NCBI e AlphaFold DB valgono
   7 giorni (il PDB si aggiorna ogni settimana); le altre finché non cambiano il database locale, il programma o il
@@ -411,7 +434,8 @@ esterno.
   cache si disattiva in Impostazioni → Spazio e file temporanei.
 - **Aggiornamenti:** quando una nuova versione di BioLoom aggiorna la struttura del database (`data/bioloom.db`), lo fa da
   sola all'avvio dopo averne salvato una copia in `data/backups/` (una per aggiornamento; si può cancellare quando tutto
-  funziona). Se l'aggiornamento non riesce, il database resta com'era e BioLoom lo dice all'avvio.
+  funziona: BioLoom non lo fa da solo, e Impostazioni → Spazio e file temporanei mostra quanto occupano). Se
+  l'aggiornamento non riesce, il database resta com'era e BioLoom lo dice all'avvio.
 
 ### Che cosa lascia il computer
 

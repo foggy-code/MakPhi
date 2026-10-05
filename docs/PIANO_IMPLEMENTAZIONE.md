@@ -264,8 +264,9 @@ Le prime cinque tappe danno il beneficio più visibile con il rischio più basso
 Tutte le fasi sono **fatte**. Ordine effettivo di consegna: F0 → F1.1 e F2.1 → F3 con F6, F5.1, F2.3 con F2.4 → F4.1,
 F4.2, F1.2 con F1.3, F1.4 con F2.2 → F5.2, F5.4, F5.5, F7 → F8a (procedura guidata e controlli preventivi) → F5.3 → F8b
 (ricerca globale, etichette e rifiniture) → F7b (tasche ed elettrostatica) con F9.1 → F9.2, F9.3, F9.4, poi una fase
-finale di correzioni dalla prova end-to-end e dalla revisione di sicurezza. Le tappe sono state riviste a gruppi, con le
-correzioni in commit a parte. I dettagli di ogni punto sono nelle sezioni di [ARCHITETTURA.md](ARCHITETTURA.md).
+finale di correzioni dalla prova end-to-end e dalla revisione di sicurezza e, dopo le fasi, la gestione dello spazio
+(sotto la tabella). Le tappe sono state riviste a gruppi, con le correzioni in commit a parte. I dettagli di ogni punto
+sono nelle sezioni di [ARCHITETTURA.md](ARCHITETTURA.md).
 
 | Fase | Stato | Realizzato | Differenze dal piano e motivi |
 |---|---|---|---|
@@ -298,6 +299,35 @@ correzioni in commit a parte. I dettagli di ogni punto sono nelle sezioni di [AR
 | F9.2 | fatto | Mutagenesi e scansione di alanina con MODELLER (protocollo `mutate_model` esteso ai vicini entro 5 Å), stima qualitativa dell'effetto con indicatori dichiarati, energia facoltativa con OpenMM, varianti di UniProt | Nessun ΔΔG: FoldX e Rosetta non sono ridistribuibili, e la stima resta qualitativa con l'avvertenza. Varianti da UniProt (naturali, di malattia, di mutagenesi), non da ClinVar |
 | F9.3 | fatto | Confronto con ESMFold (consenso esplicito, indirizzo configurabile, fino a 400 residui) o con il modello di AlphaFold DB; TM-score, lDDT per residuo, regioni divergenti incrociate con il pLDDT e il consenso | In più rispetto al piano: AlphaFold DB come seconda sorgente e l'accordo nel consenso e nel report |
 | F9.4 | fatto | Pacchetti riproducibili (manifest con versioni, parametri, semi, checksum), riesecuzione da interfaccia (`/rerun`) e con `python bioloom.py rerun`, confronto dei risultati | Esito «compatibile» in più per il rumore di OpenMM su più thread (tolleranze scientifiche dichiarate), distinto da «equivalente» (tolleranze numeriche). Ricerca, QMEAN e predizione hanno il pacchetto ma non si rieseguono (dipendono da servizi remoti) |
+
+**Dopo le fasi: gestione dello spazio.** Eliminazione dei progetti e pulizia dei job, per non accumulare file inutili
+(fuori dalla tabella, che è per fasi; funzionamento in
+[ARCHITETTURA.md](ARCHITETTURA.md#eliminazione-di-progetti-e-pulizia-dei-job)). Le scelte e i motivi:
+
+- **Solo manuale:** l'utente sceglie i criteri, vede l'anteprima e conferma; nessuna eliminazione automatica dei
+  risultati dei job, né all'avvio, né nel passo giornaliero, né con «Pulisci file temporanei». La pulizia di massa non
+  seleziona mai job attivi, conserva per impostazione predefinita stella, etichette e pipeline riprendibili, e i
+  completati richiedono «Ho capito».
+- **Ciclo a tempo invece di un job:** la pulizia è una serie di chiamate brevi e senza stato (`remaining` dice quanti job
+  restano), ripetute dall'interfaccia con «Interrompi» fra l'una e l'altra. Ogni chiamata porta l'istante
+  dell'anteprima confermata (`as_of`), così un job terminato dopo l'anteprima non si elimina. Un job di pulizia
+  occuperebbe uno slot del pool dietro le pipeline lunghe, proprio quando serve spazio, e comparirebbe nell'elenco che
+  sta svuotando. L'eliminazione di un progetto resta una richiesta completa e sincrona; l'interfaccia prima svuota il
+  progetto con lo stesso ciclo, senza `as_of` perché lo svuotamento deve essere completo, e un «Interrompi» durante lo
+  svuotamento impedisce sempre il DELETE.
+- **Validazione nel servizio:** i campi della pulizia sono tipizzati largo e ogni valore non valido, anche di un altro
+  tipo JSON (`"no"` al posto di `false`), è un 400 con il motivo in italiano, mai un 422 di Pydantic in inglese né una
+  conversione silenziosa che cambierebbe i job eliminati.
+- **INSERT condizionato in `submit`:** il job si crea solo se il progetto esiste, nello stesso statement; insieme al
+  DELETE del progetto condizionato all'assenza di job, nessun job resta orfano senza lock globali né uno stato «in
+  eliminazione» (che avrebbe richiesto una migrazione); e se la preparazione fallisce non restano né una riga `queued`
+  mai accodata né la cartella (un resto con file in uso passa in `.deleting-<id>`).
+- **Tombstone invece della scansione delle cartelle orfane:** la cartella di un job si rinomina in `.deleting-<id>`
+  prima del DELETE della riga, e la pulizia automatica toglie solo quei resti, e solo se la riga del job non c'è più
+  (altrimenti la cartella torna al suo posto). Una scansione delle cartelle senza riga, dopo un database perso o
+  ripristinato da `backups/`, eliminerebbe risultati veri.
+
+Nessuna migrazione dello schema; test in `test_cleanup.py` (98) e in quattro file del frontend (65).
 
 Rischi trasversali: FoldX e Rosetta sono esclusi perché le loro licenze non sono ridistribuibili; l'immagine cresce di
 circa 140 MB per fpocket, APBS, PDB2PQR, OpenMM e PDBFixer (`bioloom:4.1.0` 869 MB, immagine di sviluppo 1,04 GB);
@@ -369,3 +399,21 @@ Limiti noti dichiarati nel codice e in [ARCHITETTURA.md](ARCHITETTURA.md), da cu
   remoti; la pipeline non ha un pacchetto (c'è l'archivio ZIP dei risultati).
 - Le versioni degli strumenti nel pacchetto sono quelle dell'installazione al momento dell'esportazione: i job non
   registrano l'ambiente a ogni esecuzione.
+
+**Dati e spazio**
+
+- Eliminazione automatica dei risultati dei job per età, disattivata per impostazione predefinita: oggi i risultati si
+  eliminano solo a mano.
+- Cestino o annullamento dell'eliminazione: un job o un progetto eliminato non si recupera.
+- VACUUM e checkpoint del WAL dopo una pulizia grande: `bioloom.db` non si restringe, e un VACUUM richiede circa il
+  doppio dello spazio del database e blocca l'unica connessione per tutta la sua durata.
+- Una voce manuale, con anteprima, per le cartelle `jobs/<id>` già senza riga (eliminazioni non riuscite, copie
+  parziali della cartella dati): nessuna scansione automatica, perché con un database perso o ripristinato sembrerebbero
+  rifiuti.
+- Potatura delle copie di sicurezza in `backups/` dal pannello dello spazio, che oggi le mostra soltanto.
+- Eliminazione dei soli intermedi dei job falliti (conservati per la diagnosi), lasciando riga, log e risultati.
+- Il rinomino della cartella di un job in `.deleting-<id>` (`os.replace`) è provato sul filesystem Linux dei test, non
+  sul bind mount di Docker Desktop né su exFAT con file tenuti aperti dall'host Windows (il ripiego è un 409 «in uso»
+  che lascia il job intero): da verificare sullo stack reale con una copia dei dati.
+- `DELETE /api/projects/{id}` è sincrono: chiamato direttamente su un progetto con migliaia di job può superare il
+  timeout di un proxy in modalità server (l'interfaccia svuota prima il progetto con la pulizia a tempo).

@@ -209,7 +209,7 @@ export function Layout() {
           <button className="btn btn-sm" onClick={() => setNewProject("")}>
             <Icon name="plus" size={14} /> Nuovo progetto
           </button>
-          <button className="btn btn-sm btn-ghost" onClick={() => setProjectsOpen(true)} title="Tutti i progetti, con stella ed etichette">
+          <button className="btn btn-sm btn-ghost" onClick={() => setProjectsOpen(true)} title="Tutti i progetti: stella, etichette ed eliminazione">
             <Icon name="star" size={14} /> Progetti
           </button>
           <button className="search-trigger" onClick={() => setSearchOpen(true)} title="Ricerca globale" aria-label="Ricerca globale">

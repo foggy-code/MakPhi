@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { api } from "../api/client";
 import type { Project } from "../api/types";
 import { useLocalStorage } from "./hooks";
+import { pickProjectId } from "./projectSelection";
 
 // ---------------------------------------------------------------------------------- notifiche
 type ToastTone = "ok" | "err" | "info" | "warn";
@@ -60,17 +61,35 @@ const ProjectCtx = createContext<ProjectApi | null>(null);
 export function ProjectProvider({ children }: { children: ReactNode }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useLocalStorage<string | null>("bioloom.project", null);
+  // id attuale per `reload`: una rilettura partita prima di un cambio di progetto non lavora su un valore vecchio
+  const current = useRef(projectId);
+  current.current = projectId;
 
   const reload = useCallback(async () => {
     const list = await api.projects();
     setProjects(list);
-    if (list.length && (!projectId || !list.some((p) => p.id === projectId))) setProjectId(list[0].id);
-  }, [projectId, setProjectId]);
+    // progetto eliminato (anche da un'altra scheda): il primo rimasto; elenco vuoto: nessuno, mai l'id eliminato
+    const next = pickProjectId(list, current.current);
+    if (next !== current.current) {
+      current.current = next;
+      setProjectId(next);
+    }
+  }, [setProjectId]);
 
   useEffect(() => {
     reload().catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // scheda di nuovo visibile: l'elenco si rilegge, così non offre un progetto eliminato in un'altra scheda (il progetto
+  // attivo non si sincronizza fra le schede)
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") reload().catch(() => undefined);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [reload]);
 
   const create = useCallback(
     async (name: string) => {

@@ -1,9 +1,15 @@
-"""Job: elenco, stato, log incrementale, file prodotti, annullamento, ripresa, eliminazione, report HTML.
+"""Job: elenco, stato, log incrementale, file prodotti, annullamento, ripresa, eliminazione, pulizia di massa,
+report HTML.
 
 I riepiloghi dei job (elenco, dettaglio, stato, annullamento, ripresa) hanno `eta_seconds`: tempo residuo
 stimato dei job in esecuzione, null se non stimabile; e `queue_position`: posizione (da 1) di un job in coda
 nella coda del suo pool, null per gli altri. `GET /api/jobs/events` e `GET /api/jobs/{id}/events`
 sono flussi Server-Sent Events (services/live.py) per seguire i job senza polling.
+
+Pulizia di massa (services/jobcleanup.py): `POST /api/jobs/cleanup/preview` (sola lettura) e `POST /api/jobs/cleanup`
+(eliminazione a tempo, da ripetere finché `remaining` è 0) con criteri espliciti, senza valori predefiniti per ambito
+e stati. L'eliminazione di un job restituisce i byte liberati e `leftover` (cartella rimossa solo in parte: il resto
+lo toglie la pulizia dei file temporanei).
 """
 
 from __future__ import annotations
@@ -12,7 +18,7 @@ import os
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import AsyncIterator, Literal, Optional
+from typing import Any, AsyncIterator, Literal, Optional
 
 import anyio.to_thread
 from fastapi import APIRouter, Depends, Query
@@ -24,6 +30,7 @@ from ..core.container import Core
 from ..core.errors import AppError
 from ..core.storage import read_json
 from ..domain import exports, report
+from ..services.jobcleanup import DEFAULT_SECONDS, MAX_AGE_DAYS, MAX_SECONDS, MIN_SECONDS
 from ..services.reports import ReportService
 from .deps import get_core
 
@@ -40,6 +47,32 @@ SSE_RESPONSE = {200: {"content": {"text/event-stream": {}}, "description": "Flus
 class ResumeIn(BaseModel):
     scope: Literal["incomplete", "failed"] = Field(
         "incomplete", description="incomplete = tutti gli elementi non conclusi; failed = solo i falliti")
+
+
+class CleanupIn(BaseModel):
+    """Criteri della pulizia di massa. Tutti i campi sono tipizzati largo (Any): ogni valore non valido (null, un
+    altro tipo, "no" al posto di false) lo rifiuta il servizio con 400 `invalid_cleanup` e il motivo in italiano, mai
+    con un 422. Nessun valore predefinito per ambito e stati."""
+
+    scope: Any = Field("", description="project = un progetto (con project_id); all = tutti i progetti, compresi i "
+                                       "job senza progetto. Obbligatorio")
+    project_id: Any = Field(None, description="Obbligatorio con scope=project, vietato con scope=all")
+    statuses: Any = Field(default_factory=list,
+                          description="Stati da eliminare (lista), almeno uno fra completed, failed e cancelled; mai "
+                                      "quelli attivi. Obbligatorio")
+    kinds: Any = Field(None, description="Tipi di job (lista: model, pipeline…); null = tutti, lista vuota = errore")
+    older_than_days: Any = Field(None, description=f"Solo i job terminati da più di N giorni, intero da 0 a "
+                                                   f"{MAX_AGE_DAYS} (età = fine, altrimenti ultimo aggiornamento); "
+                                                   "null = qualsiasi età")
+    keep_favorites: Any = Field(True, description="Conserva i job con la stella (true o false)")
+    keep_tagged: Any = Field(True, description="Conserva i job con almeno un'etichetta (true o false)")
+    include_resumable: Any = Field(False, description="Elimina anche le pipeline fallite o annullate con elementi "
+                                                      "già completati, riprendibili (true o false)")
+    max_seconds: Any = Field(DEFAULT_SECONDS, description=f"Solo /cleanup: durata massima della chiamata in secondi "
+                                                          f"(numero), limitata da {MIN_SECONDS:g} a {MAX_SECONDS:g}")
+    as_of: Any = Field(None, description="Istante ISO 8601 restituito dall'anteprima confermata (`as_of`): l'età si "
+                                         "calcola da lì e i job terminati dopo non si eliminano; null = adesso, senza "
+                                         "limite")
 
 
 def _event_stream(stream: AsyncIterator[str]) -> StreamingResponse:
@@ -71,6 +104,25 @@ async def jobs_events(project_id: Optional[str] = None, core: Core = Depends(get
     """Flusso SSE dell'elenco dei job (tutti o di un progetto): eventi `ready`, `job`, `items`, `active`,
     `deleted`, `resync`, `reconnect`. Dichiarata prima di `/{job_id}`, che altrimenti la catturerebbe."""
     return _event_stream(core.live.list_events(project_id))
+
+
+# Pulizia di massa: dichiarata prima di `/{job_id}`, come `/events`
+@router.post("/cleanup/preview")
+def cleanup_preview(body: CleanupIn, core: Core = Depends(get_core)) -> dict:
+    """Anteprima della pulizia (sola lettura): job e byte che verrebbero eliminati (`bytes_complete` false = "almeno"),
+    per stato e per tipo; `protected` = risparmiati da stella o etichette; `resumable` = pipeline riprendibili
+    risparmiate; `sample` = i più vecchi che verrebbero eliminati; `as_of` = istante usato come "adesso", da ripassare
+    all'esecuzione confermata."""
+    return core.cleanup.preview(core.cleanup.criteria(body.model_dump()))
+
+
+@router.post("/cleanup")
+def cleanup_jobs(body: CleanupIn, core: Core = Depends(get_core)) -> dict:
+    """Elimina, dal più vecchio, i job che corrispondono ai criteri per al più `max_seconds` secondi: `deleted`,
+    `skipped` (ripresi, in uso, già eliminati o non più corrispondenti: non è un errore), `errors`, `freed_bytes`,
+    `leftover` e `remaining` (corrispondenti non ancora esaminati: ripetere la chiamata finché non è 0). Con `as_of`
+    (dall'anteprima) non elimina job terminati dopo l'anteprima."""
+    return core.cleanup.run(core.cleanup.criteria(body.model_dump()), max_seconds=body.max_seconds)
 
 
 @router.get("/{job_id}")
@@ -115,8 +167,10 @@ def resume_job(job_id: str, body: Optional[ResumeIn] = None, core: Core = Depend
 
 @router.delete("/{job_id}")
 def delete_job(job_id: str, core: Core = Depends(get_core)) -> dict:
-    core.jobs.delete(job_id)
-    return {"deleted": job_id}
+    """Elimina un job terminato con i suoi file: byte liberati e `leftover` (1 = cartella rimossa solo in parte, file
+    in uso: il resto lo toglie la pulizia dei file temporanei)."""
+    out = core.jobs.delete(job_id)
+    return {"deleted": job_id, "freed_bytes": out.freed_bytes, "leftover": int(out.leftover)}
 
 
 @router.get("/{job_id}/files/{path:path}")

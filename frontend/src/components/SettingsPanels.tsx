@@ -1,14 +1,15 @@
-// Schede delle Impostazioni: licenze, database, strumenti, spazio e file temporanei.
+// Schede delle Impostazioni: licenze, database, strumenti, spazio, file temporanei e pulizia dei job.
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { DatabaseStatus, JobSummary, LicenseStatus, SelfTestResult, Settings, SystemInfo, UniclustDatabase } from "../api/types";
-import { useToast } from "../lib/context";
+import { useProject, useToast } from "../lib/context";
 import { fmtBytes } from "../lib/format";
 import { extractModellerKey } from "../lib/files";
 import { notifySystemChanged, useAsync, useJob } from "../lib/hooks";
 import { fmtSeconds, licenseWarnings, qmeanMemoryNote } from "../lib/status";
 import { TextFileButton } from "./FileLoad";
 import { Icon } from "./Icon";
+import { JobCleanupDialog } from "./JobCleanupDialog";
 import { JobPanel } from "./JobPanel";
 import { Alert, Badge, Card, DropZone, Field, Spinner, Stat } from "./ui";
 
@@ -398,19 +399,23 @@ const STORAGE_LABELS: [string, string, string][] = [
   ["cache", "Cache servizi remoti", "cartella dati, pulizia automatica"],
   ["compute_cache", "Cache dei calcoli", "ricerche e allineamenti, pulizia automatica"],
   ["database_file", "Database progetti", "cartella dati"],
+  ["backups", "Copie di sicurezza del database", "cartella dati, create a ogni migrazione, non si eliminano da sole"],
   ["scratch", "Area di lavoro temporanea", "volume Docker, svuotata a ogni avvio"],
   ["local_cache", "Indici locali", "volume Docker di questo computer"],
 ];
 
 export function StoragePanel({ form, set, info }: { form: Settings; set: <K extends keyof Settings>(k: K, v: Settings[K]) => void; info: SystemInfo | null }) {
   const toast = useToast();
+  const { reload: reloadProjects } = useProject();
   const { data: storage, reload } = useAsync<Record<string, number>>(() => api.storage(), []);
   const [cleaning, setCleaning] = useState(false);
+  const [jobCleanup, setJobCleanup] = useState(false);
   const clean = async () => {
     setCleaning(true);
     try {
       const r = await api.cleanup();
-      toast.push(`Pulizia completata: liberati ${fmtBytes(r.freed_bytes)}`);
+      const rest = r.jobs ? `, rimossi i resti di ${r.jobs} ${r.jobs === 1 ? "job eliminato" : "job eliminati"}` : "";
+      toast.push(`Pulizia completata: liberati ${fmtBytes(r.freed_bytes)}${rest}`);
       reload();
     } catch (e) {
       toast.error(e);
@@ -420,15 +425,33 @@ export function StoragePanel({ form, set, info }: { form: Settings; set: <K exte
   };
   return (
     <div className="grid grid-2" style={{ alignItems: "start" }}>
-      <Card title="Occupazione" right={<button className="btn btn-sm" onClick={clean} disabled={cleaning}>{cleaning ? <Spinner /> : <Icon name="trash" size={13} />} Pulisci ora</button>}>
-        {storage ? (
-          <div className="grid grid-2">
-            {STORAGE_LABELS.filter(([k]) => k in storage).map(([k, label, note]) => (
-              <Stat key={k} label={label} value={<span style={{ fontSize: 16 }}>{fmtBytes(storage[k])}</span>} note={note} />
-            ))}
+      <div className="stack">
+        <Card title="Occupazione"
+          right={
+            <button className="btn btn-sm" onClick={clean} disabled={cleaning} title="Elimina file caricati scaduti, cache scadute, area temporanea e resti di job già eliminati: mai i risultati dei job">
+              {cleaning ? <Spinner /> : <Icon name="trash" size={13} />} Pulisci file temporanei
+            </button>
+          }>
+          {storage ? (
+            <div className="grid grid-2">
+              {STORAGE_LABELS.filter(([k]) => k in storage).map(([k, label, note]) => (
+                <Stat key={k} label={label} value={<span style={{ fontSize: 16 }}>{fmtBytes(storage[k])}</span>} note={note} />
+              ))}
+            </div>
+          ) : <Spinner />}
+        </Card>
+        <Card title="Job e progetti">
+          <div className="stack">
+            <Stat label="Risultati dei job" value={<span style={{ fontSize: 16 }}>{storage ? fmtBytes(storage.jobs) : "—"}</span>} />
+            <p className="small text-2">
+              I risultati dei job si eliminano solo a mano: da qui o dalla pagina Job. I progetti si eliminano da «Progetti» in alto.
+            </p>
+            <button className="btn" style={{ justifySelf: "start" }} onClick={() => setJobCleanup(true)}>
+              <Icon name="trash" size={14} /> Elimina job…
+            </button>
           </div>
-        ) : <Spinner />}
-      </Card>
+        </Card>
+      </div>
       <div className="stack">
         <Card title="File temporanei e risultati">
           <div className="stack">
@@ -449,7 +472,7 @@ export function StoragePanel({ form, set, info }: { form: Settings; set: <K exte
               7 giorni, le altre finché database e programmi non cambiano. Le voci si eliminano dopo 30 giorni; in Ricerca, Allineamenti e
               Pipeline si può sempre ricalcolare.
             </p>
-            <Field label="Conservazione dei file caricati per l'analisi (giorni)" hint="0 = conserva sempre. I risultati dei job non vengono mai eliminati automaticamente.">
+            <Field label="Conservazione dei file caricati per l'analisi (giorni)" hint="0 = conserva sempre. I risultati dei job si eliminano solo a mano.">
               <input className="input" type="number" min={0} max={3650} value={form.uploads_retention_days} onChange={(e) => set("uploads_retention_days", Number(e.target.value))} />
             </Field>
           </div>
@@ -465,6 +488,10 @@ export function StoragePanel({ form, set, info }: { form: Settings; set: <K exte
           )}
         </Card>
       </div>
+      {jobCleanup && (
+        <JobCleanupDialog initial={{ scope: "all" }} onClose={() => setJobCleanup(false)}
+          onCleaned={() => { reload(); reloadProjects().catch(() => undefined); }} />
+      )}
     </div>
   );
 }

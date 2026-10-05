@@ -108,7 +108,7 @@ def selftest(core: Core = Depends(get_core)) -> dict:
 
 @router.post("/system/cleanup")
 def cleanup(core: Core = Depends(get_core)) -> dict:
-    """Pulizia immediata di upload scaduti, cache scaduta e scratch orfano."""
+    """Pulizia immediata di upload scaduti, cache scaduta, scratch orfano e resti di job eliminati (`jobs`)."""
     return core.housekeeping.run()
 
 

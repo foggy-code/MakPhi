@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { fmtNum, gradeTone, STATUS_LABEL } from "../lib/format";
 import { Icon } from "./Icon";
 
@@ -69,9 +69,14 @@ export function Grade({ grade, large = false, title }: { grade?: string | null; 
   );
 }
 
-export function Progress({ value, indeterminate = false }: { value: number; indeterminate?: boolean }) {
+/** Barra di avanzamento; con `label` è una progressbar accessibile (nome e percentuale letti dagli screen reader). */
+export function Progress({ value, indeterminate = false, label }: { value: number; indeterminate?: boolean; label?: string }) {
+  const percent = Math.round(Math.max(0, Math.min(1, value)) * 100);
+  const a11y = label
+    ? { role: "progressbar", "aria-label": label, "aria-valuemin": 0, "aria-valuemax": 100, "aria-valuenow": indeterminate ? undefined : percent }
+    : {};
   return (
-    <div className={`progress ${indeterminate ? "indeterminate" : ""}`}>
+    <div className={`progress ${indeterminate ? "indeterminate" : ""}`} {...a11y}>
       <div style={{ width: `${Math.round(Math.max(0.02, Math.min(1, value)) * 100)}%` }} />
     </div>
   );
@@ -146,6 +151,7 @@ export function Tabs<T extends string>({ value, tabs, onChange }: { value: T; ta
 }
 
 export function Modal({ title, onClose, children, footer, wide = false }: { title: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; wide?: boolean }) {
+  const titleId = useId(); // il titolo dà il nome accessibile al dialogo
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
@@ -153,9 +159,9 @@ export function Modal({ title, onClose, children, footer, wide = false }: { titl
   }, [onClose]);
   return (
     <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`modal ${wide ? "wide" : ""}`} role="dialog" aria-modal="true">
+      <div className={`modal ${wide ? "wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <div className="modal-head">
-          <h2>{title}</h2>
+          <h2 id={titleId}>{title}</h2>
           <button className="btn btn-ghost btn-icon right" onClick={onClose} aria-label="Chiudi">
             <Icon name="x" />
           </button>

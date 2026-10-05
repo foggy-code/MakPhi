@@ -39,6 +39,9 @@ FILE
 DATI
   Progetti, risultati, template, licenze e database stanno nella cartella "data" e
   viaggiano con la chiavetta. Non staccare la chiavetta mentre BioLoom e' in funzione.
+  Per liberare spazio: Job > "Pulisci job..." elimina i job terminati che non servono piu'
+  (con anteprima e conferma); Progetti (in alto) > cestino elimina un progetto con tutti i
+  suoi job. I risultati dei job non si eliminano mai da soli.
 
 LICENZE
   MODELLER, ProSA II e PROCHECK sono concessi con licenza accademica personale a chi li ha

@@ -13,6 +13,7 @@ from ..services.compute import ComputeService
 from ..services.databases import DatabaseService
 from ..services.globalsearch import GlobalSearch
 from ..services.housekeeping import Housekeeping
+from ..services.jobcleanup import JobCleanup
 from ..services.labels import LabelService
 from ..services.licenses import LicenseService
 from ..services.live import LiveService
@@ -27,8 +28,7 @@ from ..services.structure_tools import StructureToolsService
 from ..services.templates import TemplateLibrary
 from . import cache
 from .db import Database
-from .errors import Conflict
-from .jobs import ACTIVE, JobManager
+from .jobs import JobManager
 
 
 @dataclass
@@ -50,20 +50,17 @@ class Core:
     labels: LabelService | None = None  # etichette e preferiti (F8b), creato in build_core
     search: GlobalSearch | None = None  # ricerca globale (F8b), creato in build_core
     repro: ReproducibilityService | None = None  # pacchetti di riproducibilità e riesecuzione (F9.4)
+    cleanup: JobCleanup | None = None  # pulizia di massa dei job ed eliminazione dei progetti, creato in build_core
 
     def shutting_down(self) -> bool:
         """Arresto in corso: segnale ricevuto da uvicorn (`should_exit`) o JobManager chiuso. I flussi SSE si
         chiudono da soli, altrimenti uvicorn aspetterebbe all'infinito le loro connessioni prima di fermarsi."""
         return self.jobs.closed or bool(getattr(self.server, "should_exit", False))
 
-    def delete_project(self, project_id: str) -> None:
-        self.projects.get(project_id)
-        jobs = self.jobs.list(project_id=project_id, limit=500)
-        if any(j["status"] in ACTIVE for j in jobs):
-            raise Conflict("Il progetto ha job ancora in esecuzione: annullali prima di eliminarlo.")
-        for job in jobs:
-            self.jobs.delete(job["id"])
-        self.projects.delete(project_id)
+    def delete_project(self, project_id: str) -> dict:
+        """Elimina il progetto con tutti i suoi job (services/jobcleanup.py): esito con job eliminati, byte liberati,
+        resti e progetto sostitutivo se era l'ultimo."""
+        return self.cleanup.delete_project(project_id)
 
     def close(self) -> None:
         self.housekeeping.stop()
@@ -110,7 +107,7 @@ def build_core(paths: Paths, *, server: bool = False) -> Core:
     housekeeping = Housekeeping(paths, settings.get, jobs)
     try:
         housekeeping.run()
-    except OSError as exc:
+    except Exception as exc:  # come il passo giornaliero: la pulizia non deve mai impedire l'avvio
         print(f"[BioLoom] pulizia iniziale non riuscita: {exc}")
     housekeeping.start()
     core = Core(paths, settings, db, jobs, library, projects, compute, pipeline, housekeeping, licenses, databases)
@@ -118,6 +115,8 @@ def build_core(paths: Paths, *, server: bool = False) -> Core:
     core.live.stopping = core.shutting_down
     core.labels, core.search = labels, global_search
     core.repro = repro
+    core.cleanup = JobCleanup(db, jobs, projects)
+    core.cleanup.stopping = core.shutting_down
     if recovered:
         print(f"[BioLoom] {recovered} job interrotti dal precedente arresto sono stati marcati come falliti "
               "(le pipeline si possono riprendere).")

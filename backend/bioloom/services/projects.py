@@ -11,6 +11,9 @@ from ..core.storage import validate_identifier
 from ..domain import sequences
 
 DOCUMENT_KINDS = {"pir", "fasta", "clustal", "text"}
+# progetto vuoto creato quando si elimina l'ultimo (BioLoom ne richiede sempre almeno uno)
+REPLACEMENT_NAME = "Nuovo progetto"
+REPLACEMENT_DESCRIPTION = "Creato automaticamente: BioLoom richiede almeno un progetto."
 
 
 def _new_id() -> str:
@@ -59,9 +62,31 @@ class ProjectService:
         if project_id:
             self.db.execute("UPDATE projects SET updated_at=? WHERE id=?", (now_iso(), project_id))
 
-    def delete(self, project_id: str) -> None:
-        self.get(project_id)
-        self.db.execute("DELETE FROM projects WHERE id=?", (project_id,))
+    def delete_if_unused(self, project_id: str) -> tuple[bool, Optional[dict]]:
+        """Elimina il progetto solo se nessun job lo referenzia; se era l'ultimo ne crea uno vuoto, nella stessa
+        transazione. (True, sostituto|None) eliminato; (False, None) ci sono ancora job (nuovi tentativi a carico
+        del chiamante); NotFound se il progetto non esiste più.
+
+        La transazione tiene il lock del database: né `JobManager.submit` (INSERT condizionato all'esistenza del
+        progetto) né un'altra eliminazione possono inserirsi in mezzo. Due eliminazioni degli ultimi due progetti si
+        serializzano: la prima vede ancora l'altro progetto, la seconda nessuno e crea il sostituto, quindi ne resta
+        sempre esattamente uno. Sequenze e documenti vanno via in cascata, etichette e stella con i trigger.
+        """
+        with self.db.transaction() as conn:
+            # rowcount conta solo il DELETE diretto, non le cascate né i trigger
+            cur = conn.execute(
+                "DELETE FROM projects WHERE id=? AND NOT EXISTS (SELECT 1 FROM jobs WHERE project_id=?)",
+                (project_id, project_id))
+            if cur.rowcount != 1:
+                if conn.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone() is None:
+                    raise NotFound("Progetto non trovato.")
+                return False, None
+            new_id = None
+            if conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 0:
+                new_id, now = _new_id(), now_iso()
+                conn.execute("INSERT INTO projects(id, name, description, created_at, updated_at) VALUES (?,?,?,?,?)",
+                             (new_id, REPLACEMENT_NAME, REPLACEMENT_DESCRIPTION, now, now))
+        return True, (self.get(new_id) if new_id else None)
 
     def ensure_default(self) -> dict:
         rows = self.list()

@@ -90,22 +90,57 @@ def read_json(path: Path, default: Any = None) -> Any:
         return default
 
 
-def remove_tree(path: Path) -> None:
-    """Rimozione ricorsiva che sblocca i file in sola lettura (Windows)."""
+def _grant(path: str, bits: int) -> None:
+    """Aggiunge i permessi `bits` (mai ne toglie); un collegamento simbolico non si segue."""
+    mode = os.lstat(path).st_mode
+    if not stat.S_ISLNK(mode):
+        os.chmod(path, stat.S_IMODE(mode) | bits)
+
+
+def remove_tree(path: Path, attempts: int = 3) -> bool:
+    """Rimozione ricorsiva che sblocca i file in sola lettura (Windows); True se non resta nulla.
+
+    Quando un file o una cartella non si elimina, il proprietario riceve i permessi che servono (lettura e scrittura
+    sul file; lettura, scrittura e accesso sulla cartella da eliminare e su quella che lo contiene, se è dentro
+    l'albero) e si riprova una volta: i permessi si aggiungono e non si tolgono mai, così nessuna cartella diventa
+    illeggibile per il tentativo successivo. Una cartella da cui qualcosa non si è potuto togliere si riprova fino a
+    `attempts` volte, con una breve pausa (antivirus e indicizzatori tengono aperti i file per pochi istanti). Gli
+    errori dell'eliminazione non escono da qui, neanche per un file singolo: il risultato dice se la rimozione è
+    riuscita.
+    """
+    root = os.path.abspath(path)
 
     def _on_error(func, target, _exc):
+        # si riprova solo l'eliminazione (rmtree passa il percorso completo anche quando lavora con dir_fd);
+        # un'apertura o una lettura non riuscita (os.open, os.scandir, os.lstat) resta com'è
+        if func not in (os.unlink, os.remove, os.rmdir):
+            return
         try:
-            os.chmod(target, stat.S_IWRITE)
-            func(target)
-        except OSError:
+            full = os.path.abspath(target)
+            if full != root:  # la cartella che contiene la radice non si tocca
+                _grant(os.path.dirname(full), stat.S_IRWXU)
+            _grant(full, stat.S_IRWXU if func is os.rmdir else stat.S_IREAD | stat.S_IWRITE)
+            func(full)
+        except Exception:
             pass
 
     path = Path(path)
     if path.is_dir():
-        shutil.rmtree(path, onerror=_on_error)
+        for i in range(1, max(1, attempts) + 1):
+            shutil.rmtree(path, onerror=_on_error)
+            if not path.exists() or i >= attempts:
+                break
+            time.sleep(0.1 * i)
     elif path.exists():
-        os.chmod(path, stat.S_IWRITE)
-        path.unlink()
+        try:
+            _grant(str(path), stat.S_IREAD | stat.S_IWRITE)
+        except OSError:
+            pass
+        try:
+            path.unlink()
+        except OSError:
+            pass
+    return not path.exists()
 
 
 def dir_size(path: Path) -> int:
@@ -117,3 +152,20 @@ def dir_size(path: Path) -> int:
             except OSError:
                 pass
     return total
+
+
+def dir_size_until(path: Path, deadline: float) -> tuple[int, bool]:
+    """Come `dir_size`, ma si ferma quando `time.monotonic()` raggiunge `deadline` (controllo a ogni cartella e ogni
+    256 file): (byte contati, completo). Con il tempo scaduto i byte sono un minimo, non il totale."""
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        if time.monotonic() >= deadline:
+            return total, False
+        for i, name in enumerate(files, 1):
+            if i % 256 == 0 and time.monotonic() >= deadline:
+                return total, False
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError:
+                pass
+    return total, True

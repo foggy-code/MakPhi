@@ -69,10 +69,22 @@ def update_project(project_id: str, body: ProjectPatch, core: Core = Depends(get
     return core.projects.update(project_id, body.name, body.description)
 
 
+@router.get("/{project_id}/usage")
+def project_usage(project_id: str, core: Core = Depends(get_core)) -> dict:
+    """Cosa va via eliminando il progetto (sola lettura): sequenze, documenti, job per stato, attivi, con stella, con
+    etichette, pipeline riprendibili e byte dei loro file (`bytes_complete` false = "almeno")."""
+    return core.cleanup.project_usage(project_id)
+
+
 @router.delete("/{project_id}")
 def delete_project(project_id: str, core: Core = Depends(get_core)) -> dict:
-    core.delete_project(project_id)
-    return {"deleted": project_id}
+    """Elimina il progetto con tutti i suoi job, sequenze e documenti: `jobs_deleted`, `freed_bytes`, `leftover`
+    (cartelle rimosse solo in parte) e `replacement` (il progetto vuoto creato se era l'ultimo, altrimenti null).
+    409 `project_active_jobs` se ha job attivi, con `details` {"active", "jobs_deleted"} (job già eliminati da questa
+    richiesta: 0 se i job attivi c'erano dall'inizio, quando nulla viene eliminato; più di 0 se un job è partito
+    durante l'eliminazione); `project_busy` se un job è in uso o ripreso nel frattempo (alcuni job già eliminati, il
+    progetto resta); `delete_in_progress` se un'altra eliminazione è in corso."""
+    return core.delete_project(project_id)
 
 
 @router.get("/{project_id}/sequences")

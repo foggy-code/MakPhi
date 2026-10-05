@@ -11,7 +11,9 @@ Ogni calcolo (ricerca, allineamento, modellazione, qualità, pipeline) è un job
 Un job terminato con errore o annullato può essere rimesso in coda (`requeue`): la pipeline lo usa
 per riprendere solo gli elementi non conclusi, conservando log e risultati già salvati (e, su richiesta
 esplicita, anche da completata, per riprovare gli elementi falliti). Ripresa, avvio ed eliminazione sono
-mutuamente esclusivi: un job rimesso in coda non può essere eliminato mentre riparte.
+mutuamente esclusivi: un job rimesso in coda non può essere eliminato mentre riparte. L'eliminazione è atomica sul
+disco: la cartella del job si rinomina in `.deleting-<id>` prima di cancellare la riga, e quello che non si riesce a
+togliere (file in uso) lo elimina la pulizia automatica (`purge_tombstones`).
 
 Ogni cambiamento (stato, progresso, righe di log scritte su disco, esecuzione chiusa, eliminazione) viene
 pubblicato su `events` (core/events.py), da cui i flussi SSE lo ricevono senza interrogare di continuo il
@@ -41,7 +43,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable, Optional, Union
+from typing import Callable, Iterable, NamedTuple, Optional, Union
 
 from .budget import CpuBudget
 from .db import Database, encode_json, now_iso
@@ -49,7 +51,7 @@ from .dispatch import Dispatcher
 from .errors import AppError, Conflict, NotFound
 from .eta import progress_eta, seconds_between
 from .events import DELETED, IDLE, JOB, LOG, ChangeFeed
-from .storage import atomic_write_json, remove_tree, safe_join, validate_identifier
+from .storage import atomic_write_json, dir_size, remove_tree, safe_join, validate_identifier
 
 TERMINAL = frozenset({"completed", "failed", "cancelled"})
 ACTIVE = frozenset({"queued", "running", "cancelling"})
@@ -61,6 +63,13 @@ LOG_FLUSH_SECONDS = 0.5
 # attesa massima, per una ripresa o un'eliminazione, della chiusura dell'esecuzione precedente (spostamento
 # dei file, scratch) o della preparazione di una ripresa
 REQUEUE_WAIT_SECONDS = 10.0
+# Cartella di un job in eliminazione (`delete`): rinominata così prima del DELETE della riga. La pulizia automatica
+# (`purge_tombstones`) la toglie se la riga non c'è più; se c'è ancora (DELETE mancato e rinomino inverso non
+# riuscito, arresto brusco fra rinomino e DELETE) la cartella è del job e torna al suo posto.
+TOMBSTONE_PREFIX = ".deleting-"
+UNDO_ATTEMPTS = 3  # tentativi del rinomino inverso quando un'eliminazione non va a buon fine
+_RESUMED = "Il job è stato ripreso nel frattempo: annullalo prima di eliminarlo."
+_NO_LONGER_MATCHES = "Il job non corrisponde più ai criteri della pulizia."
 
 # File intermedi di MODELLER (restrizioni, schedule, traiettorie, violazioni, modelli iniziali) e copie
 # temporanee delle analisi: non vengono salvati tra i risultati di un job riuscito.
@@ -150,7 +159,22 @@ class ProcessResult:
     output: str
 
 
-Handler = Callable[["JobContext", dict], dict]
+class Deleted(NamedTuple):
+    """Esito di `JobManager.delete`: byte liberati e se qualcosa è rimasto nella cartella `.deleting-<id>` (file in
+    uso: lo toglie la pulizia automatica)."""
+
+    freed_bytes: int
+    leftover: bool
+
+
+def _drop(path: Path) -> tuple[int, bool]:
+    """Rimuove la cartella: (byte liberati, se è sparita del tutto)."""
+    size = dir_size(path)
+    done = remove_tree(path)
+    return (size if done else max(0, size - dir_size(path))), done
+
+
+Handler =Callable[["JobContext", dict], dict]
 # stima del tempo residuo di un job in esecuzione (riga di `jobs`, adesso): secondi o None
 EtaEstimator = Callable[[dict, datetime], Optional[int]]
 # risorsa esclusiva richiesta da un job, dai suoi parametri (None = nessuna)
@@ -425,6 +449,8 @@ class JobManager:
         self._running: set[str] = set()
         self._preparing: set[str] = set()
         self._idle = threading.Condition(self._lock)
+        # nomi delle cartelle `.deleting-<id>` che un'eliminazione o la pulizia sta rimuovendo (sotto `_lock`)
+        self._removing: set[str] = set()
         self._log_handles: dict[str, object] = {}
         self._log_dirty: dict[str, float] = {}
         self._log_lock = threading.Lock()
@@ -506,19 +532,44 @@ class JobManager:
 
     def submit(self, kind: str, params: dict, *, project_id: Optional[str] = None, title: str = "",
                prepare: Optional[Callable[[str, Path], None]] = None) -> dict:
+        """Crea il job e lo mette in coda; `prepare(job_id, cartella definitiva)` gira prima dell'accodamento.
+
+        Il progetto si verifica nello stesso INSERT (un solo statement, atomico rispetto all'eliminazione del progetto,
+        services/projects.py): un progetto inesistente o appena eliminato dà NotFound, mai un job orfano. Se qualcosa
+        fallisce prima dell'accodamento (INSERT, `prepare`) la riga si cancella e la cartella si rimuove; quello che
+        non si riesce a togliere (file in uso) passa in `.deleting-<id>` e lo elimina la pulizia automatica. L'eccezione
+        originale si rilancia sempre, anche se la pulizia non riesce.
+        """
         if kind not in self._handlers:
             raise AppError(f"Tipo di job sconosciuto: {kind}")
+        project_id = project_id or None  # '' (campo vuoto di un form) = nessun progetto
         job_id = uuid.uuid4().hex[:16]
         workdir = self.jobs_dir / job_id
-        workdir.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(workdir / "params.json", params)
         now = now_iso()
-        self.db.execute(
-            "INSERT INTO jobs(id, kind, title, project_id, status, progress, stage, params, created_at, updated_at)"
-            " VALUES (?,?,?,?, 'queued', 0, 'In coda', ?, ?, ?)",
-            (job_id, kind, title[:200], project_id, encode_json(params), now, now))
-        if prepare is not None:
-            prepare(job_id, workdir)
+        try:
+            workdir.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(workdir / "params.json", params)
+            inserted = self.db.execute(
+                "INSERT INTO jobs(id, kind, title, project_id, status, progress, stage, params, created_at, "
+                "updated_at) SELECT ?, ?, ?, ?, 'queued', 0, 'In coda', ?, ?, ? "
+                "WHERE ? IS NULL OR EXISTS (SELECT 1 FROM projects WHERE id=?)",
+                (job_id, kind, title[:200], project_id, encode_json(params), now, now, project_id, project_id))
+            if inserted != 1:
+                raise NotFound("Progetto non trovato.")
+            if prepare is not None:
+                prepare(job_id, workdir)
+        except BaseException:
+            # niente cartella né riga fantasma: un job 'queued' mai accodato bloccherebbe l'eliminazione del progetto
+            try:
+                self.db.execute("DELETE FROM jobs WHERE id=? AND status='queued'", (job_id,))
+            except Exception:  # la pulizia non nasconde l'errore originale
+                pass
+            try:
+                if not remove_tree(workdir):  # file in uso: il resto lo toglie `purge_tombstones`
+                    os.replace(workdir, self.jobs_dir / f"{TOMBSTONE_PREFIX}{job_id}")
+            except Exception as exc:
+                print(f"[BioLoom] cartella del job non accodato {job_id} non rimossa: {exc}")
+            raise
         with self._lock:
             self._cancel_events[job_id] = threading.Event()
         self.events.publish(job_id, JOB)
@@ -784,14 +835,32 @@ class JobManager:
                 self.events.publish(job_id, JOB)
         return self.get(job_id, include_result=False)
 
-    def delete(self, job_id: str) -> None:
-        """Elimina un job terminato con i suoi file.
+    def delete(self, job_id: str, *, only_if: Optional[tuple[str, tuple]] = None) -> Deleted:
+        """Elimina un job terminato con i suoi file; restituisce i byte liberati e se è rimasto qualcosa.
 
         Mutuamente esclusivo con `requeue` ed `_execute`: un job terminato può tornare in coda (ripresa),
         quindi si attende che l'esecuzione precedente o la preparazione di una ripresa abbiano finito, e la
         riga si cancella solo se il job è ancora terminato (DELETE condizionato allo stato). Dopo quel DELETE
         nessuna esecuzione può ripartire, e i file si rimuovono fuori dal lock.
+
+        Atomica sul disco: sotto il lock la cartella del job si rinomina in `.deleting-<id>` prima del DELETE. Se il
+        rinomino non riesce (file in uso) il job resta intero, riga e file, con Conflict; se il DELETE non riesce il
+        rinomino si annulla (e se nemmeno quello riesce la cartella resta in `.deleting-<id>` accanto alla riga: un
+        nuovo `delete` la tratta come la cartella del job, `purge_tombstones` la riporta al suo posto). Quello che dopo
+        il DELETE non si riesce a togliere resta in `.deleting-<id>` (`leftover`) e lo elimina la pulizia automatica
+        (`purge_tombstones`): mai una cartella di risultati senza riga e senza segno.
+
+        `only_if=(sql, args)`: condizione in più sulle colonne di `jobs` (la pulizia di massa: stella, etichette, età,
+        pipeline riprendibili), valutata prima di toccare il disco e di nuovo nello stesso DELETE: se non vale più,
+        Conflict e il job resta com'è.
+
+        Ordine dei lock: guardia di `JobCleanup` → `JobManager._lock` → `Database._lock`, mai al contrario; non
+        chiamare mai `delete` dentro `db.transaction()`.
         """
+        workdir = self.workdir(job_id)
+        tomb = self.jobs_dir / f"{TOMBSTONE_PREFIX}{job_id}"
+        extra, extra_args = ("", ()) if only_if is None else (f" AND ({only_if[0]})", tuple(only_if[1]))
+        moved = both = False
         with self._idle:
             job = self.get(job_id, include_result=False)
             if job["status"] in ACTIVE:
@@ -799,16 +868,142 @@ class JobManager:
             if not self._idle.wait_for(lambda: job_id not in self._running and job_id not in self._preparing,
                                        timeout=REQUEUE_WAIT_SECONDS):
                 raise Conflict("Il job sta ancora terminando o viene ripreso: riprova tra qualche secondo.")
+            # durante l'attesa il lock è rilasciato: il job può essere stato ripreso (la sua cartella non si tocca)
+            # o eliminato (NotFound)
+            job = self.get(job_id, include_result=False)
+            if job["status"] in ACTIVE:
+                raise Conflict(_RESUMED)
+            if only_if is not None and self.db.query_one(f"SELECT 1 FROM jobs WHERE id=?{extra}",
+                                                         (job_id, *extra_args)) is None:
+                raise Conflict(_NO_LONGER_MATCHES)  # es. stella aggiunta: la cartella non si sposta
+            if tomb.name in self._removing:  # la pulizia sta togliendo un resto con lo stesso nome
+                raise Conflict("I file del job si stanno già eliminando: riprova tra qualche secondo.")
+            self._removing.add(tomb.name)
+            try:
+                if tomb.exists() and not workdir.exists():
+                    # la cartella del job è rimasta in `.deleting-<id>` (rinomino inverso non riuscito): è di questa
+                    # riga, quindi vale come già spostata e un DELETE mancato la riporta al suo posto
+                    moved = True
+                elif tomb.exists():
+                    # due cartelle: `jobs/<id>` ricreata (es. da una ripresa) e `.deleting-<id>` con i file di prima,
+                    # ancora del job finché la riga c'è: nessuna si tocca prima che il DELETE riesca
+                    both = True
+                elif workdir.exists():
+                    os.replace(workdir, tomb)
+                    moved = True
+            except OSError:
+                self._removing.discard(tomb.name)
+                raise Conflict("I file del job sono in uso (antivirus, Esplora risorse o un programma che li ha "
+                               "aperti): chiudili e riprova.")
             allowed = sorted(TERMINAL)
-            if self.db.execute(f"DELETE FROM jobs WHERE id=? AND status IN ({','.join('?' * len(allowed))})",
-                               (job_id, *allowed)) != 1:
-                self.get(job_id, include_result=False)  # NotFound se eliminato nel frattempo
-                raise Conflict("Il job è stato ripreso nel frattempo: annullalo prima di eliminarlo.")
+            try:
+                gone = self.db.execute(
+                    f"DELETE FROM jobs WHERE id=? AND status IN ({','.join('?' * len(allowed))}){extra}",
+                    (job_id, *allowed, *extra_args)) == 1
+            except BaseException:
+                self._undo_tombstone(tomb, workdir, moved)
+                raise
+            if not gone:
+                self._undo_tombstone(tomb, workdir, moved)
+                current = self.get(job_id, include_result=False)  # NotFound se eliminato nel frattempo
+                if only_if is not None and current["status"] in TERMINAL:
+                    raise Conflict(_NO_LONGER_MATCHES)
+                raise Conflict(_RESUMED)
             self._cancel_events.pop(job_id, None)
         self.events.publish(job_id, DELETED, project_id=job.get("project_id"))
         self._close_log(job_id)
-        remove_tree(self.workdir(job_id))
+        freed, done = 0, True
+        try:
+            if both:  # prima i file vecchi, poi la cartella attuale per la stessa via di sempre
+                freed, done = _drop(tomb)
+                if done:
+                    try:
+                        os.replace(workdir, tomb)
+                    except OSError:
+                        pass  # si toglie direttamente qui sotto
+            for path in (tomb, workdir) if both else (tomb,):
+                if path.exists():
+                    size, removed = _drop(path)
+                    freed, done = freed + size, done and removed
+        finally:
+            with self._lock:
+                self._removing.discard(tomb.name)
         remove_tree(self.live_dir(job_id))
+        return Deleted(freed, leftover=not done)
+
+    def _undo_tombstone(self, tomb: Path, workdir: Path, moved: bool) -> None:
+        """Riporta al suo posto la cartella di un job che alla fine non si elimina (sotto il lock). Un file appena
+        aperto da un antivirus può bloccare il rinomino per un istante: si riprova UNDO_ATTEMPTS volte. Se non riesce
+        la cartella resta in `.deleting-<id>` con la riga del job: `purge_tombstones` la riporta al suo posto (e non la
+        elimina), e un nuovo `delete` la tratta come la cartella del job."""
+        if moved:
+            for attempt in range(1, UNDO_ATTEMPTS + 1):
+                try:
+                    os.replace(tomb, workdir)
+                    break
+                except OSError as exc:
+                    if attempt >= UNDO_ATTEMPTS:
+                        print(f"[BioLoom] ripristino della cartella del job {workdir.name} non riuscito: {exc}")
+                    else:
+                        time.sleep(0.05 * attempt)
+        self._removing.discard(tomb.name)
+
+    def _keep_tombstone(self, path: Path) -> bool:
+        """(Sotto il lock) True se la riga del job di `.deleting-<id>` esiste ancora: la cartella è sua e non si
+        elimina; torna in `jobs/<id>` se quel nome è libero, altrimenti resta dov'è (con un messaggio nel log)."""
+        job_id = path.name[len(TOMBSTONE_PREFIX):]
+        if self.db.query_one("SELECT 1 FROM jobs WHERE id=?", (job_id,)) is None:
+            return False
+        workdir = self.jobs_dir / job_id
+        if workdir.exists():
+            print(f"[BioLoom] {path.name}: il job {job_id} esiste ancora ma la sua cartella è occupata: resta com'è.")
+            return True
+        try:
+            os.replace(path, workdir)
+        except OSError as exc:
+            print(f"[BioLoom] ripristino della cartella del job {job_id} non riuscito: {exc}")
+        return True
+
+    def purge_tombstones(self) -> tuple[int, int]:
+        """Elimina i resti dei job già eliminati (cartelle `.deleting-<id>` rimaste per file in uso) che nessuna
+        eliminazione sta togliendo: (cartelle eliminate, byte liberati).
+
+        Nessuna euristica di età: le cartelle `.deleting-<id>` le creano solo `delete` (e `submit`, per un job mai
+        accodato), e si eliminano solo se la riga del job non c'è più. Se c'è ancora (DELETE mancato e rinomino
+        inverso non riuscito, arresto brusco fra il rinomino e il DELETE) la cartella è del job, anche con la stella:
+        torna al suo posto (`_keep_tombstone`), mai eliminata. Una cartella sparita nel frattempo non si conta. Le
+        altre cartelle (`.rerun-incoming`, cartelle di job con o senza riga) non si toccano.
+        """
+        count = freed = 0
+        try:
+            names = sorted(p.name for p in self.jobs_dir.iterdir() if p.name.startswith(TOMBSTONE_PREFIX))
+        except OSError:
+            return 0, 0
+        for name in names:
+            path = self.jobs_dir / name
+            with self._lock:  # atomico rispetto a `delete`, che rinomina e cancella la riga sotto lo stesso lock
+                if name in self._removing or not path.exists():  # in rimozione, o già sparita dopo l'elenco
+                    continue
+                try:
+                    if self._keep_tombstone(path):
+                        continue
+                except Exception as exc:  # riga non verificabile: nel dubbio la cartella resta
+                    print(f"[BioLoom] resto di un job eliminato non verificato ({name}): {exc}")
+                    continue
+                self._removing.add(name)
+            try:
+                size = dir_size(path)
+                if remove_tree(path):
+                    count += 1
+                    freed += size
+                else:  # ancora file in uso: si riprova alla prossima pulizia
+                    freed += max(0, size - dir_size(path))
+            except OSError as exc:
+                print(f"[BioLoom] resto di un job eliminato non rimosso ({name}): {exc}")
+            finally:
+                with self._lock:
+                    self._removing.discard(name)
+        return count, freed
 
     def shutdown(self) -> None:
         with self._lock:

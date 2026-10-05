@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import type { EntityLabels, JobKind, JobSummary, ResumeScope } from "../api/types";
 import { Icon } from "../components/Icon";
+import { JobCleanupDialog } from "../components/JobCleanupDialog";
 import { JobPanel } from "../components/JobPanel";
 import { ReproButton } from "../components/ReproButton";
 import { FavoriteStar, LabelEditor, LabelFilterSelect, TagChips } from "../components/Labels";
@@ -42,13 +43,31 @@ function Detail({ id, labels, onDeleted, onChanged, onLabels }: { id: string; la
   const toast = useToast();
   const { job, summary, log, cancel, resume, error, gone } = useJob(id, { withLog: true });
   const [confirm, setConfirm] = useState(false);
+  const deleting = useRef(false); // un doppio clic sulla conferma non manda due eliminazioni
   // link a un job che non è in questa installazione (pacchetto di un altro computer, job eliminato)
   if (!summary && (gone || error)) {
     return gone
-      ? <Card><Empty icon="activity" title="Job non trovato in questa installazione">Il job {id} non esiste qui: è stato eliminato o viene da un'altra installazione (per esempio il job originale di un pacchetto di riproducibilità).</Empty></Card>
+      ? <Card><Empty icon="activity" title="Job non trovato in questa installazione">Il job {id} non esiste qui: è stato eliminato, a mano o da una pulizia, o viene da un'altra installazione (per esempio il job originale di un pacchetto di riproducibilità).</Empty></Card>
       : <Card><Empty icon="activity" title="Job non letto">{error}</Empty></Card>;
   }
   if (!summary) return null;
+  const remove = async () => {
+    if (deleting.current) return;
+    deleting.current = true;
+    try {
+      const r = await api.deleteJob(id);
+      setConfirm(false);
+      toast.push("Job eliminato");
+      if (r.leftover > 0) {
+        toast.push("Alcuni file del job non si sono potuti rimuovere (in uso?): chiudi i programmi che li usano e premi «Pulisci file temporanei» in Impostazioni.", "warn");
+      }
+      onDeleted();
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      deleting.current = false;
+    }
+  };
   const doResume = async (scope: ResumeScope) => {
     const retry = scope === "failed" || summary.status === "completed"; // da completata restano solo i falliti
     try {
@@ -69,7 +88,10 @@ function Detail({ id, labels, onDeleted, onChanged, onLabels }: { id: string; la
             <Link className="btn btn-sm btn-primary" to={OPEN_IN[summary.kind](summary.id)}>Apri risultati</Link>
             <a className="btn btn-sm" href={api.archiveUrl(id)}><Icon name="download" size={14} /> Archivio</a>
             <ReproButton jobId={id} kind={summary.kind} status={summary.status} />
-            <button className="btn btn-sm btn-danger" disabled={isActive(summary.status)} onClick={() => setConfirm(true)}><Icon name="trash" size={14} /></button>
+            <button className="btn btn-sm btn-danger" disabled={isActive(summary.status)} onClick={() => setConfirm(true)} aria-label="Elimina il job"
+              title={isActive(summary.status) ? "Un job attivo non si elimina: annullalo prima" : "Elimina il job e tutti i suoi file"}>
+              <Icon name="trash" size={14} />
+            </button>
           </>
         }
       >
@@ -100,19 +122,28 @@ function Detail({ id, labels, onDeleted, onChanged, onLabels }: { id: string; la
         )}
       </Card>
       {confirm && (
-        <Confirm text="Eliminare il job e tutti i suoi file?" confirmLabel="Elimina" onCancel={() => setConfirm(false)}
-          onConfirm={() => api.deleteJob(id).then(() => { setConfirm(false); toast.push("Job eliminato"); onDeleted(); }).catch(toast.error)} />
+        <Confirm text="Eliminare il job e tutti i suoi file? Non si può annullare." confirmLabel="Elimina" onCancel={() => setConfirm(false)}
+          onConfirm={() => void remove()} />
       )}
     </div>
   );
 }
 
 export default function Jobs() {
-  const { projectId } = useProject();
+  const { projectId, reload: reloadProjects } = useProject();
   const [params, setParams] = useSearchParams();
   const selected = params.get("id");
   const [scope, setScope] = useState<"project" | "all">("project");
   const [kind, setKind] = useState("");
+  const [cleanupOpen, setCleanupOpen] = useState(false);
+  // una pulizia che finisce dopo l'uscita dalla pagina non deve cambiare l'URL (setParams riporterebbe a /jobs)
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
   // filtro per etichetta o preferiti nell'URL (?tag=), così un link o la ricerca globale lo ritrovano
   const labelFilter = parseFilterValue(params.get("tag"));
   const setLabelFilter = (f: LabelFilter) => setParams((p) => {
@@ -133,10 +164,32 @@ export default function Jobs() {
     const next = jobs.map((j) => (j.id === l.entity_id ? { ...j, tags: l.tags, favorite: l.favorite } : j));
     setData(next.filter((j) => j.id === selected || matchesFilter(j, labelFilter)));
   };
+  // dopo una pulizia (qualunque esito): elenco, conteggi dei progetti e, se il job aperto è stato eliminato, deselezione.
+  // L'assenza dall'elenco non basta a dirlo (è limitato a 200 e filtrato): si chiede lo stato del job.
+  const onCleaned = () => {
+    reload();
+    reloadProjects().catch(() => undefined);
+    if (selected && alive.current) {
+      api.jobStatus(selected).catch((e) => {
+        if (alive.current && e instanceof ApiError && e.status === 404) setParams(labelKey ? { tag: labelKey } : {});
+      });
+    }
+  };
   return (
     <div className="page">
-      <PageHead title="Job" lead="Tutti i calcoli eseguiti in background, con stato, log, file prodotti e durata. I job attivi possono essere annullati."
-        actions={<Link className="btn" to="/rerun" title="Ricrea un calcolo da un pacchetto riproducibile e confronta i risultati"><Icon name="refresh" size={14} /> Riesegui da pacchetto</Link>} />
+      <PageHead title="Job"
+        lead="Tutti i calcoli eseguiti in background, con stato, log, file prodotti e durata. I job attivi possono essere annullati; quelli terminati si eliminano dal dettaglio o in blocco con «Pulisci job…»."
+        actions={
+          <>
+            <Link className="btn" to="/rerun" title="Ricrea un calcolo da un pacchetto riproducibile e confronta i risultati"><Icon name="refresh" size={14} /> Riesegui da pacchetto</Link>
+            <button type="button" className="btn" onClick={() => setCleanupOpen(true)} title="Elimina in blocco i job terminati che non servono più, con anteprima e conferma">
+              <Icon name="trash" size={14} /> Pulisci job…
+            </button>
+          </>
+        } />
+      {cleanupOpen && (
+        <JobCleanupDialog initial={{ scope, kind: kind || null }} onClose={() => setCleanupOpen(false)} onCleaned={onCleaned} />
+      )}
       <div className="split">
         <Card
           title="Elenco"

@@ -2407,3 +2407,96 @@ export interface PredictResult {
   warnings: string[];
   limits: string;
 }
+
+// ------------------------------------------------------------- eliminazione dei progetti e pulizia dei job
+
+/** Stati che la pulizia dei job può eliminare: mai quelli attivi (in coda, in esecuzione, in annullamento). */
+export type CleanupStatus = "completed" | "failed" | "cancelled";
+
+/** Corpo di POST /api/jobs/cleanup/preview e /api/jobs/cleanup: ambito e stati sempre espliciti (nessun predefinito). */
+export interface CleanupRequest {
+  /** "all" = tutti i progetti, compresi i job senza progetto */
+  scope: "project" | "all";
+  /** obbligatorio con scope "project", vietato con "all" */
+  project_id?: string;
+  /** non vuoto */
+  statuses: CleanupStatus[];
+  /** assente o null = tutti i tipi; mai una lista vuota */
+  kinds?: string[] | null;
+  /** età = fine del job (o ultimo aggiornamento, o creazione); null = qualsiasi */
+  older_than_days: number | null;
+  keep_favorites: boolean;
+  keep_tagged: boolean;
+  /** false: escluse le pipeline fallite o annullate con almeno un elemento completato */
+  include_resumable: boolean;
+  /** solo /cleanup: durata massima della chiamata in secondi (il server la limita a 1–25) */
+  max_seconds?: number;
+  /**
+   * istante UTC usato come «adesso» (`as_of` dell'anteprima confermata): l'età si misura da lì e un job finito dopo non
+   * si elimina; assente = adesso, senza limite superiore (lo svuotamento di un progetto non lo invia mai)
+   */
+  as_of?: string;
+}
+
+/** Anteprima della pulizia: cosa verrebbe eliminato, senza eliminare nulla. */
+export interface CleanupPreview {
+  matched: number;
+  /** byte delle cartelle dei job; con `bytes_complete` falso è un minimo (tempo di calcolo scaduto) */
+  bytes: number;
+  bytes_complete: boolean;
+  by_status: Record<string, number>;
+  by_kind: Record<string, number>;
+  /** corrispondenti ai criteri ma risparmiati dalla stella o dalle etichette */
+  protected: number;
+  /** pipeline riprendibili risparmiate (0 con include_resumable) */
+  resumable: number;
+  /** i 5 job più vecchi che verrebbero eliminati */
+  sample: { id: string; kind: string; title: string; status: string; finished_at: string | null }[];
+  /** istante UTC usato come «adesso» (ISO 8601, +00:00): l'esecuzione confermata lo rimanda come `as_of` */
+  as_of: string;
+}
+
+/** Esito di una chiamata della pulizia (a tempo: il client ripete finché `remaining` non è 0). */
+export interface CleanupRun {
+  /** eliminati in questa chiamata */
+  deleted: number;
+  /** in uso, ripresi, già eliminati altrove o non più corrispondenti (es. stella aggiunta nel frattempo): non sono errori */
+  skipped: number;
+  /** eccezioni inattese su singoli job */
+  errors: number;
+  freed_bytes: number;
+  /** cartelle rimosse solo in parte: il resto lo toglie «Pulisci file temporanei» */
+  leftover: number;
+  /** corrispondenti non ancora esaminati (i saltati non contano) */
+  remaining: number;
+}
+
+/** GET /api/projects/{id}/usage: anteprima di ciò che l'eliminazione del progetto porta via. */
+export interface ProjectUsage {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  sequences: number;
+  documents: number;
+  jobs: { total: number; active: number; starred: number; tagged: number; resumable: number; by_status: Record<string, number> };
+  bytes: number;
+  bytes_complete: boolean;
+}
+
+/** DELETE /api/projects/{id}. */
+export interface ProjectDeleteResult {
+  deleted: string;
+  jobs_deleted: number;
+  freed_bytes: number;
+  leftover: number;
+  /** progetto vuoto creato perché era l'ultimo (BioLoom ne richiede almeno uno), altrimenti null */
+  replacement: Project | null;
+}
+
+/** DELETE /api/jobs/{id}. */
+export interface JobDeleteResult {
+  deleted: string;
+  freed_bytes: number;
+  leftover: number;
+}

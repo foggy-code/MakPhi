@@ -4,6 +4,9 @@ import type {
   AnalysisRequest,
   AssemblyList,
   AuthStatus,
+  CleanupPreview,
+  CleanupRequest,
+  CleanupRun,
   ComplexRequest,
   ConsensusResult,
   CoverageCheck,
@@ -17,6 +20,7 @@ import type {
   Example,
   InterProDomain,
   Job,
+  JobDeleteResult,
   JobSummary,
   LatestToolJob,
   LigandRef,
@@ -29,6 +33,8 @@ import type {
   PreflightResult,
   PredictRequest,
   Project,
+  ProjectDeleteResult,
+  ProjectUsage,
   QualityReport,
   ReportFile,
   ReportRequest,
@@ -173,7 +179,8 @@ export const api = {
   settings: () => get<Settings>("/api/settings"),
   saveSettings: (s: Partial<Settings>) => put<Settings>("/api/settings", s),
   shutdown: () => post<{ status: string }>("/api/system/shutdown"),
-  cleanup: () => post<{ uploads: number; cache: number; scratch: number; freed_bytes: number }>("/api/system/cleanup"),
+  /** file temporanei; `jobs` = resti di job già eliminati (cartelle `.deleting-…`) rimossi */
+  cleanup: () => post<{ uploads: number; cache: number; scratch: number; jobs: number; freed_bytes: number }>("/api/system/cleanup"),
   selftest: () => post<JobSummary>("/api/system/selftest"),
 
   // accesso (modalità server)
@@ -218,7 +225,10 @@ export const api = {
   projects: (q: LabelQuery = {}) => get<Project[]>(`/api/projects${queryString(q)}`),
   createProject: (name: string, description = "") => post<Project>("/api/projects", { name, description }),
   updateProject: (id: string, data: Partial<Project>) => patch<Project>(`/api/projects/${id}`, data),
-  deleteProject: (id: string) => del(`/api/projects/${id}`),
+  /** cosa porterebbe via l'eliminazione: sequenze, documenti, job (attivi, con stella, riprendibili) e byte */
+  projectUsage: (id: string) => get<ProjectUsage>(`/api/projects/${enc(id)}/usage`),
+  /** elimina il progetto con tutti i suoi job (sincrono); se era l'ultimo il server ne crea uno vuoto (`replacement`) */
+  deleteProject: (id: string) => del<ProjectDeleteResult>(`/api/projects/${id}`),
   sequences: (pid: string, q: LabelQuery = {}) => get<Sequence[]>(`/api/projects/${pid}/sequences${queryString(q)}`),
   addSequence: (pid: string, name: string, sequence: string, source = "manual", meta: Record<string, unknown> = {}) =>
     post<Sequence>(`/api/projects/${pid}/sequences`, { name, sequence, source, meta }),
@@ -276,7 +286,12 @@ export const api = {
   jobLog: (id: string, offset = 0) => get<{ text: string; offset: number; size: number }>(`/api/jobs/${id}/log?offset=${offset}`),
   cancelJob: (id: string) => post<JobSummary>(`/api/jobs/${id}/cancel`),
   resumeJob: (id: string, scope: ResumeScope = "incomplete") => post<JobSummary>(`/api/jobs/${id}/resume`, { scope }),
-  deleteJob: (id: string) => del(`/api/jobs/${id}`),
+  /** `leftover` > 0: cartella rimossa solo in parte (il resto lo toglie «Pulisci file temporanei») */
+  deleteJob: (id: string) => del<JobDeleteResult>(`/api/jobs/${id}`),
+  /** anteprima della pulizia dei job (non elimina nulla) */
+  cleanupPreview: (req: CleanupRequest) => post<CleanupPreview>("/api/jobs/cleanup/preview", req),
+  /** una chiamata della pulizia, a tempo (`max_seconds`): si ripete finché `remaining` non è 0 (lib/cleanup.runCleanup) */
+  cleanupJobs: (req: CleanupRequest) => post<CleanupRun>("/api/jobs/cleanup", req),
   jobFileUrl: (id: string, path: string, download = false) =>
     `/api/jobs/${id}/files/${path.split("/").map(enc).join("/")}${download ? "?download=true" : ""}`,
   jobFileText: (id: string, path: string) => get<string>(`/api/jobs/${id}/files/${path.split("/").map(enc).join("/")}`),
