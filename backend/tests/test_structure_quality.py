@@ -22,14 +22,14 @@ def test_chain_summary_and_header(ubq_model, ubq_path):
 
 def test_ramachandran_reference_structure(ubq_model):
     summary = ramachandran.analyze(ubq_model)["summary"]
-    # v3 classificava solo l'81% di 1UBQ come "core"; MolProbity riporta ~98% favorito.
+    # MolProbity riporta ~98% di residui favoriti su 1UBQ.
     assert summary["favored_pct"] >= 95
     assert summary["outlier"] == 0
 
 
 def test_classification_regions():
     assert ramachandran.classify(-63, -41) == "favored"         # α-elica
-    assert ramachandran.classify(-70, 145) == "favored"         # poliprolina II (allowed in v3)
+    assert ramachandran.classify(-70, 145) == "favored"         # poliprolina II
     assert ramachandran.classify(60, 45) == "favored"           # α sinistrorsa
     assert ramachandran.classify(0, 0) == "outlier"
     assert ramachandran.classify(80, -170, "glycine") in ("favored", "allowed")
@@ -39,7 +39,7 @@ def test_classification_regions():
 
 def test_clashscore_no_covalent_false_positives(ubq_model):
     result = clashes.analyze(ubq_model)
-    # v3: 31.8 (anello della prolina e acque contati come clash)
+    # l'anello della prolina e le acque non vanno contati come clash
     assert result["clashscore"] < 5
     assert all("PRO" not in c["atom1"] + c["atom2"] for c in result["clashes"])
 

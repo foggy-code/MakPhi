@@ -1,4 +1,4 @@
-"""Voto composito di qualità (formula della v3, con soglie esplicite)."""
+"""Voto composito di qualità (penalità additive con soglie esplicite)."""
 
 from __future__ import annotations
 

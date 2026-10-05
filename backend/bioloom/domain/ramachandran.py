@@ -1,6 +1,6 @@
 """Angoli diedri del backbone e classificazione di Ramachandran.
 
-Le regioni sono rettangoli (φ_min, φ_max, ψ_min, ψ_max) in gradi. Rispetto alla v3 la regione
+Le regioni sono rettangoli (φ_min, φ_max, ψ_min, ψ_max) in gradi. La regione
 favorita del caso generale include la poliprolina II e il bordo dell'α-elica, in linea con le aree
 favorite di MolProbity (Lovell et al. 2003). Restano un'approssimazione dei contorni reali: per una
 validazione formale usare MolProbity o PROCHECK.

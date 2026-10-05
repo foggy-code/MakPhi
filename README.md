@@ -524,4 +524,3 @@ docker compose -f launcher/compose.yml build
 - [Server](docs/SERVER.md): installazione su server, accesso, HTTPS, backup.
 - [Piano di implementazione](docs/PIANO_IMPLEMENTAZIONE.md): le fasi dell'evoluzione della v4, il loro stato e i
   seguiti possibili.
-- [Reverse engineering della v3](docs/REVERSE_ENGINEERING.md).

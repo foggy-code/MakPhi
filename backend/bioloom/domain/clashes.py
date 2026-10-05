@@ -1,6 +1,6 @@
 """Clashscore approssimato sugli atomi pesanti.
 
-Differenze rispetto alla v3 (che sovrastimava i clash):
+Scelte per evitare la sovrastima dei clash:
   * le coppie a distanza topologica <= 3 legami covalenti sono escluse (grafo dei legami
     ricostruito dai raggi covalenti): niente falsi positivi su anello della prolina, ponti
     disolfuro, metalli coordinati;
