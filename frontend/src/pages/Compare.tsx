@@ -5,12 +5,16 @@ import type { AlignResult, StructureSource, SystemInfo } from "../api/types";
 import { CachedBadge, RecomputeOption } from "../components/CacheOption";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
+import { MetricGuide } from "../components/MetricNotes";
 import { StructurePicker } from "../components/Pickers";
 import { StructuralComparison } from "../components/StructuralComparison";
-import { Alert, Card, Empty, Field, PageHead } from "../components/ui";
+import { Alert, Card, Disclosure, Empty, Field, PageHead } from "../components/ui";
 import { compareJobView, compareParams, jobSources, linkedSources } from "../lib/compare";
 import { useProject, useToast } from "../lib/context";
 import { useAsync, useJob } from "../lib/hooks";
+
+/** Scelta automatica e programma integrato (i programmi esterni prendono il nome dalle informazioni di sistema). */
+const TOOL_LABEL: Record<string, string> = { auto: "Automatico", builtin: "Kabsch + TM-score integrato" };
 
 /** La catena resta nel suo campo: il selettore della struttura non la mostra. */
 const withoutChain = (s: StructureSource | null): StructureSource | null => {
@@ -86,6 +90,7 @@ export default function Compare() {
     setChainB(chainA);
   };
   const toolAvailable = (key: string) => info?.tools[key]?.available;
+  const toolLabel = TOOL_LABEL[tool] ?? info?.tools[tool]?.label ?? tool;
   const r = job?.status === "completed" && job.kind === "align" ? job.result : null;
 
   return (
@@ -96,34 +101,41 @@ export default function Compare() {
       />
       <div className="split">
         <div className="stack">
-          <Card title="Strutture">
+          <Card title="Strutture" icon="layers" sub="A è il riferimento, B si sovrappone su A">
             <div className="stack">
-              <StructurePicker label="A · riferimento (es. template o struttura sperimentale)" value={a} onChange={setA} />
-              <Field label="Catena di A" hint="Vuoto = prima catena"><input className="input" maxLength={2} value={chainA} onChange={(e) => setChainA(e.target.value.trim())} /></Field>
-              <div className="row">
-                <button className="btn btn-sm btn-ghost" onClick={swap} disabled={!a && !b} title="Scambia A e B"><Icon name="refresh" size={13} /> Scambia A e B</button>
+              <div className="cmp-slot">
+                <StructurePicker label="A · riferimento (es. template o struttura sperimentale)" value={a} onChange={setA} />
+                <Field label="Catena di A" hint="Vuoto = prima catena"><input className="input" maxLength={2} value={chainA} onChange={(e) => setChainA(e.target.value.trim())} /></Field>
               </div>
-              <StructurePicker label="B · da sovrapporre (es. modello)" value={b} onChange={setB} />
-              <Field label="Catena di B" hint="Vuoto = prima catena"><input className="input" maxLength={2} value={chainB} onChange={(e) => setChainB(e.target.value.trim())} /></Field>
-              <Field label="Programma" hint="TM-align/US-align allineano per struttura; l'integrato allinea per sequenza e poi sovrappone.">
-                <select className="input" value={tool} onChange={(e) => setTool(e.target.value)}>
-                  <option value="auto">Automatico</option>
-                  <option value="builtin">Kabsch + TM-score integrato</option>
-                  {["usalign", "tmalign"].map((t) => (
-                    <option key={t} value={t} disabled={!toolAvailable(t)}>{info?.tools[t]?.label ?? t}{toolAvailable(t) ? "" : " (non installato)"}</option>
-                  ))}
-                </select>
-              </Field>
-              <RecomputeOption checked={recompute} onChange={setRecompute} />
-              <button className="btn btn-primary" disabled={!a || !b} onClick={submit}><Icon name="play" size={14} /> Confronta</button>
+              <div className="row" style={{ justifyContent: "center" }}>
+                <button type="button" className="btn btn-sm btn-ghost" onClick={swap} disabled={!a && !b} title="Scambia A e B"><Icon name="compare" size={14} /> Scambia A e B</button>
+              </div>
+              <div className="cmp-slot">
+                <StructurePicker label="B · da sovrapporre (es. modello)" value={b} onChange={setB} />
+                <Field label="Catena di B" hint="Vuoto = prima catena"><input className="input" maxLength={2} value={chainB} onChange={(e) => setChainB(e.target.value.trim())} /></Field>
+              </div>
+              {/* riepilogo da chiusa: programma e ricalcolo senza cache, se attivo (vale per ogni confronto successivo) */}
+              <Disclosure title="Metodo e opzioni" extra={[toolLabel, recompute && "ricalcolo senza cache"].filter(Boolean).join(" · ")}>
+                <div className="stack-sm">
+                  <Field label="Programma" hint="TM-align/US-align allineano per struttura; l'integrato allinea per sequenza e poi sovrappone.">
+                    <select className="input" value={tool} onChange={(e) => setTool(e.target.value)}>
+                      <option value="auto">{TOOL_LABEL.auto}</option>
+                      <option value="builtin">{TOOL_LABEL.builtin}</option>
+                      {["usalign", "tmalign"].map((t) => (
+                        <option key={t} value={t} disabled={!toolAvailable(t)}>{info?.tools[t]?.label ?? t}{toolAvailable(t) ? "" : " (non installato)"}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <RecomputeOption checked={recompute} onChange={setRecompute} />
+                </div>
+              </Disclosure>
+              <button type="button" className="btn btn-primary" disabled={!a || !b} onClick={submit}><Icon name="play" size={14} /> Confronta</button>
             </div>
           </Card>
-          <Card title="Come leggere le metriche">
-            <div className="stack-sm small text-2">
-              <p><b>TM-score</b> (0–1, Zhang &amp; Skolnick 2004): sopra 0,5 stesso ripiegamento, sotto 0,17 come due strutture casuali. Normalizzato su A e su B.</p>
-              <p><b>GDT-TS / GDT-HA</b> (Zemla 2003; CASP7): percentuale dei Cα di A entro 1, 2, 4, 8 Å (TS) o 0,5, 1, 2, 4 Å (HA), con una sovrapposizione cercata per ogni soglia.</p>
-              <p><b>lDDT</b> (Mariani et al. 2013): frazione delle distanze tra Cα di A entro 15 Å conservate in B entro 0,5, 1, 2, 4 Å. Non usa sovrapposizioni ed è poco sensibile ai movimenti di dominio.</p>
-              <p className="tiny muted">Dettagli e limiti in docs/ARCHITETTURA.md, sezione «Confronto strutturale».</p>
+          <Card title="Come leggere le metriche" icon="info" collapsible storageKey="compare.guide">
+            <div className="stack-sm">
+              <MetricGuide metrics={["tm", "rmsd", "gdt", "lddt"]} open="tm" />
+              <p className="tiny text-2">Ogni statistica del risultato ha i suoi «Dettagli»: valori grezzi e soglie. Metodi e limiti in docs/ARCHITETTURA.md, sezione «Confronto strutturale».</p>
             </div>
           </Card>
         </div>

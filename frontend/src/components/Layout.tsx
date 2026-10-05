@@ -1,22 +1,24 @@
 import { useEffect, useRef, useState } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { SystemInfo } from "../api/types";
 import { useProject, useToast } from "../lib/context";
 import { SYSTEM_CHANGED, useInterval, useJobsFeed } from "../lib/hooks";
-import { isMacPlatform, PENDING_MS, shortcutFor } from "../lib/shortcuts";
+import { isMacPlatform, NAV_SHORTCUTS, PENDING_MS, shortcutFor } from "../lib/shortcuts";
 import { THEME_OPTIONS, useThemePreference } from "../lib/theme";
 import { GlobalSearch } from "./GlobalSearch";
 import { Icon } from "./Icon";
 import { ProjectsDialog } from "./ProjectsDialog";
 import { ShortcutsHelp } from "./ShortcutsHelp";
 import { Confirm, Modal } from "./ui";
+import "../styles/shell.css";
 
 const MAC = typeof navigator !== "undefined" && isMacPlatform(navigator);
 
 /**
  * Scorciatoie globali (lib/shortcuts.ts): ricerca, pannello "?", `g` + lettera per le pagine. Un tasto gestito qui non
- * arriva alla pagina; mentre si scrive in un campo valgono solo Ctrl+K / ⌘K.
+ * arriva alla pagina; mentre si scrive in un campo valgono solo Ctrl+K / ⌘K. Con il 3D a schermo intero (API Fullscreen o
+ * ripiego CSS) nessuna: le finestre si aprirebbero sotto il visualizzatore, invisibili ma con il focus.
  */
 function useGlobalShortcuts(handlers: { search: () => void; help: () => void; navigate: (path: string) => void }) {
   const saved = useRef(handlers);
@@ -25,6 +27,7 @@ function useGlobalShortcuts(handlers: { search: () => void; help: () => void; na
     let pendingUntil = 0;
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented) return;
+      if (document.fullscreenElement || document.querySelector(".viewer3d.fullscreen")) return;
       const action = shortcutFor(e as unknown as Parameters<typeof shortcutFor>[0], {
         pending: Date.now() < pendingUntil,
         dialogOpen: !!document.querySelector('[role="dialog"]'),
@@ -68,6 +71,25 @@ const NAV: { section: string; items: { to: string; label: string; icon: string }
   },
   { section: "Sistema", items: [{ to: "/settings", label: "Impostazioni", icon: "settings" }] },
 ];
+
+/** Lettera della scorciatoia `g` + lettera di ogni pagina, mostrata al passaggio del mouse. */
+const NAV_KEY = new Map(NAV_SHORTCUTS.map((n) => [n.path, n.key]));
+
+/** Stato di MODELLER in fondo alla barra laterale: pronto (con i job paralleli), licenza mancante, in verifica. */
+function SystemStatus({ info, active }: { info: SystemInfo | null; active: number }) {
+  const ready = !!info?.modeller.available;
+  const color = !info ? "var(--muted)" : ready ? "var(--ok)" : "var(--err)";
+  return (
+    <div className="shell-status" title={info?.modeller.python ?? undefined}>
+      <span className="dot" style={{ color }} />
+      <b>MODELLER {ready ? info?.modeller.version : ""}</b>
+      {info && !ready && <Link className="btn btn-sm btn-ghost" to="/settings?tab=licenses">Licenza</Link>}
+      <span className="small">
+        {!info ? "Verifica in corso…" : ready ? `${info.workers} job in parallelo · ${active ? `${active} attivi` : "nessuno attivo"}` : "Non disponibile: serve la licenza"}
+      </span>
+    </div>
+  );
+}
 
 export function Layout() {
   const { projects, projectId, select, create } = useProject();
@@ -132,16 +154,16 @@ export function Layout() {
     <div className={navOpen ? "app nav-open" : "app"}>
       <aside className="sidebar" id="sidebar">
         <div className="brand">
-          <img src="/favicon.svg" alt="" />
+          <span className="shell-mark"><img src="/favicon.svg" alt="" /></span>
           <div>
-            <b>BioLoom</b>
-            <small>v{info?.version ?? "4"} · modellazione per omologia</small>
+            <b>BioLoom<span className="shell-version">v{info?.version ?? "4"}</span></b>
+            <small>Modellazione per omologia</small>
           </div>
-          <button className="btn btn-ghost btn-icon nav-close" onClick={() => setNavOpen(false)} aria-label="Chiudi il menu" title="Chiudi il menu (Esc)">
+          <button type="button" className="btn btn-ghost btn-icon nav-close" onClick={() => setNavOpen(false)} aria-label="Chiudi il menu" title="Chiudi il menu (Esc)">
             <Icon name="x" size={16} />
           </button>
         </div>
-        <nav className="nav">
+        <nav className="nav" aria-label="Pagine">
           {NAV.map((group) => (
             <div key={group.section || "root"}>
               {group.section && <div className="nav-section">{group.section}</div>}
@@ -149,17 +171,15 @@ export function Layout() {
                 <NavLink key={item.to} to={item.to} end={item.to === "/"} onClick={() => setNavOpen(false)}>
                   <Icon name={item.icon} />
                   {item.label}
-                  {item.to === "/jobs" && active > 0 && <span className="count">{active}</span>}
+                  {item.to === "/jobs" && active > 0 && <span className="count" title={`${active} job attivi`}>{active}</span>}
+                  {NAV_KEY.has(item.to) && <kbd className="shell-key" aria-hidden="true">g {NAV_KEY.get(item.to)}</kbd>}
                 </NavLink>
               ))}
             </div>
           ))}
         </nav>
         <div className="sidebar-foot">
-          <div className="row" title={info?.modeller.python ?? ""}>
-            <span className="dot" style={{ color: !info ? "var(--muted)" : info.modeller.available ? "var(--ok)" : "var(--err)" }} />
-            MODELLER {!info ? "· verifica…" : info.modeller.available ? info.modeller.version : "non disponibile"}
-          </div>
+          <SystemStatus info={info} active={active} />
           <div className="segmented theme-switch" role="radiogroup" aria-label="Tema">
             {THEME_OPTIONS.map((o) => (
               <button key={o.value} type="button" role="radio" aria-checked={themePref === o.value} className={themePref === o.value ? "on" : ""}
@@ -168,17 +188,17 @@ export function Layout() {
               </button>
             ))}
           </div>
-          <div className="row">
-            <button className="btn btn-ghost btn-sm" onClick={() => setHelpOpen(true)} title="Scorciatoie da tastiera (?)">
+          <div className="shell-foot-actions">
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setHelpOpen(true)} title="Scorciatoie da tastiera (?)">
               <Icon name="keyboard" size={14} /> Tasti
             </button>
             {info?.runtime?.auth && (
-              <button className="btn btn-ghost btn-sm" onClick={() => api.logout().finally(() => window.location.reload())} title="Esci dalla sessione">
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => api.logout().finally(() => window.location.reload())} title="Esci dalla sessione">
                 <Icon name="x" size={14} /> Disconnetti
               </button>
             )}
             {info?.runtime?.allow_shutdown !== false && (
-              <button className="btn btn-ghost btn-sm" onClick={() => setAskShutdown(true)} title="Arresta BioLoom">
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAskShutdown(true)} title="Arresta BioLoom">
                 <Icon name="power" size={14} /> Esci
               </button>
             )}
@@ -188,43 +208,39 @@ export function Layout() {
       {navOpen && <div className="nav-backdrop" onClick={() => setNavOpen(false)} />}
       <div className="main">
         <header className="topbar">
-          <button className="btn btn-ghost btn-icon nav-toggle" onClick={() => setNavOpen((open) => !open)} aria-label="Menu"
+          <button type="button" className="btn btn-ghost btn-icon nav-toggle" onClick={() => setNavOpen((open) => !open)} aria-label="Menu"
             aria-expanded={navOpen} aria-controls="sidebar" title="Pagine, tema e uscita">
             <Icon name="menu" />
           </button>
-          <Icon name="folder" />
-          <select
-            className="input"
-            style={{ width: 260 }}
-            value={projectId ?? ""}
-            onChange={(e) => select(e.target.value)}
-            aria-label="Progetto attivo"
-          >
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-          <button className="btn btn-sm" onClick={() => setNewProject("")}>
-            <Icon name="plus" size={14} /> Nuovo progetto
-          </button>
-          <button className="btn btn-sm btn-ghost" onClick={() => setProjectsOpen(true)} title="Tutti i progetti: stella, etichette ed eliminazione">
-            <Icon name="star" size={14} /> Progetti
-          </button>
-          <button className="search-trigger" onClick={() => setSearchOpen(true)} title="Ricerca globale" aria-label="Ricerca globale">
+          <div className="shell-project" role="group" aria-label="Progetto">
+            <Icon name="folder" />
+            <select className="input" value={projectId ?? ""} onChange={(e) => select(e.target.value)} aria-label="Progetto attivo">
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            <button type="button" className="btn btn-sm" onClick={() => setNewProject("")} title="Crea un nuovo progetto">
+              <Icon name="plus" size={14} /> <span className="shell-label">Nuovo</span>
+            </button>
+            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setProjectsOpen(true)} title="Tutti i progetti: stella, etichette ed eliminazione">
+              <Icon name="star" size={14} /> <span className="shell-label">Progetti</span>
+            </button>
+          </div>
+          <button type="button" className="search-trigger" onClick={() => setSearchOpen(true)} title="Ricerca globale" aria-label="Ricerca globale">
             <Icon name="search" size={14} />
-            <span>Cerca…</span>
+            <span>Cerca progetti, job, template…</span>
             <kbd>{MAC ? "⌘" : "Ctrl"} K</kbd>
           </button>
           <div className="spacer" />
-          {offline && <span className="badge badge-err">Server non raggiungibile</span>}
+          {offline && <span className="badge badge-err"><Icon name="alert" size={12} /> Server non raggiungibile</span>}
           {active > 0 && (
-            <button className="btn btn-sm" onClick={() => navigate("/jobs")}>
-              <span className="spinner" style={{ width: 12, height: 12 }} /> {active} job attivi
+            <button type="button" className="btn btn-sm shell-jobs" onClick={() => navigate("/jobs")} title="Apri l'elenco dei job">
+              <span className="spinner" style={{ width: 12, height: 12 }} aria-hidden="true" /> {active} {active === 1 ? "job attivo" : "job attivi"}
             </button>
           )}
-          <a className="btn btn-ghost btn-sm" href="/docs" target="_blank" rel="noreferrer">
+          <a className="btn btn-ghost btn-sm" href="/docs" target="_blank" rel="noreferrer" title="Documentazione delle API (nuova scheda)">
             API <Icon name="external" size={13} />
           </a>
         </header>
@@ -235,7 +251,7 @@ export function Layout() {
               ? "MODELLER è installato ma serve la tua chiave di licenza (gratuita per uso accademico)."
               : "MODELLER non è disponibile: la modellazione non può partire."}
             <div className="spacer" />
-            <button className="btn btn-sm btn-primary" onClick={() => navigate("/settings?tab=licenses")}>
+            <button type="button" className="btn btn-sm btn-primary" onClick={() => navigate("/settings?tab=licenses")}>
               Inserisci la licenza
             </button>
           </div>
@@ -251,8 +267,9 @@ export function Layout() {
           onClose={() => setNewProject(null)}
           footer={
             <>
-              <button className="btn" onClick={() => setNewProject(null)}>Annulla</button>
+              <button type="button" className="btn" onClick={() => setNewProject(null)}>Annulla</button>
               <button
+                type="button"
                 className="btn btn-primary"
                 disabled={!newProject.trim()}
                 onClick={() =>

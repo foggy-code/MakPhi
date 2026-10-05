@@ -7,13 +7,15 @@ import { TextFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { SequencePicker, TemplatePicker } from "../components/Pickers";
-import { Alert, BarCell, Card, Confirm, Empty, Modal, PageHead } from "../components/ui";
+import { Alert, Badge, BarCell, Card, Confirm, Disclosure, Empty, Modal, PageHead } from "../components/ui";
+import { FormSection, InfoChips } from "../components/WorkflowParts";
 import { pirReference } from "../lib/alignConfidence";
 import { useProject, useToast } from "../lib/context";
 import { fileStem } from "../lib/files";
-import { downloadText, relTime } from "../lib/format";
+import { downloadText, fmtBytes, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
 import { parsePir, pirIdentities } from "../lib/pir";
+import { templateLabel } from "../lib/workflowView";
 
 function GenerateDialog({ onClose, onDone }: { onClose: () => void; onDone: (pir: string, templates: TemplateRef[], name: string) => void }) {
   const { projectId } = useProject();
@@ -39,7 +41,7 @@ function GenerateDialog({ onClose, onDone }: { onClose: () => void; onDone: (pir
   return (
     <Modal
       title="Genera allineamento con MODELLER"
-      wide
+      size="wide"
       onClose={onClose}
       footer={
         <>
@@ -52,11 +54,10 @@ function GenerateDialog({ onClose, onDone }: { onClose: () => void; onDone: (pir
     >
       <div className="grid grid-2">
         <SequencePicker value={target} onChange={setTarget} />
-        <div className="stack-sm">
-          <span className="small text-2" style={{ fontWeight: 550 }}>Template</span>
+        <FormSection title="Template" hint={templates.length ? `${templates.length} scelti` : undefined}>
           <TemplatePicker value={templates} onChange={setTemplates} ligands={false} />
-          <p className="tiny muted">Con più template MODELLER li sovrappone strutturalmente (salign) e allinea il bersaglio sul profilo comune.</p>
-        </div>
+          <p className="small text-2">Con più template MODELLER li sovrappone strutturalmente (salign) e allinea il bersaglio sul profilo comune.</p>
+        </FormSection>
       </div>
       {jobId && <div style={{ marginTop: 14 }}><JobPanel summary={summary} log={log} onCancel={cancel} compact /></div>}
     </Modal>
@@ -165,14 +166,17 @@ export default function PirEditor() {
         }
       />
       <div className="split">
-        <Card title="Documenti del progetto">
+        <Card title="Documenti del progetto" icon="folder" sub={docs?.length ? String(docs.length) : undefined}>
           {!docs?.length ? <Empty icon="file" title="Nessun documento">Genera un allineamento o salvane uno dalla pagina Allineamenti.</Empty> : (
-            <div className="table-wrap">
+            <div className="table-wrap" style={{ maxHeight: 560, overflowY: "auto" }}>
               <table className="table">
                 <tbody>
                   {docs.map((d) => (
                     <tr key={d.id} className={`clickable ${d.id === docId ? "selected" : ""}`} onClick={() => setParams({ doc: d.id })}>
-                      <td><b>{d.name}</b><div className="tiny muted">{d.kind.toUpperCase()} · {relTime(d.updated_at)}</div></td>
+                      <td>
+                        <b>{d.name}</b>
+                        <div className="tiny text-2">{d.kind.toUpperCase()} · {relTime(d.updated_at)}{d.size ? ` · ${fmtBytes(d.size)}` : ""}</div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -182,13 +186,14 @@ export default function PirEditor() {
         </Card>
         <div className="stack">
           <Card
-            title={<input className="input" style={{ minWidth: 280, fontWeight: 600 }} placeholder="Nome del documento" value={name} onChange={(e) => { setName(e.target.value); setDirty(true); }} />}
+            icon="file"
+            title={<input className="input" style={{ minWidth: 280, fontWeight: 600 }} placeholder="Nome del documento" aria-label="Nome del documento" value={name} onChange={(e) => { setName(e.target.value); setDirty(true); }} />}
             right={
               <>
-                {dirty && <span className="badge badge-warn">modifiche non salvate</span>}
+                {dirty && <Badge tone="warn">modifiche non salvate</Badge>}
                 <button className="btn btn-sm" disabled={!content} onClick={() => downloadText(`${name || "alignment"}.ali`, content)}><Icon name="download" size={14} /> .ali</button>
                 <button className="btn btn-sm" disabled={!content || !projectId} onClick={() => save(false)}><Icon name="save" size={14} /> Salva</button>
-                {docId && <button className="btn btn-sm btn-danger" onClick={() => setToDelete(true)}><Icon name="trash" size={14} /></button>}
+                {docId && <button className="btn btn-sm btn-danger" onClick={() => setToDelete(true)} title="Elimina il documento" aria-label="Elimina il documento"><Icon name="trash" size={14} /></button>}
                 <button
                   className="btn btn-sm btn-primary"
                   disabled={!report?.valid}
@@ -202,21 +207,29 @@ export default function PirEditor() {
               </>
             }
           >
-            <textarea
-              className="input"
-              rows={16}
-              spellCheck={false}
-              value={content}
-              onChange={(e) => { setContent(e.target.value); setDirty(true); }}
-              placeholder={">P1;target\nsequence:target:::::::0.00: 0.00\nMKTAYIAKQR-QISFVKSHF*\n\n>P1;1ABC_A\nstructureX:1ABC_A:1:A:120:A::::\nMKSAYIAKQRAQISFVKSHF*"}
-              style={{ whiteSpace: "pre", overflowX: "auto" }}
-            />
-            {templatesMeta.length > 0 && (
-              <p className="tiny muted" style={{ marginTop: 6 }}>Template associati: {templatesMeta.map((t) => `${t.id}:${t.chains.join("")}`).join(", ")}</p>
-            )}
+            <div className="stack-sm">
+              <textarea
+                className="input"
+                rows={16}
+                spellCheck={false}
+                aria-label="Allineamento in formato PIR"
+                value={content}
+                onChange={(e) => { setContent(e.target.value); setDirty(true); }}
+                placeholder={">P1;target\nsequence:target:::::::0.00: 0.00\nMKTAYIAKQR-QISFVKSHF*\n\n>P1;1ABC_A\nstructureX:1ABC_A:1:A:120:A::::\nMKSAYIAKQRAQISFVKSHF*"}
+                style={{ whiteSpace: "pre", overflowX: "auto" }}
+              />
+              <InfoChips items={[
+                { label: "Voci", value: entries.length || null },
+                { label: "Bersaglio", value: entries.find((e) => e.kind === "sequence")?.code },
+                { label: "Strutture", value: entries.filter((e) => e.kind.startsWith("structure")).length || null },
+                { label: "Colonne", value: entries.length ? entries[0].sequence.length : null },
+                { label: "Template associati", value: templatesMeta.length ? templatesMeta.map(templateLabel).join(", ") : null },
+              ]} />
+            </div>
           </Card>
           {report && (
-            <Card title="Verifica" right={report.valid ? <span className="badge badge-ok">valido per MODELLER</span> : <span className="badge badge-err">da correggere</span>}>
+            <Card title="Verifica" icon="shield" sub={`${report.errors.length} errori · ${report.warnings.length} avvisi`}
+              right={report.valid ? <Badge tone="ok">valido per MODELLER</Badge> : <Badge tone="err">da correggere</Badge>}>
               <div className="stack">
                 {report.errors.map((e, i) => <Alert key={i} tone="err">{e}</Alert>)}
                 {report.warnings.map((w, i) => <Alert key={`w${i}`} tone="warn">{w}</Alert>)}
@@ -225,19 +238,45 @@ export default function PirEditor() {
                     <table className="table">
                       <thead><tr><th>Template</th><th>Identità</th><th>Copertura del bersaglio</th></tr></thead>
                       <tbody>
-                        {identities.map((x) => (
-                          <tr key={x.code}><td><b>{x.code}</b></td><td><BarCell value={x.identity} /></td><td><BarCell value={x.coverage} /></td></tr>
+                        {identities.map((x, i) => (
+                          <tr key={`${i}-${x.code}`}><td><b>{x.code}</b></td><td><BarCell value={x.identity} /></td><td><BarCell value={x.coverage} /></td></tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
                 )}
+                {report.entries.length > 0 && (
+                  <Disclosure title="Voci dell'allineamento" extra={`${report.entries.length} voci`}>
+                    <div className="table-wrap">
+                      <table className="table">
+                        <thead><tr><th>Codice</th><th>Tipo</th><th className="num">Colonne</th><th className="num">Residui</th><th className="num">Catene</th></tr></thead>
+                        <tbody>
+                          {report.entries.map((e, i) => (
+                            <tr key={`${i}-${e.code}`}>
+                              <td><b className="mono">{e.code}</b></td>
+                              <td>{e.kind}</td>
+                              <td className="num">{e.length}</td>
+                              <td className="num">{e.residues}</td>
+                              <td className="num">{e.chains}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p style={{ marginTop: 8 }}>Identità e copertura sono calcolate sulle colonne in cui bersaglio e template hanno entrambi un residuo; la validazione autorevole è quella del server.</p>
+                  </Disclosure>
+                )}
               </div>
             </Card>
           )}
           {entries.length > 1 && entries.every((e) => e.sequence.length === entries[0].sequence.length) && (
-            <Card title="Anteprima">
+            <Card title="Anteprima" icon="align" sub={`${entries.length} sequenze · ${entries[0].sequence.length} colonne`}>
               <AlignmentView ids={entries.map((e) => e.code)} aligned={entries.map((e) => e.sequence)} reference={pirReference(entries.map((e) => e.kind))} />
+            </Card>
+          )}
+          {!content.trim() && (
+            <Card>
+              <Empty icon="align" title="Nessun allineamento aperto">Genera un allineamento con MODELLER, apri un file (PIR, FASTA allineato, Clustal…) o scegli un documento del progetto.</Empty>
             </Card>
           )}
         </div>

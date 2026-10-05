@@ -126,14 +126,14 @@ export function GlobalSearch({ onClose }: { onClose: () => void }) {
             placeholder="Cerca progetti, sequenze, documenti, job, template…" aria-label="Cerca"
             role="combobox" aria-expanded={flat.length > 0} aria-controls="palette-results"
             aria-activedescendant={flat[active] ? `palette-result-${active}` : undefined} spellCheck={false} autoComplete="off" />
-          {loading && <span className="spinner" style={{ width: 14, height: 14 }} />}
+          {loading && <span className="spinner" style={{ width: 14, height: 14 }} role="status" aria-label="Ricerca in corso" />}
           <kbd>Esc</kbd>
         </div>
         {(parsed.tag || parsed.types.length > 0 || parsed.invalid.length > 0) && (
           <div className="palette-filters small">
             {parsed.tag && <span className="tag-chip">#{parsed.tag}</span>}
             {parsed.types.map((t) => <span key={t} className="badge">{TYPE_LABEL[t]}</span>)}
-            {parsed.invalid.length > 0 && <span className="muted">Ignorati: {parsed.invalid.join(" ")} (etichette: lettere, cifre e - _ . : +; tipi: progetti, sequenze, documenti, job, template, etichette)</span>}
+            {parsed.invalid.length > 0 && <span className="text-2">Ignorati: {parsed.invalid.join(" ")} (etichette: lettere, cifre e - _ . : +; tipi: progetti, sequenze, documenti, job, template, etichette)</span>}
           </div>
         )}
         <div className={`palette-results${stale ? " stale" : ""}`} id="palette-results" role="listbox" ref={list} aria-busy={stale || undefined}>
@@ -174,7 +174,7 @@ export function GlobalSearch({ onClose }: { onClose: () => void }) {
             </div>
           ))}
         </div>
-        <div className="palette-foot tiny muted">
+        <div className="palette-foot tiny text-2">
           <span><kbd>↑</kbd> <kbd>↓</kbd> scegli</span>
           <span><kbd>Invio</kbd> apri</span>
           <span><b>#etichetta</b> filtra per etichetta</span>

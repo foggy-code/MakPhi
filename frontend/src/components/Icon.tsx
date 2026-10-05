@@ -42,6 +42,17 @@ const PATHS: Record<string, string> = {
   tag: "M3 12V4h8l10 10-8 8zM7.5 8.5h.01",
   monitor: "M3 5h18v11H3zM8 20h8M12 16v4",
   keyboard: "M3 7h18v10H3zM7 11h.01M11 11h.01M15 11h.01M7 14h10",
+  // grafici espandibili ed esportabili, sezioni a scomparsa
+  maximize: "M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5",
+  minimize: "M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5",
+  zoomIn: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM20 20l-4-4M8 11h6M11 8v6",
+  zoomOut: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM20 20l-4-4M8 11h6",
+  image: "M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15.5 9.5h.01",
+  table: "M4 5h16v14H4zM4 10h16M4 14.5h16M10 5v14",
+  chevronDown: "M6 9l6 6 6-6",
+  fileText: "M14 3H6v18h12V7zM14 3v4h4M9 13h6M9 17h6M9 9h2",
+  move: "M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3",
+  list: "M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01",
 };
 
 const FILLED = new Set(["play", "stop", "starFill"]);

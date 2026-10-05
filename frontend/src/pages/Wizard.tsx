@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type {
-  Align2dResult, DatabaseStatus, DocumentItem, LicenseStatus, LigandRef, ModelResult, QualityReport, SearchResult, Sequence, Settings,
+  Align2dResult, DatabaseStatus, DocumentItem, LicenseStatus, LigandRef, ModelResult, QualityReport, RankBand, SearchResult, Sequence, Settings,
   TemplateAnalysis, TemplateItem, TemplateRef, UniProtEntry,
 } from "../api/types";
 import { AlignmentView } from "../components/AlignmentView";
@@ -15,32 +15,31 @@ import { SequencePicker } from "../components/Pickers";
 import { PlddtOption } from "../components/PlddtOption";
 import { LaunchButton, PreflightPanel, usePreflight } from "../components/Preflight";
 import { ReportButton } from "../components/ReportButton";
-import { Alert, Badge, BarCell, Card, Empty, Field, Grade, PageHead, Segmented, Spinner, Stat } from "../components/ui";
+import { Alert, Badge, BarCell, Card, DetailGrid, Disclosure, Empty, ExpandButton, Field, Grade, PageHead, Segmented, Spinner, Stat, useExpanded } from "../components/ui";
 import { Viewer3D, type Viewer3DHandle } from "../components/Viewer3D";
+import { HitPanel } from "../components/WorkflowParts";
 import { pirReference } from "../lib/alignConfidence";
 import { hasPredictedTemplate, plddtLabel, plddtTone, sequenceAccession } from "../lib/alphafold";
 import { compareTargets } from "../lib/compare";
 import { useProject, useToast } from "../lib/context";
 import { disorderSummary, featureTracks, lowComplexitySummary } from "../lib/disorder";
-import { fmtNum } from "../lib/format";
+import { fmtNum, gradeTone } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
 import { defaultTransfer } from "../lib/ligands";
 import { parsePir } from "../lib/pir";
-import { rankTone, rankTooltip } from "../lib/templateRank";
+import { RANK_BAND_TONE, rankTone, rankTooltip } from "../lib/templateRank";
 import {
   accessionFor, accessionValid, align2dRequest, applyUrl, cleanSequence, encodeWizardParams, engineChoices, fillFromJobs, hitRole, initialState,
   isChosen, MAX_TEMPLATES, missingModelJob, modelRequest, nextEngineHint, optionNotes, optionsIssues, preflightFor, preselect, rankedHits, reachable,
   reasonedOptions, restoreState, resultSummary, searchRequest, sequenceIssues, STEPS, templatesIssues, toggleTemplate, withAccession,
-  withAlignJob, withModelJob, withOptions, withPirDoc, withSearchJob, withTarget, withTemplates, type OptionContext, type WizardState,
+  withAlignJob, withModelJob, withOptions, withPirDoc, withSearchJob, withTarget, withTemplates, type OptionContext, type Refinement, type WizardState,
   type WizardStep,
 } from "../lib/wizard";
+import { ENGINE_LABEL, optionsSummary, REFINEMENT_LABEL, stepSummary, templateLabel } from "../lib/workflowView";
 
-const REFINEMENTS = [
-  { value: "very_fast", label: "Rapidissimo" },
-  { value: "fast", label: "Rapido" },
-  { value: "normal", label: "Standard" },
-  { value: "thorough", label: "Accurato" },
-] as const;
+const REFINEMENTS = (Object.keys(REFINEMENT_LABEL) as Refinement[]).map((value) => ({ value, label: REFINEMENT_LABEL[value] }));
+/** colonne della tabella dei template del passo 2 (riga di dettaglio) */
+const HIT_COLUMNS = 7;
 
 function readDraft(key: string): unknown {
   try {
@@ -59,23 +58,47 @@ function writeDraft(key: string, state: WizardState) {
   }
 }
 
-function Stepper({ step, max, onGo }: { step: WizardStep; max: WizardStep; onGo: (s: WizardStep) => void }) {
+/** Passi della procedura: numero (spunta se superato), titolo e scelta fatta; i passi non ancora raggiungibili danno il suggerimento. */
+function Stepper({ state, step, max, onGo }: { state: WizardState; step: WizardStep; max: WizardStep; onGo: (s: WizardStep) => void }) {
   return (
-    <div className="row" style={{ gap: 6, flexWrap: "wrap" }} role="navigation" aria-label="Passi della procedura">
+    <nav className="wf-steps" aria-label="Passi della procedura">
       {STEPS.map((s) => {
         const current = s.step === step;
         const open = s.step <= max;
+        const done = s.step < step && s.step < max;
+        const summary = open ? stepSummary(state, s.step) : null;
         return (
-          <button key={s.step} className={`btn btn-sm ${current ? "btn-primary" : "btn-ghost"}`} disabled={!open} aria-current={current ? "step" : undefined}
-            title={s.hint} onClick={() => onGo(s.step)} style={{ height: "auto", padding: "6px 10px" }}>
-            <span className={`grade ${s.step < step ? "grade-ok" : current ? "grade-info" : "grade-muted"}`} style={{ width: 22, height: 22, fontSize: 12 }}>
-              {s.step < step && s.step < max ? <Icon name="check" size={12} /> : s.step}
-            </span>
-            {s.title}
+          <button key={s.step} type="button" className={`wf-step${current ? " current" : ""}${done ? " done" : ""}`} disabled={!open}
+            aria-current={current ? "step" : undefined} title={summary ? `${s.hint}: ${summary}` : s.hint} onClick={() => onGo(s.step)}>
+            <span className="n">{done ? <Icon name="check" size={13} /> : s.step}</span>
+            <span className="t">{s.title}</span>
+            <span className="s">{summary ?? s.hint}</span>
           </button>
         );
       })}
-    </div>
+    </nav>
+  );
+}
+
+/** Tutte le scelte fatte finora, con i collegamenti ai job (ricerca, allineamento, modellazione). */
+function WizardSummary({ state, library }: { state: WizardState; library: TemplateItem[] | null }) {
+  const jobs = [
+    state.searchJob && <Link key="s" to={`/search?job=${state.searchJob}`}>ricerca</Link>,
+    state.alignJob && <Link key="a" to={`/pir?fromjob=${state.alignJob}`}>allineamento</Link>,
+    state.modelJob && <Link key="m" to={`/modeling?job=${state.modelJob}`}>modellazione</Link>,
+  ].filter(Boolean);
+  return (
+    <Disclosure title="Riepilogo delle scelte" extra={stepSummary(state, 1) ?? undefined}>
+      <DetailGrid items={[
+        { label: "Bersaglio", value: stepSummary(state, 1) ?? "—" },
+        { label: "Accessione UniProt", value: state.accession || "—" },
+        { label: "Motore di ricerca", value: ENGINE_LABEL[state.engine] },
+        { label: "Template", value: stepSummary(state, 2) ?? "—" },
+        { label: "Allineamento", value: stepSummary(state, 3) ?? "—" },
+        { label: "Opzioni", value: optionsSummary(state.options, hasPredictedTemplate(state.templates, library)) },
+        { label: "Job", value: jobs.length ? jobs.map((j, i) => <Fragment key={i}>{i > 0 && " · "}{j}</Fragment>) : "—" },
+      ]} />
+    </Disclosure>
   );
 }
 
@@ -84,6 +107,8 @@ export default function Wizard() {
   const toast = useToast();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
+  // libreria dei template: dice quali sono predetti (ritaglio pLDDT) nel riepilogo e nelle opzioni
+  const { data: library } = useAsync<TemplateItem[]>(() => api.templates(), []);
   const draftKey = `bioloom.wizard.${projectId ?? "-"}`;
   const [state, setState] = useState<WizardState>(() => restoreState(params, readDraft(draftKey)));
   const stateRef = useRef(state);
@@ -169,17 +194,18 @@ export default function Wizard() {
         lead="Dalla sequenza al modello validato in sei passi: sequenza, ricerca dei template, allineamento, opzioni, avvio e risultati. Prima di ogni calcolo BioLoom controlla licenze, template, tempi e spazio. Lo stato resta nell'indirizzo della pagina e nel browser: si può ricaricare, tornare indietro o riprendere più tardi."
         actions={<button className="btn" onClick={reset}><Icon name="refresh" size={14} /> Ricomincia</button>}
       />
-      <Stepper step={step} max={max} onGo={(s) => go(s)} />
-      {!loaded && <p className="small muted row" style={{ gap: 6 }}><Spinner /> Ripresa della procedura…</p>}
+      <Stepper state={state} step={step} max={max} onGo={(s) => go(s)} />
+      {step > 1 && <WizardSummary state={state} library={library} />}
+      {!loaded && <p className="small text-2 row" style={{ gap: 6 }}><Spinner /> Ripresa della procedura…</p>}
       {step === 1 && <SequenceStep state={state} update={update} onNext={() => go(2)} />}
       {step === 2 && <TemplateStep state={state} update={update} search={search} projectId={projectId} onNext={() => go(3)} />}
       {step === 3 && <AlignmentStep state={state} update={update} align={align} projectId={projectId} onNext={() => go(4)} />}
       {step === 4 && (
-        <OptionsStep state={state} update={update} align={align.job?.id === state.alignJob ? align.job?.result ?? null : null} projectId={projectId}
+        <OptionsStep state={state} update={update} align={align.job?.id === state.alignJob ? align.job?.result ?? null : null} projectId={projectId} library={library}
           onLaunched={(id) => go(5, (s) => withModelJob(s, id))} />
       )}
       {step === 5 && (
-        <Card title="5. Costruzione dei modelli" sub="avanzamento in tempo reale; il calcolo prosegue anche chiudendo la pagina">
+        <Card title="5. Costruzione dei modelli" icon="activity" sub="avanzamento in tempo reale; il calcolo prosegue anche chiudendo la pagina">
           <div className="stack">
             {model.summary ? <JobPanel summary={model.summary} log={model.log} onCancel={model.cancel} defaultLogOpen />
               : modelMissing ? (
@@ -190,7 +216,7 @@ export default function Wizard() {
                     <button className="btn btn-sm right" onClick={() => go(4, (s) => withModelJob(s, null))}><Icon name="chevron" size={13} /> Torna alle opzioni</button>
                   </div>
                 </>
-              ) : <Spinner />}
+              ) : <div className="empty"><Spinner label="Lettura della modellazione" /></div>}
             {done.model && (
               <div className="row">
                 <span className="small text-2">Modellazione completata.</span>
@@ -251,7 +277,7 @@ function SequenceStep({ state, update, onNext }: { state: WizardState; update: U
   const dis = preview.check?.disorder;
   return (
     <div className="split">
-      <Card title="1. Sequenza bersaglio">
+      <Card title="1. Sequenza bersaglio" icon="dna">
         <div className="stack">
           <SequencePicker
             value={state.target}
@@ -279,19 +305,28 @@ function SequenceStep({ state, update, onNext }: { state: WizardState; update: U
           </div>
         </div>
       </Card>
-      <Card title="Anteprima: disordine, bassa complessità e domini" sub="dove il modello per omologia sarà poco affidabile">
-        {!sequence || issues.length ? <Empty icon="dna" title="Inserisci una sequenza proteica" />
+      <Card title="Anteprima: disordine, bassa complessità e domini" icon="activity" sub="dove il modello per omologia sarà poco affidabile">
+        {!sequence || issues.length ? <Empty icon="dna" title="Inserisci una sequenza proteica">L'anteprima mostra regioni disordinate, a bassa complessità e domini del bersaglio.</Empty>
           : preview.error ? <Alert tone="warn">Anteprima non disponibile: {preview.error}</Alert>
-          : !dis || !preview.check ? <Spinner />
+          : !dis || !preview.check ? <p className="small text-2 row" style={{ gap: 6 }}><Spinner /> Analisi della sequenza…</p>
           : (
-            <div className="stack-sm">
-              <FeatureMap length={dis.length} tracks={featureTracks({ disorder: dis, domains: preview.check.domains_info?.available ? preview.check.domains : null })} />
+            <div className="stack">
+              <FeatureMap
+                length={dis.length}
+                tracks={featureTracks({ disorder: dis, domains: preview.check.domains_info?.available ? preview.check.domains : null })}
+                title="Disordine e domini"
+                titleHidden
+                subtitle={`${state.target.name || "bersaglio"} · ${sequence.length} residui · ${dis.method}`}
+                filename={`${state.target.name || "bersaglio"}_disordine_domini`}
+              />
               <p className="small text-2">{disorderSummary(dis)} {lowComplexitySummary(dis)}</p>
-              {preview.check.domains_info?.note && <p className="tiny muted">{preview.check.domains_info.note}</p>}
-              <p className="tiny muted">
-                {sequence.length} residui. Le regioni disordinate lunghe e i domini senza template di fronte saranno costruiti senza vincoli: i controlli
-                del passo 4 li confrontano con i template scelti. {dis.method}, dalla sola sequenza (indicativo).
-              </p>
+              {preview.check.domains_info?.note && <p className="small text-2">{preview.check.domains_info.note}</p>}
+              <Disclosure title="Come leggere l'anteprima">
+                <p>
+                  {sequence.length} residui. Le regioni disordinate lunghe e i domini senza template di fronte saranno costruiti senza vincoli: i controlli
+                  del passo 4 li confrontano con i template scelti. {dis.method}, dalla sola sequenza (indicativo).
+                </p>
+              </Disclosure>
             </div>
           )}
       </Card>
@@ -304,6 +339,7 @@ function TemplateStep({ state, update, search, projectId, onNext }: { state: Wiz
   const { data: databases, loading: dbLoading } = useAsync<DatabaseStatus | null>(() => api.databases().catch(() => null), []);
   const { data: settings, loading: settingsLoading } = useAsync<Settings | null>(() => api.settings().catch(() => null), []);
   const [all, setAll] = useState(false);
+  const open = useExpanded<string>();
   const choices = engineChoices({ databases, defaultEngine: settings?.default_search_engine, accession: state.accession });
   // motore consigliato come scelta iniziale, finché l'utente non ha cercato
   const suggested = useRef(false);
@@ -328,17 +364,19 @@ function TemplateStep({ state, update, search, projectId, onNext }: { state: Wiz
   };
   return (
     <div className="split">
-      <Card title="2. Ricerca dei template">
+      <Card title="2. Ricerca dei template" icon="search">
         <div className="stack">
           <p className="small text-2"><b>Consigliato.</b> {choices.reason}</p>
-          <div className="stack-sm" role="radiogroup" aria-label="Motore di ricerca">
+          <div className="wf-engines" role="radiogroup" aria-label="Motore di ricerca">
             {choices.choices.map((c) => (
-              <label key={c.engine} className="check" style={{ alignItems: "flex-start", opacity: c.available ? 1 : 0.6 }}>
+              <label key={c.engine} className={`wf-engine${state.engine === c.engine ? " on" : ""}${c.available ? "" : " off"}`}>
                 <input type="radio" name="engine" disabled={!c.available} checked={state.engine === c.engine} onChange={() => update((s) => ({ ...s, engine: c.engine }))} />
-                <span>
-                  <b>{c.label}</b> {c.engine === choices.recommended && <Badge tone="ok">consigliato</Badge>}
-                  <span className="tiny muted" style={{ display: "block" }}>{c.note}</span>
+                <span className="row" style={{ gap: 6 }}>
+                  <b>{c.label}</b>
+                  {c.engine === choices.recommended && <Badge tone="ok">consigliato</Badge>}
+                  {!c.available && <Badge tone="warn">non pronto</Badge>}
                 </span>
+                <span className="note">{c.note}</span>
               </label>
             ))}
           </div>
@@ -347,39 +385,60 @@ function TemplateStep({ state, update, search, projectId, onNext }: { state: Wiz
           {state.searchJob && search.summary && <JobPanel summary={search.summary} log={search.log} onCancel={search.cancel} compact />}
         </div>
       </Card>
-      <Card title={result ? `${result.hits.length} template trovati` : "Template"} sub={result ? `${result.engine_label} · scelti ${state.templates.length} (al massimo ${MAX_TEMPLATES})` : undefined}>
-        {!result ? <Empty icon="search" title={running ? "Ricerca in corso…" : "Avvia la ricerca per vedere i template"} /> : (
+      <Card title={result ? `${result.hits.length} template trovati` : "Template"} icon="list"
+        sub={result ? `${result.engine_label} · scelti ${state.templates.length} (al massimo ${MAX_TEMPLATES})` : undefined}>
+        {!result ? (
+          <Empty icon="search" title={running ? "Ricerca in corso…" : "Avvia la ricerca per vedere i template"}>
+            {running ? "I risultati compaiono qui, ordinati per punteggio, con i consigliati già scelti." : "Scegli il motore a sinistra: i consigliati vengono preselezionati, la scelta resta tua."}
+          </Empty>
+        ) : (
           <div className="stack-sm">
             {hint && <Alert tone="warn">{hint}</Alert>}
             {!!result.notes?.length && result.notes.map((n) => <Alert key={n} tone="info">{n}</Alert>)}
             {!!result.suggested?.templates.length && (
-              <p className="tiny text-2">
-                Preselezionati i consigliati (copertura complessiva {fmtNum(result.suggested.coverage, 1)}%):{" "}
-                {result.suggested.templates.map((t) => `${t.template_id} (${t.role}): ${t.reason}`).join(" · ")}
-              </p>
+              <div className="wf-suggested small">
+                <span><b>Preselezionati i consigliati</b> · copertura complessiva {fmtNum(result.suggested.coverage, 1)}%</span>
+                <ul>
+                  {result.suggested.templates.map((t) => <li key={t.template_id}><b>{t.template_id}</b> ({t.role}): {t.reason}</li>)}
+                </ul>
+              </div>
             )}
             {!!hits.length && (
               <div className="table-wrap">
                 <table className="table">
-                  <thead><tr><th /><th>Template</th><th className="num">Punteggio</th><th className="num">Identità</th><th className="num">Copertura</th><th className="num">Ris. (Å)</th></tr></thead>
+                  <thead>
+                    <tr>
+                      <th style={{ width: 34 }} aria-label="Dettagli" /><th style={{ width: 30 }} aria-label="Scelto" /><th>Template</th>
+                      <th className="num">Punteggio</th><th className="num">Identità</th><th className="num">Copertura</th><th className="num">Ris. (Å)</th>
+                    </tr>
+                  </thead>
                   <tbody>
                     {shown.map((h) => {
                       const role = hitRole(result, h);
                       const chosen = isChosen(state.templates, h);
+                      const isOpen = open.has(h.template_id);
                       return (
-                        <tr key={h.template_id} className={`clickable ${chosen ? "selected" : ""}`} onClick={() => update((s) => withTemplates(s, toggleTemplate(s.templates, h)))}>
-                          <td><input type="checkbox" readOnly checked={chosen} aria-label={`Usa ${h.template_id}`} /></td>
-                          <td className="nowrap">
-                            <b>{h.template_id}</b>{" "}
-                            {role && <Badge tone={role === "principale" ? "ok" : "info"}>{role === "principale" ? "consigliato" : "complementare"}</Badge>}
-                            {h.predicted && <> <Badge tone="warn" title="Modello di AlphaFold DB, non struttura sperimentale">predetto</Badge> <Badge tone={plddtTone(h.plddt)}>{plddtLabel(h.plddt)}</Badge></>}
-                            <div className="tiny muted ellipsis" style={{ maxWidth: 260 }}>{h.title || h.description}</div>
-                          </td>
-                          <td className="num" title={rankTooltip(h)}>{h.rank_score !== undefined ? <Badge tone={rankTone(h.rank_score)}>{fmtNum(h.rank_score, 1)}</Badge> : "—"}{h.rank_twilight && <div className="tiny" style={{ color: "var(--warn)" }}>crepuscolare</div>}</td>
-                          <td className="num"><BarCell value={h.identity} /></td>
-                          <td className="num"><BarCell value={h.coverage} /></td>
-                          <td className="num">{h.resolution ? fmtNum(h.resolution, 2) : "—"}</td>
-                        </tr>
+                        <Fragment key={h.template_id}>
+                          <tr className={`clickable ${chosen ? "selected" : ""}${isOpen ? " row-open" : ""}`} onClick={() => update((s) => withTemplates(s, toggleTemplate(s.templates, h)))}>
+                            <td><ExpandButton open={isOpen} onClick={() => open.toggle(h.template_id)} label={`dettagli di ${h.template_id}`} /></td>
+                            <td><input type="checkbox" readOnly checked={chosen} aria-label={`Usa ${h.template_id}`} /></td>
+                            <td className="nowrap">
+                              <b>{h.template_id}</b>{" "}
+                              {role && <Badge tone={role === "principale" ? "ok" : "info"}>{role === "principale" ? "consigliato" : "complementare"}</Badge>}
+                              {h.predicted && <> <Badge tone="warn" title="Modello di AlphaFold DB, non struttura sperimentale">predetto</Badge> <Badge tone={plddtTone(h.plddt)}>{plddtLabel(h.plddt)}</Badge></>}
+                              <div className="tiny text-2 ellipsis" style={{ maxWidth: 260 }} title={h.title || h.description}>{h.title || h.description}</div>
+                            </td>
+                            <td className="num" title={rankTooltip(h)}>{h.rank_score !== undefined ? <Badge tone={rankTone(h.rank_score)}>{fmtNum(h.rank_score, 1)}</Badge> : "—"}{h.rank_twilight && <div className="tiny" style={{ color: "var(--warn)" }}>crepuscolare</div>}</td>
+                            <td className="num"><BarCell value={h.identity} /></td>
+                            <td className="num"><BarCell value={h.coverage} /></td>
+                            <td className="num">{h.resolution ? fmtNum(h.resolution, 2) : "—"}</td>
+                          </tr>
+                          {isOpen && (
+                            <tr className="row-detail">
+                              <td colSpan={HIT_COLUMNS}><HitPanel hit={h} queryLength={result.query_length} /></td>
+                            </tr>
+                          )}
+                        </Fragment>
                       );
                     })}
                   </tbody>
@@ -387,11 +446,11 @@ function TemplateStep({ state, update, search, projectId, onNext }: { state: Wiz
               </div>
             )}
             {hits.length > 20 && <button className="btn btn-ghost btn-sm" style={{ justifySelf: "start" }} onClick={() => setAll(!all)}>{all ? "Mostra i primi 20" : `Mostra tutti (${hits.length})`}</button>}
-            <p className="tiny muted">Ordine per punteggio 0–100 (identità rispetto alla curva di Rost, copertura, risoluzione…): clic su una riga per sceglierla. Una catena per voce PDB.</p>
+            <p className="small text-2">Ordine per punteggio 0–100 (identità rispetto alla curva di Rost, copertura, risoluzione…): clic su una riga per sceglierla, sulla freccia per tutti i dati, le componenti del punteggio e l'allineamento. Una catena per voce PDB.</p>
           </div>
         )}
         <div className="row" style={{ marginTop: 10 }}>
-          {state.templates.length > 0 && issues.length === 0 && <span className="small text-2">Scelti: {state.templates.map((t) => `${t.id}:${t.chains.join("")}`).join(", ")}</span>}
+          {state.templates.length > 0 && issues.length === 0 && <span className="small text-2">Scelti: {state.templates.map(templateLabel).join(", ")}</span>}
           <button className="btn btn-primary right" disabled={!!issues.length} onClick={onNext}>Avanti: allineamento <Icon name="chevron" size={13} /></button>
         </div>
       </Card>
@@ -413,13 +472,13 @@ function AlignmentStep({ state, update, align, projectId, onNext }: { state: Wiz
   const ready = !!result || !!state.pirDoc;
   return (
     <div className="stack">
-      <Card title="3. Allineamento del bersaglio sui template" sub={`${state.templates.map((t) => `${t.id}:${t.chains.join("")}`).join(", ")} · MODELLER align2d (salign con più template)`}>
+      <Card title="3. Allineamento del bersaglio sui template" icon="wand" sub={`${state.templates.map(templateLabel).join(", ")} · MODELLER align2d (salign con più template)`}>
         <div className="stack">
-          <p className="small text-2">
-            MODELLER allinea la sequenza sulla struttura dei template (align2d, con penalità per i gap nelle eliche e nei filamenti). La modalità
-            Confidenza colora l'identità locale e segna la zona crepuscolare e i residui senza template: correggi l'allineamento nell'Editor PIR
-            dove serve (loop, sito attivo) e salvalo come documento del progetto per usarlo qui.
-          </p>
+          <p className="small text-2">MODELLER allinea la sequenza sulla struttura dei template (align2d, con penalità per i gap nelle eliche e nei filamenti).</p>
+          <Disclosure title="Controllare e correggere l'allineamento">
+            La modalità Confidenza colora l'identità locale e segna la zona crepuscolare e i residui senza template: correggi l'allineamento
+            nell'Editor PIR dove serve (loop, sito attivo) e salvalo come documento del progetto per usarlo qui.
+          </Disclosure>
           <PreflightPanel state={preflight} />
           <div className="row">
             <LaunchButton preflight={preflight} disabled={running} onLaunch={async () => {
@@ -437,12 +496,12 @@ function AlignmentStep({ state, update, align, projectId, onNext }: { state: Wiz
           {state.alignJob && align.summary && !state.pirDoc && <JobPanel summary={align.summary} log={align.log} onCancel={align.cancel} compact />}
           {!state.pirDoc && result?.warnings?.map((w) => <Alert key={w} tone="warn">{w}</Alert>)}
           {state.pirDoc && doc && (((doc.meta?.templates as TemplateRef[] | undefined) ?? []).length
-            ? <p className="tiny muted">Template del documento: {((doc.meta.templates as TemplateRef[]) ?? []).map((t) => `${t.id}:${t.chains.join("")}`).join(", ")} (usati per la modellazione).</p>
-            : <p className="tiny muted">Il documento non indica i template: si usano quelli scelti al passo 2, nello stesso ordine.</p>)}
+            ? <p className="small text-2">Template del documento: {((doc.meta.templates as TemplateRef[]) ?? []).map(templateLabel).join(", ")} (usati per la modellazione).</p>
+            : <p className="small text-2">Il documento non indica i template: si usano quelli scelti al passo 2, nello stesso ordine.</p>)}
         </div>
       </Card>
       {entries.length > 1 && (
-        <Card title={state.pirDoc ? `Documento ${doc?.name ?? ""}` : "Allineamento di MODELLER"}>
+        <Card title={state.pirDoc ? `Documento ${doc?.name ?? ""}` : "Allineamento di MODELLER"} icon="align" sub={`${entries.length} sequenze · ${entries[0].sequence.length} colonne`}>
           <AlignmentView ids={entries.map((e) => e.code)} aligned={entries.map((e) => e.sequence)} reference={pirReference(entries.map((e) => e.kind))} initialMode="confidence" />
         </Card>
       )}
@@ -454,9 +513,8 @@ function AlignmentStep({ state, update, align, projectId, onNext }: { state: Wiz
 }
 
 // ---------------------------------------------------------------------------------- 4. opzioni
-function OptionsStep({ state, update, align, projectId, onLaunched }: { state: WizardState; update: Update; align: Align2dResult | null; projectId: string | null; onLaunched: (id: string) => void }) {
+function OptionsStep({ state, update, align, projectId, library, onLaunched }: { state: WizardState; update: Update; align: Align2dResult | null; projectId: string | null; library: TemplateItem[] | null; onLaunched: (id: string) => void }) {
   const { data: doc } = useAsync<DocumentItem | null>(() => (projectId && state.pirDoc ? api.document(projectId, state.pirDoc) : Promise.resolve(null)), [projectId, state.pirDoc]);
-  const { data: library } = useAsync<TemplateItem[]>(() => api.templates(), []);
   const { data: licenses, loading: licensesLoading } = useAsync<LicenseStatus | null>(() => api.licenses().catch(() => null), []);
   const docTemplates = state.pirDoc ? ((doc?.meta?.templates as TemplateRef[] | undefined) ?? []) : [];
   const templates = docTemplates.length ? docTemplates : state.templates;
@@ -495,13 +553,13 @@ function OptionsStep({ state, update, align, projectId, onLaunched }: { state: W
   const set = (patch: Partial<typeof o>) => update((s) => withOptions(s, patch));
   return (
     <div className="split">
-      <Card title="4. Opzioni di modellazione" sub="valori predefiniti ragionati: ogni scelta ha la sua spiegazione">
+      <Card title="4. Opzioni di modellazione" icon="settings" sub="valori predefiniti ragionati: ogni scelta ha la sua spiegazione">
         <div className="stack">
           <Field label="Numero di modelli" hint={notes.models}>
             <input className="input" type="number" min={1} max={100} value={o.models} onChange={(e) => set({ models: Number(e.target.value) })} />
           </Field>
           <Field label="Raffinamento" hint={notes.refinement}>
-            <Segmented value={o.refinement} onChange={(v) => set({ refinement: v })} options={REFINEMENTS.map((r) => ({ value: r.value, label: r.label }))} />
+            <Segmented label="Raffinamento" value={o.refinement} onChange={(v) => set({ refinement: v })} options={REFINEMENTS.map((r) => ({ value: r.value, label: r.label }))} />
           </Field>
           <Field label="Analisi di qualità" hint={notes.quality}>
             <select className="input" value={o.quality} onChange={(e) => set({ quality: e.target.value as typeof o.quality })}>
@@ -518,27 +576,40 @@ function OptionsStep({ state, update, align, projectId, onLaunched }: { state: W
                 setLigandRefs(refs);
                 setLigandsReady(ready);
               }} />
-            <span className="tiny muted">{notes.ligands}</span>
+            <span className="small text-2">{notes.ligands}</span>
           </div>
           {ctx.predicted && (
             <div className="stack-sm">
               <PlddtOption enabled={o.plddtTrim} threshold={o.plddtMin} onEnabled={(v) => set({ plddtTrim: v })} onThreshold={(v) => set({ plddtMin: v })} />
-              <span className="tiny muted">{notes.plddt}</span>
+              <span className="small text-2">{notes.plddt}</span>
             </div>
           )}
           {issues.map((m) => <Alert key={m} tone="err">{m}</Alert>)}
           {!alignment && <Alert tone="warn">Allineamento non ancora disponibile: torna al passo 3.</Alert>}
         </div>
       </Card>
-      <Card title="Controlli e avvio">
+      <Card title="Controlli e avvio" icon="shield">
         <div className="stack">
+          <Disclosure title="Riepilogo della richiesta" extra={optionsSummary(o, ctx.predicted)}>
+            <DetailGrid items={[
+              { label: "Bersaglio", value: stepSummary(state, 1) ?? "—" },
+              { label: "Allineamento", value: state.pirDoc ? `documento ${doc?.name ?? ""}` : "MODELLER align2d (passo 3)" },
+              { label: "Opzioni", value: optionsSummary(o, ctx.predicted) },
+              { label: "Ligandi", value: o.ligands ? `${ligandRefs.length} ${ligandRefs.length === 1 ? "gruppo" : "gruppi"} da trasferire` : "non trasferiti" },
+              ...templates.map((t) => {
+                const a = analyses?.[t.id];
+                const detail = a ? [a.header.method || a.meta.method, a.header.resolution ? `${fmtNum(a.header.resolution, 2)} Å` : a.meta.predicted ? plddtLabel(a.meta.plddt_mean) : null].filter(Boolean).join(" · ") : "analisi in corso…";
+                return { label: `Template ${templateLabel(t)}`, value: detail || "—" };
+              }),
+            ]} />
+          </Disclosure>
           <PreflightPanel state={preflight} />
           <LaunchButton preflight={preflight} disabled={!request || !!issues.length || (o.ligands && !ligandsReady)} onLaunch={async () => {
             if (!request) return;
             const j = await api.model(request);
             onLaunched(j.id);
           }}>Avvia modellazione</LaunchButton>
-          {o.ligands && !ligandsReady && <span className="tiny muted">Lettura dei ligandi dei template in corso…</span>}
+          {o.ligands && !ligandsReady && <span className="small text-2">Lettura dei ligandi dei template in corso…</span>}
         </div>
       </Card>
     </div>
@@ -552,18 +623,24 @@ function ResultsStep({ jobId, result, onNew, navigate }: { jobId: string; result
   const { data: report } = useAsync<QualityReport | null>(() => (best ? api.modelQuality(jobId, best.file).catch(() => null) : Promise.resolve(null)), [jobId, best?.file]);
   const summary = resultSummary(result, report);
   const compare = best ? compareTargets(jobId, best.file, result.models, result.templates).find((t) => t.label.startsWith("Template")) : undefined;
-  if (!summary || !best) return <Card><Empty icon="cube" title="Nessun modello valido nel risultato" /></Card>;
+  if (!summary || !best) return <Card><Empty icon="cube" title="Nessun modello valido nel risultato">Controlla il log del passo 5: la modellazione non ha prodotto modelli utilizzabili.</Empty></Card>;
+  const gTone = gradeTone(summary.grade);
+  const models = [...result.models].sort((a, b) => Number(!!a.failure) - Number(!!b.failure) || (a.dope ?? Infinity) - (b.dope ?? Infinity));
   return (
     <div className="stack">
       {summary.warnings.map((w) => <Alert key={w} tone="warn">{w}</Alert>)}
       <div className="grid grid-4">
         <Stat label="Modello migliore (DOPE minimo)" value={<span className="row" style={{ gap: 8 }}><Grade grade={summary.grade} large /> <span className="small">{summary.file}</span></span>}
-          note={summary.gradeScore !== null ? `voto ${fmtNum(summary.gradeScore, 1)}/100` : "analisi di qualità non calcolata"} />
-        <Stat label="Consenso fra i metodi" value={summary.consensus !== null ? <>{fmtNum(summary.consensus, 1)}<small>/100</small></> : "—"} note={summary.consensusBand ? `fascia ${summary.consensusBand}` : "senza analisi di qualità"} />
-        <Stat label="DOPE" value={fmtNum(summary.dope, 0)} note={`zDOPE ${fmtNum(summary.zdope, 2)} · GA341 ${fmtNum(summary.ga341, 2)}`} />
+          note={summary.gradeScore !== null ? `voto ${fmtNum(summary.gradeScore, 1)}/100` : "analisi di qualità non calcolata"} tone={gTone === "muted" ? undefined : gTone}
+          detail="Voto BioLoom sul modello con il DOPE più basso: 100 meno le penalità per outlier di Ramachandran, contatti sterici e DOPE normalizzato; A ≥ 85, B ≥ 70, C ≥ 55, altrimenti D. Il dettaglio è nella pagina Qualità." />
+        <Stat label="Consenso fra i metodi" value={summary.consensus !== null ? <>{fmtNum(summary.consensus, 1)}<small>/100</small></> : "—"} note={summary.consensusBand ? `fascia ${summary.consensusBand}` : "senza analisi di qualità"}
+          tone={summary.consensusBand ? RANK_BAND_TONE[summary.consensusBand as RankBand] : undefined}
+          detail="Media pesata dei metodi di validazione disponibili, ciascuno riportato su una scala 0–100: fasce buona ≥ 70, intermedia 40–70, scarsa < 40." />
+        <Stat label="DOPE" value={fmtNum(summary.dope, 0)} note={`zDOPE ${fmtNum(summary.zdope, 2)} · GA341 ${fmtNum(summary.ga341, 2)}`}
+          detail="Energia statistica di MODELLER (più bassa è meglio) per scegliere fra i modelli dello stesso allineamento; lo zDOPE la normalizza (sotto −1 simile alle strutture native), il GA341 va da 0 a 1 (vicino a 1 = ripiegamento affidabile)." />
         <Stat label="Modelli costruiti" value={summary.models} note="il migliore ha il DOPE più basso" />
       </div>
-      <Card title="6. Risultati" right={
+      <Card title="6. Risultati" icon="cube" sub={`${summary.file} · modello migliore`} right={
         <>
           <button className="btn btn-sm btn-primary" onClick={() => navigate(`/quality?job=${jobId}&file=${encodeURIComponent(best.file)}`)}><Icon name="shield" size={13} /> Qualità</button>
           {compare && <button className="btn btn-sm" onClick={() => navigate(compare.href)} title={`Confronto strutturale con ${compare.label}`}><Icon name="compare" size={13} /> Confronta con il template</button>}
@@ -572,7 +649,33 @@ function ResultsStep({ jobId, result, onNew, navigate }: { jobId: string; result
           <button className="btn btn-sm btn-ghost" onClick={onNew}><Icon name="plus" size={13} /> Nuovo modello guidato</button>
         </>
       }>
-        <Viewer3D url={api.jobFileUrl(jobId, best.file)} handle={viewer} />
+        <div className="stack">
+          <Viewer3D url={api.jobFileUrl(jobId, best.file)} handle={viewer} />
+          <Disclosure title="Tutti i modelli costruiti" extra={`${result.models.length} · per DOPE`}>
+            <div className="table-wrap" style={{ maxHeight: 360, overflowY: "auto" }}>
+              <table className="table">
+                <thead>
+                  <tr><th>Modello</th><th className="num">DOPE</th><th className="num">zDOPE</th><th className="num">GA341</th><th className="num">molpdf</th><th>Voto</th></tr>
+                </thead>
+                <tbody>
+                  {models.map((m) => (
+                    <tr key={m.file} className={m.best ? "selected" : undefined}>
+                      <td className="nowrap">
+                        <span className="mono">{m.file}</span> {m.best && <Badge tone="ok">migliore</Badge>}
+                        {m.failure && <div className="small" style={{ color: "var(--err)" }}>{m.failure}</div>}
+                      </td>
+                      <td className="num">{fmtNum(m.dope, 0)}</td>
+                      <td className="num">{fmtNum(m.zdope, 2)}</td>
+                      <td className="num">{fmtNum(m.ga341 ?? null, 2)}</td>
+                      <td className="num">{fmtNum(m.molpdf, 0)}</td>
+                      <td>{m.quality ? <Grade grade={m.quality.grade} /> : <span className="small text-2">—</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Disclosure>
+        </div>
       </Card>
     </div>
   );

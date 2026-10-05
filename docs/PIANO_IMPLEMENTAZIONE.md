@@ -347,7 +347,7 @@ Limiti noti dichiarati nel codice e in [ARCHITETTURA.md](ARCHITETTURA.md), da cu
   UniRef30_2020_06): ricerca dei database, vista, copia locale e avvio di HHblits sì.
 - Sui Mac Apple Silicon i container girano in emulazione x86 (MODELLER, ProSA e QMEAN esistono solo per x86).
 - Il frontend si controlla solo con `tsc --noEmit` e vitest: ESLint non è installato.
-- I valori della v4 per 3IU0 e 9QB7 nel confronto con la v3 non sono ripetuti dai test (i file non sono in `tests/data`).
+- I valori per 3IU0 e 9QB7 non sono ripetuti dai test (i file non sono in `tests/data`).
 
 **Calcolo e prestazioni**
 
@@ -373,7 +373,7 @@ Limiti noti dichiarati nel codice e in [ARCHITETTURA.md](ARCHITETTURA.md), da cu
   calcolano nella modalità Complesso né per i PIR a più catene; DockQ misura la fedeltà all'interfaccia del template, non
   la correttezza dell'interfaccia del bersaglio.
 - AlphaFold DB: proteine oltre circa 2700 residui senza modello, isoforme non supportate.
-- I vincoli di interfaccia di PDBePISA della v3 non sono stati portati (servizio EBI instabile).
+- Nessun vincolo di interfaccia da PDBePISA (servizio EBI instabile).
 
 **Qualità e analisi**
 

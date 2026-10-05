@@ -2,11 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type {
-  ConsensusBand, ConsensusMethod, ConsensusRegion, ConsensusResult, DatabaseStatus, Job, JobSummary, LigandGroupCheck, ModelResult, QmeanResult, QualityReport, ResidueRow, Settings,
-  StructureSource,
+  ConsensusRegion, ConsensusResult, DatabaseStatus, Job, LigandGroupCheck, ModelResult, QmeanResult, QualityReport, Settings, StructureSource,
 } from "../api/types";
 import { LigandsPanel } from "../components/LigandsPanel";
-import { ConsensusTracks, RamachandranPlot, ResidueProfile, ResidueStrip, StackBar } from "../components/charts";
+import { ResidueProfile, ResidueStrip } from "../components/charts";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { StructurePicker } from "../components/Pickers";
@@ -15,24 +14,30 @@ import { AnalysisJobCard, StructuralAnalysisPanel } from "../components/Structur
 import { ElectrostaticsPanel, PocketsPanel, ToolJobCard } from "../components/StructureTools";
 import { MutagenesisPanel } from "../components/Mutagenesis";
 import { PredictionJobCard, PredictionPanel } from "../components/Predictor";
-import { consensusPredictorNote } from "../lib/predict";
+import { ClashTable } from "../components/quality/ClashTable";
+import { CompareAnalyses } from "../components/quality/CompareAnalyses";
+import { ConsensusPanel } from "../components/quality/ConsensusPanel";
+import { RamaTab } from "../components/quality/RamaTab";
+import { ExternalValidation, GradeBreakdown, SecondaryStructureCard, StructureMeta, SummaryStats } from "../components/quality/ReportSummary";
+import { ResidueDetail, ResidueTable } from "../components/quality/ResidueTable";
 import { Viewer3D, type Viewer3DHandle } from "../components/Viewer3D";
-import { Alert, Badge, BarCell, Card, DropZone, Empty, Grade, PageHead, Stat, Tabs } from "../components/ui";
+import { Alert, Card, DetailGrid, DropZone, Empty, Grade, PageHead, Stat, Tabs } from "../components/ui";
 import { compareLink } from "../lib/compare";
 import { useProject, useToast } from "../lib/context";
-import { fmtNum, relTime } from "../lib/format";
+import { fmtNum } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
 import type { AnalysisPanelMemory } from "../lib/interactions";
 import type { CoordinationLine } from "../lib/ligands";
 import {
-  alignedPerResidue, clashHighlight, type Highlight, isProblemResidue, ligandHighlight, problemResidues, residuesHighlight, shownReportSource,
+  alignedPerResidue, clashHighlight, type Highlight, ligandHighlight, problemResidues, residuesHighlight, shownReportSource,
 } from "../lib/qualityReport";
+import { andList, GRADE_RULE, missingAnalyses, qmeanTone } from "../lib/qualityView";
 import {
-  colorOptions, isPlddt, QMEAN_LOCAL_THRESHOLD, regionResidues, residueColoring, resiNumber, SIGNAL_LABEL, type ColorBy, type ColorOption, type ResidueRef,
+  colorOptions, isPlddt, QMEAN_LOCAL_THRESHOLD, regionResidues, residueColoring, resiNumber, type ColorBy, type ColorOption, type ResidueRef,
 } from "../lib/residueColoring";
 import { qmeanRoute } from "../lib/status";
 import type { ToolJobMemory } from "../lib/toolJobs";
-import { TABLE_ROW_HEIGHT, useVirtualRows } from "../lib/virtual";
+import "../styles/quality.css";
 
 type Tab = "rama" | "profiles" | "clashes" | "residues" | "3d" | "interactions" | "pockets" | "electrostatics"
   | "mutations"; // mutagenesi e scansione di alanina (F9.2)
@@ -58,7 +63,7 @@ function QmeanPanel({ source, onDone }: { source: StructureSource; onDone?: (job
     if (jobId && done) onDone?.(jobId); // il consenso si ricalcola includendo QMEAN
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId, done]);
-  if (!settings || !dbs) return null;
+  if (!settings || !dbs) return <p className="small text-2">Controllo della disponibilità di QMEAN…</p>;
   const useFallback = fallback ?? settings.qmean_fallback_remote;
   const route = qmeanRoute({ ...settings, qmean_fallback_remote: useFallback }, dbs.qmean);
   const r = job?.status === "completed" ? job.result : null;
@@ -70,8 +75,8 @@ function QmeanPanel({ source, onDone }: { source: StructureSource; onDone?: (job
   );
   if (!route.source && !jobId) {
     return (
-      <div className="stack-sm" style={{ maxWidth: 360 }}>
-        <p className="small muted">{route.hint}</p>
+      <div className="stack-sm">
+        <p className="small text-2">{route.hint}</p>
         {fallbackToggle}
       </div>
     );
@@ -79,14 +84,17 @@ function QmeanPanel({ source, onDone }: { source: StructureSource; onDone?: (job
   const run = () =>
     api.qmean({ project_id: projectId ?? undefined, source, fallback: settings.qmean_mode === "local" ? useFallback : undefined })
       .then((j) => setJobId(j.id)).catch(toast.error);
+  const components = r ? Object.entries(r.components ?? {}) : [];
   return (
-    <div className="stack-sm" style={{ maxWidth: 420 }}>
+    <div className="stack-sm">
       {!jobId && (
         <>
-          <button className="btn btn-sm" onClick={run}>
-            <Icon name={route.source === "local" ? "play" : "external"} size={13} /> {route.label}
-          </button>
-          <span className="tiny muted">{route.hint}</span>
+          <div className="row">
+            <button type="button" className="btn btn-sm" onClick={run}>
+              <Icon name={route.source === "local" ? "play" : "external"} size={13} /> {route.label}
+            </button>
+            <span className="small text-2">{route.hint}</span>
+          </div>
           {fallbackToggle}
         </>
       )}
@@ -94,9 +102,23 @@ function QmeanPanel({ source, onDone }: { source: StructureSource; onDone?: (job
       {r?.fallback && <Alert tone="warn">QMEAN locale non riuscito ({r.fallback.reason}): calcolato su SWISS-MODEL.</Alert>}
       {r && (
         <div className="grid grid-3">
-          <Stat label="QMEAN4 Z-score" value={fmtNum(r.qmean4_z, 2)} note="≥ −4: qualità paragonabile a strutture sperimentali" />
-          <Stat label="QMEAN4" value={fmtNum(r.qmean4, 3)} note={r.source === "local" ? `locale · ${r.method ?? "QMEAN"}` : "SWISS-MODEL"} />
-          <Stat label={r.method === "QMEAN" ? "Media locale" : "QMEANDisCo"} value={fmtNum(r.qmeandisco, 3)} note={r.url ? <a href={r.url} target="_blank" rel="noreferrer">rapporto completo</a> : r.uniclust ? `${r.uniclust}${r.uniclust_version ? ` (${r.uniclust_version})` : ""}` : undefined} />
+          <Stat label="QMEAN4 Z-score" value={fmtNum(r.qmean4_z, 2)} tone={qmeanTone(r.qmean4_z)} note="≥ −4: qualità paragonabile a strutture sperimentali"
+            detail={(
+              <>
+                <span>Distanza, in deviazioni standard, dalle strutture sperimentali di pari dimensione: vicino a 0 accordo, −4 o meno bassa qualità.</span>
+                {r.qmean6_z != null && <DetailGrid items={[{ label: "QMEAN6 Z-score", value: fmtNum(r.qmean6_z, 2) }]} />}
+              </>
+            )} />
+          <Stat label="QMEAN4" value={fmtNum(r.qmean4, 3)} note={r.source === "local" ? `locale · ${r.method ?? "QMEAN"}` : "SWISS-MODEL"}
+            detail={components.length ? (
+              <>
+                <span>Componenti del punteggio (potenziali statistici).</span>
+                <DetailGrid items={components.map(([k, v]) => ({ label: k, value: fmtNum(v, 3) }))} />
+              </>
+            ) : undefined} />
+          <Stat label={r.method === "QMEAN" ? "Media locale" : "QMEANDisCo"} value={fmtNum(r.qmeandisco, 3)}
+            note={r.url ? <a href={r.url} target="_blank" rel="noreferrer">rapporto completo</a> : r.uniclust ? `${r.uniclust}${r.uniclust_version ? ` (${r.uniclust_version})` : ""}` : undefined}
+            detail={<span>Qualità locale media da 0 a 1; per residuo sotto {fmtNum(QMEAN_LOCAL_THRESHOLD, 1)} qualità bassa attesa (profilo nella scheda «Profili per residuo»).</span>} />
         </div>
       )}
     </div>
@@ -124,246 +146,22 @@ function CompareLinks({ source }: { source: StructureSource }) {
   );
 }
 
-function ExternalValidation({ report }: { report: QualityReport }) {
-  const pc = report.procheck;
-  const pr = report.prosa;
-  if (!pc && !pr) return null;
-  return (
-    <div className="grid grid-2">
-      {pc && (
-        <Card title="PROCHECK" sub="Laskowski et al. 1993">
-          <div className="stack-sm">
-            <StackBar parts={[
-              { label: "Core", value: pc.ramachandran.core ?? 0, color: "var(--ok)" },
-              { label: "Consentite", value: pc.ramachandran.allowed ?? 0, color: "var(--accent)" },
-              { label: "Generose", value: pc.ramachandran.generous ?? 0, color: "var(--warn)" },
-              { label: "Non consentite", value: pc.ramachandran.disallowed ?? 0, color: "var(--err)" },
-            ]} />
-            <div className="grid grid-3">
-              <Stat label="G-factor globale" value={fmtNum(pc.g_factors.overall, 2)} note="> −0,5 normale; < −1 insolito" />
-              <Stat label="Diedri / covalenti" value={<span style={{ fontSize: 16 }}>{fmtNum(pc.g_factors.dihedrals, 2)} / {fmtNum(pc.g_factors.covalent, 2)}</span>} />
-              <Stat label="Contatti ravvicinati" value={pc.bad_contacts ?? "—"} note={pc.mc_bond_angles_ok != null ? `angoli di legame nei limiti: ${fmtNum(pc.mc_bond_angles_ok)}%` : undefined} />
-            </div>
-            <p className="tiny muted">Una buona struttura ha oltre il 90% dei residui nelle regioni core. I grafici PostScript completi sono tra i file del job.</p>
-          </div>
-        </Card>
-      )}
-      {pr && (
-        <Card title="ProSA II" sub="energia del ripiegamento (Sippl)">
-          <div className="stack-sm">
-            <div className="grid grid-3">
-              <Stat label="Z-score" value={fmtNum(pr.zscore, 2)} note="confrontalo con le strutture sperimentali di pari lunghezza: valori positivi indicano problemi" />
-              <Stat label="Z coppie" value={fmtNum(pr.zscore_pair, 2)} />
-              <Stat label="Z superficie" value={fmtNum(pr.zscore_surface, 2)} />
-            </div>
-            <ProsaProfile profile={pr.profile} />
-          </div>
-        </Card>
-      )}
-    </div>
-  );
-}
-
-/** Profilo di energia ProSA (finestra 10): i tratti sopra lo zero sono potenzialmente problematici. */
-function ProsaProfile({ profile }: { profile: { index: number; energy_w10: number | null }[] }) {
-  const pts = profile.filter((p) => p.energy_w10 != null) as { index: number; energy_w10: number }[];
-  if (pts.length < 2) return null;
-  const w = 480;
-  const h = 110;
-  const min = Math.min(-2, ...pts.map((p) => p.energy_w10));
-  const max = Math.max(1, ...pts.map((p) => p.energy_w10));
-  const x = (i: number) => ((i - pts[0].index) / Math.max(1, pts[pts.length - 1].index - pts[0].index)) * (w - 30) + 25;
-  const y = (v: number) => h - 15 - ((v - min) / (max - min)) * (h - 25);
-  const path = pts.map((p, i) => `${i ? "L" : "M"}${x(p.index).toFixed(1)},${y(p.energy_w10).toFixed(1)}`).join(" ");
-  return (
-    <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", height: "auto" }} role="img" aria-label="Profilo di energia ProSA">
-      <line x1={25} x2={w - 5} y1={y(0)} y2={y(0)} stroke="var(--border)" strokeDasharray="4 3" />
-      <text x={2} y={y(0) + 4} fontSize={10} fill="var(--muted)">0</text>
-      <path d={path} fill="none" stroke="var(--accent)" strokeWidth={1.6} />
-      {pts.filter((p) => p.energy_w10 > 0).map((p) => <circle key={p.index} cx={x(p.index)} cy={y(p.energy_w10)} r={2} fill="var(--err)" />)}
-      <text x={25} y={h - 2} fontSize={10} fill="var(--muted)">residuo {pts[0].index}</text>
-      <text x={w - 5} y={h - 2} fontSize={10} fill="var(--muted)" textAnchor="end">{pts[pts.length - 1].index}</text>
-    </svg>
-  );
-}
-
-const sameResidue = (a: ResidueRef | null | undefined, b: ResidueRef) => !!a && a.chain === b.chain && a.resnum === b.resnum;
-
-function ResidueTable({ residues, onPick, selected, consensus, plddt }: { residues: ResidueRow[]; onPick: (r: ResidueRow) => void; selected: ResidueRef | null; consensus: ConsensusResult | null; plddt: boolean }) {
-  const counts = alignedPerResidue({ residues }, consensus);
-  const problem = (r: ResidueRow, i: number) => isProblemResidue(r, i, counts);
-  const selectedIsProblem = selected ? residues.some((r, i) => sameResidue(selected, r) && problem(r, i)) : true;
-  const [only, setOnly] = useState<"all" | "problems">(selectedIsProblem ? "problems" : "all");
-  const rows = residues.map((r, i) => ({ r, i })).filter(({ r, i }) => only === "all" || problem(r, i));
-  // oltre VIRTUAL_THRESHOLD righe si disegnano solo quelle visibili (F8b); il residuo scelto (3D, grafici) si porta in
-  // vista scorrendo solo la tabella, anche se la sua riga non è disegnata
-  const virtual = useVirtualRows<HTMLDivElement>({ count: rows.length, rowHeight: TABLE_ROW_HEIGHT, measure: true });
-  const rowStyle = virtual.active ? { height: TABLE_ROW_HEIGHT } : undefined;
-  const selIndex = selected ? rows.findIndex(({ r }) => sameResidue(selected, r)) : -1;
-  const { reveal } = virtual;
-  useEffect(() => {
-    if (selIndex >= 0) reveal(selIndex);
-  }, [selected, only, selIndex, reveal]);
-  const columns = counts ? 10 : 9;
-  return (
-    <div className="stack-sm">
-      <div className="row small">
-        <label className="check"><input type="radio" checked={only === "problems"} onChange={() => setOnly("problems")} /> Solo residui problematici</label>
-        <label className="check"><input type="radio" checked={only === "all"} onChange={() => setOnly("all")} /> Tutti ({residues.length})</label>
-        {counts && <span className="muted">Problematici: outlier, clash o segnalati da almeno 2 metodi del consenso.</span>}
-      </div>
-      {!rows.length ? <Alert tone="ok">{counts ? "Nessun outlier di Ramachandran, residuo coinvolto in clash o segnalato da almeno 2 metodi del consenso." : "Nessun outlier di Ramachandran né residuo coinvolto in clash."}</Alert> : (
-        <div ref={virtual.ref} onScroll={virtual.onScroll} className="table-wrap" style={{ maxHeight: 420, overflowY: "auto" }}>
-          <table className="table">
-            <thead><tr><th>Residuo</th><th>DSSP</th><th className="num">φ</th><th className="num">ψ</th><th>Ramachandran</th><th className="num">Clash</th><th className="num">RSA</th><th className="num">DOPE</th><th className="num">{plddt ? "pLDDT" : "B-factor"}</th>{counts && <th>Consenso</th>}</tr></thead>
-            <tbody>
-              {virtual.range.padTop > 0 && <tr className="virtual-spacer" aria-hidden="true" style={{ height: virtual.range.padTop }}><td colSpan={columns} /></tr>}
-              {rows.slice(virtual.range.start, virtual.range.end).map(({ r, i }, n) => {
-                const sel = sameResidue(selected, r);
-                return (
-                  <tr key={`${r.chain}${r.resnum}`} data-vrow={virtual.range.start + n} style={rowStyle} className={`clickable${sel ? " selected" : ""}${virtual.active ? " virtual-row" : ""}`} onClick={() => onPick(r)}>
-                    <td className="nowrap"><b>{r.resname}</b> {r.chain}{r.resnum}</td>
-                    <td>{r.ss}</td>
-                    <td className="num">{fmtNum(r.phi, 0)}</td>
-                    <td className="num">{fmtNum(r.psi, 0)}</td>
-                    <td>{r.rama ? <Badge tone={r.rama === "favored" ? "ok" : r.rama === "allowed" ? "info" : "err"}>{r.rama === "favored" ? "favorita" : r.rama === "allowed" ? "consentita" : "outlier"}</Badge> : "—"}</td>
-                    <td className="num">{r.clashes || ""}</td>
-                    <td className="num">{fmtNum(r.rsa, 2)}</td>
-                    <td className="num">{fmtNum(r.dope, 3)}</td>
-                    <td className="num">{fmtNum(r.bfactor, 1)}</td>
-                    {counts && <td className="small">{counts.flags[i].map((k) => SIGNAL_LABEL[k] ?? k).join(", ")}</td>}
-                  </tr>
-                );
-              })}
-              {virtual.range.padBottom > 0 && <tr className="virtual-spacer" aria-hidden="true" style={{ height: virtual.range.padBottom }}><td colSpan={columns} /></tr>}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Scheda del residuo selezionato (dal 3D, dai grafici o dalla tabella). */
-function ResidueDetail({ report, selected, consensus, onTable }: { report: QualityReport; selected: ResidueRef; consensus: ConsensusResult | null; onTable: () => void }) {
-  const i = report.residues.findIndex((r) => sameResidue(selected, r));
-  if (i < 0) return null;
-  const r = report.residues[i];
-  const per = consensus && consensus.per_residue.counts.length === report.residues.length ? consensus.per_residue : null;
-  const qmean = per?.values.qmean?.[i];
-  const flags = per?.flags[i] ?? [];
-  return (
-    <div className="row small" style={{ gap: 14 }}>
-      <b>{r.resname} {r.chain}{r.resnum}</b>
-      <span>DSSP {r.ss}</span>
-      <span>φ/ψ {fmtNum(r.phi, 0)}/{fmtNum(r.psi, 0)} · {r.rama ? { favored: "favorita", allowed: "consentita", outlier: "outlier" }[r.rama] : "—"}</span>
-      <span>clash {r.clashes}</span>
-      <span>RSA {fmtNum(r.rsa, 2)}</span>
-      <span>DOPE {fmtNum(r.dope, 3)}</span>
-      <span>{isPlddt(report) ? "pLDDT" : "B-factor"} {fmtNum(r.bfactor, 1)}</span>
-      {qmean != null && <span>QMEAN {fmtNum(qmean, 2)}</span>}
-      {per && <span>{flags.length ? <>segnalato da <b>{flags.map((k) => SIGNAL_LABEL[k] ?? k).join(", ")}</b></> : "nessuna segnalazione"}</span>}
-      <button className="btn btn-sm btn-ghost" onClick={onTable}>Mostra nella tabella</button>
-    </div>
-  );
-}
-
-const BAND_TONE: Record<ConsensusBand, "ok" | "warn" | "err"> = { buona: "ok", intermedia: "warn", scarsa: "err" };
-
-function fmtRaw(m: ConsensusMethod): string {
-  if (m.key === "grade") return `${fmtNum(m.raw, 1)}/100`;
-  if (m.key === "procheck") return `${fmtNum(m.raw, 1)}%`;
-  return fmtNum(m.raw, 2);
-}
-
-/** Consenso tra i metodi: punteggio, valori normalizzati, discordanze, regioni e segnalazioni per residuo. */
-function ConsensusPanel({ report, consensus, error, selected, onSelect, onRegion }: {
-  report: QualityReport;
-  consensus: ConsensusResult | null;
-  error: string | null;
-  selected: ResidueRef | null;
-  onSelect: (r: ResidueRow) => void;
-  onRegion: (region: ConsensusRegion) => void;
-}) {
-  if (!consensus) {
-    return error ? <Card title="Consenso tra i metodi"><Alert tone="warn">{error}</Alert></Card> : null;
-  }
-  const c = consensus;
-  return (
-    <Card title="Consenso tra i metodi" sub="scale e pesi dichiarati in domain/consensus.py" right={c.band && <Badge tone={BAND_TONE[c.band]}>fascia {c.band}</Badge>}>
-      <div className="stack">
-        {error && <Alert tone="warn">{error}</Alert>}
-        <div className="row" style={{ gap: 18, alignItems: "center" }}>
-          <Stat label="Punteggio di consenso" value={<>{fmtNum(c.score, 0)}<small>/100</small></>} note={`${c.methods_used} metodi su ${c.methods_total} · buona ≥ 70, scarsa < 40`} />
-          <div className="small text-2" style={{ flex: 1, minWidth: 240 }}>
-            Ogni metodo è portato su 0–100 con una scala lineare a tratti costruita sulle soglie della letteratura (70 = soglia di affidabilità, 40 = soglia dei problemi); il consenso è la media pesata dei soli metodi disponibili. Il voto A–D resta quello di BioLoom.
-            {c.missing.length > 0 && <div className="muted" style={{ marginTop: 4 }}>Non disponibili: {c.missing.map((m) => `${m.label} (${m.reason})`).join("; ")}.</div>}
-          </div>
-        </div>
-        <div className="table-wrap">
-          <table className="table">
-            <thead><tr><th>Metodo</th><th className="num">Valore</th><th>Normalizzato</th><th className="num">Peso</th><th>Fascia</th></tr></thead>
-            <tbody>
-              {c.methods.map((m) => (
-                <tr key={m.key}>
-                  <td><b>{m.label}</b><div className="tiny muted">{m.measures}</div></td>
-                  <td className="num nowrap">{fmtRaw(m)}</td>
-                  <td><BarCell value={m.normalized} label={fmtNum(m.normalized, 0)} /></td>
-                  <td className="num">{fmtNum(m.weight, 2)}</td>
-                  <td><Badge tone={BAND_TONE[m.band]}>{m.band}</Badge></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <details className="small text-2">
-          <summary>Scale e fonti</summary>
-          <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
-            {c.methods.map((m) => (
-              <li key={m.key}>
-                <b>{m.label}</b>: {m.points.map(([raw, score]) => `${fmtNum(raw, m.key === "grade" || m.key === "procheck" ? 0 : 1)} → ${score}`).join(" · ")} (lineare tra i punti). <span className="muted">{m.source}.</span>
-              </li>
-            ))}
-          </ul>
-        </details>
-        {c.discordances.length > 0 ? (
-          <div className="stack-sm">
-            <h4>Discordanze</h4>
-            {c.discordances.map((d, k) => <Alert key={k} tone="warn">{d.text}</Alert>)}
-          </div>
-        ) : c.methods_used > 1 && <Alert tone="ok">I metodi disponibili concordano: nessuno è in fascia buona mentre un altro è in fascia scarsa.</Alert>}
-        <div className="stack-sm">
-          <h4>Regioni problematiche</h4>
-          {c.regions.length ? (
-            <div className="row">
-              {c.regions.map((r) => (
-                <button key={`${r.chain}${r.start}`} className="chip" onClick={() => onRegion(r)} title="Evidenzia nel 3D">{r.text}</button>
-              ))}
-            </div>
-          ) : <p className="small muted">Nessun tratto di almeno 3 residui segnalato da almeno 2 metodi.</p>}
-          {/* disordine predetto dalla sequenza (F5.5): spiega le regioni, non entra nel punteggio */}
-          {!!c.disorder?.regions.length && <Alert tone="info">{c.disorder.text}</Alert>}
-          {/* accordo con una predizione esterna (F9.3), solo con il confronto eseguito */}
-          {consensusPredictorNote(c) && <Alert tone={consensusPredictorNote(c)!.tone}>{consensusPredictorNote(c)!.text}</Alert>}
-          <ConsensusTracks residues={report.residues} consensus={c} selected={selected} onSelect={onSelect} onRegion={onRegion} />
-        </div>
-        {c.warnings.map((w, k) => <p key={k} className="tiny muted">{w}</p>)}
-      </div>
-    </Card>
-  );
-}
-
 function ColorBySelect({ options, value, onChange }: { options: ColorOption[]; value: ColorBy; onChange: (v: ColorBy) => void }) {
   return (
     <label className="check">
       Colora per
-      <select className="input" style={{ width: 220, minHeight: 28, padding: "2px 6px" }} value={value} onChange={(e) => onChange(e.target.value as ColorBy)}>
+      <select className="input input-sm" style={{ width: 220 }} value={value} onChange={(e) => onChange(e.target.value as ColorBy)}>
         {options.map((o) => (
           <option key={o.value} value={o.value} disabled={!o.available}>{o.label}{!o.available && o.note ? ` (${o.note})` : ""}</option>
         ))}
       </select>
     </label>
   );
+}
+
+/** Etichetta di una scheda con un conteggio, colorato quando non è zero. */
+function TabLabel({ text, count, tone, title }: { text: string; count: number; tone: "warn" | "err"; title: string }) {
+  return <>{text}<span className={`quality-tab-count${count ? ` quality-tab-count-${tone}` : ""}`} title={title}>{count}</span></>;
 }
 
 /** Rapporto da mostrare e dove chiederne il consenso (job di qualità, oppure modello di un job). */
@@ -398,6 +196,7 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
   const rs = report.ramachandran.summary;
   const url = structureUrl(source ?? report.source);
   const plddt = isPlddt(report);
+  const reportSource = source ?? report.source;
 
   // Il consenso della rotta aggiunge GA341 di MODELLER, QMEAN calcolato qui e vale anche per i rapporti precedenti.
   useEffect(() => {
@@ -432,10 +231,16 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
     setLines(h.lines);
     if (center) setCenterKey((k) => k + 1);
   };
-  /** Dal grafico o dalla tabella: evidenzia e centra nel 3D. */
+  const residueFocus = (r: ResidueRef) => residuesHighlight([{ chain: r.chain, resi: resiNumber(r.resnum) }], { chain: r.chain, resnum: r.resnum });
+  /** Fuori dalle schede (consenso, ProSA) e da "Mostra nel 3D": evidenzia, centra e apre il 3D. */
   const pick = (r: ResidueRef) => {
-    show(residuesHighlight([{ chain: r.chain, resi: resiNumber(r.resnum) }], { chain: r.chain, resnum: r.resnum }));
+    show(residueFocus(r));
     setTab("3d");
+  };
+  /** Dai grafici e dalle tabelle delle schede: seleziona il residuo senza cambiare scheda (la vista espansa resta aperta). */
+  const select = (r: ResidueRef) => show(residueFocus(r), false);
+  const showSelected = () => {
+    if (selected) pick(selected);
   };
   /** Dal 3D: seleziona il residuo (tabella, grafici, scheda) senza spostare la vista. */
   const pick3d = (r: ResidueRef) => {
@@ -455,206 +260,147 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
   // stessa definizione del filtro "Solo residui problematici" della tabella
   const problems = useMemo(() => problemResidues(report, consensus).map((r) => ({ chain: r.chain, resi: resiNumber(r.resnum) })), [report, consensus]);
   const per = alignedPerResidue(report, consensus);
-  const strip = coloring && (
-    <div className="stack-sm">
-      <div className="row small">
-        <ColorBySelect options={options} value={shownBy} onChange={setColorBy} />
-        <span className="muted">Striscia per residuo: {coloring.title}. Clic su un residuo per evidenziarlo nel 3D.</span>
-      </div>
-      <ResidueStrip residues={report.residues} coloring={coloring} selected={selected} onSelect={pick} />
-    </div>
+  // senza DOPE (casella spenta o MODELLER assente) il profilo dice quale metrica manca e come ottenerla
+  const hasDope = report.residues.some((r) => r.dope !== null && r.dope !== undefined);
+  const detail = (extra: { onShow3d?: () => void; onTable?: () => void }) => selected && (
+    <ResidueDetail report={report} selected={selected} consensus={consensus} onClose={() => setSelected(null)} {...extra} />
   );
   return (
     <div className="stack">
-      <Card>
-        <div className="row" style={{ gap: 18, alignItems: "center" }}>
-          <Grade grade={g.grade} large />
-          <div style={{ flex: 1, minWidth: 220 }}>
+      <Card className="quality-hero">
+        <div className="quality-hero-main">
+          <Grade grade={g.grade} large title={`Voto BioLoom ${g.grade}: punteggio ${fmtNum(g.score, 1)}/100`} />
+          <div className="quality-hero-text">
             <h2>{report.structure.title || report.structure.file}</h2>
-            <div className="small text-2">
-              {report.structure.residues} residui · {report.structure.chains} catene · {report.structure.heavy_atoms} atomi
-              {report.structure.method && ` · ${report.structure.method}`}
-              {report.structure.resolution && ` · ${report.structure.resolution} Å`}
-              {plddt && ` · pLDDT medio ${fmtNum(report.bfactor.mean, 1)}`}
-            </div>
-            <div className="small muted" style={{ marginTop: 4 }}>
-              Punteggio {fmtNum(g.score, 1)}/100 — penalità: Ramachandran {fmtNum(g.penalties.ramachandran, 1)}, clash {fmtNum(g.penalties.clashes, 1)}, DOPE {fmtNum(g.penalties.dope, 1)}
-              {consensus?.score != null && <> · consenso {fmtNum(consensus.score, 0)}/100 ({consensus.band}, {consensus.methods_used} metodi)</>}
-            </div>
-            {plddt && <div style={{ marginTop: 6 }}><Badge tone="info" title="Riconosciuto come nella libreria dei template: intestazione di AlphaFold DB (TITLE «ALPHAFOLD … PREDICTION» senza EXPDTA, oppure ModelCIF senza _exptl.method) o di ESMFold (TITLE «ESMFOLD … PREDICTION» senza EXPDTA), o nome AF-<accessione>-F<n> senza un altro metodo dichiarato, e valori tra 0 e 100">{report.structure.predictor === "esmfold" ? "Predizione ESMFold" : "Modello AlphaFold"}: la colonna B-factor contiene il pLDDT</Badge></div>}
-            {source && <div style={{ marginTop: 8 }}><CompareLinks source={source} /></div>}
+            {report.structure.title && report.structure.file !== report.structure.title && <span className="small text-2 mono">{report.structure.file}</span>}
+            <StructureMeta report={report} consensus={consensus} />
+          </div>
+          <div className="quality-hero-score">
+            <span>Punteggio</span>
+            <b>{fmtNum(g.score, 1)}<small>/100</small></b>
+          </div>
+        </div>
+        <GradeBreakdown report={report} />
+        {(source || consensusRef) && (
+          <div className="quality-hero-actions">
+            {source && <CompareLinks source={source} />}
             {consensusRef && (
-              <div className="row tiny muted" style={{ marginTop: 8, gap: 8 }}>
+              <div className="row small" style={{ gap: 8 }}>
                 <ReportButton jobId={consensusRef.job} model={consensusRef.model} qmeanJob={qmeanJob} predictJob={predictJob} viewer={viewer} />
-                <span>{tab === "3d" ? "Include la vista 3D corrente" : "Apri la scheda 3D per includere la vista nel report"}{qmeanJob ? " e il QMEAN calcolato qui" : ""}{predictJob ? " e il confronto con la predizione" : ""}.</span>
+                <span className="text-2">{tab === "3d" ? "Include la vista 3D corrente" : "Apri la scheda 3D per includere la vista nel report"}{qmeanJob ? " e il QMEAN calcolato qui" : ""}{predictJob ? " e il confronto con la predizione" : ""}.</span>
               </div>
             )}
           </div>
-          {source && <QmeanPanel source={source} onDone={onQmean} />}
-        </div>
+        )}
       </Card>
       {report.warnings.map((w, i) => <Alert key={i} tone="warn">{w}</Alert>)}
-      <div className="grid grid-4">
-        <Stat label="Ramachandran favorite" value={<>{fmtNum(rs.favored_pct)}<small>%</small></>} note={`${rs.outlier} outlier (${fmtNum(rs.outlier_pct)}%) · ${rs.allowed} consentite`} />
-        <Stat label="Clashscore" value={fmtNum(report.clashes.clashscore, 2)} note={`${report.clashes.count} contatti gravi (atomi pesanti)`} />
-        <Stat label="DOPE" value={report.dope?.score ? fmtNum(report.dope.score, 0) : "—"} note={report.dope?.zscore != null ? `zDOPE ${fmtNum(report.dope.zscore, 2)} (${report.dope.zscore < -1 ? "simile a strutture native" : "da verificare"})` : "richiede MODELLER"} />
-        <Stat label="Superficie" value={report.sasa.mean_rsa != null ? <>{fmtNum(report.sasa.mean_rsa * 100, 0)}<small>% RSA media</small></> : "—"} note={report.sasa.buried_pct != null ? `${fmtNum(report.sasa.buried_pct)}% residui sepolti` : undefined} />
-      </div>
-      <ExternalValidation report={report} />
+      <SummaryStats report={report} />
+      <ExternalValidation report={report} selected={selected} onSelect={pick} />
+      {source && (
+        <Card title="QMEAN" icon="shield" sub="qualità globale e locale rispetto a strutture sperimentali (Benkert et al. 2011)">
+          <QmeanPanel source={source} onDone={onQmean} />
+        </Card>
+      )}
       <ConsensusPanel report={report} consensus={consensus} error={consensusError} selected={selected} onSelect={pick} onRegion={pickRegion} />
       {/* controllo di plausibilità con una predizione esterna (F9.3): il consenso lo include a confronto completato */}
-      {(source ?? report.source) && (
-        <PredictionPanel source={(source ?? report.source)!} label={report.structure.title || report.label || report.structure.file}
+      {reportSource && (
+        <PredictionPanel source={reportSource} label={report.structure.title || report.label || report.structure.file}
           residues={report.structure.chains_detail?.[0]?.residues ?? null} onResult={setPredictJob} />
       )}
       {report.ligands && <LigandsPanel report={report.ligands} selected={ligand} onSelect={pickLigand} />}
-      <Card title="Struttura secondaria" sub={report.secondary_structure.method}>
-        <StackBar parts={[
-          { label: "Elica", value: report.secondary_structure.helix_pct, color: "var(--helix)" },
-          { label: "Foglietto β", value: report.secondary_structure.strand_pct, color: "var(--strand)" },
-          { label: "Coil", value: report.secondary_structure.coil_pct, color: "var(--coil)" },
-        ]} />
-      </Card>
-      <Card>
+      <SecondaryStructureCard report={report} />
+      <Card title="Analisi dettagliate" icon="search" sub="clic su un residuo per i dettagli; «Mostra nel 3D» lo evidenzia nella struttura">
         <Tabs value={tab} onChange={setTab} tabs={[
-          { value: "rama", label: "Ramachandran" },
+          { value: "rama", label: <TabLabel text="Ramachandran" count={rs.outlier} tone="err" title="Outlier di Ramachandran" /> },
           { value: "profiles", label: "Profili per residuo" },
-          { value: "clashes", label: `Contatti sterici (${report.clashes.count})` },
-          { value: "residues", label: "Residui" },
+          { value: "clashes", label: <TabLabel text="Contatti sterici" count={report.clashes.count} tone="warn" title="Contatti sterici gravi" /> },
+          { value: "residues", label: <TabLabel text="Residui" count={problems.length} tone="warn" title="Residui problematici" /> },
           { value: "3d", label: "3D" },
           { value: "interactions", label: "Interazioni" },
           { value: "pockets", label: "Tasche" },
           { value: "electrostatics", label: "Elettrostatica" },
           { value: "mutations", label: "Mutagenesi" },
         ]} />
-        {tab === "rama" && (
-          <div className="grid grid-2" style={{ alignItems: "start" }}>
-            <RamachandranPlot report={report.ramachandran} onSelect={pick} />
-            <div className="stack-sm">
-              <h4>Outlier</h4>
-              {report.ramachandran.points.filter((p) => p.region === "outlier").length === 0 ? <Alert tone="ok">Nessun residuo in regione non consentita.</Alert> : (
-                <div className="row">
-                  {report.ramachandran.points.filter((p) => p.region === "outlier").map((p) => (
-                    <button key={`${p.chain}${p.resnum}`} className="chip" onClick={() => pick(p)}>{p.resname} {p.chain}{p.resnum} <span className="muted">({p.phi.toFixed(0)}, {p.psi.toFixed(0)})</span></button>
-                  ))}
-                </div>
-              )}
-              <p className="tiny muted">
-                Regioni semplificate calibrate sulle aree favorite di MolProbity (Lovell et al. 2003), distinte per glicina, prolina e caso generale. Per una validazione formale usa MolProbity.
-                {rs.cis_non_proline > 0 && ` Trovati ${rs.cis_non_proline} legami peptidici cis non prolinici.`}
-              </p>
-            </div>
-          </div>
-        )}
+        {tab === "rama" && <RamaTab report={report} consensus={consensus} selected={selected} onSelect={select} onShow3d={showSelected} onTable={() => setTab("residues")} />}
         {tab === "profiles" && (
           <div className="stack">
-            {strip}
-            <ResidueProfile residues={report.residues} metric="dope" onSelect={pick} selected={selected}
-              threshold={per?.dope_threshold != null ? { value: per.dope_threshold, label: "picchi segnalati (media + 1 DS)" } : null} />
+            {coloring && (
+              <div className="stack-sm">
+                <div className="row small">
+                  <ColorBySelect options={options} value={shownBy} onChange={setColorBy} />
+                  <span className="text-2">Striscia per residuo: {coloring.title}. Clic su un residuo per selezionarlo nei profili.</span>
+                </div>
+                {/* qui non c'è il 3D accanto (con la sua legenda): la striscia porta la legenda della scala */}
+                <ResidueStrip residues={report.residues} coloring={coloring} selected={selected} onSelect={select} legend />
+              </div>
+            )}
+            {hasDope ? (
+              <ResidueProfile residues={report.residues} metric="dope" onSelect={select} selected={selected}
+                threshold={per?.dope_threshold != null ? { value: per.dope_threshold, label: "picchi segnalati (media + 1 DS)" } : null} />
+            ) : (
+              <p className="small text-2" role="note">
+                <b>Energia DOPE per residuo</b>: non calcolata in questa analisi. Spunta «Calcola il profilo DOPE (MODELLER)» in
+                «Nuova analisi», in cima alla pagina, e rianalizza la struttura (serve MODELLER).
+              </p>
+            )}
             {per?.values.qmean && (
-              <ResidueProfile residues={report.residues} values={per.values.qmean} label="QMEAN locale per residuo" hint="Da 0 a 1; sotto 0,6 qualità bassa attesa (SWISS-MODEL)." onSelect={pick} selected={selected} height={150}
-                threshold={{ value: QMEAN_LOCAL_THRESHOLD, label: "0,6" }} />
+              <ResidueProfile residues={report.residues} values={per.values.qmean} label="QMEAN locale per residuo" hint="Da 0 a 1; sotto 0,6 qualità bassa attesa (SWISS-MODEL)." onSelect={select} selected={selected} height={150}
+                threshold={{ value: QMEAN_LOCAL_THRESHOLD, label: "0,6" }} filename="profilo_qmean_locale" />
             )}
             {per?.values.prosa && (
-              <ResidueProfile residues={report.residues} values={per.values.prosa} label="Energia ProSA (finestra 10)" hint="Valori positivi: parti potenzialmente problematiche (Wiederstein & Sippl 2007)." onSelect={pick} selected={selected} height={150}
-                threshold={{ value: 0, label: "0" }} />
+              <ResidueProfile residues={report.residues} values={per.values.prosa} label="Energia ProSA (finestra 10)" hint="Valori positivi: parti potenzialmente problematiche (Wiederstein & Sippl 2007)." onSelect={select} selected={selected} height={150}
+                threshold={{ value: 0, label: "0" }} filename="profilo_prosa" />
             )}
-            <ResidueProfile residues={report.residues} metric="rsa" onSelect={pick} selected={selected} height={150} />
-            <ResidueProfile residues={report.residues} metric={plddt ? "plddt" : "bfactor"} onSelect={pick} selected={selected} height={150} />
+            <ResidueProfile residues={report.residues} metric="rsa" onSelect={select} selected={selected} height={150} />
+            <ResidueProfile residues={report.residues} metric={plddt ? "plddt" : "bfactor"} onSelect={select} selected={selected} height={150} />
+            {/* sotto i profili: aprendosi non sposta i grafici sotto il puntatore */}
+            {detail({ onShow3d: showSelected, onTable: () => setTab("residues") }) || <p className="small text-2">Clic su un residuo per i dettagli.</p>}
           </div>
         )}
         {tab === "clashes" && (
-          !report.clashes.clashes.length ? <Alert tone="ok">Nessun contatto sterico grave (sovrapposizione &gt; 0,4 Å).</Alert> : (
-            <div className="table-wrap" style={{ maxHeight: 420, overflowY: "auto" }}>
-              <table className="table">
-                <thead><tr><th>Atomo 1</th><th>Atomo 2</th><th className="num">Distanza (Å)</th><th className="num">Sovrapposizione (Å)</th></tr></thead>
-                <tbody>
-                  {report.clashes.clashes.map((c, i) => (
-                    <tr key={i} className="clickable" onClick={() => {
-                      show(clashHighlight(c));
-                      setTab("3d");
-                    }}>
-                      <td className="mono">{c.atom1}</td><td className="mono">{c.atom2}</td><td className="num">{fmtNum(c.distance, 2)}</td><td className="num">{fmtNum(c.overlap, 2)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )
+          <ClashTable report={report} onShow={(c) => {
+            show(clashHighlight(c));
+            setTab("3d");
+          }} />
         )}
-        {tab === "residues" && <ResidueTable residues={report.residues} onPick={pick} selected={selected} consensus={consensus} plddt={plddt} />}
+        {tab === "residues" && (
+          <div className="stack">
+            <ResidueTable residues={report.residues} onPick={select} selected={selected} consensus={consensus} plddt={plddt} />
+            {detail({ onShow3d: showSelected }) || <p className="small text-2">Clic su una riga per i dettagli del residuo.</p>}
+          </div>
+        )}
         {tab === "3d" && (
           url ? (
             <div className="stack-sm">
               <div className="row small">
                 <ColorBySelect options={options} value={shownBy} onChange={setColorBy} />
-                <button className="btn btn-sm" onClick={() => show(residuesHighlight(problems, selected))}>Evidenzia tutti i residui problematici ({problems.length})</button>
-                <button className="btn btn-sm btn-ghost" onClick={() => show(residuesHighlight([]), false)}>Nessuna evidenza</button>
-                <span className="muted">Evidenziati a bastoncini arancioni · clic su un residuo per selezionarlo.{lines.length > 0 && ligand && ` Linee tratteggiate: coordinazione di ${ligand.resname} ${ligand.chain}${ligand.resnum}.`}</span>
+                <button type="button" className="btn btn-sm" onClick={() => show(residuesHighlight(problems, selected))}>Evidenzia tutti i residui problematici ({problems.length})</button>
+                <button type="button" className="btn btn-sm btn-ghost" onClick={() => show(residuesHighlight([]), false)}>Nessuna evidenza</button>
+                <span className="text-2">Evidenziati a bastoncini arancioni · clic su un residuo per selezionarlo.{lines.length > 0 && ligand && ` Linee tratteggiate: coordinazione di ${ligand.resname} ${ligand.chain}${ligand.resnum}.`}</span>
               </div>
               <Viewer3D url={url} highlight={focus} format={url.endsWith(".cif") ? "cif" : "pdb"} coloring={coloring} onPickResidue={pick3d} centerKey={centerKey} handle={viewer} lines={lines} centerZoom={!!ligand} />
               {coloring && <ResidueStrip residues={report.residues} coloring={coloring} selected={selected} onSelect={pick} />}
-              {selected && <ResidueDetail report={report} selected={selected} consensus={consensus} onTable={() => setTab("residues")} />}
+              {detail({ onTable: () => setTab("residues") })}
             </div>
-          ) : <p className="small muted">Struttura non disponibile per la visualizzazione 3D.</p>
+          ) : <p className="small text-2">Struttura non disponibile per la visualizzazione 3D.</p>
         )}
         {/* analisi strutturale (F7): interazioni, interfacce, conservazione della stessa struttura */}
         {tab === "interactions" && (
-          (source ?? report.source) ? <StructuralAnalysisPanel source={(source ?? report.source)!} url={url} memory={analysisMemory} onMemory={setAnalysisMemory} />
-            : <p className="small muted">Struttura del rapporto non disponibile: rilancia l'analisi di qualità.</p>
+          reportSource ? <StructuralAnalysisPanel source={reportSource} url={url} memory={analysisMemory} onMemory={setAnalysisMemory} />
+            : <p className="small text-2">Struttura del rapporto non disponibile: rilancia l'analisi di qualità.</p>
         )}
         {/* tasche (fpocket) ed elettrostatica (PDB2PQR + APBS) della stessa struttura (F7b) */}
-        {(tab === "pockets" || tab === "electrostatics") && !(source ?? report.source) && (
-          <p className="small muted">Struttura del rapporto non disponibile: rilancia l'analisi di qualità.</p>
+        {(tab === "pockets" || tab === "electrostatics") && !reportSource && (
+          <p className="small text-2">Struttura del rapporto non disponibile: rilancia l'analisi di qualità.</p>
         )}
-        {tab === "pockets" && (source ?? report.source) && <PocketsPanel source={(source ?? report.source)!} url={url} memory={pocketsMemory} onMemory={setPocketsMemory} />}
-        {tab === "electrostatics" && (source ?? report.source) && <ElectrostaticsPanel source={(source ?? report.source)!} url={url} memory={electroMemory} onMemory={setElectroMemory} />}
+        {tab === "pockets" && reportSource && <PocketsPanel source={reportSource} url={url} memory={pocketsMemory} onMemory={setPocketsMemory} />}
+        {tab === "electrostatics" && reportSource && <ElectrostaticsPanel source={reportSource} url={url} memory={electroMemory} onMemory={setElectroMemory} />}
         {/* mutagenesi in silico e scansione di alanina della stessa struttura (F9.2) */}
-        {tab === "mutations" && ((source ?? report.source)
-          ? <MutagenesisPanel source={(source ?? report.source)!} memory={mutationMemory} onMemory={setMutationMemory} />
-          : <p className="small muted">Struttura del rapporto non disponibile: rilancia l'analisi di qualità.</p>)}
+        {tab === "mutations" && (reportSource
+          ? <MutagenesisPanel source={reportSource} memory={mutationMemory} onMemory={setMutationMemory} />
+          : <p className="small text-2">Struttura del rapporto non disponibile: rilancia l'analisi di qualità.</p>)}
       </Card>
     </div>
-  );
-}
-
-function Compare() {
-  const { projectId } = useProject();
-  const { data: jobs } = useAsync<JobSummary[]>(() => api.jobs({ project_id: projectId ?? undefined, kind: "quality", status: "completed", limit: 12 }), [projectId]);
-  const [full, setFull] = useState<Job<QualityReport>[]>([]);
-  useEffect(() => {
-    if (!jobs?.length) return setFull([]);
-    Promise.all(jobs.map((j) => api.job<QualityReport>(j.id))).then(setFull).catch(() => undefined);
-  }, [jobs]);
-  if (!full.length) return null;
-  return (
-    <Card title="Confronto delle analisi del progetto" sub="Ultime 12 analisi completate">
-      <div className="table-wrap">
-        <table className="table">
-          <thead><tr><th>Struttura</th><th>Voto</th><th className="num">Consenso</th><th className="num">Fav. %</th><th className="num">Outlier %</th><th className="num">Clashscore</th><th className="num">DOPE</th><th className="num">zDOPE</th><th className="num">Elica %</th><th className="num">β %</th><th /></tr></thead>
-          <tbody>
-            {full.filter((j) => j.result).map((j) => {
-              const r = j.result!;
-              return (
-                <tr key={j.id}>
-                  <td><b>{r.label ?? r.structure.file}</b><div className="tiny muted">{relTime(j.finished_at)}</div></td>
-                  <td><Grade grade={r.grade.grade} /></td>
-                  <td className="num" title={r.consensus ? `${r.consensus.methods_used} metodi (senza QMEAN)` : "analisi precedente al consenso"}>{fmtNum(r.consensus?.score ?? null, 0)}</td>
-                  <td className="num">{fmtNum(r.ramachandran.summary.favored_pct)}</td>
-                  <td className="num">{fmtNum(r.ramachandran.summary.outlier_pct)}</td>
-                  <td className="num">{fmtNum(r.clashes.clashscore, 2)}</td>
-                  <td className="num">{fmtNum(r.dope?.score ?? null, 0)}</td>
-                  <td className="num">{fmtNum(r.dope?.zscore ?? null, 2)}</td>
-                  <td className="num">{fmtNum(r.secondary_structure.helix_pct)}</td>
-                  <td className="num">{fmtNum(r.secondary_structure.strand_pct)}</td>
-                  <td><Link className="btn btn-sm btn-ghost" to={`/quality?qjob=${j.id}`}>Apri</Link></td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </Card>
   );
 }
 
@@ -710,49 +456,98 @@ export default function Quality() {
   // dove chiedere il consenso ricalcolato (QMEAN, GA341): il job di qualità oppure il modello del job
   const consensusRef = useMemo(() => (qjob ? { job: qjob } : modelJob && modelFile ? { job: modelJob, model: modelFile } : null), [qjob, modelJob, modelFile]);
 
+  const picker = (
+    <div className="stack">
+      <StructurePicker value={source} onChange={setSource} />
+      <label className="check"><input type="checkbox" checked={dope} onChange={(e) => setDope(e.target.checked)} /> Calcola il profilo DOPE (MODELLER)</label>
+      <label className="check"><input type="checkbox" checked={extended} onChange={(e) => setExtended(e.target.checked)} /> PROCHECK e ProSA II (se installati)</label>
+      <button type="button" className="btn btn-primary" disabled={!source} onClick={() => run(source)}><Icon name="shield" size={14} /> Analizza</button>
+      <hr className="sep" />
+      <DropZone accept=".pdb,.ent,.cif,.mmcif" onFile={upload} label={<>Oppure carica un file <b>.pdb</b> / <b>.cif</b> da analizzare</>} />
+    </div>
+  );
+  const howto = (
+    <div className="stack-sm small text-2">
+      <div className="row"><Grade grade="A" /> ≥ 85: modello affidabile per analisi strutturali.</div>
+      <div className="row"><Grade grade="B" /> ≥ 70: buono; controlla le regioni segnalate.</div>
+      <div className="row"><Grade grade="C" /> ≥ 55: da rifinire (loop, allineamento).</div>
+      <div className="row"><Grade grade="D" /> &lt; 55: problematico; rivedi template e allineamento.</div>
+      <p>Punteggio = 100 − penalità Ramachandran (outlier oltre lo 0,5%) − penalità clashscore − penalità zDOPE (se &gt; −1).</p>
+      <p>Il consenso (0–100) combina voto, z-DOPE, GA341, QMEAN, ProSA e PROCHECK, quando disponibili, e indica i metodi che discordano e le regioni segnalate da più metodi.</p>
+    </div>
+  );
+  const head = <PageHead title="Qualità strutturale" lead="Validazione di modelli e template: Ramachandran, contatti sterici, energia DOPE per residuo, struttura secondaria, accessibilità al solvente e voto complessivo A–D." />;
+
+  // con un rapporto aperto la pagina è a una colonna: grafici e tabelle usano tutta la larghezza, la scelta di
+  // un'altra struttura e la guida al voto restano in alto, richiudibili
+  if (report) {
+    // Rapporto salvato di un modello (?job=&file=): spesso senza PROCHECK e ProSA, la mossa probabile è rianalizzarlo,
+    // quindi «Nuova analisi» parte aperta, con il modello già scelto e la nota di cosa manca (chiave propria: chiuderla
+    // sugli altri rapporti non la nasconde qui). Negli altri casi parte chiusa: «Rianalizza» nell'intestazione rilancia
+    // la struttura mostrata con le opzioni correnti senza aprirla.
+    const savedModel = !qjob && !!modelJob && !!modelFile;
+    const missing = missingAnalyses(report, { dope, extended });
+    const options = andList([dope && "DOPE", extended && "PROCHECK", extended && "ProSA"].filter((o): o is string => !!o));
+    return (
+      <div className="page">
+        {head}
+        <div className="grid grid-2" style={{ alignItems: "start" }}>
+          <Card
+            title="Nuova analisi"
+            sub={savedModel ? "rianalizza questo modello, scegline un altro o carica un file" : "rianalizza questa struttura, scegline un'altra o carica un file"}
+            icon="upload"
+            collapsible
+            defaultOpen={savedModel}
+            storageKey={savedModel ? "quality.new.model" : "quality.new"}
+            right={reportSource && (
+              <button type="button" className="btn btn-sm" onClick={() => run(reportSource)}
+                title={`Rilancia l'analisi della struttura mostrata${options ? ` con ${options} (se installati)` : ""}`}>
+                <Icon name="refresh" size={13} /> Rianalizza
+              </button>
+            )}
+          >
+            <div className="stack-sm">
+              {missing.length > 0 && (
+                <p className="small text-2">
+                  {savedModel ? "Il rapporto salvato del modello" : "Questo rapporto"} non ha {andList(missing)}: «Rianalizza» {missing.length > 1 ? "li aggiunge, se installati" : "lo aggiunge, se installato"}.
+                </p>
+              )}
+              {picker}
+            </div>
+          </Card>
+          <Card title="Come leggere il voto" sub={GRADE_RULE} icon="info" collapsible defaultOpen={false} storageKey="quality.howto.report">{howto}</Card>
+        </div>
+        {qjob && <JobPanel summary={summary} log={log} onCancel={cancel} />}
+        <Report key={qjob ?? `${modelJob}/${modelFile}`} report={report} source={reportSource} consensusRef={consensusRef} />
+        <CompareAnalyses />
+      </div>
+    );
+  }
+
   return (
     <div className="page">
-      <PageHead title="Qualità strutturale" lead="Validazione di modelli e template: Ramachandran, contatti sterici, energia DOPE per residuo, struttura secondaria, accessibilità al solvente e voto complessivo A–D." />
+      {head}
       <div className="split">
         <div className="stack">
-          <Card title="Struttura da analizzare">
-            <div className="stack">
-              <StructurePicker value={source} onChange={setSource} />
-              <label className="check"><input type="checkbox" checked={dope} onChange={(e) => setDope(e.target.checked)} /> Calcola il profilo DOPE (MODELLER)</label>
-              <label className="check"><input type="checkbox" checked={extended} onChange={(e) => setExtended(e.target.checked)} /> PROCHECK e ProSA II (se installati)</label>
-              <button className="btn btn-primary" disabled={!source} onClick={() => run(source)}><Icon name="shield" size={14} /> Analizza</button>
-              <hr className="sep" />
-              <DropZone accept=".pdb,.ent,.cif,.mmcif" onFile={upload} label={<>Oppure carica un file <b>.pdb</b> / <b>.cif</b> da analizzare</>} />
-            </div>
-          </Card>
-          <Card title="Come leggere il voto">
-            <div className="stack-sm small text-2">
-              <div className="row"><Grade grade="A" /> ≥ 85: modello affidabile per analisi strutturali.</div>
-              <div className="row"><Grade grade="B" /> ≥ 70: buono; controlla le regioni segnalate.</div>
-              <div className="row"><Grade grade="C" /> ≥ 55: da rifinire (loop, allineamento).</div>
-              <div className="row"><Grade grade="D" /> &lt; 55: problematico; rivedi template e allineamento.</div>
-              <p className="tiny muted">Punteggio = 100 − penalità Ramachandran (outlier oltre lo 0,5%) − penalità clashscore − penalità zDOPE (se &gt; −1).</p>
-              <p className="tiny muted">Il consenso (0–100) combina voto, z-DOPE, GA341, QMEAN, ProSA e PROCHECK, quando disponibili, e indica i metodi che discordano e le regioni segnalate da più metodi.</p>
-            </div>
-          </Card>
+          <Card title="Struttura da analizzare" icon="upload">{picker}</Card>
+          <Card title="Come leggere il voto" sub={GRADE_RULE} icon="info" collapsible storageKey="quality.howto">{howto}</Card>
         </div>
         <div className="stack">
           {qjob && <JobPanel summary={summary} log={log} onCancel={cancel} />}
-          {ajob && !qjob && !report && <AnalysisJobCard jobId={ajob} />}
-          {pjob && !qjob && !report && <ToolJobCard kind="pockets" jobId={pjob} />}
-          {ejob && !qjob && !report && <ToolJobCard kind="electrostatics" jobId={ejob} />}
-          {prjob && !qjob && !report && <PredictionJobCard jobId={prjob} />}
-          {!qjob && !report && !ajob && !pjob && !ejob && !prjob && (
+          {ajob && !qjob && <AnalysisJobCard jobId={ajob} />}
+          {pjob && !qjob && <ToolJobCard kind="pockets" jobId={pjob} />}
+          {ejob && !qjob && <ToolJobCard kind="electrostatics" jobId={ejob} />}
+          {prjob && !qjob && <PredictionJobCard jobId={prjob} />}
+          {!qjob && !ajob && !pjob && !ejob && !prjob && (
             <Card>
               {modelJob ? (
                 <Empty icon="shield" title="Analisi non ancora calcolata per questo modello">
-                  <button className="btn btn-primary" onClick={() => run(source)}>Analizza ora</button>
+                  <button type="button" className="btn btn-primary" onClick={() => run(source)}>Analizza ora</button>
                 </Empty>
               ) : <Empty icon="shield" title="Scegli una struttura o carica un file" />}
             </Card>
           )}
-          {report && <Report key={qjob ?? `${modelJob}/${modelFile}`} report={report} source={reportSource} consensusRef={consensusRef} />}
-          <Compare />
+          <CompareAnalyses />
         </div>
       </div>
     </div>

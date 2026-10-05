@@ -13,18 +13,19 @@ export function PlddtOption({ enabled, threshold, onEnabled, onThreshold }: {
         <input type="checkbox" checked={enabled} onChange={(e) => onEnabled(e.target.checked)} />
         Togli dai template AlphaFold i residui con pLDDT &lt;
         <input
-          className="input"
+          className="input input-sm"
           type="number"
           min={0}
           max={100}
           step={5}
-          style={{ width: 72, minHeight: 28 }}
+          style={{ width: 72 }}
+          aria-label="Soglia di pLDDT"
           disabled={!enabled}
           value={threshold}
           onChange={(e) => onThreshold(clampThreshold(Number(e.target.value)))}
         />
       </label>
-      <span className="tiny muted">
+      <span className="small text-2">
         Le regioni a bassa confidenza (spesso disordinate) degradano il modello: i residui tolti diventano gap nell'allineamento e MODELLER li
         costruisce senza vincoli dal template. Predefinito {PLDDT_DEFAULT}: sotto, AlphaFold DB considera lo scheletro poco affidabile. Le
         strutture sperimentali non vengono mai ritagliate.

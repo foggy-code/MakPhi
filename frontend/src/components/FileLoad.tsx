@@ -33,7 +33,8 @@ export function FileButton({ accept, onFile, children = "Carica da file", disabl
         type="button"
         className={`btn ${small ? "btn-sm" : ""} ${over ? "btn-primary" : ""}`}
         disabled={disabled || busy}
-        title={title ?? "Scegli un file oppure trascinalo qui"}
+        aria-busy={busy || undefined}
+        title={busy ? "Lettura del file in corso…" : title ?? "Scegli un file oppure trascinalo qui"}
         onClick={() => input.current?.click()}
         onDragOver={(e) => { e.preventDefault(); setOver(true); }}
         onDragLeave={() => setOver(false)}

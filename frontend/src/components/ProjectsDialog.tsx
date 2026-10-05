@@ -7,7 +7,7 @@ import {
   projectDeleteToast,
 } from "../lib/cleanup";
 import { useProject, useToast } from "../lib/context";
-import { relTime } from "../lib/format";
+import { fmtDate, relTime } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { favoritesFirst, FILTER_ALL, filterParams, type LabelFilter } from "../lib/tags";
 import { Icon } from "./Icon";
@@ -135,7 +135,7 @@ export function ProjectDeleteView(p: ProjectDeleteViewProps) {
 type View = { kind: "list" } | { kind: "delete"; project: Project };
 
 /**
- * Elenco dei progetti con stella, etichette e filtro per etichetta (F8b); un clic sceglie il progetto attivo, il
+ * Elenco dei progetti con stella, etichette, filtro per etichetta (F8b) e ricerca per nome o descrizione; un clic sceglie il progetto attivo, il
  * cestino apre la conferma dell'eliminazione nello stesso dialogo (niente dialoghi annidati: un Esc li chiuderebbe
  * tutti). L'eliminazione svuota prima il progetto con la pulizia a tempo, poi chiama il DELETE (deleteProjectFlow).
  */
@@ -145,7 +145,9 @@ export function ProjectsDialog({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
   const [filter, setFilter] = useState<LabelFilter>(FILTER_ALL);
   const { data, loading, setData, reload } = useAsync<Project[]>(() => api.projects(filterParams(filter)), [JSON.stringify(filter)]);
-  const rows = favoritesFirst(data ?? []);
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const rows = favoritesFirst(data ?? []).filter((p) => !q || p.name.toLowerCase().includes(q) || p.description?.toLowerCase().includes(q));
   const [view, setView] = useState<View>({ kind: "list" });
   const [usage, setUsage] = useState<ProjectUsage | null>(null);
   const [usageError, setUsageError] = useState<string | undefined>();
@@ -325,26 +327,21 @@ export function ProjectsDialog({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <Modal title="Progetti" wide onClose={requestClose}>
+    <Modal title="Progetti" size="wide" onClose={requestClose}>
       <div className="stack">
-        <div className="row small">
+        <div className="shell-list-tools">
+          <input className="input" style={{ width: 240, minHeight: 30 }} placeholder="Cerca per nome o descrizione" aria-label="Cerca un progetto" autoFocus
+            value={query} onChange={(e) => setQuery(e.target.value)} />
           <LabelFilterSelect type="project" value={filter} onChange={setFilter} />
-          <span className="muted">
-            Preferiti in cima · clic su un progetto per renderlo attivo · etichette e stella anche nella Panoramica · cestino per eliminarlo con
-            sequenze, documenti e job.
-          </span>
+          <span className="count">{data ? `${rows.length} di ${data.length}` : ""}</span>
         </div>
-        {loading && !data ? <Spinner /> : !rows.length ? (
+        <p className="small text-2">Preferiti in cima · clic su un progetto per renderlo attivo · etichette e stella anche nella Panoramica · cestino per eliminarlo con sequenze, documenti e job.</p>
+        {loading && !data ? <div className="empty"><Spinner label="Caricamento dei progetti" /></div> : !rows.length ? (
           <Empty icon="folder" title="Nessun progetto con questo filtro" />
         ) : (
           <div className="table-wrap" style={{ maxHeight: "60vh", overflowY: "auto" }}>
             <table className="table">
-              <thead>
-                <tr>
-                  <th style={{ width: 30 }} /><th>Progetto</th><th>Etichette</th><th className="num">Sequenze</th><th className="num">Job</th>
-                  <th>Modificato</th><th style={{ width: 40 }} />
-                </tr>
-              </thead>
+              <thead><tr><th style={{ width: 30 }} aria-label="Preferito" /><th>Progetto</th><th>Etichette</th><th className="num">Sequenze</th><th className="num">Documenti</th><th className="num">Job</th><th>Modificato</th><th style={{ width: 40 }} aria-label="Elimina" /></tr></thead>
               <tbody>
                 {rows.map((p) => (
                   <tr key={p.id} className={`clickable${p.id === projectId ? " selected" : ""}`}
@@ -352,12 +349,13 @@ export function ProjectsDialog({ onClose }: { onClose: () => void }) {
                     <td><FavoriteStar type="project" id={p.id} value={!!p.favorite} onChange={patch} /></td>
                     <td>
                       <b>{p.name}</b> {p.id === projectId && <span className="badge badge-accent">attivo</span>}
-                      {p.description && <div className="tiny muted ellipsis" style={{ maxWidth: 380 }}>{p.description}</div>}
+                      {p.description && <div className="shell-sub ellipsis" style={{ maxWidth: 380 }} title={p.description}>{p.description}</div>}
                     </td>
                     <td><TagChips tags={p.tags} onPick={(t) => setFilter({ kind: "tag", tag: t })} /></td>
                     <td className="num">{p.sequences ?? "—"}</td>
+                    <td className="num">{p.documents ?? "—"}</td>
                     <td className="num">{p.jobs ?? "—"}</td>
-                    <td className="tiny muted nowrap">{relTime(p.updated_at)}</td>
+                    <td className="shell-sub nowrap" title={`Creato ${fmtDate(p.created_at)} · modificato ${fmtDate(p.updated_at)}`}>{relTime(p.updated_at)}</td>
                     <td><ProjectDeleteButton name={p.name} onClick={() => openDelete(p)} /></td>
                   </tr>
                 ))}
@@ -365,7 +363,7 @@ export function ProjectsDialog({ onClose }: { onClose: () => void }) {
             </table>
           </div>
         )}
-        <p className="tiny muted"><Icon name="info" size={12} /> Le etichette del progetto attivo si modificano nella Panoramica.</p>
+        <p className="small text-2"><Icon name="info" size={12} /> Le etichette del progetto attivo si modificano nella Panoramica.</p>
       </div>
     </Modal>
   );

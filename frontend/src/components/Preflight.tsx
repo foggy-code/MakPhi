@@ -2,10 +2,11 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { api } from "../api/client";
 import type { PreflightCheck, PreflightRequest, PreflightResult } from "../api/types";
 import { useToast } from "../lib/context";
-import { confirmTitle, countsText, estimateText, launchDecision, LEVEL_TONE, requestKey, splitChecks } from "../lib/preflight";
+import { coverageBadge, missingDomainsNote, sortedWarnings } from "../lib/disorder";
+import { confirmTitle, countsText, estimateText, launchDecision, LEVEL_LABEL, LEVEL_TONE, requestKey, splitChecks } from "../lib/preflight";
 import { CoverageAlerts } from "./CoverageAlerts";
 import { Icon } from "./Icon";
-import { Alert, Modal, Spinner } from "./ui";
+import { Alert, Badge, DetailGrid, Disclosure, Modal, Spinner } from "./ui";
 
 const RETRY_MS = 4000;
 const RETRIES = 5;
@@ -72,44 +73,73 @@ function CheckAlert({ check }: { check: PreflightCheck }) {
   return (
     <Alert tone={LEVEL_TONE[check.level]}>
       {check.message}
-      {check.suggestion && <div className="tiny" style={{ marginTop: 3 }}><b>Suggerimento.</b> {check.suggestion}</div>}
+      {check.suggestion && <div className="small" style={{ marginTop: 3 }}><b>Suggerimento.</b> {check.suggestion}</div>}
     </Alert>
   );
 }
 
-/** Esiti dei controlli: errori e avvisi in evidenza, avvisi di copertura con CoverageAlerts, informazioni discrete. */
+/**
+ * Esiti dei controlli: sintesi e tempo stimato in testa, errori e avvisi in evidenza, poi le informazioni sempre
+ * visibili (dati che lasciano il computer, consigli); avvisi di copertura con CoverageAlerts, aperti se c'è un avviso o
+ * un suggerimento («domini non verificati» nel riepilogo); base della stima e codici degli esiti a scomparsa.
+ */
 export function PreflightPanel({ state, title = "Controlli prima dell'avvio" }: { state: PreflightState; title?: string }) {
   if (!state.request) return null;
   const { result, loading, error } = state;
   const parts = splitChecks(result);
   const estimate = estimateText(result?.estimate);
-  // la stima è già nel testo dell'esito "estimated_time" (modellazione, pipeline); per la ricerca una riga a parte
-  const timed = parts.infos.some((c) => c.code === "estimated_time");
+  // la stima è già nel testo dell'esito "estimated_time" (modellazione, pipeline); per la ricerca la si scrive qui
+  const timed = parts.infos.find((c) => c.code === "estimated_time");
+  const infos = parts.infos.filter((c) => c !== timed);
+  const tone = !result ? undefined : result.counts.error ? "err" : result.counts.warning ? "warn" : "ok";
+  const combined = result?.coverage?.combined;
+  const coverageWarn = coverageBadge(combined);
+  // perché i domini mancano: nel riepilogo, così si vede anche a sezione chiusa
+  const domainsNote = result?.coverage && !result.coverage.note ? missingDomainsNote(result.coverage) : null;
   return (
     <div className="stack-sm" aria-live="polite">
       <div className="row small">
-        <b className="text-2">{title}</b>
-        {loading ? <span className="tiny muted row" style={{ gap: 6 }}><Spinner /> verifica in corso…</span>
-          : result ? <span className="tiny muted">{countsText(result)}</span> : null}
+        <b>{title}</b>
+        {loading ? <span className="small text-2 row" style={{ gap: 6 }}><Spinner /> verifica in corso…</span>
+          : result ? <Badge tone={tone}>{countsText(result)}</Badge> : null}
       </div>
-      {error && <p className="tiny muted">Controlli non riusciti ({error}): l'avvio resta possibile, il server valida comunque la richiesta.</p>}
+      {(timed || estimate) && (
+        <span className="small text-2 row" style={{ gap: 6 }} title={result?.estimate?.basis}>
+          <Icon name="activity" size={14} />
+          {timed ? `${timed.message}${timed.suggestion ? ` ${timed.suggestion}` : ""}` : `Tempo stimato: ${estimate}.`}
+        </span>
+      )}
+      {error && <p className="small text-2">Controlli non riusciti ({error}): l'avvio resta possibile, il server valida comunque la richiesta.</p>}
       {parts.errors.map((c, i) => <CheckAlert key={`e${i}${c.code}`} check={c} />)}
       {parts.warnings.map((c, i) => <CheckAlert key={`w${i}${c.code}`} check={c} />)}
-      {result?.coverage && (
-        <div className="stack-sm">
-          <span className="tiny text-2" style={{ fontWeight: 550 }}>Disordine e domini del bersaglio</span>
-          <CoverageAlerts check={result.coverage} assessment={result.coverage.combined} />
-        </div>
-      )}
-      {(parts.infos.length > 0 || (estimate && !timed)) && (
-        <ul className="tiny muted" style={{ margin: 0, paddingLeft: 18 }}>
-          {parts.infos.map((c, i) => (
-            <li key={`i${i}${c.code}`} title={c.code === "estimated_time" ? result?.estimate?.basis : undefined}>
-              {c.message}{c.suggestion ? ` ${c.suggestion}` : ""}
-            </li>
-          ))}
-          {estimate && !timed && <li title={result?.estimate?.basis}>Tempo stimato: {estimate}.</li>}
+      {infos.length > 0 && (
+        <ul className="small text-2" style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 3 }}>
+          {infos.map((c, i) => <li key={`i${i}${c.code}`}>{c.message}{c.suggestion ? ` ${c.suggestion}` : ""}</li>)}
         </ul>
+      )}
+      {result?.coverage && (
+        <Disclosure title="Disordine e domini del bersaglio"
+          extra={coverageWarn || domainsNote ? (
+            <>
+              {coverageWarn && <Badge tone="warn">{coverageWarn.label}</Badge>}
+              {domainsNote && <Badge title={domainsNote}>domini non verificati</Badge>}
+            </>
+          ) : undefined}
+          defaultOpen={sortedWarnings(combined).length > 0 || !!combined?.suggestion}>
+          <CoverageAlerts check={result.coverage} assessment={combined} />
+        </Disclosure>
+      )}
+      {result && (result.estimate || result.checks.length > 0) && (
+        <Disclosure title="Dettagli tecnici">
+          <DetailGrid items={[
+            ...(result.estimate ? [
+              { label: "Tempo stimato", value: estimate },
+              { label: "Base della stima", value: result.estimate.basis || "—" },
+              ...(result.estimate.detail ? [{ label: "Dettaglio della stima", value: result.estimate.detail }] : []),
+            ] : []),
+            { label: "Esiti", value: result.checks.length ? result.checks.map((c) => `${c.code} (${LEVEL_LABEL[c.level]})`).join(" · ") : "nessuno" },
+          ]} />
+        </Disclosure>
       )}
     </div>
   );
@@ -165,7 +195,7 @@ export function LaunchButton({ preflight, onLaunch, disabled = false, children, 
         {busy ? <Spinner /> : <Icon name="play" size={14} />} {children}
       </button>
       {decision.state === "blocked" && !disabled && (
-        <span className="tiny" style={{ color: "var(--err)" }}>Non si può avviare: {decision.reason}</span>
+        <span className="small" style={{ color: "var(--err)" }}>Non si può avviare: {decision.reason}</span>
       )}
       {confirm && (
         <Modal

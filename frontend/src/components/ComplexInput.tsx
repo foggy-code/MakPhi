@@ -6,6 +6,7 @@ import {
   rowsForChains, splitPirChains, SYMMETRY_WEIGHT, type ChainSource, type ComplexRow, type ComplexState,
 } from "../lib/complex";
 import { useProject, useToast } from "../lib/context";
+import { plural } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
 import { parsePir } from "../lib/pir";
 import { AlignmentView } from "./AlignmentView";
@@ -49,9 +50,9 @@ function ChainRow({ row, rows, seqs, onChange }: { row: ComplexRow; rows: Comple
       <div className="row">
         <label className="check">
           <input type="checkbox" checked={row.included} onChange={(e) => onChange({ included: e.target.checked })} />
-          <b>Catena {row.chain}</b>{row.residues ? <span className="muted"> ({row.residues} aa nel template)</span> : null}
+          <b>Catena {row.chain}</b>{row.residues ? <span className="text-2"> ({row.residues} aa nel template)</span> : null}
         </label>
-        {row.included && <div className="right"><Segmented value={row.source} options={options} onChange={(s) => onChange({ source: s, sameAs: s === "same" ? row.sameAs || refs[0]?.chain || "" : row.sameAs })} /></div>}
+        {row.included && <div className="right"><Segmented label={`Sequenza della catena ${row.chain}`} value={row.source} options={options} onChange={(s) => onChange({ source: s, sameAs: s === "same" ? row.sameAs || refs[0]?.chain || "" : row.sameAs })} /></div>}
       </div>
       {row.included && (
         <div className="stack-sm" style={{ marginTop: 6 }}>
@@ -72,7 +73,7 @@ function ChainRow({ row, rows, seqs, onChange }: { row: ComplexRow; rows: Comple
               {refs.map((r) => <option key={r.chain} value={r.chain}>catena {r.chain}{r.name ? ` (${r.name})` : ""}</option>)}
             </select>
           )}
-          <span className="tiny muted">{length ? `${length} residui` : "nessuna sequenza"}{row.source === "same" && row.sameAs ? ` · come la catena ${row.sameAs} (omo-oligomero)` : ""}</span>
+          <span className="small text-2">{length ? `${length} residui` : "nessuna sequenza"}{row.source === "same" && row.sameAs ? ` · come la catena ${row.sameAs} (omo-oligomero)` : ""}</span>
         </div>
       )}
     </div>
@@ -155,20 +156,20 @@ export function ComplexInput({ value, onChange }: { value: ComplexState; onChang
             <option value="">{library?.length ? "— template della libreria —" : "Libreria vuota: scarica un template"}</option>
             {library?.map((t) => (
               <option key={t.id} value={t.id}>
-                {t.id} · {t.chains.length} {t.chains.length === 1 ? "catena" : "catene"}{t.assembly ? ` · assemblaggio ${t.assembly.assembly_id} di ${t.assembly.source_id}` : t.title ? ` · ${t.title.slice(0, 50)}` : ""}
+                {t.id} · {plural(t.chains.length, "catena", "catene")}{t.assembly ? ` · assemblaggio ${t.assembly.assembly_id} di ${t.assembly.source_id}` : t.title ? ` · ${t.title.slice(0, 50)}` : ""}
               </option>
             ))}
           </select>
           <div className="row">
-            <input className="input" style={{ width: 170, textTransform: "uppercase" }} placeholder="Codice PDB (es. 4HHB)" maxLength={4} value={pdbId} onChange={(e) => setPdbId(e.target.value)} />
-            <button className="btn btn-sm" disabled={pdbId.trim().length !== 4 || !!busy} onClick={fetchPdb}>{busy === "fetch" ? <Spinner /> : <Icon name="download" size={13} />} Scarica da RCSB</button>
+            <input className="input" style={{ width: 170, textTransform: "uppercase" }} placeholder="Codice PDB (es. 4HHB)" aria-label="Codice PDB" maxLength={4} value={pdbId} onChange={(e) => setPdbId(e.target.value)} />
+            <button type="button" className="btn btn-sm" disabled={pdbId.trim().length !== 4 || !!busy} onClick={fetchPdb}>{busy === "fetch" ? <Spinner /> : <Icon name="download" size={13} />} Scarica da RCSB</button>
           </div>
         </div>
       </Field>
       {value.templateId && loading && !analysis && <Spinner />}
       {error && <Alert tone="err">{error.message}</Alert>}
       {chosen?.assembly && (
-        <span className="tiny muted">Assemblaggio {chosen.assembly.assembly_id} di {chosen.assembly.source_id}: {chosen.assembly.chains.map((c) => assemblyChainLabel(c)).join(", ")}.</span>
+        <span className="small text-2">Assemblaggio {chosen.assembly.assembly_id} di {chosen.assembly.source_id}: {chosen.assembly.chains.map((c) => assemblyChainLabel(c)).join(", ")}.</span>
       )}
       {(importable.length > 0 || others.length > 0) && (
         <div className="stack-sm">
@@ -176,26 +177,26 @@ export function ComplexInput({ value, onChange }: { value: ComplexState; onChang
           {importable.map((a) => (
             <div key={a.id} className="row small">
               <span className="text-2" style={{ flex: 1 }}>{assemblyLabel(a)}</span>
-              <button className="btn btn-sm" disabled={!!busy} onClick={() => importAssembly(a.id)}>{busy === a.id ? <Spinner /> : <Icon name="layers" size={13} />} Importa e usa</button>
+              <button type="button" className="btn btn-sm" disabled={!!busy} onClick={() => importAssembly(a.id)}>{busy === a.id ? <Spinner /> : <Icon name="layers" size={13} />} Importa e usa</button>
             </div>
           ))}
           {others.map((a) => (
-            <div key={a.id} className="tiny muted">
+            <div key={a.id} className="small text-2">
               {assemblyLabel(a)} · {!a.buildable ? a.note : a.identity_only ? "coincide con le catene del file: usa direttamente il template" : "una sola catena proteica"}
             </div>
           ))}
         </div>
       )}
-      {assemblies?.note && !importable.length && value.templateId && <span className="tiny muted">{assemblies.note}</span>}
+      {assemblies?.note && !importable.length && value.templateId && <span className="small text-2">{assemblies.note}</span>}
       <Field label="Nome del complesso"><input className="input" value={value.name} onChange={(e) => onChange({ ...value, name: e.target.value })} /></Field>
       {value.rows.length > 0 && (
         <div className="stack-sm">
           <span className="small text-2" style={{ fontWeight: 550 }}>Sequenza del bersaglio per ogni catena del template</span>
           {value.rows.map((r, i) => <ChainRow key={r.chain} row={r} rows={value.rows} seqs={seqs ?? []} onChange={(patch) => setRow(i, patch)} />)}
-          <span className="tiny muted">
+          <span className="small text-2">
             {check.chains} catene, {check.residues} residui (massimo {MAX_COMPLEX_CHAINS} catene e {MAX_COMPLEX_RESIDUES} residui: il tempo di MODELLER cresce con i residui del modello). Le catene del modello avranno i nomi del template, con i residui numerati da 1.
           </span>
-          {check.errors.filter((e) => !e.startsWith("Scegli il template")).map((e) => <span key={e} className="tiny" style={{ color: "var(--warn)" }}>{e}</span>)}
+          {check.errors.filter((e) => !e.startsWith("Scegli il template")).map((e) => <span key={e} className="small" style={{ color: "var(--warn)" }}>{e}</span>)}
         </div>
       )}
       {value.rows.length > 0 && (
@@ -203,20 +204,20 @@ export function ComplexInput({ value, onChange }: { value: ComplexState; onChang
           <label className="check" title="Restrizioni di simmetria di MODELLER sui C-alfa: ogni catena uguale è vincolata alla prima del suo gruppo">
             <input type="checkbox" checked={value.symmetry} disabled={!check.symmetric.length} onChange={(e) => onChange({ ...value, symmetry: e.target.checked })} />
             Restrizioni di simmetria fra le catene con la stessa sequenza
-            {check.symmetric.length > 0 ? <Badge tone="info">{check.symmetric.map((g) => g.join(" = ")).join(" · ")}</Badge> : <span className="muted"> (nessuna coppia di catene uguali)</span>}
+            {check.symmetric.length > 0 ? <Badge tone="info">{check.symmetric.map((g) => g.join(" = ")).join(" · ")}</Badge> : <span className="text-2"> (nessuna coppia di catene uguali)</span>}
           </label>
           {value.symmetry && check.symmetric.length > 0 && (
             <div className="row small">
               <span className="text-2">Peso</span>
-              <input className="input" style={{ width: 90 }} type="number" min={0.1} max={10} step={0.1} value={value.weight} onChange={(e) => onChange({ ...value, weight: Number(e.target.value) || SYMMETRY_WEIGHT })} />
-              <span className="tiny muted">predefinito 1, come nel manuale di MODELLER: le catene restano uguali fra loro, la loro disposizione viene dal template.</span>
+              <input className="input" style={{ width: 90 }} type="number" min={0.1} max={10} step={0.1} aria-label="Peso delle restrizioni di simmetria" value={value.weight} onChange={(e) => onChange({ ...value, weight: Number(e.target.value) || SYMMETRY_WEIGHT })} />
+              <span className="small text-2">predefinito 1, come nel manuale di MODELLER: le catene restano uguali fra loro, la loro disposizione viene dal template.</span>
             </div>
           )}
         </div>
       )}
       <div className="row">
-        <button className="btn btn-sm" disabled={!check.request} onClick={preview}><Icon name="align" size={13} /> Anteprima dell'allineamento per catena</button>
-        <span className="tiny muted">MODELLER allinea ogni catena del bersaglio sulla sua catena del template (align2d).</span>
+        <button type="button" className="btn btn-sm" disabled={!check.request} onClick={preview}><Icon name="align" size={13} /> Anteprima dell'allineamento per catena</button>
+        <span className="small text-2">MODELLER allinea ogni catena del bersaglio sulla sua catena del template (align2d).</span>
       </div>
       {previewJob && <ComplexPreview key={previewJob} jobId={previewJob} />}
     </div>

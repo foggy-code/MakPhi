@@ -1,16 +1,16 @@
 # Architettura di BioLoom v4
 
-BioLoom v4 è la riscrittura di BioLoom v3 (vedi [REVERSE_ENGINEERING.md](REVERSE_ENGINEERING.md)). Questo documento è per
+Questo documento è per
 chi sviluppa: come è fatto il programma e perché, con le misure e i valori di riferimento dei test. L'uso è descritto nel
 [README](../README.md), l'evoluzione per fasi (le sigle F0–F9 usate qui) nel [piano di
 implementazione](PIANO_IMPLEMENTAZIONE.md).
 
 **Obiettivi:**
 
-- stesso dominio scientifico della v3;
+- modellazione di proteine per omologia, dalla sequenza al modello validato;
 - tutto il programma in container Docker, portatile tra sistemi operativi, chiavetta e server;
 - contratti API unici e verificati;
-- correzione dei difetti scientifici rilevati nella v3;
+- metriche di qualità verificate su strutture di riferimento (senza falsi positivi su prolina e acque);
 - funzionamento anche senza gli strumenti esterni facoltativi.
 
 ## Indice
@@ -47,7 +47,7 @@ implementazione](PIANO_IMPLEMENTAZIONE.md).
 - [Frontend](#frontend)
 - [Sicurezza e privacy](#sicurezza-e-privacy)
 - [Test](#test)
-- [Non portato dalla v3](#non-portato-dalla-v3)
+- [Fuori perimetro](#fuori-perimetro)
 
 ## Vista d'insieme
 
@@ -1448,16 +1448,15 @@ integrato se mkdssp manca), su un pool di thread del singolo calcolo. QMEAN rest
   paralleli delle Impostazioni), ognuno con il proprio contesto; metriche, rapporti e REMARK restano nell'ordine dei
   modelli, e il primo modello fallito in quell'ordine fa fallire il job come prima.
 
-**Confronto con la v3** sulle strutture di riferimento (valori della v3 in
-[REVERSE_ENGINEERING.md](REVERSE_ENGINEERING.md)). Per 1UBQ i valori della v4 sono verificati dai test
+**Valori di riferimento** sulle strutture di prova. Per 1UBQ i valori sono verificati dai test
 (`test_structure_quality.py`, `test_parallel_quality.py`); per 3IU0 e 9QB7, i cui file non sono in `tests/data`, i
 test non li ripetono:
 
-| Struttura | v3 core/favorite | v4 favorite | v3 clashscore | v4 clashscore |
-|---|---|---|---|---|
-| 1UBQ | 81,1 % | 95,9 % | 31,8 | 1,7 |
-| 3IU0 | 77,1 % | 94,3 % | 24,9 | 0,4 |
-| 9QB7 | 72,7 % | 94,0 % | — | 0,2 |
+| Struttura | Residui in regione favorita | Clashscore |
+|---|---|---|
+| 1UBQ | 95,9 % | 1,7 |
+| 3IU0 | 94,3 % | 0,4 |
+| 9QB7 | 94,0 % | 0,2 |
 
 ### QMEAN locale con qualunque versione di UniClust30
 
@@ -3337,8 +3336,10 @@ proteina globulare, nessuno fra le catene): il tempo cresce in proporzione ai re
 ## Frontend
 
 React 19 + TypeScript + Vite, nessuna libreria UI esterna: componenti propri (`components/ui.tsx`), grafici SVG
-(`components/charts.tsx`: Ramachandran, profili per residuo con striscia di struttura secondaria, heatmap,
-mappa delle feature UniProt), viewer 3D 3Dmol.js caricato su richiesta con rilascio del contesto WebGL.
+(`components/charts/`, un file per grafico: `Ramachandran.tsx`, `residue.tsx` per i profili per residuo con
+striscia di struttura secondaria, `ConsensusTracks.tsx`, `Heatmap.tsx`, `FeatureMap.tsx` per la mappa delle feature
+UniProt, `StackBar.tsx`; tutti dentro la cornice comune `components/ChartFrame.tsx` con PNG, CSV e vista espansa),
+viewer 3D 3Dmol.js caricato su richiesta con rilascio del contesto WebGL.
 Il client API (`api/client.ts`) e i tipi (`api/types.ts`) sono l'unico punto di contatto con il backend. Le parti di
 interfaccia delle singole funzioni sono descritte nelle loro sezioni (paragrafi **Interfaccia**).
 
@@ -3481,13 +3482,13 @@ analisi strutturali, la rifinitura e la mutagenesi non usano la rete; l'interfac
 
 ## Test
 
-**Conteggi** (contati il 5 ottobre 2026 con `scripts/test.sh backend --collect-only -q` nell'immagine `bioloom:4.1.0` e con
+**Conteggi** (contati il 6 ottobre 2026 con `scripts/test.sh backend --collect-only -q` nell'immagine `bioloom:4.1.0` e con
 `npx vitest run`):
 
 | Suite | File | Test |
 |---|---|---|
 | backend, `backend/tests` (pytest) | 43 | 1215 nella suite predefinita (42 file), più i 4 di `test_remote.py` (marcatore `network`, esclusi da `addopts`: `pytest -m network`) |
-| frontend, `frontend/src/**/*.test.ts(x)` (vitest) | 44 | 417 |
+| frontend, `frontend/src/**/*.test.ts(x)` (vitest) | 75 | 656 |
 
 I test che richiedono MODELLER, PROCHECK, ProSA o gli strumenti dell'immagine di sviluppo (fpocket, PDB2PQR, APBS,
 OpenMM, PDBFixer) si saltano da soli, con il motivo, dove mancano (`requires_modeller` e le condizioni degli strumenti):
@@ -3943,9 +3944,9 @@ parentesi):
   stessa normalizzazione del backend, filtro degli elenchi), `Layout.test.tsx` (3: pulsante del menu e barra laterale
   sugli schermi stretti, griglia dei passi della Panoramica).
 
-## Non portato dalla v3
+## Fuori perimetro
 
-| Funzione v3 | Motivo |
+| Funzione | Motivo |
 |---|---|
 | Vincoli di interfaccia PDBePISA | servizio EBI instabile; sostituibile con vincoli di distanza manuali |
 | Wiki integrata e regole per agenti LLM | fuori dal perimetro dell'applicazione |

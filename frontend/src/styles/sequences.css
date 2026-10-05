@@ -1,0 +1,109 @@
+/*
+ * Pagine del flusso di lavoro (Sequenze, Libreria template, Ricerca template, procedura guidata, Editor PIR) e parti
+ * comuni (components/WorkflowParts.tsx): metadati a chip, sezioni dei moduli, dettaglio degli hit, template
+ * consigliati, passi della procedura, scelta del motore. Solo i token del tema (contrasto in lib/contrast.test.ts).
+ */
+
+/*
+ * Colori che portano dati nelle pagine delle sequenze, per tema (≥ 3:1 sui pannelli, lib/sequenceTokens.test.ts):
+ * classi di residui della barra di composizione (--aa-*: nel tema scuro i colori Clustal X dell'allineamento, nel chiaro
+ * le stesse tinte più scure) e tracce delle annotazioni UniProt (--trk-*, accanto a quelle di styles.css).
+ */
+:root {
+  --aa-hydrophobic: #80a0f0;
+  --aa-positive: #f01505;
+  --aa-negative: #c048c0;
+  --aa-polar: #15c015;
+  --aa-special: #f09048;
+  --trk-chain: #60a5fa;
+  --trk-region: #a78bfa;
+  --trk-site: #f87171;
+  --trk-disulfide: #facc15;
+  --trk-mod: #34d399;
+  --trk-pdb: #94a3b8;
+}
+:root[data-theme="light"] {
+  --aa-hydrophobic: #4a6fd6;
+  --aa-positive: #f01505;
+  --aa-negative: #c048c0;
+  --aa-polar: #178a17;
+  --aa-special: #c8641e;
+  --trk-chain: #2563eb;
+  --trk-region: #7c3aed;
+  --trk-site: #dc2626;
+  --trk-disulfide: #a16207;
+  --trk-mod: #047857;
+  --trk-pdb: #64748b;
+}
+.wf-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.wf-chips .chip { color: var(--text-2); }
+.wf-chips .chip b { color: var(--text); font-weight: 650; font-variant-numeric: tabular-nums; }
+
+/* sequenza numerata a blocchi: niente a capo, scorre in orizzontale */
+.seq-block.wf-numbered { white-space: pre; word-break: normal; max-height: 320px; }
+
+/* sezioni di un riquadro con titolo piccolo e separatore */
+.wf-section { display: grid; gap: 8px; }
+.wf-section + .wf-section { border-top: 1px solid var(--border); padding-top: 14px; }
+.wf-section-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.wf-section-head .hint { font-size: 12px; color: var(--text-2); }
+
+/* campo di filtro nell'intestazione di un riquadro (taglia compatta: .input.input-sm di styles.css) */
+.input.wf-filter { width: 200px; }
+
+/* dettaglio di un hit: campi e componenti del punteggio affiancati */
+.wf-hit { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 16px; align-items: start; }
+.wf-rank td { white-space: normal; vertical-align: top; }
+.wf-rank td .bar-cell { min-width: 120px; }
+.wf-rank tfoot td { background: var(--panel-2); border-top: 1px solid var(--border-strong); font-weight: 650; }
+.wf-coverage { position: relative; height: 8px; min-width: 90px; border-radius: 4px; background: var(--panel-3); }
+.wf-coverage > div { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
+
+/* template consigliati */
+.wf-suggested {
+  display: grid; gap: 8px; padding: 10px 14px; border-radius: 10px; background: var(--ok-soft); color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--ok) 35%, transparent); border-left: 4px solid var(--ok);
+}
+.wf-suggested ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
+.table tr.wf-recommended > td:first-child { box-shadow: inset 3px 0 0 var(--ok); }
+
+/* passi della procedura guidata: numero, titolo, scelta fatta (o suggerimento) */
+.wf-steps { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+.wf-step {
+  display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 1px 10px; align-items: center; text-align: left; min-width: 0;
+  padding: 9px 12px; border-radius: 11px; border: 1px solid var(--border); background: var(--panel); color: var(--text);
+  font: inherit; cursor: pointer; transition: border-color 0.12s, background 0.12s;
+}
+.wf-step:hover:not(:disabled) { border-color: var(--accent); background: var(--panel-2); }
+.wf-step:disabled { cursor: not-allowed; background: var(--bg-2); }
+.wf-step .n {
+  grid-row: span 2; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+  font-weight: 700; font-size: 12.5px; background: var(--panel-3); color: var(--text-2);
+}
+.wf-step .t { font-weight: 650; font-size: 13px; }
+.wf-step .s { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-step.done .n { background: var(--ok-soft); color: var(--ok); }
+.wf-step.current { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+.wf-step.current .n { background: var(--accent); color: var(--on-accent); }
+.wf-step.current .s { color: var(--text-2); }
+
+/* scelta del motore di ricerca (procedura guidata) */
+.wf-engines { display: grid; gap: 8px; }
+.wf-engine {
+  display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 3px 10px; align-items: start; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); color: var(--text); cursor: pointer;
+}
+.wf-engine:hover { border-color: var(--border-strong); }
+.wf-engine.on { border-color: var(--accent); background: var(--accent-soft); }
+.wf-engine.off { cursor: not-allowed; background: var(--bg-2); }
+.wf-engine input { margin: 3px 0 0; accent-color: var(--accent); }
+.wf-engine .note { grid-column: 2; font-size: 12px; color: var(--text-2); }
+
+@media (max-width: 1100px) {
+  .wf-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .wf-hit { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .wf-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .input.wf-filter { width: 100%; }
+}

@@ -4,6 +4,8 @@
 import type { ConsensusResult, QualityReport, ResidueRow } from "../api/types";
 import { PLDDT_BAND_LABEL, PLDDT_BAND_MIN, plddtBand } from "./alphafold";
 import { colorFor, fmtScaleValue, PALETTES, uniformStops, type BinnedScale, type CategoricalScale, type ColorScale, type ContinuousScale } from "./colorscale";
+import { RAMA_SHORT_LABEL, type RamaRegion } from "./ramachandran";
+import { SS3_LABEL } from "./residues";
 
 export type ColorBy = "ss" | "rama" | "clashes" | "dope" | "rsa" | "bfactor" | "plddt" | "qmean" | "consensus";
 
@@ -57,7 +59,7 @@ export const SS_SCALE: CategoricalScale = {
   kind: "categorical",
   categories: [
     { key: "H", color: "#f472b6", label: "Elica" },
-    { key: "E", color: "#fbbf24", label: "Foglietto β" },
+    { key: "E", color: "#fbbf24", label: "Filamento β" },
     { key: "C", color: "#94a3b8", label: "Coil" },
   ],
 };
@@ -128,8 +130,8 @@ export const RSA_SCALE: ContinuousScale = {
   digits: 2,
 };
 
-const SS_LABEL: Record<string, string> = { H: "elica", E: "foglietto β", C: "coil" };
-const RAMA_LABEL: Record<string, string> = { favored: "favorita", allowed: "consentita", outlier: "outlier" };
+// etichette comuni a tabelle, grafici e dettagli: stato DSSP E "filamento β" (come DSSP e il backend), regioni di
+// Ramachandran favorita/consentita/outlier
 export const SIGNAL_LABEL: Record<string, string> = { rama: "Ramachandran", clash: "clash", dope: "DOPE", qmean: "QMEAN", prosa: "ProSA" };
 
 function numbers(values: (number | null | undefined)[]): number[] {
@@ -193,9 +195,9 @@ export function residueColoring(report: QualityReport, by: ColorBy, consensus?: 
   const num = (digits: number, unit?: string) => (v: number | string | null) => (typeof v === "number" ? fmtScaleValue(v, digits, unit) : "—");
   switch (by) {
     case "ss":
-      return { key: by, title: "Struttura secondaria (DSSP)", values: map((r) => r.ss3), scale: SS_SCALE, describe: (v) => SS_LABEL[String(v)] ?? "—" };
+      return { key: by, title: "Struttura secondaria (DSSP)", values: map((r) => r.ss3), scale: SS_SCALE, describe: (v) => SS3_LABEL[String(v)] ?? "—" };
     case "rama":
-      return { key: by, title: "Ramachandran", values: map((r) => r.rama), scale: RAMA_SCALE, describe: (v) => (v ? RAMA_LABEL[String(v)] ?? String(v) : "senza φ/ψ") };
+      return { key: by, title: "Ramachandran", values: map((r) => r.rama), scale: RAMA_SCALE, describe: (v) => (v ? RAMA_SHORT_LABEL[String(v) as RamaRegion] ?? String(v) : "senza φ/ψ") };
     case "clashes":
       return { key: by, title: "Contatti sterici gravi per residuo", values: map((r) => r.clashes), scale: CLASH_SCALE, describe: (v) => (typeof v === "number" ? `${v} clash` : "—") };
     case "dope": {

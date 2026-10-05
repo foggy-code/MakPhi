@@ -22,11 +22,12 @@ const Login = lazy(() => import("./pages/Login"));
 const Wizard = lazy(() => import("./pages/Wizard")); // procedura guidata (F8a)
 const Rerun = lazy(() => import("./pages/Rerun")); // riesecuzione da pacchetto (F9.4)
 
+/** Attesa di una pagina: lo Spinner è già l'annuncio (role="status"), il testo visibile non si ripete. */
 function Loading() {
   return (
-    <div className="empty">
-      <Spinner />
-      Caricamento…
+    <div className="shell-loading">
+      <Spinner label="Caricamento della pagina" />
+      <span aria-hidden="true">Caricamento…</span>
     </div>
   );
 }

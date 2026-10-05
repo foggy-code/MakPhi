@@ -7,7 +7,7 @@ import type { JobSummary, PackageSummary, RerunResult } from "../api/types";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { LaunchButton, PreflightPanel, usePreflight } from "../components/Preflight";
-import { Alert, Badge, Card, DropZone, Empty, PageHead, Spinner, StatusBadge } from "../components/ui";
+import { Alert, Badge, Card, Disclosure, DropZone, Empty, PageHead, Spinner, StatusBadge } from "../components/ui";
 import { useProject, useToast } from "../lib/context";
 import { fmtBytes, fmtDate, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
@@ -31,7 +31,7 @@ function ManifestPreview({ summary }: { summary: PackageSummary }) {
         {summary.cache?.result_from_cache && <><dt>Cache</dt><dd>il risultato originale veniva dalla cache dei calcoli ({fmtDate(summary.cache.cached_at)}): la riesecuzione lo ricalcola</dd></>}
         <dt>Impronta</dt><dd className="mono tiny" title="SHA-256 del manifest: verificata insieme ai checksum di ogni file">{summary.manifest_sha256.slice(0, 16)}…</dd>
       </dl>
-      {typeof summary.seeds?.note === "string" && <p className="tiny muted" style={{ margin: 0 }}>{summary.seeds.note}</p>}
+      {typeof summary.seeds?.note === "string" && <p className="small text-2">{summary.seeds.note}</p>}
       <div>
         <h4 style={{ marginBottom: 6 }}>Versioni</h4>
         <div className="table-wrap">
@@ -50,12 +50,11 @@ function ManifestPreview({ summary }: { summary: PackageSummary }) {
         </div>
       </div>
       {params.length > 0 && (
-        <details>
-          <summary className="small">Parametri del job ({Object.keys(summary.params ?? {}).length})</summary>
-          <dl className="kv" style={{ marginTop: 8 }}>
-            {params.map(([k, v]) => <Fragment key={k}><dt className="mono">{k}</dt><dd className="mono small" style={{ wordBreak: "break-all" }}>{v}</dd></Fragment>)}
+        <Disclosure title="Parametri del job" extra={`${Object.keys(summary.params ?? {}).length} voci`}>
+          <dl className="kv shell-kv-params">
+            {params.map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v}</dd></Fragment>)}
           </dl>
-        </details>
+        </Disclosure>
       )}
       {summary.remote.length > 0 && (
         <div className="stack-sm">
@@ -65,18 +64,17 @@ function ManifestPreview({ summary }: { summary: PackageSummary }) {
           </ul>
         </div>
       )}
-      <details>
-        <summary className="small">File del pacchetto ({summary.files.count})</summary>
-        <div className="table-wrap" style={{ maxHeight: 260, overflowY: "auto", marginTop: 8 }}>
+      <Disclosure title="File del pacchetto" extra={`${summary.files.count} · ${fmtBytes(summary.files.bytes)}`}>
+        <div className="table-wrap" style={{ maxHeight: 260, overflowY: "auto" }}>
           <table className="table">
             <tbody>
               {summary.files.list.map((f) => (
-                <tr key={f.path}><td className="mono small">{f.path}</td><td className="tiny muted">{ROLE_LABEL[f.role] ?? f.role}</td><td className="num small">{fmtBytes(f.size)}</td></tr>
+                <tr key={f.path}><td className="mono small">{f.path}</td><td className="shell-sub">{ROLE_LABEL[f.role] ?? f.role}</td><td className="num small">{fmtBytes(f.size)}</td></tr>
               ))}
             </tbody>
           </table>
         </div>
-      </details>
+      </Disclosure>
     </div>
   );
 }
@@ -94,6 +92,7 @@ function RerunReport({ jobId, result }: { jobId: string; result: RerunResult }) 
   const c = result.counts;
   return (
     <Card
+      icon="compare"
       title="Confronto con il pacchetto"
       right={
         <>
@@ -153,11 +152,11 @@ function RerunReport({ jobId, result }: { jobId: string; result: RerunResult }) 
                 <thead><tr><th>Metrica</th><th className="num">Originale</th><th className="num">Riesecuzione</th><th className="num">Differenza</th></tr></thead>
                 <tbody>
                   {section.rows.map((r) => (
-                    <tr key={r.key} style={r.within ? undefined : { background: "var(--err-bg, transparent)" }}>
+                    <tr key={r.key} style={r.within ? undefined : { background: "var(--err-soft)" }}>
                       <td>{r.label}</td>
                       <td className="num mono small">{fmtValue(r.original)}</td>
                       <td className="num mono small">{fmtValue(r.rerun)}</td>
-                      <td className="num small">{r.within ? <span className="muted">{fmtDelta(r) || "uguale"}</span> : <Badge tone="err">{fmtDelta(r) || "diverso"}</Badge>}</td>
+                      <td className="num small">{r.within ? <span className="text-2">{fmtDelta(r) || "uguale"}</span> : <Badge tone="err">{fmtDelta(r) || "diverso"}</Badge>}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -165,28 +164,25 @@ function RerunReport({ jobId, result }: { jobId: string; result: RerunResult }) 
             </div>
           </div>
         ))}
-        <div>
-          <h4 style={{ marginBottom: 6 }}>File</h4>
-          <p className="small text-2" style={{ marginTop: 0 }}>
-            {c.identical} identici · {c.equivalent} equivalenti · {c.different} diversi · {c.missing} mancanti · {c.extra} in più
-          </p>
-          {files.length > 0 && (
+        <Disclosure title="File" extra={`${c.identical} identici · ${c.equivalent} equivalenti · ${c.different} diversi · ${c.missing} mancanti · ${c.extra} in più`}
+          defaultOpen={c.different + c.missing + c.extra > 0}>
+          {files.length > 0 ? (
             <div className="table-wrap" style={{ maxHeight: 320, overflowY: "auto" }}>
               <table className="table">
                 <tbody>
                   {files.map((f) => (
                     <tr key={f.path}>
                       <td style={{ width: 110 }}><Badge tone={FILE_STATUS_TONE[f.status]}>{FILE_STATUS_LABEL[f.status]}</Badge></td>
-                      <td className="mono small">{f.path}{!f.principal && <span className="tiny muted"> (accessorio)</span>}</td>
+                      <td className="mono small">{f.path}{!f.principal && <span className="shell-sub"> (accessorio)</span>}</td>
                       <td className="small text-2">{fileDetail(f)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          )}
-        </div>
-        <p className="tiny muted" style={{ margin: 0 }}>{toleranceText(result.tolerance)}</p>
+          ) : <span>Nessun file da confrontare.</span>}
+        </Disclosure>
+        <p className="small text-2">{toleranceText(result.tolerance)}</p>
       </div>
     </Card>
   );
@@ -247,7 +243,7 @@ export default function Rerun() {
         lead="Carica un pacchetto riproducibile (Job → «Pacchetto riproducibile»): BioLoom verifica manifest e checksum, ricrea il calcolo con gli stessi parametri e input (cache ignorata, nessun download) e confronta i risultati con quelli del pacchetto." />
       <div className="split">
         <div className="stack">
-          <Card title="Pacchetto">
+          <Card icon="upload" title="Pacchetto">
             <div className="stack">
               <DropZone accept=".zip,application/zip" onFile={load}
                 label={loading ? <span className="row" style={{ gap: 6, justifyContent: "center" }}><Spinner /> Verifica di {fileName}…</span>
@@ -261,20 +257,20 @@ export default function Rerun() {
                   <LaunchButton preflight={preflight} onLaunch={launch}>Riesegui e confronta</LaunchButton>
                 </>
               )}
-              <p className="tiny muted" style={{ margin: 0 }}>
+              <p className="small text-2">
                 Gli script MODELLER del pacchetto sono solo documentazione: la riesecuzione li rigenera dai parametri, validati come
                 quelli di un calcolo nuovo. Da riga di comando: <span className="mono">python bioloom.py rerun &lt;pacchetto.zip&gt; --data &lt;cartella&gt;</span>.
               </p>
             </div>
           </Card>
-          <Card title="Riesecuzioni recenti">
-            {!recent?.length ? <p className="small muted">Nessuna riesecuzione.</p> : (
-              <div className="stack-sm">
+          <Card icon="activity" title="Riesecuzioni recenti">
+            {!recent?.length ? <p className="small text-2">Nessuna riesecuzione.</p> : (
+              <div className="shell-recent">
                 {recent.map((r) => (
-                  <button key={r.id} className="btn btn-ghost" style={{ justifyContent: "flex-start", height: "auto", padding: "6px 10px", borderColor: r.id === jobId ? "var(--accent)" : undefined }} onClick={() => setParams({ job: r.id })}>
+                  <button key={r.id} type="button" className={r.id === jobId ? "on" : ""} aria-current={r.id === jobId || undefined} onClick={() => setParams({ job: r.id })}>
                     <StatusBadge status={r.status} />
-                    <span className="ellipsis" style={{ flex: 1, textAlign: "left" }}>{r.title}</span>
-                    <span className="tiny muted">{relTime(r.created_at)}</span>
+                    <span className="ellipsis" title={r.title}>{r.title}</span>
+                    <span className="when">{relTime(r.created_at)}</span>
                   </button>
                 ))}
               </div>
@@ -282,7 +278,7 @@ export default function Rerun() {
           </Card>
         </div>
         <div className="stack">
-          {jobId ? <RerunJob key={jobId} id={jobId} onStatus={setJobStatus} /> :<Card><Empty icon="refresh" title="Carica un pacchetto per rieseguirlo, o apri una riesecuzione recente" /></Card>}
+          {jobId ? <RerunJob key={jobId} id={jobId} onStatus={setJobStatus} />  : <Card><Empty icon="refresh" title="Carica un pacchetto per rieseguirlo, o apri una riesecuzione recente">Alla fine della riesecuzione qui compare il confronto con i risultati del pacchetto: strutture, metriche e file.</Empty></Card>}
         </div>
       </div>
     </div>
