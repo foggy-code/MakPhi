@@ -4,8 +4,43 @@
     {
       "name": "bioloom",
       "runtimeExecutable": "docker",
-      "runtimeArgs": ["compose", "-f", "launcher/compose.yml", "--env-file", ".env.locale", "up"],
+      "runtimeArgs": [
+        "compose",
+        "-f",
+        "launcher/compose.yml",
+        "--env-file",
+        ".env.locale",
+        "up"
+      ],
       "port": 8765
+    },
+    {
+      "name": "frontend-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "frontend",
+        "run",
+        "dev",
+        "--",
+        "--strictPort"
+      ],
+      "port": 5173
+    },
+    {
+      "name": "frontend-preview",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "frontend",
+        "run",
+        "preview",
+        "--",
+        "--port",
+        "4173",
+        "--strictPort"
+      ],
+      "port": 4173
     }
   ]
 }

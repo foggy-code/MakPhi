@@ -3,74 +3,31 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { JobSummary, SearchEngine, SearchHit, SearchResult, Sequence, Settings, SuggestedTemplate } from "../api/types";
 import { CachedBadge, RecomputeOption } from "../components/CacheOption";
+import { FeatureMap } from "../components/charts";
 import { CoverageAlerts, useCoverageCheck } from "../components/CoverageAlerts";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { SequencePicker } from "../components/Pickers";
-import { Alert, Badge, BarCell, Card, Empty, Field, PageHead, Segmented } from "../components/ui";
+import { Alert, Badge, BarCell, Card, Disclosure, Empty, ExpandAll, ExpandButton, Field, PageHead, Segmented, StatusBadge, useExpanded } from "../components/ui";
+import { HitCoverageBar, HitPanel } from "../components/WorkflowParts";
 import {
   autoAccessionFor, type AutoAccession, followAccession, isUniProtAccession, normalizeAccession, plddtLabel, plddtTone,
 } from "../lib/alphafold";
 import { useProject, useToast } from "../lib/context";
-import { assessmentMap, coverageBadge, hitRanges, targetAccession } from "../lib/disorder";
+import { assessmentMap, coverageBadge, featureTracks, hitRanges, missingDomainsNote, targetAccession } from "../lib/disorder";
 import { fmtEvalue, fmtNum, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
-import { modelingLink, rankTone, rankTooltip, reasonLine, sortedReasons, suggestedRoles, suggestionTemplates } from "../lib/templateRank";
+import { modelingLink, rankTone, rankTooltip, suggestedRoles, suggestionTemplates } from "../lib/templateRank";
+import { hitTracks } from "../lib/workflowView";
 
 type SortKey = "rank_score" | "evalue" | "identity" | "coverage" | "bitscore" | "resolution";
 
-/** Motivazioni del punteggio di un template (riga espansa della tabella). */
-function RankReasons({ hit }: { hit: SearchHit }) {
-  if (hit.rank_score === undefined) return <p className="tiny muted">Punteggio non disponibile: ricerca di una versione precedente, rilanciala per vederlo.</p>;
-  return (
-    <div className="stack-sm">
-      <div className="small">
-        <b>Punteggio {fmtNum(hit.rank_score, 1)}/100</b> (fascia {hit.rank_band}){hit.rank_twilight && <> · <Badge tone="warn" title="Identità sotto la curva di Rost 1999 per la lunghezza allineata">zona crepuscolare</Badge></>}
-      </div>
-      <ul className="tiny" style={{ margin: 0, paddingLeft: 18 }}>
-        {sortedReasons(hit.rank_reasons).map((r) => (
-          <li key={r.key} className={r.score === null ? "muted" : undefined}>{reasonLine(r)}</li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function HitAlignment({ hit }: { hit: SearchHit }) {
-  const mid = hit.query_aligned
-    .split("")
-    .map((c, i) => (c === hit.subject_aligned[i] ? "|" : c !== "-" && hit.subject_aligned[i] !== "-" ? "·" : " "))
-    .join("");
-  const rows = [];
-  for (let i = 0; i < hit.query_aligned.length; i += 80) {
-    rows.push(
-      <div key={i} style={{ marginBottom: 8 }}>
-        <div>Query    {hit.query_aligned.slice(i, i + 80)}</div>
-        <div className="muted">         {mid.slice(i, i + 80)}</div>
-        <div>{hit.template_id.padEnd(9, " ").slice(0, 9)}{hit.subject_aligned.slice(i, i + 80)}</div>
-      </div>,
-    );
-  }
-  return (
-    <div className="stack-sm">
-      <div className="small text-2">
-        Query {hit.query_start}–{hit.query_end} · template {hit.subject_start}–{hit.subject_end} (di {hit.subject_length}) · positivi {fmtNum(hit.positives)}%
-        {hit.organism && ` · ${hit.organism}`}
-      </div>
-      <pre className="seq-block" style={{ whiteSpace: "pre", maxHeight: 220 }}>{rows}</pre>
-    </div>
-  );
-}
-
-function CoverageBar({ hit, qlen }: { hit: SearchHit; qlen: number }) {
-  const left = ((hit.query_start - 1) / qlen) * 100;
-  const width = ((hit.query_end - hit.query_start + 1) / qlen) * 100;
-  return (
-    <div title={`Residui ${hit.query_start}–${hit.query_end} della query`} style={{ position: "relative", height: 8, background: "var(--panel-3)", borderRadius: 4, minWidth: 90 }}>
-      <div style={{ position: "absolute", left: `${left}%`, width: `${width}%`, top: 0, bottom: 0, borderRadius: 4, background: hit.coverage >= 80 ? "var(--ok)" : hit.coverage >= 50 ? "var(--accent)" : "var(--warn)" }} />
-    </div>
-  );
-}
+/** colonne della tabella dei risultati (riga di dettaglio) */
+const COLUMNS = 9;
+/** template nella mappa della copertura, nell'ordine della tabella */
+const MAP_HITS = 20;
+/** righe aperte al più da «Apri tutti» (ogni dettaglio ha allineamento e tabelle) */
+const EXPAND_ALL = 100;
 
 export default function Search() {
   const { projectId } = useProject();
@@ -91,7 +48,7 @@ export default function Search() {
     autoAcc.current = s ? autoAccessionFor(s) : null;
     setUniprot(autoAcc.current?.accession ?? "");
   };
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const open = useExpanded<string>();
   // predefinito: punteggio composito decrescente (i risultati delle versioni precedenti, senza punteggio, restano
   // nell'ordine del motore)
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "rank_score", dir: -1 });
@@ -154,6 +111,14 @@ export default function Search() {
   const coverage = useCoverageCheck(coverageRequest, 0);
   const assessments = useMemo(() => assessmentMap(coverage.check), [coverage.check]);
   const bestAssessment = result?.best ? assessments.get(result.best) : undefined;
+  const bestBadge = coverageBadge(bestAssessment);
+  const domainsNote = coverage.check && !coverage.check.note ? missingDomainsNote(coverage.check) : null;
+  // mappa della copertura: disordine e domini del bersaglio sopra, poi i primi template nell'ordine della tabella
+  const mapTracks = useMemo(() => {
+    const check = coverage.check;
+    const target = check?.disorder ? featureTracks({ disorder: check.disorder, domains: check.domains_info?.available ? check.domains : null }) : [];
+    return [...target, ...hitTracks(hits, MAP_HITS)];
+  }, [hits, coverage.check]);
 
   const addToLibrary = async (hit: SearchHit) => {
     setFetching(hit.pdb_id);
@@ -169,17 +134,20 @@ export default function Search() {
     }
   };
   const header = (key: SortKey, label: string) => (
-    <th className="sortable num" onClick={() => setSort({ key, dir: sort.key === key ? ((-sort.dir) as 1 | -1) : key === "evalue" || key === "resolution" ? 1 : -1 })}>
+    <th className="sortable num" aria-sort={sort.key === key ? (sort.dir === 1 ? "ascending" : "descending") : undefined}
+      onClick={() => setSort({ key, dir: sort.key === key ? ((-sort.dir) as 1 | -1) : key === "evalue" || key === "resolution" ? 1 : -1 })}>
       {label} {sort.key === key ? (sort.dir === 1 ? "▲" : "▼") : ""}
     </th>
   );
+  const expandable = hits.slice(0, EXPAND_ALL).map((h) => h.template_id);
+  const allOpen = expandable.length > 0 && expandable.every((id) => open.has(id));
 
   return (
     <div className="page">
       <PageHead title="Ricerca template" lead="Cerca strutture sperimentali omologhe alla sequenza bersaglio. RCSB è immediato; NCBI BLAST è più sensibile per omologie lontane ma richiede alcuni minuti; BLAST+ e MMseqs2 locali funzionano senza internet sul database pdbaa. AlphaFold DB offre modelli predetti per le proteine senza strutture sperimentali omologhe." />
       <div className="split">
         <div className="stack">
-          <Card title="Query">
+          <Card title="Query" icon="search" sub="sequenza, motore e soglie">
             <div className="stack">
               <SequencePicker
                 value={query}
@@ -195,7 +163,7 @@ export default function Search() {
                 }}
               />
               <Field label="Motore">
-                <Segmented value={engine} onChange={setEngine} options={[{ value: "rcsb", label: "RCSB (rapido)" }, { value: "ncbi", label: "NCBI BLAST" }, { value: "local", label: "BLAST+ locale" }, { value: "mmseqs", label: "MMseqs2 locale" }, { value: "alphafold", label: "AlphaFold DB" }]} />
+                <Segmented label="Motore di ricerca" value={engine} onChange={setEngine} options={[{ value: "rcsb", label: "RCSB (rapido)" }, { value: "ncbi", label: "NCBI BLAST" }, { value: "local", label: "BLAST+ locale" }, { value: "mmseqs", label: "MMseqs2 locale" }, { value: "alphafold", label: "AlphaFold DB" }]} />
               </Field>
               {engine === "alphafold" && (
                 <Field
@@ -220,18 +188,21 @@ export default function Search() {
                 </Field>
               </div>
               <RecomputeOption checked={recompute} onChange={setRecompute} />
-              <button className="btn btn-primary" disabled={!query.sequence.trim() || uniprotInvalid} onClick={submit}>
+              <button className="btn btn-primary" style={{ justifySelf: "start" }} disabled={!query.sequence.trim() || uniprotInvalid} onClick={submit}>
                 <Icon name="search" /> Avvia ricerca
               </button>
             </div>
           </Card>
-          <Card title="Ricerche recenti">
-            {!recent?.length ? <p className="small muted">Nessuna ricerca in questo progetto.</p> : (
+          <Card title="Ricerche recenti" icon="list" sub={recent?.length ? `ultime ${recent.length}` : undefined}>
+            {!recent?.length ? <Empty icon="search" title="Nessuna ricerca in questo progetto">Le ricerche avviate compaiono qui e si riaprono con un clic.</Empty> : (
               <div className="stack-sm">
                 {recent.map((r) => (
-                  <button key={r.id} className={`btn btn-ghost`} style={{ justifyContent: "flex-start", height: "auto", padding: "6px 10px", borderColor: r.id === jobId ? "var(--accent)" : undefined }} onClick={() => setParams({ job: r.id })}>
-                    <span className="ellipsis" style={{ flex: 1, textAlign: "left" }}>{r.title}</span>
-                    <span className="tiny muted">{relTime(r.created_at)}</span>
+                  <button key={r.id} type="button" className="btn btn-ghost" aria-current={r.id === jobId ? "true" : undefined}
+                    style={{ justifyContent: "flex-start", height: "auto", padding: "7px 10px", borderColor: r.id === jobId ? "var(--accent)" : undefined, background: r.id === jobId ? "var(--accent-soft)" : undefined }}
+                    onClick={() => setParams({ job: r.id })}>
+                    <span className="ellipsis" style={{ flex: 1, textAlign: "left", color: "var(--text)" }}>{r.title}</span>
+                    {r.status !== "completed" && <StatusBadge status={r.status} />}
+                    <span className="tiny text-2">{relTime(r.created_at)}</span>
                   </button>
                 ))}
               </div>
@@ -241,155 +212,207 @@ export default function Search() {
 
         <div className="stack">
           {jobId && <JobPanel summary={summary} log={log} onCancel={cancel} />}
-          {!jobId && <Card><Empty icon="search" title="Avvia una ricerca per vedere i template omologhi" /></Card>}
+          {!jobId && (
+            <Card>
+              <Empty icon="search" title="Avvia una ricerca per vedere i template omologhi">
+                Scegli la sequenza e il motore a sinistra: i risultati arrivano qui, ordinati per punteggio, con il dettaglio di ogni template.
+              </Empty>
+            </Card>
+          )}
           {result && (
             <Card
               title={`${result.hits.length} template trovati`}
+              icon="list"
               sub={<>{result.engine_label} · query {result.query.name} ({result.query_length} aa) <CachedBadge result={result} /></>}
-              right={<input className="input" style={{ width: 220 }} placeholder="Filtra (codice, titolo, organismo)" value={filter} onChange={(e) => setFilter(e.target.value)} />}
-            >
-              {result.engine === "alphafold" && !!result.notes?.length && result.hits.length > 0 && (
-                <div className="stack-sm" style={{ marginBottom: 8 }}>{result.notes.map((n, i) => <Alert key={i} tone="warn">{n}</Alert>)}</div>
-              )}
-              {!!result.suggested?.templates.length && (
-                <div className="stack-sm" style={{ marginBottom: 10, padding: "8px 10px", borderRadius: 8, background: "var(--ok-soft)" }}>
-                  <div className="row">
-                    <b className="small">Template consigliati</b>
-                    <span className="tiny muted">
-                      copertura complessiva {fmtNum(result.suggested.coverage, 1)}% ({result.suggested.covered_residues} di {result.suggested.query_length} residui) · al massimo {result.suggested.max_templates}
-                    </span>
-                    <button className="btn btn-sm btn-primary right" disabled={!suggestedLink} onClick={() => navigate(suggestedLink)} title="Apre la Modellazione con la sequenza e i template consigliati">
-                      <Icon name="cube" size={13} /> Usa i consigliati per la modellazione
-                    </button>
-                  </div>
-                  <ul className="tiny" style={{ margin: 0, paddingLeft: 18 }}>
-                    {result.suggested.templates.map((t) => (
-                      <li key={t.template_id}><b>{t.template_id}</b> ({t.role}, punteggio {fmtNum(t.rank_score, 1)}): {t.reason}</li>
-                    ))}
-                  </ul>
-                  {(result.suggested.excluded.length > 0 || result.suggested.not_examined > 0) && (
-                    <details className="tiny">
-                      <summary className="muted">Candidati esclusi ({result.suggested.excluded.length}{result.suggested.not_examined ? `, più ${result.suggested.not_examined} non esaminati: numero massimo raggiunto` : ""})</summary>
-                      <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
-                        {result.suggested.excluded.map((e) => <li key={e.template_id}><b>{e.template_id}</b>: {e.reason}</li>)}
-                      </ul>
-                    </details>
+              right={
+                <>
+                  <input className="input input-sm wf-filter" placeholder="Filtra (codice, titolo, organismo)" aria-label="Filtra i template" value={filter} onChange={(e) => setFilter(e.target.value)} />
+                  {hits.length > 0 && (
+                    <ExpandAll masculine noun="template" allOpen={allOpen} onExpand={() => open.expandAll(expandable)} onCollapse={open.collapseAll}
+                      label={hits.length > EXPAND_ALL ? `Apri i primi ${EXPAND_ALL}` : undefined} />
                   )}
-                </div>
-              )}
-              {result.best && result.hits.length > 0 && (
-                <details className="small" style={{ marginBottom: 8 }} open={!!coverageBadge(bestAssessment)}>
-                  <summary>Disordine e domini del bersaglio con il template consigliato {result.best}{coverageBadge(bestAssessment) ? `: ${coverageBadge(bestAssessment)!.label}` : ""}</summary>
-                  <div style={{ marginTop: 6 }}>
-                    <CoverageAlerts check={coverage.check} assessment={bestAssessment} loading={coverage.loading} error={coverage.error} />
+                </>
+              }
+            >
+              <div className="stack">
+                {result.engine === "alphafold" && !!result.notes?.length && result.hits.length > 0 && (
+                  <div className="stack-sm">{result.notes.map((n, i) => <Alert key={i} tone="warn">{n}</Alert>)}</div>
+                )}
+                {/* cosa sono i risultati di AlphaFold DB: in chiaro, accanto ai risultati */}
+                {result.engine === "alphafold" && result.hits.length > 0 && (
+                  <Alert tone="info">
+                    Modelli predetti da AlphaFold DB {result.uniprot ? `per l'accessione ${result.uniprot}` : "delle proteine Swiss-Prot più simili (NCBI BLAST)"}, non strutture sperimentali.
+                    Identità e copertura vengono dal riallineamento locale (Smith-Waterman, BLOSUM62) sulla sequenza del modello; l'E-value è quello di BLAST o, con l'accessione, del solo confronto a coppie.
+                    In modellazione i residui con pLDDT &lt; 70 (confidenza bassa, spesso regioni disordinate) vengono tolti dal template (opzione).
+                  </Alert>
+                )}
+                {!!result.suggested?.templates.length && (
+                  <div className="wf-suggested">
+                    <div className="row">
+                      <Icon name="check" size={15} />
+                      <b>Template consigliati</b>
+                      <span className="small text-2">
+                        copertura complessiva {fmtNum(result.suggested.coverage, 1)}% ({result.suggested.covered_residues} di {result.suggested.query_length} residui) · al massimo {result.suggested.max_templates}
+                      </span>
+                      <button className="btn btn-sm btn-primary right" disabled={!suggestedLink} onClick={() => navigate(suggestedLink)} title="Apre la Modellazione con la sequenza e i template consigliati">
+                        <Icon name="cube" size={13} /> Usa i consigliati per la modellazione
+                      </button>
+                    </div>
+                    <ul className="small">
+                      {result.suggested.templates.map((t) => (
+                        <li key={t.template_id}>
+                          <b>{t.template_id}</b> <Badge tone={t.role === "principale" ? "ok" : "info"}>{t.role}</Badge> punteggio {fmtNum(t.rank_score, 1)}: {t.reason}
+                        </li>
+                      ))}
+                    </ul>
+                    {(result.suggested.excluded.length > 0 || result.suggested.not_examined > 0) && (
+                      <Disclosure title="Candidati esclusi" extra={`${result.suggested.excluded.length}${result.suggested.not_examined ? ` + ${result.suggested.not_examined} non esaminati` : ""}`}>
+                        <ul style={{ margin: 0, paddingLeft: 18 }}>
+                          {result.suggested.excluded.map((e) => <li key={e.template_id}><b>{e.template_id}</b>: {e.reason}</li>)}
+                        </ul>
+                        {result.suggested.not_examined > 0 && <p style={{ marginTop: 6 }}>{result.suggested.not_examined} candidati non esaminati: numero massimo di template raggiunto.</p>}
+                      </Disclosure>
+                    )}
                   </div>
-                </details>
-              )}
-              {!hits.length ? (
-                result.hits.length ? <Empty icon="search" title="Nessun template corrisponde al filtro" />
-                  : result.engine === "alphafold" ? (
-                    // l'E-value non c'entra (con l'accessione non si usa): si mostra il perché
-                    <Empty icon="search" title="Nessun modello AlphaFold trovato">
-                      {result.notes?.length ? result.notes.join(" ") : "Nessuna proteina di Swiss-Prot simile ha un modello in AlphaFold DB: indica l'accessione UniProt della sequenza o prova un altro motore."}
-                    </Empty>
-                  )
-                  : <Empty icon="search" title="Nessun template sotto la soglia di E-value">Prova ad aumentare l'E-value o a usare NCBI BLAST.</Empty>
-              ) : (
-                <div className="table-wrap">
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>Template</th>
-                        <th>Descrizione</th>
-                        {header("rank_score", "Punteggio")}
-                        {header("identity", "Identità")}
-                        {header("coverage", "Copertura")}
-                        {header("evalue", "E-value")}
-                        {header("resolution", "Ris. (Å)")}
-                        <th />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {hits.map((h) => {
-                        const badge = coverageBadge(assessments.get(h.template_id));
-                        return (
-                        <Fragment key={h.template_id}>
-                          <tr className="clickable" style={roles.has(h.template_id) ? { background: "var(--ok-soft)" } : undefined} onClick={() => setExpanded(expanded === h.template_id ? null : h.template_id)}>
-                            <td className="nowrap">
-                              <b>{h.template_id}</b>{" "}
-                              {roles.has(h.template_id) && (roles.get(h.template_id)?.role === "complementare"
-                                ? <Badge tone="info" title={roles.get(h.template_id)?.reason}>complementare</Badge>
-                                : <Badge tone="ok" title={roles.get(h.template_id)?.reason ?? "Miglior punteggio"}>consigliato</Badge>)}
-                              {inLibrary.has(h.pdb_id) && <Badge tone="accent">in libreria</Badge>}
-                              {badge && <div style={{ marginTop: 3 }}><Badge tone={badge.tone} title={badge.title}>{badge.label}</Badge></div>}
-                              {h.predicted && (
-                                <div className="row" style={{ gap: 4, marginTop: 3 }}>
-                                  <Badge tone="warn" title="Modello di AlphaFold DB: non è una struttura sperimentale">modello predetto</Badge>
-                                  <Badge tone={plddtTone(h.plddt)} title="Confidenza media della predizione (0–100)">{plddtLabel(h.plddt)}</Badge>
-                                </div>
+                )}
+                {result.best && result.hits.length > 0 && (
+                  <Disclosure
+                    title={`Disordine e domini del bersaglio con il template consigliato ${result.best}`}
+                    extra={coverage.loading ? "verifica in corso…" : bestBadge || domainsNote ? (
+                      <>
+                        {bestBadge && <Badge tone="warn" title={bestBadge.title}>{bestBadge.label}</Badge>}
+                        {domainsNote && <Badge title={domainsNote}>domini non verificati</Badge>}
+                      </>
+                    ) : undefined}
+                    defaultOpen={!!bestBadge}
+                  >
+                    <CoverageAlerts check={coverage.check} assessment={bestAssessment} loading={coverage.loading} error={coverage.error} />
+                  </Disclosure>
+                )}
+                {!hits.length ? (
+                  result.hits.length ? <Empty icon="search" title="Nessun template corrisponde al filtro">Cancella o cambia il testo del filtro.</Empty>
+                    : result.engine === "alphafold" ? (
+                      // l'E-value non c'entra (con l'accessione non si usa): si mostra il perché
+                      <Empty icon="search" title="Nessun modello AlphaFold trovato">
+                        {result.notes?.length ? result.notes.join(" ") : "Nessuna proteina di Swiss-Prot simile ha un modello in AlphaFold DB: indica l'accessione UniProt della sequenza o prova un altro motore."}
+                      </Empty>
+                    )
+                    : <Empty icon="search" title="Nessun template sotto la soglia di E-value">Prova ad aumentare l'E-value o a usare NCBI BLAST.</Empty>
+                ) : (
+                  <div className="table-wrap">
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th style={{ width: 34 }} aria-label="Dettagli" />
+                          <th>Template</th>
+                          <th>Descrizione</th>
+                          {header("rank_score", "Punteggio")}
+                          {header("identity", "Identità")}
+                          {header("coverage", "Copertura")}
+                          {header("evalue", "E-value")}
+                          {header("resolution", "Ris. (Å)")}
+                          <th aria-label="Azioni" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {hits.map((h) => {
+                          const badge = coverageBadge(assessments.get(h.template_id));
+                          const role = roles.get(h.template_id);
+                          const isOpen = open.has(h.template_id);
+                          return (
+                            <Fragment key={h.template_id}>
+                              <tr className={`clickable${isOpen ? " row-open" : ""}${roles.has(h.template_id) ? " wf-recommended" : ""}`} onClick={() => open.toggle(h.template_id)}>
+                                <td><ExpandButton open={isOpen} onClick={() => open.toggle(h.template_id)} label={`dettagli di ${h.template_id}`} /></td>
+                                <td className="nowrap">
+                                  <b>{h.template_id}</b>{" "}
+                                  {roles.has(h.template_id) && (role?.role === "complementare"
+                                    ? <Badge tone="info" title={role.reason}>complementare</Badge>
+                                    : <Badge tone="ok" title={role?.reason ?? "Miglior punteggio"}>consigliato</Badge>)}
+                                  {inLibrary.has(h.pdb_id) && <> <Badge tone="accent">in libreria</Badge></>}
+                                  {badge && <div style={{ marginTop: 3 }}><Badge tone={badge.tone} title={badge.title}>{badge.label}</Badge></div>}
+                                  {h.predicted && (
+                                    <div className="row" style={{ gap: 4, marginTop: 3 }}>
+                                      <Badge tone="warn" title="Modello di AlphaFold DB: non è una struttura sperimentale">modello predetto</Badge>
+                                      <Badge tone={plddtTone(h.plddt)} title="Confidenza media della predizione (0–100)">{plddtLabel(h.plddt)}</Badge>
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="small" style={{ maxWidth: 320 }}>
+                                  <div className="ellipsis" title={h.title || h.description}>{h.title || h.description}</div>
+                                  <div className="tiny text-2 ellipsis">{h.method}{h.organism ? ` · ${h.organism}` : ""}</div>
+                                </td>
+                                <td className="num nowrap" title={rankTooltip(h)}>
+                                  {h.rank_score !== undefined ? <Badge tone={rankTone(h.rank_score)}>{fmtNum(h.rank_score, 1)}</Badge> : "—"}
+                                  {h.rank_twilight && <div className="tiny" style={{ color: "var(--warn)" }}>crepuscolare</div>}
+                                </td>
+                                <td className="num"><BarCell value={h.identity} /></td>
+                                <td className="num">
+                                  <div className="stack-sm" style={{ gap: 3 }}>
+                                    <HitCoverageBar hit={h} qlen={result.query_length} />
+                                    <span className="tiny">{fmtNum(h.coverage)}%</span>
+                                  </div>
+                                </td>
+                                <td className="num nowrap">{fmtEvalue(h.evalue)}</td>
+                                <td className="num">{h.resolution ? fmtNum(h.resolution, 2) : "—"}</td>
+                                <td className="nowrap" onClick={(e) => e.stopPropagation()}>
+                                  <button className="btn btn-sm" disabled={fetching === h.pdb_id || inLibrary.has(h.pdb_id)} onClick={() => addToLibrary(h)}
+                                    title="Scarica la struttura nella libreria" aria-label={`Scarica ${h.pdb_id} nella libreria`}>
+                                    <Icon name="download" size={13} />
+                                  </button>{" "}
+                                  <button
+                                    className="btn btn-sm btn-primary"
+                                    title="Modella con questo template"
+                                    aria-label={`Modella con ${h.template_id}`}
+                                    onClick={() => navigate(`/modeling?name=${encodeURIComponent(result.query.name)}&seqtext=${encodeURIComponent(result.query.sequence)}&t=${h.pdb_id}:${h.chain}`)}
+                                  >
+                                    <Icon name="cube" size={13} />
+                                  </button>
+                                </td>
+                              </tr>
+                              {isOpen && (
+                                <tr className="row-detail">
+                                  <td colSpan={COLUMNS}>
+                                    <HitPanel hit={h} queryLength={result.query_length}>
+                                      <div className="stack-sm">
+                                        <h4>Disordine e domini con questo template</h4>
+                                        <CoverageAlerts check={coverage.check} assessment={assessments.get(h.template_id)} loading={coverage.loading} error={coverage.error} />
+                                      </div>
+                                    </HitPanel>
+                                  </td>
+                                </tr>
                               )}
-                            </td>
-                            <td className="small" style={{ maxWidth: 320 }}>
-                              <div className="ellipsis">{h.title || h.description}</div>
-                              <div className="tiny muted ellipsis">{h.method}{h.organism ? ` · ${h.organism}` : ""}</div>
-                            </td>
-                            <td className="num nowrap" title={rankTooltip(h)}>
-                              {h.rank_score !== undefined ? <Badge tone={rankTone(h.rank_score)}>{fmtNum(h.rank_score, 1)}</Badge> : "—"}
-                              {h.rank_twilight && <div className="tiny" style={{ color: "var(--warn)" }}>crepuscolare</div>}
-                            </td>
-                            <td className="num"><BarCell value={h.identity} /></td>
-                            <td className="num">
-                              <div className="stack-sm" style={{ gap: 3 }}>
-                                <CoverageBar hit={h} qlen={result.query_length} />
-                                <span className="tiny">{fmtNum(h.coverage)}%</span>
-                              </div>
-                            </td>
-                            <td className="num nowrap">{fmtEvalue(h.evalue)}</td>
-                            <td className="num">{h.resolution ? fmtNum(h.resolution, 2) : "—"}</td>
-                            <td className="nowrap" onClick={(e) => e.stopPropagation()}>
-                              <button className="btn btn-sm" disabled={fetching === h.pdb_id || inLibrary.has(h.pdb_id)} onClick={() => addToLibrary(h)} title="Scarica la struttura nella libreria">
-                                <Icon name="download" size={13} />
-                              </button>{" "}
-                              <button
-                                className="btn btn-sm btn-primary"
-                                title="Modella con questo template"
-                                onClick={() => navigate(`/modeling?name=${encodeURIComponent(result.query.name)}&seqtext=${encodeURIComponent(result.query.sequence)}&t=${h.pdb_id}:${h.chain}`)}
-                              >
-                                <Icon name="cube" size={13} />
-                              </button>
-                            </td>
-                          </tr>
-                          {expanded === h.template_id && (
-                            <tr>
-                              <td colSpan={8} style={{ background: "var(--panel-2)" }}>
-                                <div className="stack-sm">
-                                  <RankReasons hit={h} />
-                                  <HitAlignment hit={h} />
-                                  <CoverageAlerts check={coverage.check} assessment={assessments.get(h.template_id)} loading={coverage.loading} error={coverage.error} />
-                                </div>
-                              </td>
-                            </tr>
-                          )}
-                        </Fragment>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              <p className="tiny muted" style={{ marginTop: 8 }}>
-                Punteggio 0–100: media pesata di identità (rispetto alla curva della zona crepuscolare di Rost 1999 per la lunghezza allineata), copertura, E-value, risoluzione o pLDDT, R-free, metodo, lacune e data; ligandi e stato oligomerico sono informativi.
-                Fasce: buona ≥ 70, intermedia 40–70, scarsa &lt; 40. Clic su una riga per le motivazioni e l'allineamento.
-                I consigliati sono il migliore più i template complementari che coprono almeno 10 residui nuovi o migliorano l'identità locale, senza ridondanze.
-                L'E-value della ricerca RCSB è stimato con la statistica di Karlin-Altschul.
-              </p>
-              {result.engine === "alphafold" && (
-                <p className="tiny muted">
-                  Modelli predetti da AlphaFold DB {result.uniprot ? `per l'accessione ${result.uniprot}` : "delle proteine Swiss-Prot più simili (NCBI BLAST)"}, non strutture sperimentali.
-                  Identità e copertura vengono dal riallineamento locale (Smith-Waterman, BLOSUM62) sulla sequenza del modello; l'E-value è quello di BLAST o, con l'accessione, del solo confronto a coppie.
-                  In modellazione i residui con pLDDT &lt; 70 (confidenza bassa, spesso regioni disordinate) vengono tolti dal template (opzione).
-                </p>
-              )}
+                            </Fragment>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <p className="small text-2">Clic su una riga per tutti i dati del template, le componenti del punteggio e l'allineamento.</p>
+                <Disclosure title="Come si legge il punteggio">
+                  <div className="stack-sm">
+                    <p>
+                      Punteggio 0–100: media pesata di identità (rispetto alla curva della zona crepuscolare di Rost 1999 per la lunghezza allineata), copertura, E-value, risoluzione o pLDDT, R-free, metodo, lacune e data; ligandi e stato oligomerico sono informativi.
+                      Fasce: buona ≥ 70, intermedia 40–70, scarsa &lt; 40.
+                    </p>
+                    <p>I consigliati sono il migliore più i template complementari che coprono almeno 10 residui nuovi o migliorano l'identità locale, senza ridondanze.</p>
+                    <p>L'E-value della ricerca RCSB è stimato con la statistica di Karlin-Altschul.</p>
+                  </div>
+                </Disclosure>
+              </div>
+            </Card>
+          )}
+          {result && hits.length > 0 && (
+            <Card title="Copertura della query" icon="align" sub={`primi ${Math.min(MAP_HITS, hits.length)} template nell'ordine della tabella${coverage.check?.disorder ? ", con disordine e domini del bersaglio" : ""}`}
+              collapsible storageKey="search.coverage-map">
+              <FeatureMap
+                length={result.query_length}
+                tracks={mapTracks}
+                title={`Template allineati su ${result.query.name}`}
+                titleHidden
+                subtitle={`${result.query.name} · ${result.engine_label} · ${result.query_length} residui · colore per fascia del punteggio`}
+                filename={`copertura_${result.query.name}`}
+              />
             </Card>
           )}
         </div>

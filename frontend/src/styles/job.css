@@ -1,0 +1,31 @@
+/*
+ * Stato di un job (components/JobPanel.tsx, usato in quasi tutte le pagine): intestazione, tempi, avanzamento, errore e
+ * log a scomparsa con la vista a tutta altezza. Solo i token del tema.
+ */
+
+.job-panel { display: grid; gap: 12px; }
+.job-head { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; min-width: 0; }
+.job-title { font-weight: 650; color: var(--text); min-width: 0; max-width: min(560px, 100%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-head > .right { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.job-meta { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 12.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.job-meta b { color: var(--text); font-weight: 600; }
+.job-progress { display: grid; gap: 6px; }
+.job-progress-line { display: flex; gap: 6px 14px; align-items: baseline; flex-wrap: wrap; font-size: 12.5px; color: var(--text-2); }
+.job-progress-line .stage { color: var(--text); font-weight: 560; }
+.job-progress-line .pct { margin-left: auto; color: var(--text); font-weight: 650; font-variant-numeric: tabular-nums; }
+.job-error { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 12.5px; }
+.job-log { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); overflow: hidden; }
+.job-log-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 10px; flex-wrap: wrap; }
+.job-log-head > .right { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.job-log-toggle {
+  display: inline-flex; align-items: center; gap: 7px; border: 0; background: none; padding: 3px 2px; border-radius: 6px;
+  color: var(--text); font: 600 13px var(--font); cursor: pointer;
+}
+.job-log-toggle:hover { color: var(--accent); }
+.job-log-toggle .small { font-weight: 500; color: var(--text-2); }
+.job-log > .log { border: 0; border-top: 1px solid var(--border); border-radius: 0; margin: 0; }
+.log.job-log-full { max-height: none; height: calc(100vh - 170px); margin: 0; }
+
+@media (max-width: 760px) {
+  .job-progress-line .pct { margin-left: 0; }
+}

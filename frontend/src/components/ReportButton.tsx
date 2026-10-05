@@ -1,20 +1,11 @@
 import { useState, type RefObject } from "react";
 import { api } from "../api/client";
 import { useToast } from "../lib/context";
+import { saveFile } from "../lib/exportImage";
 import { reportImage, reportSavedMessage } from "../lib/report";
 import { Icon } from "./Icon";
 import type { Viewer3DHandle } from "./Viewer3D";
 import { Spinner } from "./ui";
-
-/** Salva un file scaricato con il nome indicato (anche ReproButton). */
-export function saveFile(filename: string, blob: Blob) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
 
 /**
  * Scarica il report HTML autonomo (stampabile in PDF dal browser) di un modello o, senza `model`, di un'analisi
@@ -40,7 +31,7 @@ export function ReportButton({ jobId, model = null, qmeanJob = null, predictJob 
     try {
       const shot = reportImage(viewer?.current?.pngDataUri() ?? null);
       const file = await api.report(jobId, model, shot.image ? { image_png_base64: shot.image } : {}, qmeanJob, predictJob);
-      saveFile(file.filename, file.blob);
+      saveFile(file.blob, file.filename);
       // l'eventuale motivo della vista mancante solo a report salvato: se la richiesta fallisce resta solo l'errore
       const done = reportSavedMessage(shot);
       toast.push(done.text, done.tone);
@@ -52,8 +43,9 @@ export function ReportButton({ jobId, model = null, qmeanJob = null, predictJob 
   };
   const title = "Report HTML autonomo, da aprire nel browser e stampare in PDF" + (viewer ? " (con la vista 3D se è aperta)" : "");
   return (
-    <button className="btn btn-sm" disabled={disabled || busy} title={title} onClick={run}>
-      {busy ? <Spinner /> : <Icon name="file" size={13} />}{compact ? "" : " Report"}
+    <button type="button" className={`btn btn-sm${compact ? " btn-icon" : ""}`} disabled={disabled || busy} title={title}
+      aria-label={compact ? "Scarica il report HTML" : undefined} aria-busy={busy || undefined} onClick={run}>
+      {busy ? <Spinner label="Preparazione del report" /> : <Icon name="fileText" size={14} />}{compact ? "" : busy ? " Preparazione…" : " Report"}
     </button>
   );
 }

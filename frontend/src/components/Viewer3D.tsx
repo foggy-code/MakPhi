@@ -1,7 +1,11 @@
-import { useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 import { hexToInt, legendFor, NO_VALUE_COLOR } from "../lib/colorscale";
+import { saveFile } from "../lib/exportImage";
 import { atomKey, coloringMap, describeResidue, hasMissing, type ResidueColoring, type ResidueRef } from "../lib/residueColoring";
+import { dataUriToBlob, viewerPngName } from "../lib/viewerImage";
+import { Icon } from "./Icon";
 import { Spinner } from "./ui";
+import "../styles/viewer.css";
 
 type Scheme = "ss" | "chain" | "rainbow" | "bfactor";
 const SCHEMES: { value: Scheme; label: string }[] = [
@@ -137,8 +141,13 @@ function ViewerLegend({ coloring }: { coloring: ResidueColoring }) {
   );
 }
 
-/** Visualizzatore 3D (3Dmol.js caricato su richiesta, contesto WebGL rilasciato allo smontaggio). */
+/**
+ * Visualizzatore 3D (3Dmol.js caricato su richiesta, contesto WebGL rilasciato allo smontaggio). In basso a destra
+ * "PNG" (la vista corrente) ed "Espandi": schermo intero con la Fullscreen API o, se manca o la richiesta è rifiutata
+ * (iframe), con la classe `.fullscreen`; Esc torna alla vista normale.
+ */
 export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highlight = [], format = "pdb", coloring = null, onPickResidue, centerKey, handle, lines = [], centerZoom = false, spheres = [] }: Props) {
+  const frame = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
   const viewer = useRef<any>(null);
   const [text, setText] = useState<string | null>(pdb ?? null);
@@ -146,6 +155,9 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [hover, setHover] = useState<string | null>(null);
+  const [drawn, setDrawn] = useState(false);
+  const [full, setFull] = useState<"native" | "css" | null>(null);
+  const [pngFailed, setPngFailed] = useState(false);
   const colors = useMemo((): ViewerColors | null => {
     if (!coloring) return null;
     const residues = new Map<string, number>();
@@ -158,23 +170,42 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
   const live = useRef({ scheme, highlight, colors, coloring, onPickResidue, centerKey, interactive, lines, centerZoom, spheres });
   live.current = { scheme, highlight, colors, coloring, onPickResidue, centerKey, interactive, lines, centerZoom, spheres };
 
-  // Immagine per il report: solo con la struttura disegnata e nessun caricamento in corso (con un altro `url` il
+  // Immagine (PNG, report): solo con la struttura disegnata e nessun caricamento in corso (con un altro `url` il
   // viewer mostra ancora la struttura precedente finché il file nuovo non arriva) né errore.
-  const shown = useRef(false);
-  const idle = useRef(true);
-  idle.current = !loading && !error && !!text;
-  useImperativeHandle(handle, () => ({
-    pngDataUri: () => {
-      const v = viewer.current;
-      if (!v || !shown.current || !idle.current || typeof v.pngURI !== "function") return null;
-      try {
-        v.render(); // il canvas WebGL di 3Dmol conserva il buffer: l'immagine è la vista corrente
-        return v.pngURI() as string;
-      } catch {
-        return null;
-      }
-    },
-  }), []);
+  const ready = drawn && !loading && !error && !!text;
+  const readyNow = useRef(ready);
+  readyNow.current = ready;
+  const snapshot = useCallback((): string | null => {
+    const v = viewer.current;
+    if (!v || !readyNow.current || typeof v.pngURI !== "function") return null;
+    try {
+      v.render(); // il canvas WebGL di 3Dmol conserva il buffer: l'immagine è la vista corrente
+      return v.pngURI() as string;
+    } catch {
+      return null;
+    }
+  }, []);
+  useImperativeHandle(handle, () => ({ pngDataUri: snapshot }), [snapshot]);
+
+  const savePng = () => {
+    const uri = snapshot();
+    try {
+      // un canvas senza dimensioni dà "data:,", che non è un'immagine: dataUriToBlob lo rifiuta
+      if (uri) saveFile(dataUriToBlob(uri), viewerPngName(pdb ? null : url));
+      setPngFailed(!uri);
+    } catch {
+      setPngFailed(true);
+    }
+  };
+
+  const toggleFull = () => {
+    const el = frame.current;
+    if (!el) return;
+    if (full === "native") document.exitFullscreen().catch(() => setFull(null));
+    else if (full === "css") setFull(null);
+    else if (document.fullscreenEnabled) el.requestFullscreen().catch(() => setFull("css"));
+    else setFull("css");
+  };
 
   const enablePicking = (v: any) => {
     if (!live.current.interactive) return;
@@ -192,27 +223,38 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
     );
   };
 
+  // Un file alla volta: cambiando modello la richiesta precedente si annulla e una risposta in ritardo non sostituisce
+  // quella nuova (il viewer, il PNG e l'immagine del report mostrerebbero la struttura sbagliata).
   useEffect(() => {
     setError(null);
     if (pdb) {
       setText(pdb);
+      setLoading(false);
       return;
     }
     if (!url) {
       setText(null);
+      setLoading(false);
       return;
     }
+    const ctrl = new AbortController();
+    let stale = false;
     setLoading(true);
-    fetch(url)
+    fetch(url, { signal: ctrl.signal })
       .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then(setText)
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
+      .then((t) => { if (!stale) setText(t); })
+      .catch((e) => { if (!stale && e?.name !== "AbortError") setError(String(e)); })
+      .finally(() => { if (!stale) setLoading(false); });
+    return () => {
+      stale = true;
+      ctrl.abort();
+    };
   }, [pdb, url]);
 
   useEffect(() => {
     let cancelled = false;
-    shown.current = false; // finché la struttura nuova non è disegnata
+    setDrawn(false); // finché la struttura nuova non è disegnata
+    setPngFailed(false);
     if (!text || !host.current) return;
     import("3dmol")
       .then((mod: any) => {
@@ -230,10 +272,10 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
         v.zoomTo();
         if (cur.centerKey !== undefined) centerOn(v, cur.highlight, cur.centerZoom);
         v.render();
-        shown.current = true;
+        setDrawn(true);
       })
       .catch((e) => {
-        shown.current = false;
+        setDrawn(false);
         setError(`Impossibile avviare il visualizzatore 3D: ${e}`);
       });
     return () => {
@@ -257,6 +299,40 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [centerKey]);
 
+  // Schermo intero: lo stato segue la Fullscreen API (anche l'uscita con Esc, gestita dal browser)
+  useEffect(() => {
+    const sync = () => {
+      const mine = !!frame.current && document.fullscreenElement === frame.current;
+      setFull((f) => (mine ? "native" : f === "native" ? null : f));
+    };
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, []);
+
+  useEffect(() => {
+    if (full !== "css") return;
+    frame.current?.scrollIntoView({ block: "nearest" });
+    // Esc in fase di cattura: esce dallo schermo intero senza chiudere la finestra che contiene il viewer
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      setFull(null);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [full]);
+
+  // la tela di 3Dmol si adatta alle dimensioni nuove, dopo l'impaginazione
+  useEffect(() => {
+    const v = viewer.current;
+    if (!v) return;
+    const id = requestAnimationFrame(() => {
+      v.resize();
+      v.render();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [full]);
+
   useEffect(
     () => () => {
       try {
@@ -268,32 +344,42 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
         /* nulla da rilasciare */
       }
       viewer.current = null;
-      shown.current = false;
     },
     [],
   );
 
   return (
-    <div className="viewer3d" style={{ height }}>
+    // a schermo intero l'altezza viene dalla Fullscreen API o dalla classe .fullscreen
+    <div ref={frame} className={`viewer3d${full === "css" ? " fullscreen" : ""}`} style={full ? undefined : { height }}>
       <div ref={host} style={{ position: "absolute", inset: 0 }} />
       {(loading || (!text && !error)) && (
         <div className="empty" style={{ position: "absolute", inset: 0, placeContent: "center" }}>
           {loading ? <Spinner /> : "Nessuna struttura selezionata"}
         </div>
       )}
-      {error && <div className="empty" style={{ position: "absolute", inset: 0, placeContent: "center", color: "var(--err)" }}>{error}</div>}
+      {error && <div className="empty viewer3d-error" style={{ position: "absolute", inset: 0, placeContent: "center" }}>{error}</div>}
       {text && coloring && <ViewerLegend coloring={coloring} />}
       {text && hover && <div className="hover3d">{hover}</div>}
       {text && (
         <div className="overlay">
           {!coloring && SCHEMES.map((s) => (
-            <button key={s.value} className="btn btn-sm" style={s.value === scheme ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined} onClick={() => setScheme(s.value)}>
+            <button key={s.value} type="button" className="btn btn-sm" aria-pressed={s.value === scheme} onClick={() => setScheme(s.value)}>
               {s.label}
             </button>
           ))}
-          <button className="btn btn-sm" onClick={() => { viewer.current?.zoomTo(); viewer.current?.render(); }}>Centra</button>
+          <button type="button" className="btn btn-sm" onClick={() => { viewer.current?.zoomTo(); viewer.current?.render(); }}>Centra</button>
         </div>
       )}
+      <div className="overlay-tr">
+        <button type="button" className="btn btn-sm" disabled={!ready} onClick={savePng}
+          title={pngFailed ? "Esportazione non riuscita: riprova" : "Scarica la vista corrente come immagine PNG"}>
+          <Icon name={pngFailed ? "alert" : "image"} size={14} /> PNG
+        </button>
+        <button type="button" className="btn btn-sm" disabled={!text && !full} onClick={toggleFull}
+          title={full ? "Torna alla vista normale (Esc)" : "Mostra la struttura a schermo intero"}>
+          <Icon name={full ? "minimize" : "maximize"} size={14} /> {full ? "Esci (Esc)" : "Espandi"}
+        </button>
+      </div>
     </div>
   );
 }

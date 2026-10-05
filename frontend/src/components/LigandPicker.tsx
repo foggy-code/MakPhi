@@ -6,7 +6,7 @@ import {
   candidateGroups, CLASS_LABEL, CLASS_TONE, groupClass, groupTitle, isDefault, isLookupError, isTransferable, ligandOptions, lookupState, selectionSummary,
   syncSelection, type LigandLookup,
 } from "../lib/ligands";
-import { Badge } from "./ui";
+import { Badge, Disclosure } from "./ui";
 
 // Template scelto da un link (Ricerca) e non ancora in libreria: il selettore dei template lo sta scaricando da RCSB
 // o AlphaFold DB, quindi un 404 si riprova qualche volta (come la verifica di copertura, useCoverageCheck).
@@ -90,23 +90,28 @@ export function LigandPicker({ templates, known = {}, enabled, onEnabled, select
       </label>
       {enabled && (
         <div className="stack-sm card flat" style={{ padding: "8px 10px" }}>
-          {!templates.length && <span className="tiny muted">Scegli prima i template.</span>}
+          {!templates.length && <span className="small text-2">Scegli prima i template.</span>}
           {templates.map((t) => {
             const list = candidates.filter((c) => c.template === t.id);
+            const usable = list.filter((c) => isTransferable(c.group));
+            const chosen = usable.filter((c) => selection[c.key]).length;
             const a = analyses[t.id];
             return (
               <div key={t.id} className="stack-sm">
-                <b className="small">{t.id}{t.chains.length ? ` · catene ${t.chains.join(", ")}` : ""}</b>
-                {!a || a === "loading" ? <span className="tiny muted">Lettura dei gruppi eteroatomici del template…</span>
+                <div className="row small">
+                  <b>{t.id}{t.chains.length ? ` · catene ${t.chains.join(", ")}` : ""}</b>
+                  {usable.length > 0 && <Badge tone={chosen ? "accent" : undefined}>{chosen} di {usable.length} scelti</Badge>}
+                </div>
+                {!a || a === "loading" ? <span className="small text-2">Lettura dei gruppi eteroatomici del template…</span>
                   : isLookupError(a) ? (
-                    a.retrying ? <span className="tiny muted">Template non ancora in libreria (download in corso?): nuovo tentativo fra qualche secondo…</span> : (
-                      <span className="row tiny" style={{ color: "var(--warn)" }}>
+                    a.retrying ? <span className="small text-2">Template non ancora in libreria (download in corso?): nuovo tentativo fra qualche secondo…</span> : (
+                      <span className="row small" style={{ color: "var(--warn)" }}>
                         Gruppi di {t.id} non disponibili: {a.error}
                         <button className="btn btn-sm btn-ghost" onClick={() => retry(t.id)}>Riprova</button>
                       </span>
                     )
                   )
-                  : !list.length ? <span className="tiny muted">Nessun gruppo eteroatomico (acque escluse) nelle catene scelte.</span>
+                  : !list.length ? <span className="small text-2">Nessun gruppo eteroatomico (acque escluse) nelle catene scelte.</span>
                   : list.map((c) => {
                     const cls = groupClass(c.group);
                     return (
@@ -114,19 +119,20 @@ export function LigandPicker({ templates, known = {}, enabled, onEnabled, select
                         <input type="checkbox" disabled={!isTransferable(c.group)} checked={!!selection[c.key]} onChange={(e) => toggle(c.key, e.target.checked)} />
                         <span className="mono">{groupTitle(c.group)}</span>
                         <Badge tone={CLASS_TONE[cls]}>{c.group.label ?? CLASS_LABEL[cls]}</Badge>
-                        {c.group.description && <span className="tiny muted">{c.group.description}</span>}
-                        {(!isDefault(c.group) || !isTransferable(c.group)) && c.group.reason && <span className="tiny muted">{c.group.reason}</span>}
+                        {c.group.description && <span className="text-2">{c.group.description}</span>}
+                        {(!isDefault(c.group) || !isTransferable(c.group)) && c.group.reason && <span className="text-2">· {c.group.reason}</span>}
                       </label>
                     );
                   })}
               </div>
             );
           })}
-          <span className="tiny muted">
-            {selectionSummary(candidates, selection)} I gruppi scelti entrano nell'allineamento come colonne «.» e MODELLER li copia dal template; le
-            acque non si trasferiscono.{templates.length > 1 && " Lo stesso gruppo nello stesso sito di più template diventa un solo gruppo del modello, con i vincoli di tutti."} Dopo
+          <span className="small text-2">{selectionSummary(candidates, selection)}</span>
+          <Disclosure title="Come funziona il trasferimento">
+            I gruppi scelti entrano nell'allineamento come colonne «.» e MODELLER li copia dal template; le acque non si trasferiscono.
+            {templates.length > 1 && " Lo stesso gruppo nello stesso sito di più template diventa un solo gruppo del modello, con i vincoli di tutti."} Dopo
             la modellazione BioLoom verifica contatti, scontri e coordinazione dei metalli (pagina Qualità).
-          </span>
+          </Disclosure>
         </div>
       )}
     </div>

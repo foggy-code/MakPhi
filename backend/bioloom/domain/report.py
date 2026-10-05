@@ -275,10 +275,14 @@ def model_trims(head: str) -> dict[str, Optional[dict]]:
 # ---------------------------------------------------------------------------------------------- grafici SVG
 SVG_NS = "http://www.w3.org/2000/svg"
 FONT = "font-family=\"Helvetica, Arial, sans-serif\""
-REGION_FILL = {"allowed": "#dbe7f4", "favored": "#a8c8e6"}
-POINT_FILL = {"favored": "#1d4e89", "allowed": "#d98200", "outlier": "#c62828"}
+# colori standard del grafico di Ramachandran (convenzione PROCHECK, Laskowski et al. 1993): favorite rosse, consentite
+# gialle, non consentite bianche, residui neri, outlier etichettati in rosso
+REGION_FILL = {"allowed": "#ffff00", "favored": "#ff0000"}
+DISALLOWED_FILL = "#ffffff"
+POINT_FILL = {"favored": "#000000", "allowed": "#000000", "outlier": "#000000"}
+OUTLIER_LABEL = "#c00000"
 REGION_LABEL = {"favored": "favorita", "allowed": "consentita", "outlier": "outlier"}
-# Pannelli come nell'interfaccia (components/charts.tsx): la pre-prolina usa le regioni del caso generale
+# Pannelli come nell'interfaccia (frontend/src/components/charts/Ramachandran.tsx): la pre-prolina usa le regioni del caso generale
 RAMA_PANELS = (("general", "Caso generale (anche pre-prolina)"), ("glycine", "Glicina"), ("proline", "Prolina"))
 SS_FILL = {"H": "#c0392b", "E": "#d4a106", "C": "#cfd8dc"}
 SS_LABEL = {"H": "elica (H, G, I)", "E": "filamento β (E, B)", "C": "coil"}
@@ -307,8 +311,9 @@ def _rama_panel(point: dict) -> str:
 
 
 def rama_svg(rama: dict, panel: str) -> str:
-    """Grafico di Ramachandran di una classe di residui: regioni favorite e consentite (rettangoli di
-    domain/ramachandran, calibrati sulle aree di MolProbity) e un cerchio per residuo; outlier etichettati."""
+    """Grafico di Ramachandran di una classe di residui con i colori standard: regioni favorite (rosso) e consentite
+    (giallo) dai rettangoli di domain/ramachandran, calibrati sulle aree di MolProbity, il resto bianco; un cerchio nero
+    per residuo, outlier etichettati in rosso."""
     title = dict(RAMA_PANELS)[panel]
     size, pl, pr, pt, pb = 250, 42, 12, 22, 34
     width, height = pl + size + pr, pt + size + pb
@@ -324,7 +329,7 @@ def rama_svg(rama: dict, panel: str) -> str:
         regions = ramachandran.REGIONS[panel]
     out = [_svg_open(width, height, f"Grafico di Ramachandran: {title}"),
            f'<text x="{pl}" y="14" font-size="11" font-weight="bold" fill="#1f2933">{_e(title)}</text>',
-           f'<rect x="{pl}" y="{pt}" width="{size}" height="{size}" fill="#f7f9fb" stroke="#9aa5b1"/>']
+           f'<rect x="{pl}" y="{pt}" width="{size}" height="{size}" fill="{DISALLOWED_FILL}" stroke="#1f2933"/>']
     for kind in ("allowed", "favored"):
         rects = regions.get(kind)
         for rect in rects if isinstance(rects, (list, tuple)) else []:
@@ -335,10 +340,10 @@ def rama_svg(rama: dict, panel: str) -> str:
             out.append(f'<rect x="{_f(x(a))}" y="{_f(y(d))}" width="{_f(x(b) - x(a))}" height="{_f(y(c) - y(d))}" '
                        f'fill="{REGION_FILL[kind]}"/>')
     for v in (-90, 0, 90):
-        out.append(f'<line x1="{_f(x(v))}" x2="{_f(x(v))}" y1="{pt}" y2="{pt + size}" stroke="#c4cdd5" '
-                   'stroke-dasharray="3 3"/>')
-        out.append(f'<line x1="{pl}" x2="{pl + size}" y1="{_f(y(v))}" y2="{_f(y(v))}" stroke="#c4cdd5" '
-                   'stroke-dasharray="3 3"/>')
+        out.append(f'<line x1="{_f(x(v))}" x2="{_f(x(v))}" y1="{pt}" y2="{pt + size}" stroke="#7b8794" '
+                   'stroke-dasharray="3 3" stroke-width="0.6"/>')
+        out.append(f'<line x1="{pl}" x2="{pl + size}" y1="{_f(y(v))}" y2="{_f(y(v))}" stroke="#7b8794" '
+                   'stroke-dasharray="3 3" stroke-width="0.6"/>')
     for v in (-180, -90, 0, 90, 180):
         out.append(f'<text x="{_f(x(v))}" y="{pt + size + 13}" text-anchor="middle" fill="#52606d">{v}</text>')
         out.append(f'<text x="{pl - 5}" y="{_f(y(v) + 3)}" text-anchor="end" fill="#52606d">{v}</text>')
@@ -357,13 +362,13 @@ def rama_svg(rama: dict, panel: str) -> str:
         tip = f"{_residue_label(p)}: φ {_num(p['phi'], 0)}°, ψ {_num(p['psi'], 0)}° ({REGION_LABEL[region]})"
         out.append(f'<circle class="rp {region}" cx="{_f(cx)}" cy="{_f(cy)}" r="{3.6 if outlier else 2.4}" '
                    f'fill="{POINT_FILL[region]}"'
-                   + (' stroke="#ffffff" stroke-width="0.8"' if outlier else ' fill-opacity="0.8"')
+                   + (' stroke="#ffffff" stroke-width="0.8"' if outlier else ' fill-opacity="0.85"')
                    + f'><title>{_e(tip)}</title></circle>')
         if outlier:  # etichetta a destra del punto, a sinistra vicino al bordo destro del grafico
             right = cx > pl + size - 60
             tx, anchor = (cx - 5, "end") if right else (cx + 5, "start")
             labels.append(f'<text class="lab" x="{_f(tx)}" y="{_f(max(pt + 9, cy - 4))}" text-anchor="{anchor}" '
-                          f'font-size="9" font-weight="bold" fill="#8e1b1b">{_e(_residue_label(p))}</text>')
+                          f'font-size="9" font-weight="bold" fill="{OUTLIER_LABEL}">{_e(_residue_label(p))}</text>')
     out.extend(labels)
     out.append("</svg>")
     return "".join(out)
@@ -1362,9 +1367,10 @@ def _rama_block(doc: _Doc, quality: dict) -> None:
     doc.add('<p class="small muted">'
             f'<span class="swatch" style="background:{REGION_FILL["favored"]}"></span>regione favorita'
             f'<span class="swatch" style="background:{REGION_FILL["allowed"]}"></span>regione consentita'
-            f'<span class="swatch" style="background:{POINT_FILL["favored"]}"></span>residuo favorito'
-            f'<span class="swatch" style="background:{POINT_FILL["allowed"]}"></span>consentito'
-            f'<span class="swatch" style="background:{POINT_FILL["outlier"]}"></span>outlier (etichettato)</p>')
+            f'<span class="swatch" style="background:{DISALLOWED_FILL};box-shadow:inset 0 0 0 1px #9aa5b1"></span>'
+            'non consentita'
+            f'<span class="swatch" style="background:{POINT_FILL["favored"]};border-radius:50%"></span>residuo'
+            f'<b style="color:{OUTLIER_LABEL};margin-left:10px">ABC A1</b> outlier (etichettato in rosso)</p>')
     outliers = [p for p in points if p.get("region") == "outlier"]
     if outliers:
         doc.add("<p>Outlier: " + ", ".join(f"{_e(_residue_label(p))} ({_num(p.get('phi'), 0)}°, "

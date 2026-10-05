@@ -1,0 +1,20 @@
+/*
+ * Grafici lineari e matrice di identità (components/charts): legenda a gradiente, campioni con il bordo, striscia per
+ * residuo, righe della vista espansa delle barre.
+ */
+.heat-legend { align-items: center; }
+.heat-scale { display: inline-grid; gap: 3px; width: min(280px, 100%); }
+.heat-bar { display: block; height: 10px; border-radius: 3px; border: 1px solid var(--border); }
+.heat-ticks { position: relative; height: 15px; }
+.heat-ticks span { position: absolute; top: 0; transform: translateX(-50%); font-size: 11px; color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.heat-ticks span:first-child { transform: none; }
+.heat-ticks span:last-child { transform: translateX(-100%); }
+/* campione di un colore che porta dati: il bordo tiene visibili i colori chiari (giallo, grigio) sul fondo bianco */
+.legend i.edged { box-shadow: inset 0 0 0 1px var(--chart-axis); }
+
+/* striscia per residuo (ResidueStrip): la selezione è un riquadro sopra le celle, non una classe su ognuna */
+.res-strip { position: relative; }
+.res-strip > .res-strip-sel { position: absolute; top: 0; bottom: 0; min-width: 2px; outline: 2px solid var(--text); outline-offset: -2px; pointer-events: none; }
+
+.stackbar-rows { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px; align-items: center; font-size: 12.5px; color: var(--text); }
+.stackbar-rows .bar-cell { color: var(--text-2); font-variant-numeric: tabular-nums; }

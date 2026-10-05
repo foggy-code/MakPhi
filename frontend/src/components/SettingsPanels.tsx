@@ -9,8 +9,9 @@ import { notifySystemChanged, useAsync, useJob } from "../lib/hooks";
 import { fmtSeconds, licenseWarnings, qmeanMemoryNote } from "../lib/status";
 import { TextFileButton } from "./FileLoad";
 import { Icon } from "./Icon";
+import { StackBar } from "./charts";
 import { JobPanel } from "./JobPanel";
-import { Alert, Badge, Card, DropZone, Field, Spinner, Stat } from "./ui";
+import { Alert, Badge, Card, Disclosure, DropZone, Field, Spinner, Stat } from "./ui";
 
 /** Avvia un job di servizio (database, verifica) e ne mostra l'avanzamento. */
 function useServiceJob<R>(onDone?: (r: R | null) => void) {
@@ -37,7 +38,7 @@ export function LicensesPanel() {
   const { data, setData, loading } = useAsync<LicenseStatus>(() => api.licenses(), []);
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
-  if (loading && !data) return <div className="empty"><Spinner /></div>;
+  if (loading && !data) return <div className="empty"><Spinner label="Caricamento delle licenze" /></div>;
   if (!data) return null;
   const update = (s: LicenseStatus) => {
     setData(s);
@@ -61,7 +62,7 @@ export function LicensesPanel() {
     <div className="grid grid-2" style={{ alignItems: "start" }}>
       <div className="stack">
         {licenseWarnings(data).map((w, i) => <Alert key={i} tone="warn">{w}</Alert>)}
-        <Card title="MODELLER" sub="licenza accademica gratuita">
+        <Card icon="cube" title="MODELLER" sub="licenza accademica gratuita">
           <div className="stack">
             {m.available ? (
               <Alert tone="ok">
@@ -90,7 +91,7 @@ export function LicensesPanel() {
               >
                 Leggi la chiave da un file
               </TextFileButton>
-              <span className="tiny muted">file di testo, email di registrazione salvata o config.py di un'altra installazione di MODELLER</span>
+              <span className="small text-2">file di testo, email di registrazione salvata o config.py di un'altra installazione di MODELLER</span>
             </div>
             {m.source === "file" && (
               <button className="btn btn-sm btn-ghost" style={{ alignSelf: "start" }} onClick={() => api.removeModellerKey().then(update).catch(toast.error)}>
@@ -99,13 +100,13 @@ export function LicensesPanel() {
             )}
           </div>
         </Card>
-        <Card title="PROCHECK">
+        <Card icon="shield" title="PROCHECK">
           {data.procheck.installed
             ? <Alert tone="ok">PROCHECK è installato: nessuna chiave richiesta (licenza accademica).</Alert>
             : <Alert tone="info">PROCHECK non è incluso in questa immagine: metti il pacchetto in docker/vendor/procheck e ricostruisci l'immagine.</Alert>}
         </Card>
       </div>
-      <Card title="ProSA II 2003" sub="licenza legata al MAC del computer">
+      <Card icon="activity" title="ProSA II 2003" sub="licenza legata al MAC del computer">
         <div className="stack">
           {!p.installed && <Alert tone="info">ProSA non è incluso in questa immagine (pacchetto in docker/vendor/prosa).</Alert>}
           {p.license ? (
@@ -126,7 +127,7 @@ export function LicensesPanel() {
           )}
           {p.error && <Alert tone="err">{p.error}</Alert>}
           <DropZone accept="*" label={p.license ? "Sostituisci il file LicenseDB" : "Trascina qui il file LicenseDB o fai clic"} onFile={(f) => api.uploadProsaLicense(f).then((s) => { update(s); toast.push("Licenza ProSA salvata"); }).catch(toast.error)} />
-          <p className="tiny muted">Le licenze restano nella cartella dati (sottocartella licenses) e viaggiano con essa: non entrano mai nell'immagine Docker.</p>
+          <p className="small text-2">Le licenze restano nella cartella dati (sottocartella licenses) e viaggiano con essa: non entrano mai nell'immagine Docker.</p>
         </div>
       </Card>
     </div>
@@ -137,24 +138,24 @@ export function LicensesPanel() {
 export function DatabasesPanel() {
   const { data, reload } = useAsync<DatabaseStatus>(() => api.databases(), []);
   const svc = useServiceJob(() => reload());
-  if (!data) return <div className="empty"><Spinner /></div>;
+  if (!data) return <div className="empty"><Spinner label="Caricamento dei database" /></div>;
   const q = data.qmean;
   return (
     <div className="grid grid-2" style={{ alignItems: "start" }}>
       <div className="stack">
         {svc.summary && <JobPanel summary={svc.summary} onCancel={svc.cancel} compact />}
-        <Card title="pdbaa (BLAST+)" sub="sequenze del PDB per la ricerca locale">
+        <Card icon="library" title="pdbaa (BLAST+)" sub="sequenze del PDB per la ricerca locale" right={<Badge tone={data.pdbaa.usable ? "ok" : "info"}>{data.pdbaa.usable ? "presente" : "assente"}</Badge>}>
           <div className="stack">
             {data.pdbaa.usable
               ? <Alert tone="ok">Database presente: {fmtBytes(data.pdbaa.size)}{data.pdbaa.updated ? `, aggiornato il ${data.pdbaa.updated}` : ""}.</Alert>
               : <Alert tone="info">Database assente: la ricerca locale (BLAST+ e MMseqs2) non è disponibile. RCSB e NCBI funzionano comunque.</Alert>}
-            <button className="btn" style={{ alignSelf: "start" }} disabled={svc.running} onClick={() => svc.start(api.updatePdbaa)}>
+            <button type="button" className="btn" style={{ alignSelf: "start" }} disabled={svc.running} onClick={() => svc.start(api.updatePdbaa)}>
               <Icon name="download" size={14} /> {data.pdbaa.usable ? "Aggiorna da NCBI" : "Scarica da NCBI"}
             </button>
-            <p className="tiny muted">Circa 0,5 GB nella cartella dati. Il download avviene nell'area temporanea e sostituisce il database solo a fine operazione.</p>
+            <p className="small text-2">Circa 0,5 GB nella cartella dati. Il download avviene nell'area temporanea e sostituisce il database solo a fine operazione.</p>
           </div>
         </Card>
-        <Card title="MMseqs2" sub="ricerca locale veloce">
+        <Card icon="search" title="MMseqs2" sub="ricerca locale veloce" right={<Badge tone={data.mmseqs.usable ? (data.mmseqs.indexed_here ? "ok" : "info") : "warn"}>{data.mmseqs.usable ? (data.mmseqs.indexed_here ? "pronto, con indice" : "pronto") : "da preparare"}</Badge>}>
           <div className="stack">
             {data.mmseqs.usable ? (
               <Alert tone={data.mmseqs.indexed_here ? "ok" : "info"}>
@@ -163,16 +164,16 @@ export function DatabasesPanel() {
               </Alert>
             ) : <Alert tone="info">Database MMseqs2 non ancora preparato: si crea da pdbaa in pochi minuti.</Alert>}
             <div className="row">
-              <button className="btn" disabled={svc.running || !data.pdbaa.usable} onClick={() => svc.start(api.buildMmseqs)}>
+              <button type="button" className="btn" disabled={svc.running || !data.pdbaa.usable} onClick={() => svc.start(api.buildMmseqs)}>
                 <Icon name="refresh" size={14} /> {data.mmseqs.usable ? "Ricrea da pdbaa" : "Prepara MMseqs2"}
               </button>
               {data.mmseqs.usable && !data.mmseqs.indexed_here && (
-                <button className="btn btn-primary" disabled={svc.running} onClick={() => svc.start(api.indexMmseqs)}>
+                <button type="button" className="btn btn-primary" disabled={svc.running} onClick={() => svc.start(api.indexMmseqs)}>
                   <Icon name="play" size={12} /> Crea indice veloce
                 </button>
               )}
             </div>
-            <p className="tiny muted">Il database (≈ 140 MB) sta nella cartella dati; l'indice (≈ 1,5 GB) resta su ciascun computer, nel volume Docker locale, per non appesantire la chiavetta.</p>
+            <p className="small text-2">Il database (≈ 140 MB) sta nella cartella dati; l'indice (≈ 1,5 GB) resta su ciascun computer, nel volume Docker locale, per non appesantire la chiavetta.</p>
           </div>
         </Card>
       </div>
@@ -225,7 +226,8 @@ function UniclustCard({ status: q, running, onConvert, onLocal, onChanged }: {
   const dbs = q.databases ?? [];
   const ready = dbs.filter((d) => d.state === "ready");
   return (
-    <Card title="UniClust30 / UniRef30 per QMEAN locale" sub="qualunque versione, dal disco esterno">
+    <Card icon="layers" title="UniClust30 / UniRef30 per QMEAN locale" sub="qualunque versione, dal disco esterno"
+      right={<Badge tone={q.available ? "ok" : "warn"}>{q.available ? "QMEAN locale pronto" : "non disponibile"}</Badge>}>
       <div className="stack">
         {q.available ? (
           <Alert tone="ok">
@@ -236,7 +238,7 @@ function UniclustCard({ status: q, running, onConvert, onLocal, onChanged }: {
         ) : (
           <Alert tone="warn">{q.message ?? "QMEAN locale non disponibile."}</Alert>
         )}
-        {qmeanMemoryNote(q) && <div className="small muted">{qmeanMemoryNote(q)}</div>}
+        {qmeanMemoryNote(q) && <div className="small text-2">{qmeanMemoryNote(q)}</div>}
         {q.uniclust?.memory_message && (
           <Alert tone={q.uniclust.memory === "insufficient" ? "err" : "warn"}>
             {q.uniclust.memory === "swap" && <>{q.uniclust.memory_message}<br /></>}
@@ -258,24 +260,25 @@ function UniclustCard({ status: q, running, onConvert, onLocal, onChanged }: {
                     <tr key={d.id} className={d.id === q.selected ? "selected" : ""}>
                       <td>
                         <b>{d.name}</b> {d.id === q.selected && <Badge tone="accent">in uso</Badge>}
-                        <div className="tiny muted">{d.family}{d.version ? ` · ${d.version}` : ""}{d.hhm ? "" : " · senza HMM"}{d.cs219_source === "converted" ? " · cs219 ricreato" : ""}</div>
+                        <div className="shell-sub">{d.family}{d.version ? ` · ${d.version}` : ""}{d.hhm ? "" : " · senza HMM"}{d.cs219_source === "converted" ? " · cs219 ricreato" : ""}</div>
                         {d.problems.map((p, i) => <div key={i} className="tiny" style={{ color: "var(--err)" }}>{p}</div>)}
                         <LocalCopyNote db={d} />
                         <div className="row" style={{ gap: 6, marginTop: 6 }}>
                           {d.state === "needs_conversion" && (
-                            <button className="btn btn-sm" disabled={running} onClick={() => onConvert(d.id)} title="Ricrea il file cs219 per HH-suite 3 dagli allineamenti (una volta sola)">
+                            <button type="button" className="btn btn-sm" disabled={running} onClick={() => onConvert(d.id)} title="Ricrea il file cs219 per HH-suite 3 dagli allineamenti (una volta sola)">
                               <Icon name="refresh" size={12} /> Converti
                             </button>
                           )}
                           {d.state !== "incomplete" && d.local && d.local.state !== "copying" && d.local.state !== "ready" && (d.shared || d.local.state === "stale") && (
-                            <button className={`btn btn-sm${d.id === q.selected && d.state === "ready" ? " btn-primary" : ""}`} disabled={running}
+                            <button type="button" className={`btn btn-sm${d.id === q.selected && d.state === "ready" ? " btn-primary" : ""}`} disabled={running}
                               onClick={() => onLocal(d.id, "copy")}
                               title={`Copia indici e cs219 (${fmtBytes(d.local.size)}) nel volume Docker di questo computer: HHblits evita le letture lente dal disco condiviso`}>
                               <Icon name="download" size={12} /> Copia indici ({fmtBytes(d.local.size)})
                             </button>
                           )}
                           {d.local && (d.local.state === "ready" || d.local.state === "stale") && (
-                            <button className="btn btn-sm btn-ghost" disabled={running} onClick={() => onLocal(d.id, "remove")} title="Elimina la copia locale e libera spazio (il database sul disco non cambia)">
+                            <button type="button" className="btn btn-sm btn-ghost" disabled={running} onClick={() => onLocal(d.id, "remove")} title="Elimina la copia locale e libera spazio (il database sul disco non cambia)"
+                              aria-label={`Elimina la copia locale di ${d.name}`}>
                               <Icon name="trash" size={12} />
                             </button>
                           )}
@@ -296,18 +299,18 @@ function UniclustCard({ status: q, running, onConvert, onLocal, onChanged }: {
               </select>
             </Field>
             {dbs.some((d) => d.shared) && (
-              <p className="tiny muted">
+              <Disclosure title="Disco condiviso e copia degli indici">
                 Il disco arriva nel container attraverso la condivisione di file di Docker Desktop: è veloce a blocchi grandi ma molto lento per le
                 letture piccole con cui HHblits scorre gli indici. <b>Copia indici</b> porta su questo computer solo indici e cs219 (pochi GB, nel disco
                 di Docker: su Windows di solito in C:): i file grandi restano sul disco e se ne leggono solo le voci trovate. Va fatto una volta per computer; se il database
                 cambia, BioLoom se ne accorge e torna a leggere dal disco finché non aggiorni la copia.
-              </p>
+              </Disclosure>
             )}
             {dbs.some((d) => d.state === "needs_conversion") && (
-              <p className="tiny muted">
+              <Disclosure title="Conversione dei formati vecchi">
                 Le versioni in formato HH-suite 2 (uniclust30 2016–2017) vanno convertite una volta: BioLoom ricrea il file cs219 dagli allineamenti
                 e lo conserva su questo computer, senza modificare il disco. Sui database completi richiede alcune ore.
-              </p>
+              </Disclosure>
             )}
           </>
         )}
@@ -319,19 +322,21 @@ function UniclustCard({ status: q, running, onConvert, onLocal, onChanged }: {
           <Alert key={o.id} tone="info">
             <div className="row" style={{ justifyContent: "space-between" }}>
               <span>Copia locale di <span className="mono">{o.id}</span> ({fmtBytes(o.size)}): il database non è collegato.</span>
-              <button className="btn btn-sm btn-ghost" disabled={running} onClick={() => onLocal(o.id, "remove")}><Icon name="trash" size={12} /> Elimina</button>
+              <button type="button" className="btn btn-sm btn-ghost" disabled={running} onClick={() => onLocal(o.id, "remove")}><Icon name="trash" size={12} /> Elimina</button>
             </div>
           </Alert>
         ))}
-        <div className="step-list">
-          <div className="step"><span className="n">1</span><div className="small">Collega il disco con UniClust30 o UniRef30, in qualunque versione (UniRef30 2020–2023, uniclust30 2016–2018), anche più versioni in cartelle diverse.</div></div>
-          <div className="step"><span className="n">2</span><div className="small">Avvia (o riavvia) BioLoom con l'avviatore: trova da solo le versioni sui dischi collegati, anche se cambia la lettera o il punto di montaggio. Se non le trova, indica la cartella con il tasto U.</div></div>
-          <div className="step"><span className="n">3</span><div className="small">Facoltativo: una cartella con la QMTL abilita QMEANDisCo.</div></div>
-        </div>
-        <p className="tiny muted">
+        <Disclosure title="Come collegare il database" defaultOpen={!q.available && !dbs.length}>
+          <div className="step-list">
+            <div className="step"><span className="n">1</span><div className="small">Collega il disco con UniClust30 o UniRef30, in qualunque versione (UniRef30 2020–2023, uniclust30 2016–2018), anche più versioni in cartelle diverse.</div></div>
+            <div className="step"><span className="n">2</span><div className="small">Avvia (o riavvia) BioLoom con l'avviatore: trova da solo le versioni sui dischi collegati, anche se cambia la lettera o il punto di montaggio. Se non le trova, indica la cartella con il tasto U.</div></div>
+            <div className="step"><span className="n">3</span><div className="small">Facoltativo: una cartella con la QMTL abilita QMEANDisCo.</div></div>
+          </div>
+        </Disclosure>
+        <Disclosure title="Calibrazione di QMEAN e uso su un server">
           QMEAN è calibrato dagli autori su UniClust30 2018_08: con altre versioni i termini di accordo di struttura secondaria e accessibilità
           possono variare leggermente. Su un server il percorso si indica in server.env (UNICLUST_PATH, QMTL_PATH). Il disco resta in sola lettura.
-        </p>
+        </Disclosure>
       </div>
     </Card>
   );
@@ -344,9 +349,10 @@ const STATUS_COLOR = { ok: "var(--ok)", missing: "var(--muted)", error: "var(--e
 export function ToolsPanel({ info, onRefresh }: { info: SystemInfo | null; onRefresh: () => void }) {
   const [result, setResult] = useState<SelfTestResult | null>(null);
   const svc = useServiceJob<SelfTestResult>((r) => setResult(r));
+  const tools = info ? Object.entries(info.tools) : [];
   return (
     <div className="grid grid-2" style={{ alignItems: "start" }}>
-      <Card title="Verifica dell'installazione" sub="ogni strumento provato sull'ubiquitina (1UBQ)" right={<button className="btn btn-primary btn-sm" disabled={svc.running} onClick={() => svc.start(api.selftest)}>{svc.running ? <Spinner /> : <Icon name="play" size={12} />} Avvia</button>}>
+      <Card icon="check" title="Verifica dell'installazione" sub="ogni strumento provato sull'ubiquitina (1UBQ)" right={<button type="button" className="btn btn-primary btn-sm" disabled={svc.running} onClick={() => svc.start(api.selftest)}>{svc.running ? <Spinner /> : <Icon name="play" size={12} />} Avvia</button>}>
         <div className="stack">
           {svc.running && svc.summary && <JobPanel summary={svc.summary} onCancel={svc.cancel} compact />}
           {result ? (
@@ -357,27 +363,28 @@ export function ToolsPanel({ info, onRefresh }: { info: SystemInfo | null; onRef
                     <span style={{ color: STATUS_COLOR[c.status] }}><Icon name={STATUS_ICON[c.status]} size={15} /></span>
                     <b>{c.tool}</b>
                     <span className="small text-2">{c.detail}</span>
-                    <span className="tiny muted">{fmtSeconds(c.seconds)}</span>
+                    <span className="shell-sub">{fmtSeconds(c.seconds)}</span>
                   </div>
                 ))}
               </div>
               <p className="small">{result.counts.ok} funzionanti · {result.counts.missing} non disponibili · {result.counts.error} con errori</p>
             </>
-          ) : !svc.running && <p className="small muted">Prova MODELLER, DSSP, BLAST+, MMseqs2, Clustal Omega, MAFFT, MUSCLE, TM-align, US-align, PROCHECK, ProSA e il servizio QMEAN. Richiede meno di un minuto.</p>}
+          ) : !svc.running && <p className="small text-2">Prova MODELLER, DSSP, BLAST+, MMseqs2, Clustal Omega, MAFFT, MUSCLE, TM-align, US-align, PROCHECK, ProSA e il servizio QMEAN. Richiede meno di un minuto.</p>}
         </div>
       </Card>
-      <Card title="Strumenti rilevati" right={<button className="btn btn-sm" onClick={onRefresh}><Icon name="refresh" size={13} /> Rileva</button>}>
+      <Card icon="settings" title="Strumenti rilevati" sub={info ? `${tools.filter(([, t]) => t.available).length} di ${tools.length} installati` : undefined}
+        right={<button type="button" className="btn btn-sm" onClick={onRefresh}><Icon name="refresh" size={13} /> Rileva</button>}>
         {info && (
           <div className="table-wrap">
             <table className="table">
               <tbody>
-                {Object.entries(info.tools).map(([k, t]) => (
+                {tools.map(([k, t]) => (
                   <tr key={k}>
                     <td>
                       <span className="row" style={{ gap: 6 }}><span className="dot" style={{ color: t.available ? "var(--ok)" : "var(--muted)" }} /><b>{t.label}</b></span>
-                      <div className="tiny muted">{t.use}</div>
+                      <div className="shell-sub">{t.use}</div>
                     </td>
-                    <td className="small">{t.available ? <span className="mono tiny">{t.path}</span> : <span className="tiny muted">non installato: si usa il motore integrato, se esiste</span>}</td>
+                    <td className="small">{t.available ? <span className="mono tiny">{t.path}</span> : <span className="shell-sub">non installato: si usa il motore integrato, se esiste</span>}</td>
                   </tr>
                 ))}
               </tbody>
@@ -390,22 +397,30 @@ export function ToolsPanel({ info, onRefresh }: { info: SystemInfo | null; onRef
 }
 
 // ---------------------------------------------------------------------------------------------- spazio
-const STORAGE_LABELS: [string, string, string][] = [
-  ["jobs", "Risultati dei job", "cartella dati"],
-  ["templates", "Libreria template", "cartella dati"],
-  ["databases", "Database locali", "cartella dati"],
-  ["uploads", "File caricati", "cartella dati, pulizia automatica"],
-  ["cache", "Cache servizi remoti", "cartella dati, pulizia automatica"],
-  ["compute_cache", "Cache dei calcoli", "ricerche e allineamenti, pulizia automatica"],
-  ["database_file", "Database progetti", "cartella dati"],
-  ["scratch", "Area di lavoro temporanea", "volume Docker, svuotata a ogni avvio"],
-  ["local_cache", "Indici locali", "volume Docker di questo computer"],
+/**
+ * Voci dell'occupazione: chiave del server, nome, dove si trova, colore nella barra della composizione (niente colori di
+ * errore per voci normali; tutti almeno 3:1 sul pannello in entrambi i temi).
+ */
+const STORAGE_LABELS: [string, string, string, string][] = [
+  ["jobs", "Risultati dei job", "cartella dati", "var(--accent)"],
+  ["templates", "Libreria template", "cartella dati", "var(--info)"],
+  ["databases", "Database locali", "cartella dati", "var(--accent-2)"],
+  ["uploads", "File caricati", "cartella dati, pulizia automatica", "var(--ok)"],
+  ["cache", "Cache servizi remoti", "cartella dati, pulizia automatica", "var(--warn)"],
+  ["compute_cache", "Cache dei calcoli", "ricerche e allineamenti, pulizia automatica", "var(--strand)"],
+  ["database_file", "Database progetti", "cartella dati", "var(--helix)"],
+  ["scratch", "Area di lavoro temporanea", "volume Docker, svuotata a ogni avvio", "var(--muted)"],
+  ["local_cache", "Indici locali", "volume Docker di questo computer", "color-mix(in srgb, var(--accent-2) 50%, var(--helix))"],
 ];
 
 export function StoragePanel({ form, set, info }: { form: Settings; set: <K extends keyof Settings>(k: K, v: Settings[K]) => void; info: SystemInfo | null }) {
   const toast = useToast();
   const { data: storage, reload } = useAsync<Record<string, number>>(() => api.storage(), []);
   const [cleaning, setCleaning] = useState(false);
+  const entries = storage ? STORAGE_LABELS.filter(([k]) => k in storage) : [];
+  const total = entries.reduce((sum, [k]) => sum + (storage?.[k] ?? 0), 0);
+  const parts = entries.filter(([k]) => (storage?.[k] ?? 0) > 0)
+    .map(([k, label, , color]) => ({ label: `${label} (${fmtBytes(storage?.[k])})`, value: ((storage?.[k] ?? 0) / total) * 100, color }));
   const clean = async () => {
     setCleaning(true);
     try {
@@ -420,17 +435,21 @@ export function StoragePanel({ form, set, info }: { form: Settings; set: <K exte
   };
   return (
     <div className="grid grid-2" style={{ alignItems: "start" }}>
-      <Card title="Occupazione" right={<button className="btn btn-sm" onClick={clean} disabled={cleaning}>{cleaning ? <Spinner /> : <Icon name="trash" size={13} />} Pulisci ora</button>}>
+      <Card icon="folder" title="Occupazione" sub={storage ? `${fmtBytes(total)} in tutto` : undefined}
+        right={<button type="button" className="btn btn-sm" onClick={clean} disabled={cleaning}>{cleaning ? <Spinner /> : <Icon name="trash" size={13} />} Pulisci ora</button>}>
         {storage ? (
-          <div className="grid grid-2">
-            {STORAGE_LABELS.filter(([k]) => k in storage).map(([k, label, note]) => (
-              <Stat key={k} label={label} value={<span style={{ fontSize: 16 }}>{fmtBytes(storage[k])}</span>} note={note} />
-            ))}
+          <div className="stack">
+            {total > 0 && <StackBar parts={parts} title="Composizione dello spazio" titleHidden subtitle="cartella dati e volumi Docker" filename="bioloom_spazio" />}
+            <div className="grid grid-2">
+              {entries.map(([k, label, note]) => (
+                <Stat key={k} label={label} value={<span style={{ fontSize: 16 }}>{fmtBytes(storage[k])}</span>} note={note} />
+              ))}
+            </div>
           </div>
-        ) : <Spinner />}
+        ) : <div className="empty"><Spinner label="Lettura dell'occupazione" /></div>}
       </Card>
       <div className="stack">
-        <Card title="File temporanei e risultati">
+        <Card icon="save" title="File temporanei e risultati">
           <div className="stack">
             <p className="small text-2">
               I calcoli girano nell'area di lavoro temporanea (veloce, sul computer); a fine job nella cartella dati restano solo i risultati.
@@ -444,7 +463,8 @@ export function StoragePanel({ form, set, info }: { form: Settings; set: <K exte
               <input type="checkbox" checked={form.compute_cache} onChange={(e) => set("compute_cache", e.target.checked)} />
               Riusa i risultati già calcolati di ricerche di template e allineamenti multipli e strutturali (cache dei calcoli)
             </label>
-            <p className="tiny muted" style={{ margin: 0 }}>
+            {/* quando un risultato viene riusato e come ricalcolare: sempre visibile accanto alla scelta */}
+            <p className="small text-2">
               Un calcolo identico (stessa sequenza, parametri, database e programma) non viene rifatto: le ricerche online (RCSB, NCBI) valgono
               7 giorni, le altre finché database e programmi non cambiano. Le voci si eliminano dopo 30 giorni; in Ricerca, Allineamenti e
               Pipeline si può sempre ricalcolare.
@@ -454,7 +474,7 @@ export function StoragePanel({ form, set, info }: { form: Settings; set: <K exte
             </Field>
           </div>
         </Card>
-        <Card title="Installazione">
+        <Card icon="info" title="Installazione">
           {info && (
             <dl className="kv">
               <dt>Versione</dt><dd>BioLoom {info.version}{info.runtime?.image ? ` · immagine ${info.runtime.image}` : ""}</dd>

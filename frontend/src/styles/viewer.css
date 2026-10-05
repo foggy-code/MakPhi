@@ -1,0 +1,12 @@
+/*
+ * Visualizzatore 3D (components/Viewer3D.tsx): schermo intero con la Fullscreen API (senza bordo né angoli
+ * arrotondati) e posto per i comandi in basso a destra (PNG, Espandi), che i comandi a sinistra non coprono:
+ * su un viewer stretto vanno a capo verso l'alto.
+ */
+.viewer3d:fullscreen { border: 0; border-radius: 0; }
+.viewer3d .overlay { max-width: calc(100% - 200px); }
+
+/* Il fondo del viewer è scuro in entrambi i temi: colori fissi chiari, non i token del tema chiaro. */
+.viewer3d .overlay .btn[aria-pressed="true"] { border-color: #3ddcf3; color: #3ddcf3; }
+.viewer3d > .empty { color: #cbd5e1; }
+.viewer3d > .viewer3d-error { color: #ff8a8a; }
