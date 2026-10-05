@@ -49,14 +49,21 @@ export function TagChips({ tags, onPick, onRemove, max }: { tags?: string[] | nu
     <span className="tag-list">
       {shown.map((t) => (
         <span key={t} className={`tag-chip${onPick ? " pickable" : ""}`} title={onPick ? `Filtra per #${t}` : `#${t}`}
-          onClick={onPick ? (e) => { e.stopPropagation(); onPick(t); } : undefined}>
+          role={onPick ? "button" : undefined} tabIndex={onPick ? 0 : undefined}
+          onClick={onPick ? (e) => { e.stopPropagation(); onPick(t); } : undefined}
+          onKeyDown={onPick ? (e) => {
+            if (e.key !== "Enter" && e.key !== " ") return;
+            e.preventDefault();
+            e.stopPropagation();
+            onPick(t);
+          } : undefined}>
           #{t}
           {onRemove && (
             <button type="button" aria-label={`Togli l'etichetta ${t}`} onClick={(e) => { e.stopPropagation(); onRemove(t); }}>×</button>
           )}
         </span>
       ))}
-      {shown.length < tags.length && <span className="tiny muted">+{tags.length - shown.length}</span>}
+      {shown.length < tags.length && <span className="tiny text-2" title={tags.slice(shown.length).map((t) => `#${t}`).join(" ")}>+{tags.length - shown.length}</span>}
     </span>
   );
 }
@@ -141,7 +148,7 @@ export function LabelEditor({ type, id, initial, onChange, compact = false }: { 
           {suggestions.filter((s) => !labels?.tags.includes(s.tag)).slice(0, 30).map((s) => <option key={s.tag} value={s.tag} />)}
         </datalist>
         {check && (check.ok
-          ? check.tag !== text.trim() && <span className="tiny muted" title="Etichetta che verrà salvata">→ #{check.tag}</span>
+          ? check.tag !== text.trim() && <span className="tiny text-2" title="Etichetta che verrà salvata">→ #{check.tag}</span>
           : <span className="tiny" style={{ color: "var(--err)" }}>{check.error}</span>)}
       </span>
     </div>
@@ -160,7 +167,7 @@ export function LabelFilterSelect({ type, value, onChange, width = 170 }: { type
   const current = filterValue(value);
   if (current && !options.some((o) => o.value === current)) options.push({ value: current, label: `#${current}` });
   return (
-    <select className="input" style={{ width, minHeight: 28 }} value={current} aria-label="Filtra per etichetta"
+    <select className="input input-sm" style={{ width }} value={current} aria-label="Filtra per etichetta"
       onFocus={load} onChange={(e) => onChange(parseFilterValue(e.target.value))}>
       {options.map((o) => <option key={o.value || "all"} value={o.value}>{o.label}</option>)}
     </select>

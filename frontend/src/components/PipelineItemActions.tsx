@@ -17,9 +17,9 @@ export function PipelineItemActions({ jobId, item, onView }: { jobId: string; it
   if (!model) return null;
   return (
     <>
-      <button className="btn btn-sm" onClick={onView} title="Visualizza"><Icon name="eye" size={13} /></button>{" "}
-      <Link className="btn btn-sm" to={`/quality?job=${jobId}&file=${encodeURIComponent(model)}`} title="Qualità"><Icon name="shield" size={13} /></Link>{" "}
-      <a className="btn btn-sm" href={api.jobFileUrl(jobId, model, true)} title="Scarica PDB"><Icon name="download" size={13} /></a>{" "}
+      <button type="button" className="btn btn-sm" onClick={onView} title="Visualizza" aria-label="Visualizza il modello in 3D"><Icon name="eye" size={13} /></button>{" "}
+      <Link className="btn btn-sm" to={`/quality?job=${jobId}&file=${encodeURIComponent(model)}`} title="Qualità" aria-label="Qualità del modello"><Icon name="shield" size={13} /></Link>{" "}
+      <a className="btn btn-sm" href={api.jobFileUrl(jobId, model, true)} title="Scarica PDB" aria-label="Scarica il PDB del modello"><Icon name="download" size={13} /></a>{" "}
       {/* il server genera il report solo per un elemento completato (409 altrimenti) */}
       <ReportButton jobId={jobId} model={model} compact disabled={item.status !== "completed"} />
     </>
@@ -32,11 +32,11 @@ export function PipelineModelView({ jobId, name, model, onClose }: { jobId: stri
   return (
     <Modal
       title={`Modello di ${name}`}
-      wide
+      size="wide"
       onClose={onClose}
       footer={
         <>
-          <span className="small muted" style={{ alignSelf: "center" }}>Il report include la vista 3D corrente.</span>
+          <span className="small text-2" style={{ alignSelf: "center" }}>Il report include la vista 3D corrente.</span>
           <ReportButton jobId={jobId} model={model} viewer={viewer} />
         </>
       }

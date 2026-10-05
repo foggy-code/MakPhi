@@ -1,0 +1,39 @@
+/*
+ * Confronto strutturale e allineamenti: spiegazioni delle metriche, legenda del profilo, allineamento leggibile. Ogni
+ * selettore ha un prefisso d'area (.cmp-, .aln-): il foglio resta attivo in tutta l'app dopo il primo caricamento.
+ * Chip premuti e pannelli di dettaglio sono comuni (styles.css: button.chip[aria-pressed], .detail-panel).
+ */
+
+/* spiegazione di una metrica (dettagli delle statistiche, guida della pagina Confronto) */
+.cmp-notes { display: grid; gap: 8px; }
+.cmp-notes p { color: var(--text-2); }
+.cmp-thresholds { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
+.cmp-thresholds li { display: flex; align-items: center; gap: 8px; color: var(--text); }
+.cmp-thresholds .badge { min-width: 70px; justify-content: center; font-variant-numeric: tabular-nums; flex: none; }
+
+/* legenda del profilo e scale a gradiente */
+.cmp-scale { display: inline-flex; align-items: center; gap: 6px; }
+.cmp-scale-bar { display: inline-block; width: 120px; height: 10px; border-radius: 3px; border: 1px solid var(--border); }
+.legend i.cmp-line { width: 16px; height: 3px; border-radius: 2px; vertical-align: 3px; }
+.legend i.cmp-band { background: var(--warn-soft); box-shadow: inset 0 0 0 1px var(--warn); }
+.cmp-readout { font-size: 12.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.cmp-readout b { color: var(--text); }
+
+/* tratti che deviano; campione del colore della distanza nei dettagli e nella tabella */
+.cmp-segments { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--border); }
+.cmp-segments .chip { font-variant-numeric: tabular-nums; }
+.cmp-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+
+/* allineamento: nomi e righello nel colore del testo, riga del bersaglio segnata, numeri di fine riga leggibili */
+.aln-readable .aln-name { color: var(--text); }
+.aln-readable .aln-ruler .aln-seq { color: var(--text-2); }
+.aln-readable .aln-seq span.aln-end { width: auto; padding-left: 8px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.aln-readable .aln-cons .aln-name { color: var(--text-2); font-style: italic; }
+.aln-readable .aln-cons .aln-seq { color: var(--text); font-weight: 700; }
+.aln-readable .aln-ref .aln-name { font-weight: 700; box-shadow: inset 3px 0 0 var(--accent); }
+.aln-status { font-size: 12.5px; color: var(--text-2); min-height: 20px; font-variant-numeric: tabular-nums; }
+.aln-status b { color: var(--text); }
+.aln-legend .mono { font-size: 11.5px; color: var(--text-2); }
+
+/* pagina Confronto: le due strutture, ciascuna nel suo riquadro */
+.cmp-slot { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); }

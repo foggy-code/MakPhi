@@ -3,12 +3,31 @@ import { api, ApiError } from "../api/client";
 import type { JobSummary, ParsedFile, Sequence, StructureSource, TemplateAnalysis, TemplateItem, TemplateRef, UploadedStructure } from "../api/types";
 import { isAlphaFoldId, plddtLabel, plddtTone, predictorBadge, predictorTitle } from "../lib/alphafold";
 import { useProject, useToast } from "../lib/context";
+import { fmtInt, fmtNum } from "../lib/format";
 import { useAsync } from "../lib/hooks";
-import { defaultTransfer } from "../lib/ligands";
+import { CLASS_LABEL, defaultTransfer, groupClass, groupTitle } from "../lib/ligands";
 import { jobChoices, modelChoices, modelFiles, parsePastedSequence, pastedTextMatches } from "../lib/picker";
+import { residueRanges } from "../lib/workflowView";
 import { FileButton, SequenceFileButton } from "./FileLoad";
 import { Icon } from "./Icon";
-import { Badge, DropZone, Segmented } from "./ui";
+import { Badge, DetailGrid, DropZone, ExpandButton, Segmented, useExpanded } from "./ui";
+
+/** Dati del template scelto (pannello espanso del selettore): metodo, qualità, catene, mancanti, gruppi eteroatomici. */
+function TemplateFacts({ a }: { a: TemplateAnalysis }) {
+  const groups = a.ligands.map((g) => `${groupTitle(g)} (${g.label ?? CLASS_LABEL[groupClass(g)]})`);
+  return (
+    <DetailGrid items={[
+      { label: "Metodo", value: a.header.method || a.meta.method || "—" },
+      a.meta.predicted
+        ? { label: "Confidenza", value: plddtLabel(a.meta.plddt_mean) }
+        : { label: "Risoluzione", value: a.header.resolution ? `${fmtNum(a.header.resolution, 2)} Å` : "—" },
+      { label: "Catene", value: a.chains.map((c) => `${c.chain} ${c.first}–${c.last} (${fmtInt(c.residues)} aa)`).join(" · ") || "—" },
+      { label: "Residui mancanti", value: a.header.missing_residues.length ? residueRanges(a.header.missing_residues) : "nessuno" },
+      { label: "Interruzioni", value: a.chains.reduce((n, c) => n + c.breaks.length, 0) || "nessuna" },
+      { label: "Gruppi eteroatomici", value: groups.length ? groups.join(", ") : "nessuno" },
+    ]} />
+  );
+}
 
 /** Sequenza bersaglio: da progetto, incollata (FASTA o testo) oppure da file in qualunque formato comune. */
 export function SequencePicker({ value, onChange, label = "Sequenza bersaglio" }: {
@@ -34,9 +53,9 @@ export function SequencePicker({ value, onChange, label = "Sequenza bersaglio" }
   return (
     <div className="stack-sm">
       <div className="row">
-        <span className="small text-2" style={{ fontWeight: 550 }}>{label}</span>
+        <b className="small">{label}</b>
         <div className="right">
-          <Segmented value={mode} onChange={setMode} options={[{ value: "project", label: "Dal progetto" }, { value: "paste", label: "Incolla" }, { value: "file", label: "Da file" }]} />
+          <Segmented label="Origine della sequenza" value={mode} onChange={setMode} options={[{ value: "project", label: "Dal progetto" }, { value: "paste", label: "Incolla" }, { value: "file", label: "Da file" }]} />
         </div>
       </div>
       {mode === "file" ? (
@@ -51,7 +70,7 @@ export function SequencePicker({ value, onChange, label = "Sequenza bersaglio" }
             >
               Scegli un file
             </SequenceFileButton>
-            {fromFile && <span className="tiny muted ellipsis" style={{ maxWidth: 260 }}>{fromFile.filename} · {fromFile.format_label}</span>}
+            {fromFile && <span className="small text-2 ellipsis" style={{ maxWidth: 260 }} title={fromFile.filename}>{fromFile.filename} · {fromFile.format_label}</span>}
           </div>
           {fromFile && fromFile.records.length > 1 && (
             <select className="input" value={fileIndex} onChange={(e) => {
@@ -63,7 +82,7 @@ export function SequencePicker({ value, onChange, label = "Sequenza bersaglio" }
               ))}
             </select>
           )}
-          {!fromFile && <span className="tiny muted">FASTA, PIR, Clustal, GenBank, UniProt, PDB/mmCIF (una sequenza per catena) o testo semplice.</span>}
+          {!fromFile && <span className="small text-2">FASTA, PIR, Clustal, GenBank, UniProt, PDB/mmCIF (una sequenza per catena) o testo semplice.</span>}
         </div>
       ) : mode === "project" ? (
         <select
@@ -97,7 +116,7 @@ export function SequencePicker({ value, onChange, label = "Sequenza bersaglio" }
           />
         </>
       )}
-      {value.sequence && <span className="tiny muted">{value.sequence.replace(/[^A-Za-z]/g, "").length} residui</span>}
+      {value.sequence && <span className="small text-2">{value.name || "senza nome"} · {value.sequence.replace(/[^A-Za-z]/g, "").length} residui</span>}
     </div>
   );
 }
@@ -118,6 +137,7 @@ export function TemplatePicker({ value, onChange, max = 10, ligands = true, onAn
   const [adding, setAdding] = useState("");
   const [analysis, setAnalysis] = useState<Record<string, TemplateAnalysis>>({});
   const [status, setStatus] = useState<Record<string, "loading" | "fetching" | "ok" | "error">>({});
+  const open = useExpanded<string>();
   const valueRef = useRef(value);
   valueRef.current = value;
   // Analizza i template scelti; i codici PDB assenti dalla libreria vengono scaricati da RCSB, gli id
@@ -196,11 +216,14 @@ export function TemplatePicker({ value, onChange, max = 10, ligands = true, onAn
         const a = analysis[t.id];
         // casella «Ligandi»: solo con gruppi che la scelta predefinita trasferisce davvero dalle catene scelte
         const transfer = ligands && a ? defaultTransfer(t, a) : null;
+        const isOpen = open.has(t.id);
         return (
           <div key={t.id} className="card flat" style={{ padding: "10px 12px" }}>
             <div className="row">
+              {a && <ExpandButton open={isOpen} onClick={() => open.toggle(t.id)} label={`dati di ${t.id}`} />}
               <b>{t.id}</b>
-              {status[t.id] === "fetching" && <span className="badge badge-info"><span className="spinner" style={{ width: 10, height: 10 }} /> download da {isAlphaFoldId(t.id) ? "AlphaFold DB" : "RCSB"}…</span>}
+              {status[t.id] === "loading" && <span className="small text-2 row" style={{ gap: 6 }}><span className="spinner" style={{ width: 12, height: 12 }} aria-hidden="true" /> analisi…</span>}
+              {status[t.id] === "fetching" && <span className="badge badge-info"><span className="spinner" style={{ width: 10, height: 10 }} aria-hidden="true" /> download da {isAlphaFoldId(t.id) ? "AlphaFold DB" : "RCSB"}…</span>}
               {status[t.id] === "error" && <span className="badge badge-err">non disponibile</span>}
               {a?.meta.predicted && (
                 <>
@@ -208,8 +231,8 @@ export function TemplatePicker({ value, onChange, max = 10, ligands = true, onAn
                   <Badge tone={plddtTone(a.meta.plddt_mean)}>{plddtLabel(a.meta.plddt_mean)}</Badge>
                 </>
               )}
-              <span className="small muted ellipsis" style={{ maxWidth: 260 }}>{a?.header.title}</span>
-              <button className="btn btn-ghost btn-icon right" onClick={() => onChange(value.filter((v) => v.id !== t.id))} aria-label="Rimuovi">
+              <span className="small text-2 ellipsis" style={{ maxWidth: 260 }} title={a?.header.title}>{a?.header.title}</span>
+              <button className="btn btn-ghost btn-icon right" onClick={() => onChange(value.filter((v) => v.id !== t.id))} aria-label={`Rimuovi ${t.id}`} title="Rimuovi">
                 <Icon name="x" size={14} />
               </button>
             </div>
@@ -224,7 +247,7 @@ export function TemplatePicker({ value, onChange, max = 10, ligands = true, onAn
                       onChange(value.map((v) => (v.id === t.id ? { ...v, chains: e.target.checked ? [...v.chains, c.chain] : v.chains.filter((x) => x !== c.chain) } : v)))
                     }
                   />
-                  {c.chain} <span className="muted">({c.residues} aa)</span>
+                  {c.chain} <span className="text-2">({c.residues} aa)</span>
                 </label>
               ))}
               {transfer && transfer.names.length > 0 && (
@@ -234,6 +257,7 @@ export function TemplatePicker({ value, onChange, max = 10, ligands = true, onAn
                 </label>
               )}
             </div>
+            {a && isOpen && <div style={{ marginTop: 10 }}><TemplateFacts a={a} /></div>}
           </div>
         );
       })}
@@ -284,9 +308,9 @@ export function StructurePicker({ value, onChange, label = "Struttura" }: { valu
   return (
     <div className="stack-sm">
       <div className="row">
-        <span className="small text-2" style={{ fontWeight: 550 }}>{label}</span>
+        <b className="small">{label}</b>
         <div className="right">
-          <Segmented value={kind} onChange={(k) => { setKind(k); onChange(k === "upload" && uploaded ? uploaded.source : null); }} options={[{ value: "template", label: "Libreria" }, { value: "job", label: "Modello" }, { value: "upload", label: "File" }]} />
+          <Segmented label="Origine della struttura" value={kind} onChange={(k) => { setKind(k); onChange(k === "upload" && uploaded ? uploaded.source : null); }} options={[{ value: "template", label: "Libreria" }, { value: "job", label: "Modello" }, { value: "upload", label: "File" }]} />
         </div>
       </div>
       {kind === "upload" ? (
@@ -302,7 +326,7 @@ export function StructurePicker({ value, onChange, label = "Struttura" }: { valu
                 .catch(toast.error)
             }
           />
-          <span className="tiny muted">Il file resta tra i caricamenti per i giorni impostati nella pulizia automatica; i risultati dei calcoli restano per sempre.</span>
+          <span className="small text-2">Il file resta tra i caricamenti per i giorni impostati nella pulizia automatica; i risultati dei calcoli restano per sempre.</span>
         </div>
       ) : kind === "template" ? (
         <select className="input" value={value?.type === "template" ? value.id : ""} onChange={(e) => onChange(e.target.value ? { type: "template", id: e.target.value, chain: value?.chain } : null)}>

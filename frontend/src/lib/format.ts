@@ -1,4 +1,8 @@
 import type { JobKind, JobStatus } from "../api/types";
+import { saveFile } from "./exportImage";
+
+/** Esito di un valore (statistiche, badge, fasce dei metodi): stesso significato e colore ovunque. */
+export type Tone = "ok" | "info" | "warn" | "err";
 
 export const STATUS_LABEL: Record<string, string> = {
   queued: "In coda",
@@ -11,6 +15,23 @@ export const STATUS_LABEL: Record<string, string> = {
   searching: "Ricerca template",
   modeling: "Modellazione",
   filtered: "Filtrato",
+};
+
+/**
+ * Tono di ogni stato di job o di elemento di pipeline, l'unico usato nell'interfaccia: badge (StatusBadge), barre di
+ * composizione degli stati, legende. Per un colore: `var(--${JOB_STATUS_TONE[s]})`, "var(--muted)" se manca.
+ */
+export const JOB_STATUS_TONE: Record<string, Tone | "accent"> = {
+  completed: "ok",
+  running: "accent",
+  searching: "accent",
+  modeling: "accent",
+  queued: "info",
+  pending: "info",
+  cancelling: "warn",
+  failed: "err",
+  cancelled: "warn",
+  filtered: "warn",
 };
 
 export const KIND_LABEL: Record<JobKind, string> = {
@@ -49,6 +70,21 @@ export function fmtNum(v: number | null | undefined, digits = 1): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
   const text = v.toLocaleString("it-IT", { minimumFractionDigits: digits, maximumFractionDigits: digits });
   return /^-0(,0*)?$/.test(text) ? text.slice(1) : text;
+}
+
+/** Con segno esplicito e meno tipografico: "+1,2", "−0,8", "0". */
+export function fmtSigned(v: number, digits = 1): string {
+  return `${v > 0 ? "+" : v < 0 ? "−" : ""}${fmtNum(Math.abs(v), digits)}`;
+}
+
+/** Valore con la sua unità ("2,31 Å"); "—" se manca o non è un numero. */
+export function fmtUnit(v: number | null | undefined, digits: number, unit: string): string {
+  return v === null || v === undefined || Number.isNaN(v) ? "—" : `${fmtNum(v, digits)} ${unit}`;
+}
+
+/** "1 sequenza", "3 sequenze". */
+export function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
 }
 
 export function fmtInt(v: number | null | undefined): string {
@@ -169,14 +205,9 @@ export function gradeTone(grade?: string | null): "ok" | "info" | "warn" | "err"
   }
 }
 
+/** Scarica un testo come file (FASTA, log, PIR). */
 export function downloadText(filename: string, text: string, type = "text/plain") {
-  const blob = new Blob([text], { type });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  saveFile(new Blob([text], { type }), filename);
 }
 
 export function wrapSequence(seq: string, width = 60): string {

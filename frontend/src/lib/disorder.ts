@@ -9,10 +9,13 @@ import { accessionFromName, sequenceAccession } from "./alphafold";
 import { fmtNum } from "./format";
 import { parsePir } from "./pir";
 
+// colori delle tracce dai token del tema (≥ 3:1 sui pannelli in entrambi i temi, lib/chartTokens.test.ts). Il disordine
+// resta #f87171 (il valore di --trk-disorder del tema scuro): CoverageAlerts.test.tsx lo verifica nel markup; nel tema
+// chiaro lo rende visibile il bordo dei tratti della mappa (FeatureMap)
 export const TRACK_COLOR = {
   disorder: "#f87171",
-  lowComplexity: "#fbbf24",
-  domain: "#22d3ee",
+  lowComplexity: "var(--trk-lowc)",
+  domain: "var(--trk-domain)",
   helix: "var(--helix)",
   strand: "var(--strand)",
 } as const;
@@ -176,12 +179,21 @@ export function coverageBadge(a: Partial<CoverageAssessment> | null | undefined)
   return { label: labels.join(" · "), tone: "warn", title: warn.map((w) => w.text).join("\n") };
 }
 
-/** Riga di sintesi sotto gli avvisi: metodo, domini (da dove o perché mancano). */
-export function coverageFootnote(check: CoverageCheck): string {
+/**
+ * Riga di sintesi sotto gli avvisi: metodo, domini (da dove o perché mancano). `withNote: false` toglie la nota sui
+ * domini, quando la si mostra già a parte (CoverageAlerts la mette in chiaro se i domini mancano).
+ */
+export function coverageFootnote(check: CoverageCheck, { withNote = true }: { withNote?: boolean } = {}): string {
   const parts: string[] = [];
   if (check.disorder) parts.push(`${disorderSummary(check.disorder)} Metodo: ${check.disorder.method}, dalla sola sequenza (indicativo).`);
   const info = check.domains_info;
   if (info?.available) parts.push(`Domini da ${info.source} (${info.accession}): ${check.domains.length ? check.domains.map((d) => `${d.name} ${span(d.start, d.end)}`).join(", ") : "nessuno annotato"}.`);
-  if (info?.note) parts.push(info.note);
+  if (info?.note && withNote) parts.push(info.note);
   return parts.join(" ");
+}
+
+/** Nota sul perché i domini del bersaglio mancano (senza accessione, sequenza diversa da UniProt…); null se ci sono. */
+export function missingDomainsNote(check: CoverageCheck | null | undefined): string | null {
+  const info = check?.domains_info;
+  return info && !info.available && info.note ? info.note : null;
 }

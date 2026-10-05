@@ -3002,8 +3002,10 @@ proteina globulare, nessuno fra le catene): il tempo cresce in proporzione ai re
 ## Frontend
 
 React 19 + TypeScript + Vite, nessuna libreria UI esterna: componenti propri (`components/ui.tsx`), grafici SVG
-(`components/charts.tsx`: Ramachandran, profili per residuo con striscia di struttura secondaria, heatmap,
-mappa delle feature UniProt), viewer 3D 3Dmol.js caricato su richiesta con rilascio del contesto WebGL.
+(`components/charts/`, un file per grafico: `Ramachandran.tsx`, `residue.tsx` per i profili per residuo con
+striscia di struttura secondaria, `ConsensusTracks.tsx`, `Heatmap.tsx`, `FeatureMap.tsx` per la mappa delle feature
+UniProt, `StackBar.tsx`; tutti dentro la cornice comune `components/ChartFrame.tsx` con PNG, CSV e vista espansa),
+viewer 3D 3Dmol.js caricato su richiesta con rilascio del contesto WebGL.
 Il client API (`api/client.ts`) e i tipi (`api/types.ts`) sono l'unico punto di contatto con il backend. Le parti di
 interfaccia delle singole funzioni sono descritte nelle loro sezioni (paragrafi **Interfaccia**).
 

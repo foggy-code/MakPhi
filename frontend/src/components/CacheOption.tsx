@@ -18,7 +18,7 @@ export function RecomputeOption({ checked, onChange, label = "Ricalcola ignorand
     >
       <input type="checkbox" checked={checked || off} disabled={off} onChange={(e) => onChange(e.target.checked)} />
       {label}
-      {off && <span className="tiny muted">(cache disattivata nelle Impostazioni)</span>}
+      {off && <span className="tiny text-2">(cache disattivata nelle Impostazioni)</span>}
     </label>
   );
 }

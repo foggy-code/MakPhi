@@ -1,17 +1,20 @@
-import { useState } from "react";
+import { Fragment, memo, useCallback, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { EntityLabels, JobKind, JobSummary, ResumeScope } from "../api/types";
+import type { EntityLabels, Job, JobKind, JobSummary, ResumeScope } from "../api/types";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { ReproButton } from "../components/ReproButton";
 import { FavoriteStar, LabelEditor, LabelFilterSelect, TagChips } from "../components/Labels";
-import { Card, Confirm, Empty, PageHead, Progress, StatusBadge } from "../components/ui";
+import { Alert, Card, Confirm, DetailGrid, Disclosure, Empty, ExpandButton, PageHead, Progress, Spinner, StatusBadge, useExpanded } from "../components/ui";
 import { useProject, useToast } from "../lib/context";
-import { fmtBytes, fmtDate, fmtDuration, fmtEta, isActive, KIND_LABEL, queueLabel } from "../lib/format";
+import { fmtBytes, fmtDate, fmtDuration, fmtEta, isActive, KIND_LABEL, queueLabel, relTime, STATUS_LABEL } from "../lib/format";
 import { useAsync, useInterval, useJob, useLiveJobList } from "../lib/hooks";
 import { listPollInterval } from "../lib/live";
+import { paramRows } from "../lib/rerun";
+import { logTail, matchesStatus, STATUS_FILTERS, type StatusFilter } from "../lib/shellView";
 import { filterParams, filterValue, itemLabels, matchesFilter, parseFilterValue, type ItemLabels, type LabelFilter } from "../lib/tags";
+import { jobTimes } from "../lib/toolsView";
 
 const OPEN_IN: Record<JobKind, (id: string) => string> = {
   search: (id) => `/search?job=${id}`,
@@ -38,6 +41,73 @@ const OPEN_IN: Record<JobKind, (id: string) => string> = {
   predict: (id) => `/quality?prjob=${id}`,
 };
 
+/** Parametri letti al più (pannello Dettagli) e mostrati nella riga espansa dell'elenco. */
+const PARAM_ROWS = 80;
+const PEEK_ROWS = 12;
+
+/** Parametri del job (chiave e valore abbreviato). */
+function ParamList({ rows }: { rows: [string, string][] }) {
+  return (
+    <dl className="kv shell-kv-params">
+      {rows.map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v}</dd></Fragment>)}
+    </dl>
+  );
+}
+
+/**
+ * Riga espansa dell'elenco: stato e tempi subito; parametri, file e ultime righe del log letti all'apertura (e di nuovo
+ * quando cambia lo stato del job). `memo`: l'elenco si ridisegna a ogni evento dei job, la riga solo se cambia il suo.
+ */
+const JobPeek = memo(function JobPeek({ job: s, onOpen }: { job: JobSummary; onOpen: (id: string) => void }) {
+  const { data: full, error } = useAsync<Job>(() => api.job(s.id), [s.id, s.status]);
+  // offset fuori intervallo: il server restituisce la fine del log (gli ultimi 256 KB, non c'è un limite più corto),
+  // non l'inizio; l'estratto si calcola una volta per lettura
+  const { data: log } = useAsync<string>(() => api.jobLog(s.id, -1).then((c) => c.text), [s.id, s.status]);
+  const params = paramRows(full?.params, PARAM_ROWS);
+  const files = full?.files ?? [];
+  const bytes = files.reduce((sum, f) => sum + f.size, 0);
+  const tail = useMemo(() => (log ? logTail(log, 10) : ""), [log]);
+  return (
+    <div className="shell-peek">
+      <DetailGrid items={[
+        { label: "Tipo", value: KIND_LABEL[s.kind] },
+        { label: "Stato", value: s.stage && s.status !== "completed" ? `${STATUS_LABEL[s.status] ?? s.status} · ${s.stage}` : STATUS_LABEL[s.status] ?? s.status },
+        ...jobTimes(s),
+        ...(isActive(s.status) ? [{ label: "Avanzamento", value: `${Math.round(s.progress * 100)}%${fmtEta(s.eta_seconds) ? ` · ${fmtEta(s.eta_seconds)}` : ""}` }] : []),
+        { label: "Identificativo", value: <span className="mono">{s.id}</span> },
+      ]} />
+      {s.status === "failed" && s.error && (
+        <Alert tone="err"><pre className="shell-error-text">{s.error}</pre></Alert>
+      )}
+      {error && <span className="small text-2">Dettagli non letti: {error.message}</span>}
+      {params.length > 0 && (
+        <Disclosure title="Parametri" extra={`${params.length} voci`}>
+          <ParamList rows={params.slice(0, PEEK_ROWS)} />
+          {params.length > PEEK_ROWS && <span className="small text-2">E altri {params.length - PEEK_ROWS}: elenco completo nei dettagli.</span>}
+        </Disclosure>
+      )}
+      {files.length > 0 && (
+        <Disclosure title="File prodotti" extra={`${files.length} · ${fmtBytes(bytes)}`}>
+          <ul className="shell-file-list">
+            {files.slice(0, 12).map((f) => <li key={f.path}><span className="mono">{f.path}</span> · {fmtBytes(f.size)}</li>)}
+            {files.length > 12 && <li>e altri {files.length - 12}: elenco completo nei dettagli.</li>}
+          </ul>
+        </Disclosure>
+      )}
+      {tail && (
+        <div className="stack-sm">
+          <h4>Ultime righe del log</h4>
+          <pre className="log shell-log-tail">{tail}</pre>
+        </div>
+      )}
+      <div className="shell-peek-actions">
+        <button type="button" className="btn btn-sm" onClick={() => onOpen(s.id)}><Icon name="list" size={13} /> Tutti i dettagli</button>
+        {s.status === "completed" && <Link className="btn btn-sm btn-ghost" to={OPEN_IN[s.kind](s.id)}><Icon name="external" size={13} /> Apri risultati</Link>}
+      </div>
+    </div>
+  );
+});
+
 function Detail({ id, labels, onDeleted, onChanged, onLabels }: { id: string; labels?: ItemLabels; onDeleted: () => void; onChanged: () => void; onLabels: (l: EntityLabels) => void }) {
   const toast = useToast();
   const { job, summary, log, cancel, resume, error, gone } = useJob(id, { withLog: true });
@@ -59,45 +129,58 @@ function Detail({ id, labels, onDeleted, onChanged, onLabels }: { id: string; la
       toast.error(e);
     }
   };
+  const params = paramRows(job?.params, PARAM_ROWS);
+  const files = job?.files ?? [];
   return (
     <div className="stack">
       <JobPanel summary={summary} log={log} onCancel={cancel} resume={job} onResume={doResume} compact defaultLogOpen />
       <Card
+        icon="info"
         title="Dettagli"
         right={
           <>
             <Link className="btn btn-sm btn-primary" to={OPEN_IN[summary.kind](summary.id)}>Apri risultati</Link>
             <a className="btn btn-sm" href={api.archiveUrl(id)}><Icon name="download" size={14} /> Archivio</a>
             <ReproButton jobId={id} kind={summary.kind} status={summary.status} />
-            <button className="btn btn-sm btn-danger" disabled={isActive(summary.status)} onClick={() => setConfirm(true)}><Icon name="trash" size={14} /></button>
+            <button type="button" className="btn btn-sm btn-danger" disabled={isActive(summary.status)} onClick={() => setConfirm(true)} aria-label="Elimina il job" title="Elimina il job e i suoi file">
+              <Icon name="trash" size={14} />
+            </button>
           </>
         }
       >
-        <dl className="kv">
-          <dt>Etichette</dt><dd><LabelEditor type="job" id={id} initial={labels} onChange={onLabels} /></dd>
-          <dt>Tipo</dt><dd>{KIND_LABEL[summary.kind]}</dd>
-          <dt>Creato</dt><dd>{fmtDate(summary.created_at)}</dd>
-          <dt>Durata</dt><dd>{fmtDuration(summary.started_at, summary.finished_at)}</dd>
-          <dt>Identificativo</dt><dd className="mono">{summary.id}</dd>
-        </dl>
-        {job?.files && job.files.length > 0 && (
-          <div style={{ marginTop: 14 }}>
-            <h4 style={{ marginBottom: 6 }}>File prodotti ({job.files.length})</h4>
-            <div className="table-wrap" style={{ maxHeight: 300, overflowY: "auto" }}>
-              <table className="table">
-                <tbody>
-                  {job.files.map((f) => (
-                    <tr key={f.path}>
-                      <td className="mono">{f.path}</td>
-                      <td className="num small">{fmtBytes(f.size)}</td>
-                      <td style={{ width: 40 }}><a className="btn btn-sm btn-ghost" href={api.jobFileUrl(id, f.path, true)}><Icon name="download" size={13} /></a></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
+        <div className="stack">
+          <dl className="kv">
+            <dt>Etichette</dt><dd><LabelEditor type="job" id={id} initial={labels} onChange={onLabels} /></dd>
+            <dt>Tipo</dt><dd>{KIND_LABEL[summary.kind]}</dd>
+            <dt>Creato</dt><dd>{fmtDate(summary.created_at)}</dd>
+            <dt>Durata</dt><dd>{fmtDuration(summary.started_at, summary.finished_at)}</dd>
+            <dt>Identificativo</dt><dd className="mono">{summary.id}</dd>
+          </dl>
+          {params.length > 0 && (
+            <Disclosure title="Parametri" extra={`${params.length} voci`}>
+              <ParamList rows={params} />
+            </Disclosure>
+          )}
+          {files.length > 0 && (
+            <Disclosure title="File prodotti" extra={`${files.length} · ${fmtBytes(files.reduce((sum, f) => sum + f.size, 0))}`} defaultOpen>
+              <div className="table-wrap" style={{ maxHeight: 300, overflowY: "auto" }}>
+                <table className="table">
+                  <tbody>
+                    {files.map((f) => (
+                      <tr key={f.path}>
+                        <td className="mono">{f.path}</td>
+                        <td className="num small">{fmtBytes(f.size)}</td>
+                        <td style={{ width: 40 }}>
+                          <a className="btn btn-sm btn-ghost" href={api.jobFileUrl(id, f.path, true)} aria-label={`Scarica ${f.path}`} title="Scarica"><Icon name="download" size={13} /></a>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Disclosure>
+          )}
+        </div>
       </Card>
       {confirm && (
         <Confirm text="Eliminare il job e tutti i suoi file?" confirmLabel="Elimina" onCancel={() => setConfirm(false)}
@@ -113,6 +196,8 @@ export default function Jobs() {
   const selected = params.get("id");
   const [scope, setScope] = useState<"project" | "all">("project");
   const [kind, setKind] = useState("");
+  const [status, setStatus] = useState<StatusFilter>("all");
+  const open = useExpanded<string>();
   // filtro per etichetta o preferiti nell'URL (?tag=), così un link o la ricerca globale lo ritrovano
   const labelFilter = parseFilterValue(params.get("tag"));
   const setLabelFilter = (f: LabelFilter) => setParams((p) => {
@@ -128,58 +213,78 @@ export default function Jobs() {
   const live = useLiveJobList(jobs, setData, reload,
     (j) => (scope === "all" || !projectId || j.project_id === projectId) && (!kind || j.kind === kind) && labelFilter.kind === "all");
   useInterval(reload, listPollInterval(live, !!jobs?.some((j) => isActive(j.status)), 2000, 8000));
+  const shown = useMemo(() => jobs?.filter((j) => matchesStatus(j, status)) ?? [], [jobs, status]);
   const patchLabels = (l: EntityLabels) => {
     if (!jobs) return;
     const next = jobs.map((j) => (j.id === l.entity_id ? { ...j, tags: l.tags, favorite: l.favorite } : j));
     setData(next.filter((j) => j.id === selected || matchesFilter(j, labelFilter)));
   };
+  const choose = useCallback((id: string) => setParams((p) => {
+    const next = new URLSearchParams(p);
+    next.set("id", id);
+    return next;
+  }), [setParams]);
   return (
     <div className="page">
-      <PageHead title="Job" lead="Tutti i calcoli eseguiti in background, con stato, log, file prodotti e durata. I job attivi possono essere annullati."
+      <PageHead title="Job" lead="Tutti i calcoli eseguiti in background, con stato, log, file prodotti e durata. I job attivi possono essere annullati; la freccia di una riga mostra parametri, file e ultime righe del log."
         actions={<Link className="btn" to="/rerun" title="Ricrea un calcolo da un pacchetto riproducibile e confronta i risultati"><Icon name="refresh" size={14} /> Riesegui da pacchetto</Link>} />
       <div className="split">
-        <Card
-          title="Elenco"
-          right={
-            <>
-              <select className="input" style={{ width: 140, minHeight: 28 }} value={scope} onChange={(e) => setScope(e.target.value as "project" | "all")}>
-                <option value="project">Questo progetto</option>
-                <option value="all">Tutti i progetti</option>
-              </select>
-              <select className="input" style={{ width: 150, minHeight: 28 }} value={kind} onChange={(e) => setKind(e.target.value)}>
-                <option value="">Tutti i tipi</option>
-                {Object.entries(KIND_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-              </select>
-              <LabelFilterSelect type="job" value={labelFilter} onChange={setLabelFilter} width={150} />
-            </>
-          }
-        >
-          {!jobs?.length ? <Empty icon="activity" title="Nessun job">{labelFilter.kind !== "all" && "Nessun job con questo filtro."}</Empty> : (
+        <Card icon="list" title="Elenco" sub={jobs ? `${shown.length} di ${jobs.length}` : undefined}>
+          <div className="shell-list-tools">
+            <select className="input input-sm" style={{ width: 150 }} value={scope} onChange={(e) => setScope(e.target.value as "project" | "all")} aria-label="Progetti">
+              <option value="project">Questo progetto</option>
+              <option value="all">Tutti i progetti</option>
+            </select>
+            <select className="input input-sm" style={{ width: 160 }} value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Tipo di job">
+              <option value="">Tutti i tipi</option>
+              {Object.entries(KIND_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            </select>
+            <LabelFilterSelect type="job" value={labelFilter} onChange={setLabelFilter} width={150} />
+            <select className="input input-sm" style={{ width: 160 }} value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)} aria-label="Stato">
+              {STATUS_FILTERS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+            </select>
+          </div>
+          {!jobs ? <div className="empty"><Spinner label="Caricamento dei job" /></div> : !shown.length ? (
+            <Empty icon="activity" title="Nessun job">{labelFilter.kind !== "all" || status !== "all" ? "Nessun job con questo filtro." : undefined}</Empty>
+          ) : (
             <div className="table-wrap" style={{ maxHeight: "70vh", overflowY: "auto" }}>
               <table className="table">
                 <tbody>
-                  {jobs.map((j) => (
-                    <tr key={j.id} className={`clickable ${j.id === selected ? "selected" : ""}`} onClick={() => setParams((p) => { const next = new URLSearchParams(p); next.set("id", j.id); return next; })}>
-                      <td>
-                        <div className="row" style={{ gap: 6 }}>
-                          <FavoriteStar type="job" id={j.id} value={!!j.favorite} onChange={patchLabels} size={13} />
-                          <StatusBadge status={j.status} /><span className="tiny muted">{KIND_LABEL[j.kind]}</span>
-                          <TagChips tags={j.tags} max={3} onPick={(t) => setLabelFilter({ kind: "tag", tag: t })} />
-                        </div>
-                        <div className="ellipsis small" style={{ maxWidth: 330, marginTop: 3 }}>{j.title}</div>
-                        {isActive(j.status) && <div style={{ marginTop: 4 }}><Progress value={j.progress} /></div>}
-                        {isActive(j.status) && fmtEta(j.eta_seconds) && <div className="tiny muted" style={{ marginTop: 2 }}>{fmtEta(j.eta_seconds)}</div>}
-                        {queueLabel(j) && <div className="tiny muted" style={{ marginTop: 2 }}>{queueLabel(j)}</div>}
-                      </td>
-                      <td className="tiny muted nowrap">{fmtDate(j.created_at)}</td>
-                    </tr>
-                  ))}
+                  {shown.map((j) => {
+                    const isOpen = open.has(j.id);
+                    return (
+                      <Fragment key={j.id}>
+                        <tr className={`clickable${j.id === selected ? " selected" : ""}${isOpen ? " row-open" : ""}`} onClick={() => choose(j.id)}>
+                          <td style={{ width: 30, verticalAlign: "top" }}>
+                            <ExpandButton open={isOpen} onClick={() => open.toggle(j.id)} label={`dettagli di ${j.title || KIND_LABEL[j.kind]}`} />
+                          </td>
+                          <td>
+                            <div className="row" style={{ gap: 6 }}>
+                              <FavoriteStar type="job" id={j.id} value={!!j.favorite} onChange={patchLabels} size={13} />
+                              <StatusBadge status={j.status} /><span className="shell-sub">{KIND_LABEL[j.kind]}</span>
+                              <TagChips tags={j.tags} max={3} onPick={(t) => setLabelFilter({ kind: "tag", tag: t })} />
+                            </div>
+                            <div className="ellipsis small" style={{ maxWidth: 320, marginTop: 3 }} title={j.title}>{j.title}</div>
+                            {isActive(j.status) && <div style={{ marginTop: 4 }}><Progress value={j.progress} /></div>}
+                            {isActive(j.status) && fmtEta(j.eta_seconds) && <div className="shell-sub" style={{ marginTop: 2 }}>{fmtEta(j.eta_seconds)}</div>}
+                            {queueLabel(j) && <div className="shell-sub" style={{ marginTop: 2 }}>{queueLabel(j)}</div>}
+                          </td>
+                          <td className="nowrap shell-sub" style={{ verticalAlign: "top" }} title={fmtDate(j.created_at)}>{relTime(j.created_at)}</td>
+                        </tr>
+                        {isOpen && (
+                          <tr className="row-detail">
+                            <td colSpan={3}><JobPeek job={j} onOpen={choose} /></td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           )}
         </Card>
-        <div>{selected ? <Detail key={selected} id={selected} labels={itemLabels(jobs?.find((j) => j.id === selected))} onDeleted={() => { setParams(labelKey ? { tag: labelKey } : {}); reload(); }} onChanged={reload} onLabels={patchLabels} /> : <Card><Empty icon="activity" title="Seleziona un job per i dettagli" /></Card>}</div>
+        <div>{selected ? <Detail key={selected} id={selected} labels={itemLabels(jobs?.find((j) => j.id === selected))} onDeleted={() => { setParams(labelKey ? { tag: labelKey } : {}); reload(); }} onChanged={reload} onLabels={patchLabels} /> : <Card><Empty icon="activity" title="Seleziona un job per i dettagli">Clic su una riga per stato, log in tempo reale, parametri e file; la freccia mostra un'anteprima nell'elenco.</Empty></Card>}</div>
       </div>
     </div>
   );

@@ -9,7 +9,7 @@ import type {
 } from "../api/types";
 import type { CategoricalScale } from "./colorscale";
 import { compareLink } from "./compare";
-import { fmtNum, STATUS_LABEL } from "./format";
+import { fmtNum, fmtSigned, STATUS_LABEL } from "./format";
 import { resiNumber, residueKey, type ResidueColoring, type ResidueValue } from "./residueColoring";
 
 /** I 20 amminoacidi standard (lettera → codice a tre lettere). */
@@ -105,12 +105,10 @@ export const OUTSIDE_COLOR = "#e2e8f0";
 export const LEVEL_LABEL: Record<MutationSignalLevel, string> = { strong: "forte", moderate: "moderato", gain: "possibile guadagno", info: "informativo" };
 export const LEVEL_TONE: Record<MutationSignalLevel, "err" | "warn" | "info"> = { strong: "err", moderate: "warn", gain: "info", info: "info" };
 
-const signed = (v: number, digits: number) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${fmtNum(Math.abs(v), digits)}`;
-
 /** "+349 (+3,35 residui equivalenti)". */
 export function dopeText(d: Pick<MutationDope, "delta" | "delta_eq"> | null | undefined): string {
   if (!d || d.delta == null) return "—";
-  return `${signed(d.delta, 0)}${d.delta_eq != null ? ` (${signed(d.delta_eq, 2)} residui equivalenti)` : ""}`;
+  return `${fmtSigned(d.delta, 0)}${d.delta_eq != null ? ` (${fmtSigned(d.delta_eq, 2)} residui equivalenti)` : ""}`;
 }
 
 /** "+73 kJ/mol (+17,4 kcal/mol)"; il motivo se l'energia non c'è. */
@@ -119,7 +117,7 @@ export function energyText(e: MutationEnergy | null | undefined): string {
   if (!e.available) return "OpenMM non disponibile";
   if (e.error) return `non riuscita (${e.error})`;
   if (e.ddE == null) return "—";
-  return `${signed(e.ddE, 0)} kJ/mol${e.ddE_kcal != null ? ` (${signed(e.ddE_kcal, 1)} kcal/mol)` : ""}`;
+  return `${fmtSigned(e.ddE, 0)} kJ/mol${e.ddE_kcal != null ? ` (${fmtSigned(e.ddE_kcal, 1)} kcal/mol)` : ""}`;
 }
 
 const SS_TEXT: Record<string, string> = { H: "α-elica", G: "elica 3₁₀", I: "π-elica", E: "filamento β", B: "ponte β", T: "turn", S: "bend" };
@@ -128,7 +126,7 @@ const SS_TEXT: Record<string, string> = { H: "α-elica", G: "elica 3₁₀", I: 
 export function siteSummary(s: Pick<MutationSite, "ss" | "ss_position" | "ss_length" | "rsa_wt" | "core" | "blosum62">): string {
   const ss = SS_TEXT[s.ss] ? `${SS_TEXT[s.ss]}${s.ss_length > 1 ? ` (${s.ss_position + 1} di ${s.ss_length})` : ""}` : "coil";
   const rsa = s.rsa_wt != null ? `${s.core ? "sepolto" : "esposto"} (RSA ${fmtNum(s.rsa_wt * 100, 0)}%)` : "esposizione non calcolata";
-  return `${ss} · ${rsa} · BLOSUM62 ${signed(s.blosum62, 0)}`;
+  return `${ss} · ${rsa} · BLOSUM62 ${fmtSigned(s.blosum62, 0)}`;
 }
 
 // ---------------------------------------------------------------------------------- richieste

@@ -10,6 +10,7 @@ import type {
   AnalysisRequest, AnalysisResult, ConservationResult, InteractionEnd, InterfacePair, InterfacesResult, ParsedFile, PlausibilityLevel, ResidueRow,
 } from "../api/types";
 import { fmtScaleValue, type BinnedScale, type ContinuousScale } from "./colorscale";
+import { plural } from "./format";
 import { resiNumber, type ResidueColoring, type ResidueRef } from "./residueColoring";
 
 export type InteractionKind = "hbonds" | "salt_bridges" | "disulfides" | "aromatic";
@@ -64,7 +65,7 @@ export function interactionRows(result: AnalysisResult | null | undefined, kind:
       return inter.salt_bridges.map((s) => ({
         key: rowKey(kind, s.a, s.b), kind, a: s.a, b: s.b, distance: s.distance, interChain: s.inter_chain,
         type: s.his ? "con istidina" : "ionico",
-        detail: `${s.pairs} ${s.pairs === 1 ? "coppia" : "coppie"} N–O entro 4 Å${s.his ? " · His carica solo se protonata" : ""}`,
+        detail: `${plural(s.pairs, "coppia", "coppie")} N–O entro 4 Å${s.his ? " · His carica solo se protonata" : ""}`,
       }));
     case "disulfides":
       return inter.disulfides.map((d) => ({
