@@ -1,0 +1,14 @@
+"""Avvio di BioLoom v4 senza Docker (sviluppo), dalla cartella di BioLoom:
+`python programma/bioloom.py [--port 8765] [--no-browser]`. La cartella dati è `data/` accanto a `programma/`.
+
+Riesecuzione di un pacchetto di riproducibilità: `python programma/bioloom.py rerun <pacchetto.zip> [--data <cartella>]`."""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "backend"))
+
+from bioloom.__main__ import main  # noqa: E402
+
+if __name__ == "__main__":
+    main()
