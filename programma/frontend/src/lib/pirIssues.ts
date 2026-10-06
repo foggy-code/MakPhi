@@ -46,6 +46,13 @@ export function chainBreakIssues(rows: string[]): PirIssue[] {
   }).map((s) => ({ row: null, ...s, severity: "err", text: "Separatore di catena «/» non nella stessa colonna in tutte le voci" }));
 }
 
+/** Colonne fatte solo di gap (si tolgono con "Togli colonne di soli gap"). */
+export function emptyColumnIssues(rows: string[]): PirIssue[] {
+  const width = Math.max(0, ...rows.map((s) => s.length));
+  return spans(width, (c) => rows.every((s) => !isLetter(s[c]) && s[c] !== "/" && s[c] !== "."))
+    .map((s) => ({ row: null, ...s, severity: "info", text: "Colonna fatta solo di gap: si può togliere" }));
+}
+
 /** Residui del bersaglio con soli gap (o niente) di fronte in tutti i template. */
 export function uncoveredIssues(rows: string[], kinds: string[]): PirIssue[] {
   const target = kinds.indexOf("sequence");

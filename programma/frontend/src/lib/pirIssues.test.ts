@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PirSecondaryEntry } from "../api/types";
-import { chainBreakIssues, conflictIssues, issueSummary, issuesAt, mismatchIssues, nextIssue, uncoveredIssues, type PirIssue } from "./pirIssues";
+import { chainBreakIssues, conflictIssues, emptyColumnIssues, issueSummary, issuesAt, mismatchIssues, nextIssue, uncoveredIssues, type PirIssue } from "./pirIssues";
 
 const entry = (mismatches: PirSecondaryEntry["mismatches"]): PirSecondaryEntry => ({
   code: "t", kind: "structureX", residues: 0, ss: null, source: "dssp", method: null, template: null, matched_by: null, message: null,
@@ -13,6 +13,11 @@ describe("controlli", () => {
       { row: null, from: 2, to: 3, severity: "err", text: "Separatore di catena «/» non nella stessa colonna in tutte le voci" },
     ]);
     expect(chainBreakIssues(["MK/TA", "MK/TA"])).toEqual([]);
+  });
+
+  it("colonne fatte solo di gap", () => {
+    expect(emptyColumnIssues(["M--K", "A--R"]).map((i) => [i.from, i.to])).toEqual([[1, 2]]);
+    expect(emptyColumnIssues(["M/K", "A/R"])).toEqual([]);
   });
 
   it("residui del bersaglio senza template di fronte", () => {

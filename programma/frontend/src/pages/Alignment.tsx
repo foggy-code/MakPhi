@@ -11,6 +11,7 @@ import { JobPanel } from "../components/JobPanel";
 import { MetricNotes } from "../components/MetricNotes";
 import { SequencePicker, StructurePicker, TemplatePicker } from "../components/Pickers";
 import { PirWorkspace, type PirWorkspaceState } from "../components/PirWorkspace";
+import { AlignmentEditor } from "../components/AlignmentEditor";
 import { StructuralComparison } from "../components/StructuralComparison";
 import { Alert, Card, DetailGrid, Disclosure, Empty, Field, PageHead, Segmented, Stat, Tabs } from "../components/ui";
 import { FormSection } from "../components/WorkflowParts";
@@ -84,9 +85,13 @@ function AlignmentStats({ stats: s, score, params }: { stats: AlignStats; score?
 function Results({ jobId, result, params }: { jobId: string; result: AlignResult; params?: Record<string, unknown> }) {
   const { projectId } = useProject();
   const toast = useToast();
+  const navigate = useNavigate();
+  // allineamento modificato nella griglia: esportazione e salvataggio usano questo
+  const [rows, setRows] = useState<string[]>(result.aligned);
+  const edited = rows.some((r, i) => r !== result.aligned[i]);
   const exportAs = async (format: "fasta" | "clustal" | "pir") => {
     try {
-      const text = await api.convertAlignment(result.ids, result.aligned, format);
+      const text = await api.convertAlignment(result.ids, rows, format);
       downloadText(`allineamento.${format === "clustal" ? "aln" : format}`, text);
     } catch (e) {
       toast.error(e);
@@ -95,9 +100,21 @@ function Results({ jobId, result, params }: { jobId: string; result: AlignResult
   const save = async () => {
     if (!projectId) return;
     try {
-      const text = await api.convertAlignment(result.ids, result.aligned, "fasta");
-      await api.saveDocument(projectId, { name: `${result.method.split(" ")[0]} ${result.ids.join(" / ").slice(0, 60)}`, kind: "fasta", content: text, meta: { job_id: jobId } });
+      const text = await api.convertAlignment(result.ids, rows, "fasta");
+      await api.saveDocument(projectId, { name: `${result.method.split(" ")[0]} ${result.ids.join(" / ").slice(0, 60)}${edited ? " (modificato)" : ""}`, kind: "fasta", content: text, meta: { job_id: jobId, edited } });
       toast.push("Allineamento salvato nei documenti del progetto");
+    } catch (e) {
+      toast.error(e);
+    }
+  };
+  /** Allineamento di sequenze → PIR nell'Editor PIR, dove si indicano i template (seconda riga di ogni voce). */
+  const toPir = async () => {
+    if (!projectId) return;
+    try {
+      const text = await api.convertAlignment(result.ids, rows, "pir");
+      const d = await api.saveDocument(projectId, { name: `PIR da ${result.method.split(" ")[0]} ${result.ids.join(" / ").slice(0, 50)}`, kind: "pir", content: text, meta: { job_id: jobId } });
+      toast.push("Convertito in PIR: nell'Editor PIR indica quali voci sono template (Seconda riga…, tipo structureX).", "info");
+      navigate(`/pir?doc=${d.id}`);
     } catch (e) {
       toast.error(e);
     }
@@ -131,12 +148,19 @@ function Results({ jobId, result, params }: { jobId: string; result: AlignResult
             <button type="button" className="btn btn-sm" onClick={() => exportAs("fasta")}>FASTA</button>
             <button type="button" className="btn btn-sm" onClick={() => exportAs("clustal")}>Clustal</button>
             <button type="button" className="btn btn-sm" onClick={() => exportAs("pir")}>PIR</button>
+            {result.mode !== "structural" && (
+              <button type="button" className="btn btn-sm" disabled={!projectId} onClick={toPir} title="Salva come PIR e lo apre nell'Editor PIR">Converti in PIR</button>
+            )}
             <button type="button" className="btn btn-sm btn-primary" onClick={save}><Icon name="save" size={14} /> Salva nel progetto</button>
           </>
         }
       >
         <div className="stack">
-          <AlignmentView ids={result.ids} aligned={result.aligned} conservation={result.conservation} downloadable={false} />
+          {edited && <Alert tone="info">Allineamento modificato a mano: statistiche e grafici si riferiscono a quello calcolato; esportazione e salvataggio usano quello modificato.</Alert>}
+          <AlignmentEditor kind={result.mode} ids={result.ids} rows={rows} onRows={setRows} structures={sources ?? []} />
+          <Disclosure title="Vista di sola lettura (confidenza, consenso)">
+            <AlignmentView ids={result.ids} aligned={rows} conservation={edited ? undefined : result.conservation} downloadable={false} />
+          </Disclosure>
           <Disclosure title="Metodo e parametri" extra={MODE_LABEL[result.mode]}>
             <DetailGrid items={[
               { label: "Metodo", value: result.method },

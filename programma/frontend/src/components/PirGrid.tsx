@@ -107,6 +107,12 @@ interface Props {
   onAnnotate?: (c0: number, c1: number) => void;
   /** il cursore si è spostato (vista 3D collegata) */
   onCursor?: (r: number, c: number) => void;
+  /** etichetta di ogni riga accanto al nome (predefinita: bersaglio / template secondo il tipo PIR) */
+  rowLabels?: string[];
+  /** pulsanti per inserire «/» e «.» (solo PIR) */
+  markers?: boolean;
+  /** casella per sbloccare i residui dei template (solo PIR) */
+  lockToggle?: boolean;
 }
 
 const isLocked = (kind: string | undefined, templatesEditable: boolean) => !templatesEditable && !!kind?.startsWith("structure");
@@ -118,7 +124,7 @@ const widthOf = (rows: string[]) => Math.max(0, ...rows.map((s) => s.length));
  * lettera sostituisce il residuo sotto il cursore. Le colonne fuori vista non si disegnano: allineamenti lunghi restano
  * fluidi. Il focus resta sulla griglia anche dopo i pulsanti, così le lettere non finiscono alle scorciatoie globali.
  */
-export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, canUndo, canRedo, templatesEditable, onTemplatesEditable, mutated, focus, onFocusDone, secondary, issues = [], onEditHeader, onTrimEnds, changed, bands = [], onAnnotate, onCursor }: Props) {
+export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, canUndo, canRedo, templatesEditable, onTemplatesEditable, mutated, focus, onFocusDone, secondary, issues = [], onEditHeader, onTrimEnds, changed, bands = [], onAnnotate, onCursor, rowLabels, markers = true, lockToggle = true }: Props) {
   const [colorMode, setColorModeState] = useState<ColorMode>(readColorMode);
   const setColorMode = (m: ColorMode) => {
     setColorModeState(m);
@@ -253,7 +259,9 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
       const up = aa.toUpperCase();
       if (!isStandardAa(up)) return edit(null, `«${up}» non è uno dei 20 amminoacidi standard.`);
       if (isLocked(kinds[cursor.r], templatesEditable)) {
-        return edit(null, "I residui dei template sono bloccati: devono corrispondere al file della struttura. Sbloccali dalla barra solo se serve davvero.");
+        return edit(null, lockToggle
+          ? "I residui dei template sono bloccati: devono corrispondere al file della struttura. Sbloccali dalla barra solo se serve davvero."
+          : "I residui delle strutture non si sostituiscono: devono restare quelli dei file.");
       }
       const cur = rows[cursor.r]?.[cursor.c];
       if (!cur || !/[A-Za-z]/.test(cur)) return edit(null, "Qui non c'è un residuo: si sostituiscono solo i residui (per aggiungerne usa il testo PIR).");
@@ -415,10 +423,12 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
           <button type="button" className="btn btn-sm btn-ghost" onClick={() => onEditHeader(cursor.r)}
             title="Codice e seconda riga della voce sotto il cursore, campo per campo (anche con doppio clic sul nome)">Seconda riga…</button>
         )}
-        <label className="check right" title="I residui dei template devono corrispondere al file della struttura: sbloccali solo per correggere un PIR che non corrisponde già">
-          <input type="checkbox" checked={templatesEditable} onChange={(e) => onTemplatesEditable(e.target.checked)} />
-          Residui dei template modificabili
-        </label>
+        {lockToggle && (
+          <label className="check right" title="I residui dei template devono corrispondere al file della struttura: sbloccali solo per correggere un PIR che non corrisponde già">
+            <input type="checkbox" checked={templatesEditable} onChange={(e) => onTemplatesEditable(e.target.checked)} />
+            Residui dei template modificabili
+          </label>
+        )}
       </div>
       <div className="row small pirg-tools">
         {/* con il mouse il focus torna alla griglia (le lettere non vanno alle scorciatoie globali); con la tastiera resta qui */}
@@ -427,10 +437,14 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
         </span>
         <span className="text-2">{MODE_LEGEND[colorMode]}</span>
         <span className="right row" style={{ gap: 6 }}>
-          <button type="button" className="btn btn-sm btn-ghost" onClick={run(() => actions.marker("/"))}
-            title="Inserisce prima della selezione una colonna con il separatore di catena «/» in tutte le voci">Inserisci «/»</button>
-          <button type="button" className="btn btn-sm btn-ghost" onClick={run(() => actions.marker("."))}
-            title="Inserisce prima della selezione una colonna con «.» (blocco di un ligando) nelle righe selezionate e gap nelle altre">Inserisci «.»</button>
+          {markers && (
+            <>
+              <button type="button" className="btn btn-sm btn-ghost" onClick={run(() => actions.marker("/"))}
+                title="Inserisce prima della selezione una colonna con il separatore di catena «/» in tutte le voci">Inserisci «/»</button>
+              <button type="button" className="btn btn-sm btn-ghost" onClick={run(() => actions.marker("."))}
+                title="Inserisce prima della selezione una colonna con «.» (blocco di un ligando) nelle righe selezionate e gap nelle altre">Inserisci «.»</button>
+            </>
+          )}
           {onAnnotate && (
             <button type="button" className="btn btn-sm btn-ghost" onClick={() => onAnnotate(sel.c0, sel.c1)}
               title="Dà un nome ai residui del bersaglio nelle colonne selezionate (sito attivo, disolfuro…): una fascia colorata che segue i gap">Annota la selezione…</button>
@@ -490,7 +504,7 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
           {rows.map((s, r) => (
             <div key={r} className={`pirg-row${kinds[r] === "sequence" ? " pirg-target" : ""}`} style={{ top: r * stride }}>
               <div className="pirg-name" title={`${ids[r]} · ${kinds[r]}`}>
-                <span className="pirg-kind">{kinds[r] === "sequence" ? "bersaglio" : "template"}</span>{ids[r]}
+                <span className="pirg-kind">{rowLabels?.[r] ?? (kinds[r] === "sequence" ? "bersaglio" : "template")}</span>{ids[r]}
                 <span className="pirg-num" title="Numero del primo residuo visibile">{firstNumber(r)}</span>
               </div>
               <div className="pirg-seq" style={{ left: NAME_W + c0 * CW }}>
@@ -545,7 +559,7 @@ const signed = (n: number) => (n > 0 ? `+${n}` : String(n).replace("-", "−"));
 function Palette({ current, locked, onPick }: { current: string; locked: boolean; onPick: (aa: string) => void }) {
   const wt = current.toUpperCase();
   const residue = /^[A-Z]$/.test(wt);
-  const reason = !residue ? "porta il cursore su un residuo" : locked ? "residuo di un template: bloccato" : null;
+  const reason = !residue ? "porta il cursore su un residuo" : locked ? "residuo di una struttura: bloccato" : null;
   return (
     <div className="pirg-palette" role="group" aria-label="Sostituzione del residuo sotto il cursore">
       <div className="pirg-palette-head small">
