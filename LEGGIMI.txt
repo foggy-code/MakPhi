@@ -11,6 +11,13 @@ AVVIO
 Si apre il browser su http://127.0.0.1:8765. Per chiudere: "Arresta BioLoom" oppure il tasto S
 nella finestra dell'avviatore.
 
+CARTELLE
+  Guida       manuale d'uso completo (primo avvio, funzioni, QMEAN, dati e privacy,
+              chiavetta e server, licenze)
+  data        i tuoi dati: progetti, risultati, template, licenze, database
+  immagini    immagini Docker per avviare BioLoom senza internet
+  programma   il codice di BioLoom: non serve aprirla
+
 AL PRIMO AVVIO SU UN COMPUTER
   - le immagini Docker vengono caricate dalla cartella "immagini" (qualche minuto, senza internet);
   - se non trovi la chiave MODELLER gia' inserita, aggiungila in Impostazioni > Licenze;

@@ -4,9 +4,9 @@
 /server.env
 immagini/*.tar
 
-# pacchetti con licenza (vedi docker/vendor/README.md)
-docker/vendor/**/*.tar.gz
-docker/vendor/**/*.tar
+# pacchetti con licenza (vedi programma/docker/vendor/README.md)
+programma/docker/vendor/**/*.tar.gz
+programma/docker/vendor/**/*.tar
 
 # Python
 .venv/
@@ -16,8 +16,8 @@ __pycache__/
 *.egg-info/
 
 # frontend
-frontend/node_modules/
-frontend/dist/
+programma/frontend/node_modules/
+programma/frontend/dist/
 
 # editor / sistema
 .vscode/

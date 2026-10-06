@@ -7,7 +7,7 @@
       "runtimeArgs": [
         "compose",
         "-f",
-        "launcher/compose.yml",
+        "programma/launcher/compose.yml",
         "--env-file",
         ".env.locale",
         "up"
@@ -19,7 +19,7 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": [
         "--prefix",
-        "frontend",
+        "programma/frontend",
         "run",
         "dev",
         "--",
@@ -32,7 +32,7 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": [
         "--prefix",
-        "frontend",
+        "programma/frontend",
         "run",
         "preview",
         "--",
