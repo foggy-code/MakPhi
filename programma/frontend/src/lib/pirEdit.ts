@@ -123,6 +123,53 @@ function slideGaps(rows: string[], s: Selection, dir: -1 | 1): string[] | null {
   return changed(rows, squareUp(out));
 }
 
+/**
+ * Inserisce nella colonna `col` una colonna di marcatori: "/" (separatore di catena) in tutte le voci, perché MODELLER
+ * lo vuole nella stessa colonna ovunque; "." (blocco di un ligando) nelle righe `marked`, gap nelle altre.
+ */
+export function insertMarkerColumn(rows: string[], col: number, mark: "/" | ".", marked: Set<number>): string[] {
+  return squareUp(rows.map((s, r) => {
+    const row = s.padEnd(col, GAP);
+    const ch = mark === "/" || marked.has(r) ? mark : GAP;
+    return row.slice(0, col) + ch + row.slice(col);
+  }));
+}
+
+export interface TrimResult {
+  rows: string[];
+  /** residui tolti al bersaglio all'inizio e alla fine */
+  start: number;
+  end: number;
+}
+
+/**
+ * Toglie le colonne iniziali e finali in cui nessun template ha un residuo (code del bersaglio senza stampo, che
+ * MODELLER costruirebbe come anse libere), senza scavalcare un separatore di catena. Null se non c'è nulla da togliere
+ * o se mancano bersaglio o template.
+ */
+export function trimUncoveredEnds(rows: string[], kinds: string[]): TrimResult | null {
+  const target = kinds.indexOf("sequence");
+  const templates = kinds.map((k, i) => (k.startsWith("structure") ? i : -1)).filter((i) => i >= 0);
+  if (target < 0 || !templates.length) return null;
+  const width = Math.max(0, ...rows.map((s) => s.length));
+  const covered = (c: number) => templates.some((r) => isLetter(rows[r][c]));
+  const marker = (c: number) => rows.some((s) => s[c] === "/" || s[c] === ".");
+  let from = 0;
+  while (from < width && !covered(from) && !marker(from)) from++;
+  let to = width;
+  while (to > from && !covered(to - 1) && !marker(to - 1)) to--;
+  // una catena intera senza template resterebbe vuota davanti al suo separatore: da quel lato non si ritaglia
+  if (from > 0 && marker(from)) from = 0;
+  if (to < width && to > 0 && marker(to - 1)) to = width;
+  if (from === 0 && to === width) return null;
+  const t = rows[target];
+  const count = (a: number, b: number) => t.slice(a, b).split("").filter(isLetter).length;
+  const start = count(0, from);
+  const end = count(to, width);
+  if (!start && !end) return null;
+  return { rows: rows.map((s) => s.slice(from, to)), start, end };
+}
+
 /** Toglie le colonne fatte solo di gap; null se non ce ne sono. */
 export function removeGapColumns(rows: string[]): string[] | null {
   const width = Math.max(0, ...rows.map((s) => s.length));

@@ -3,13 +3,15 @@ import { CLASS_TINT } from "../lib/alignmentView";
 import { RESIDUE_CLASSES, residueClass } from "../lib/aminoAcids";
 import { residueText } from "../lib/compareMetrics";
 import { AMINO } from "../lib/mutations";
-import { deleteGaps, insertGaps, isGapBlock, isRagged, normSel, removeGapColumns, sameRows, slideBlock, squareUp, type Selection } from "../lib/pirEdit";
+import { COLOR_MODES, columnConservation, conservationLevel, hydroClass, type ColorMode } from "../lib/pirColors";
+import { deleteGaps, insertGaps, insertMarkerColumn, isGapBlock, isRagged, normSel, removeGapColumns, sameRows, slideBlock, squareUp, type Selection } from "../lib/pirEdit";
 import { blosum62, blosumTone, isStandardAa, residuePositions, substitute } from "../lib/pirMutations";
 import { issueSummary, issuesAt, nextIssue, type PirIssue } from "../lib/pirIssues";
 import { conflictText, type GapConflict, type SS3 } from "../lib/pirSecondary";
 import { dsspLabel } from "../lib/qualityView";
 import { SS3_LABEL } from "../lib/residues";
 import { Icon } from "./Icon";
+import { Segmented } from "./ui";
 import "../styles/pir.css";
 
 // Geometria fissa delle celle: la colonna sotto il puntatore si ricava dalla posizione, senza misurare gli span.
@@ -20,6 +22,31 @@ const NAME_W = 170;
 const TH = 12;
 /** colonne disegnate oltre i bordi visibili (scorrimento orizzontale senza vuoti) */
 const OVERSCAN = 24;
+
+/** altezza dell'istogramma della conservazione sotto il righello */
+const HH = 14;
+const COLOR_PREF = "bioloom.pir.colors";
+
+// tinte di fondo delle altre colorazioni (testo nel colore del tema, come le tinte tenui delle classi)
+const IDENT: CSSProperties = { background: "#22c55e55" };
+const CONS: CSSProperties[] = [{}, { background: "#3b82f622" }, { background: "#3b82f640" }, { background: "#3b82f666" }];
+const HYDRO: Record<string, CSSProperties> = { phobic: { background: "#f59e0b4d" }, philic: { background: "#3b82f64d" }, mid: {} };
+const MODE_LEGEND: Record<ColorMode, string> = {
+  class: "classi chimiche di Clustal X",
+  identity: "verde: residuo uguale a quello del bersaglio nella stessa colonna",
+  conservation: "blu più intenso: colonna più conservata (≥ 50%, 70%, 90% delle voci con lo stesso residuo)",
+  hydro: "arancio: idrofobico · blu: idrofilo (Kyte & Doolittle)",
+  none: "senza colori",
+};
+
+function readColorMode(): ColorMode {
+  try {
+    const v = localStorage.getItem(COLOR_PREF);
+    return COLOR_MODES.some((m) => m.value === v) ? (v as ColorMode) : "class";
+  } catch {
+    return "class";
+  }
+}
 
 const TINT: Record<string, CSSProperties> = {};
 for (const c of RESIDUE_CLASSES) for (const l of c.letters) TINT[l] = { background: `${c.color}${CLASS_TINT}` };
@@ -70,6 +97,8 @@ interface Props {
   issues?: PirIssue[];
   /** apre il modulo della seconda riga per la voce (pulsante o doppio clic sul nome) */
   onEditHeader?: (row: number) => void;
+  /** toglie le code del bersaglio senza template (la pagina aggiorna anche riferimento e numerazione) */
+  onTrimEnds?: () => void;
 }
 
 const isLocked = (kind: string | undefined, templatesEditable: boolean) => !templatesEditable && !!kind?.startsWith("structure");
@@ -81,7 +110,16 @@ const widthOf = (rows: string[]) => Math.max(0, ...rows.map((s) => s.length));
  * lettera sostituisce il residuo sotto il cursore. Le colonne fuori vista non si disegnano: allineamenti lunghi restano
  * fluidi. Il focus resta sulla griglia anche dopo i pulsanti, così le lettere non finiscono alle scorciatoie globali.
  */
-export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, canUndo, canRedo, templatesEditable, onTemplatesEditable, mutated, focus, onFocusDone, secondary, issues = [], onEditHeader }: Props) {
+export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, canUndo, canRedo, templatesEditable, onTemplatesEditable, mutated, focus, onFocusDone, secondary, issues = [], onEditHeader, onTrimEnds }: Props) {
+  const [colorMode, setColorModeState] = useState<ColorMode>(readColorMode);
+  const setColorMode = (m: ColorMode) => {
+    setColorModeState(m);
+    try {
+      localStorage.setItem(COLOR_PREF, m);
+    } catch {
+      // preferenza non salvata: vale finché la pagina resta aperta
+    }
+  };
   const width = widthOf(rows);
   // passo verticale fra le righe: con la struttura secondaria ogni riga ha la sua traccia sotto
   const stride = secondary ? RH + TH : RH;
@@ -125,7 +163,7 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
     const visible = box.clientWidth - NAME_W;
     if (x < box.scrollLeft) box.scrollLeft = Math.max(0, x - CW * 4);
     else if (x + CW > box.scrollLeft + visible) box.scrollLeft = x + CW * 5 - visible;
-    const y = RH + r * stride; // il righello sta sopra le righe
+    const y = RH + HH + r * stride; // righello e istogramma stanno sopra le righe
     if (y < box.scrollTop + RH) box.scrollTop = Math.max(0, y - RH - stride);
     else if (y + stride > box.scrollTop + box.clientHeight) box.scrollTop = y + stride * 2 - box.clientHeight;
   };
@@ -190,6 +228,11 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
       ? "I gap non scavalcano il bordo, un separatore di catena «/» o un ligando «.»."
       : dir < 0 ? "Il blocco non può andare a sinistra: c'è un residuo o il bordo." : "Il blocco non può andare a destra: c'è un residuo di fronte.", dir),
     squeeze: () => edit(removeGapColumns(rows), "Nessuna colonna fatta solo di gap."),
+    /** colonna di marcatori prima della selezione: "/" in tutte le voci, "." nelle righe selezionate */
+    marker: (mark: "/" | ".") => {
+      const marked = new Set(Array.from({ length: sel.r1 - sel.r0 + 1 }, (_, i) => sel.r0 + i));
+      return edit(insertMarkerColumn(rows, sel.c0, mark, marked), "");
+    },
     /** sostituisce il residuo sotto il cursore */
     substitute: (aa: string) => {
       const up = aa.toUpperCase();
@@ -304,6 +347,20 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
   const numbering = useMemo(() => rows.map((s, i) => residuePositions(s, headers[i] ?? "")), [rows, headers]);
   const positions = numbering[cursor.r] ?? [];
   const firstVisible = Math.floor(view.left / CW);
+  const conservation = useMemo(() => columnConservation(rows), [rows]);
+  const targetRow = kinds.indexOf("sequence");
+  /** Tinta di fondo di una cella secondo la colorazione scelta. */
+  const cellStyle = (x: string, r: number, c: number): CSSProperties | undefined => {
+    if (colorMode === "class") return TINT[x.toUpperCase()];
+    if (colorMode === "none" || !/[A-Za-z]/.test(x)) return undefined;
+    if (colorMode === "identity") {
+      const t = rows[targetRow]?.[c];
+      return r !== targetRow && t && t.toUpperCase() === x.toUpperCase() ? IDENT : undefined;
+    }
+    if (colorMode === "conservation") return CONS[conservationLevel(conservation[c] ?? 0)];
+    const h = hydroClass(x);
+    return h ? HYDRO[h] : undefined;
+  };
   const firstNumber = (r: number) => {
     const list = numbering[r] ?? [];
     for (let c = firstVisible; c < list.length; c++) {
@@ -343,6 +400,20 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
           Residui dei template modificabili
         </label>
       </div>
+      <div className="row small pirg-tools">
+        <Segmented label="Colori della griglia" value={colorMode} options={COLOR_MODES} onChange={setColorMode} />
+        <span className="text-2">{MODE_LEGEND[colorMode]}</span>
+        <span className="right row" style={{ gap: 6 }}>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={run(() => actions.marker("/"))}
+            title="Inserisce prima della selezione una colonna con il separatore di catena «/» in tutte le voci">Inserisci «/»</button>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={run(() => actions.marker("."))}
+            title="Inserisce prima della selezione una colonna con «.» (blocco di un ligando) nelle righe selezionate e gap nelle altre">Inserisci «.»</button>
+          {onTrimEnds && (
+            <button type="button" className="btn btn-sm btn-ghost" onClick={() => { onTrimEnds(); refocus(); }}
+              title="Toglie le colonne iniziali e finali in cui nessun template ha un residuo (code del bersaglio senza stampo)">Ritaglia le estremità</button>
+          )}
+        </span>
+      </div>
       {issues.length > 0 && (
         <div className="small pirg-issues">
           <b>Controlli:</b> {issueSummary(issues)} · F8 / Maiusc+F8 portano il cursore al successivo / precedente (segni colorati sul righello)
@@ -370,6 +441,13 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
             <i key={`i${k}`} className={`pirg-issue pirg-issue-${x.severity}`} style={{ left: NAME_W + x.from * CW, width: (x.to - x.from + 1) * CW }} />
           ))}
         </div>
+        <div className="pirg-hist" style={{ width: NAME_W + width * CW }} aria-hidden="true">
+          <div className="pirg-name">conservazione</div>
+          {conservation.slice(c0, c1).map((v, i) => (v > 0 ? (
+            <i key={c0 + i} style={{ left: NAME_W + (c0 + i) * CW, height: Math.max(1, Math.round(v * (HH - 2))) }}
+              className={v >= 0.999 ? "pirg-hist-full" : undefined} />
+          ) : null))}
+        </div>
         <div ref={bodyRef} className="pirg-body" style={{ width: NAME_W + width * CW, height: rows.length * stride }} onMouseDown={onMouseDown} aria-hidden="true"
           onDoubleClick={(e) => {
             const cell = cellAt(e);
@@ -387,7 +465,7 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
               </div>
               <div className="pirg-seq" style={{ left: NAME_W + c0 * CW }}>
                 {s.slice(c0, c1).split("").map((x, i) => (
-                  <span key={c0 + i} style={TINT[x.toUpperCase()]}
+                  <span key={c0 + i} style={cellStyle(x, r, c0 + i)}
                     className={x === "-" ? "pirg-gap" : x === "/" || x === "." ? "pirg-mark" : mutated?.has(`${r}:${c0 + i}`) ? "pirg-mut" : undefined}>{x}</span>
                 ))}
               </div>

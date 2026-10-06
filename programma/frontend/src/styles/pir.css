@@ -44,6 +44,18 @@
   border-right: 1px solid var(--chart-axis);
 }
 .pirg-ruler .pirg-name { color: var(--muted); font-family: var(--font); font-size: 11px; background: var(--panel-3); }
+/* istogramma della conservazione per colonna, fermo sotto il righello */
+.pirg-hist {
+  position: sticky;
+  top: var(--rh);
+  z-index: var(--z-sticky);
+  height: 14px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+.pirg-hist .pirg-name { height: 14px; line-height: 14px; color: var(--muted); font-family: var(--font); font-size: 9.5px; text-align: right; cursor: default; }
+.pirg-hist > i { position: absolute; bottom: 1px; width: calc(var(--cw) - 2px); margin-left: 1px; background: var(--accent); opacity: 0.55; border-radius: 1px 1px 0 0; }
+.pirg-hist > i.pirg-hist-full { opacity: 1; }
 .pirg-body { position: relative; }
 .pirg-row { position: absolute; left: 0; right: 0; height: var(--rh); line-height: var(--rh); }
 .pirg-name {

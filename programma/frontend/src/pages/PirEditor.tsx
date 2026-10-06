@@ -19,8 +19,8 @@ import { fileStem } from "../lib/files";
 import { downloadText, fmtBytes, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
 import { parsePir, pirIdentities } from "../lib/pir";
-import { setEntryHeader } from "../lib/pirHeader";
-import { emptyHistory, record, redo, rewritePir, squareUp, undo, type History } from "../lib/pirEdit";
+import { formatHeader, parseHeader, setEntryHeader } from "../lib/pirHeader";
+import { emptyHistory, record, redo, rewritePir, squareUp, trimUncoveredEnds, undo, type History } from "../lib/pirEdit";
 import { columnOfResidue, originalSequences, pirMutations, residuesOf, revertMutations, type PirMutation } from "../lib/pirMutations";
 import { chainBreakIssues, conflictIssues, mismatchIssues, uncoveredIssues } from "../lib/pirIssues";
 import { columnCodes, columnStates, gapConflicts, secondaryKey } from "../lib/pirSecondary";
@@ -242,6 +242,31 @@ export default function PirEditor() {
     const sources = ssEntries.map((x) => x?.source ?? null);
     return { states, codes, sources, conflicts: gapConflicts(entries.map((e) => e.sequence), entries.map((e) => e.kind), states, sources) };
   }, [ssOn, ssData, ssEntries, entries]);
+  /**
+   * Toglie le code del bersaglio senza template. Il riferimento delle sostituzioni perde gli stessi residui; se la seconda
+   * riga del bersaglio ha un residuo iniziale numerico, cresce di quanti residui sono stati tolti all'inizio.
+   */
+  const trimEnds = () => {
+    const r = trimUncoveredEnds(entries.map((e) => e.sequence), entries.map((e) => e.kind));
+    if (!r) {
+      toast.push("Niente da ritagliare: le estremità del bersaglio hanno già un template di fronte.", "info");
+      return;
+    }
+    const ti = entries.findIndex((e) => e.kind === "sequence");
+    const t = entries[ti];
+    let text = rewritePir(content, r.rows);
+    const h = parseHeader(t.header);
+    const first = parseInt(h.startRes, 10);
+    if (r.start && Number.isFinite(first)) text = setEntryHeader(text, ti, t.code, formatHeader({ ...h, startRes: String(first + r.start) }));
+    setOriginal((o) => (o[t.code] === undefined ? o : { ...o, [t.code]: o[t.code].slice(r.start, o[t.code].length - r.end) }));
+    change(text);
+    toast.push(
+      `Tolti dal bersaglio ${r.start} residui all'inizio e ${r.end} alla fine.`
+        + (r.start && !Number.isFinite(first) ? " La numerazione ora parte dal primo residuo rimasto." : ""),
+      "info",
+    );
+  };
+
   /** Controlli in tempo reale, per la griglia (segni sul righello, F8). */
   const issues = useMemo(() => {
     const rows = entries.map((e) => e.sequence);
@@ -411,6 +436,7 @@ export default function PirEditor() {
                   secondary={gridSecondary}
                   issues={issues}
                   onEditHeader={setHeaderRow}
+                  onTrimEnds={trimEnds}
                 />
               ) : (
                 <textarea
