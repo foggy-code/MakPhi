@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { Align2dResult, DocumentItem, PirReport, TemplateRef } from "../api/types";
@@ -6,8 +6,9 @@ import { AlignmentView } from "../components/AlignmentView";
 import { TextFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
+import { PirGrid } from "../components/PirGrid";
 import { SequencePicker, TemplatePicker } from "../components/Pickers";
-import { Alert, Badge, BarCell, Card, Confirm, Disclosure, Empty, Modal, PageHead } from "../components/ui";
+import { Alert, Badge, BarCell, Card, Confirm, Disclosure, Empty, Modal, PageHead, Tabs } from "../components/ui";
 import { FormSection, InfoChips } from "../components/WorkflowParts";
 import { pirReference } from "../lib/alignConfidence";
 import { useProject, useToast } from "../lib/context";
@@ -15,6 +16,7 @@ import { fileStem } from "../lib/files";
 import { downloadText, fmtBytes, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
 import { parsePir, pirIdentities } from "../lib/pir";
+import { emptyHistory, record, redo, serializePir, undo, type History } from "../lib/pirEdit";
 import { templateLabel } from "../lib/workflowView";
 
 function GenerateDialog({ onClose, onDone }: { onClose: () => void; onDone: (pir: string, templates: TemplateRef[], name: string) => void }) {
@@ -78,12 +80,38 @@ export default function PirEditor() {
   const [report, setReport] = useState<PirReport | null>(null);
   const [generate, setGenerate] = useState(false);
   const [toDelete, setToDelete] = useState(false);
+  const [tab, setTab] = useState<"grid" | "text">("grid");
+  const [history, setHistory] = useState<History>(emptyHistory);
+  // le battute di fila nel testo PIR formano un solo passo della cronologia
+  const lastTyping = useRef(0);
+
+  /** Contenuto caricato da fuori (documento, file, job): nuova cronologia. */
+  const load = (text: string) => {
+    setContent(text);
+    setHistory(emptyHistory());
+  };
+  /** Modifica dell'utente: lo stato precedente va nella cronologia. */
+  const change = (text: string, typing = false) => {
+    const now = Date.now();
+    if (!typing || now - lastTyping.current > 1000) setHistory((h) => record(h, content));
+    lastTyping.current = typing ? now : 0;
+    setContent(text);
+    setDirty(true);
+  };
+  const step = (dir: "undo" | "redo") => {
+    const r = dir === "undo" ? undo(history, content) : redo(history, content);
+    if (!r) return;
+    setHistory(r.history);
+    setContent(r.value);
+    setDirty(true);
+    lastTyping.current = 0;
+  };
 
   useEffect(() => {
     if (!docId || !projectId) return;
     api.document(projectId, docId).then((d) => {
       setName(d.name);
-      setContent(d.content ?? "");
+      load(d.content ?? "");
       setMeta(d.meta ?? {});
       setDirty(false);
     }).catch(toast.error);
@@ -97,7 +125,7 @@ export default function PirEditor() {
       if (!j.result) return;
       for (const w of j.result.warnings ?? []) toast.push(w, "warn");
       setName(`Allineamento MODELLER (job ${from.slice(0, 6)})`);
-      setContent(j.result.pir);
+      load(j.result.pir);
       setMeta({ templates: j.result.templates.map((t) => ({ id: t.id, chains: t.chains })) });
       setDirty(true);
     }).catch(toast.error);
@@ -133,7 +161,7 @@ export default function PirEditor() {
     }
     setParams({});
     setName(fileStem(file.name));
-    setContent(pir);
+    load(pir);
     setMeta({});
     setDirty(true);
   };
@@ -161,7 +189,7 @@ export default function PirEditor() {
           <>
             <button className="btn" onClick={() => setGenerate(true)}><Icon name="wand" /> Genera con MODELLER</button>
             <TextFileButton accept=".pir,.ali,.txt,.fasta,.fa,.aln,.sto,.msf" onText={openFile}>Apri file</TextFileButton>
-            <button className="btn" onClick={() => { setParams({}); setName(""); setContent(""); setMeta({}); }}><Icon name="plus" /> Nuovo</button>
+            <button className="btn" onClick={() => { setParams({}); setName(""); load(""); setMeta({}); }}><Icon name="plus" /> Nuovo</button>
           </>
         }
       />
@@ -208,16 +236,32 @@ export default function PirEditor() {
             }
           >
             <div className="stack-sm">
-              <textarea
-                className="input"
-                rows={16}
-                spellCheck={false}
-                aria-label="Allineamento in formato PIR"
-                value={content}
-                onChange={(e) => { setContent(e.target.value); setDirty(true); }}
-                placeholder={">P1;target\nsequence:target:::::::0.00: 0.00\nMKTAYIAKQR-QISFVKSHF*\n\n>P1;1ABC_A\nstructureX:1ABC_A:1:A:120:A::::\nMKSAYIAKQRAQISFVKSHF*"}
-                style={{ whiteSpace: "pre", overflowX: "auto" }}
-              />
+              {entries.length > 0 && (
+                <Tabs value={tab} onChange={setTab} tabs={[{ value: "grid", label: "Griglia" }, { value: "text", label: "Testo PIR" }]} />
+              )}
+              {entries.length > 0 && tab === "grid" ? (
+                <PirGrid
+                  ids={entries.map((e) => e.code)}
+                  kinds={entries.map((e) => e.kind)}
+                  rows={entries.map((e) => e.sequence)}
+                  onEdit={(rows) => change(serializePir(entries, rows))}
+                  onUndo={() => step("undo")}
+                  onRedo={() => step("redo")}
+                  canUndo={history.past.length > 0}
+                  canRedo={history.future.length > 0}
+                />
+              ) : (
+                <textarea
+                  className="input"
+                  rows={16}
+                  spellCheck={false}
+                  aria-label="Allineamento in formato PIR"
+                  value={content}
+                  onChange={(e) => change(e.target.value, true)}
+                  placeholder={">P1;target\nsequence:target:::::::0.00: 0.00\nMKTAYIAKQR-QISFVKSHF*\n\n>P1;1ABC_A\nstructureX:1ABC_A:1:A:120:A::::\nMKSAYIAKQRAQISFVKSHF*"}
+                  style={{ whiteSpace: "pre", overflowX: "auto" }}
+                />
+              )}
               <InfoChips items={[
                 { label: "Voci", value: entries.length || null },
                 { label: "Bersaglio", value: entries.find((e) => e.kind === "sequence")?.code },
@@ -270,7 +314,7 @@ export default function PirEditor() {
             </Card>
           )}
           {entries.length > 1 && entries.every((e) => e.sequence.length === entries[0].sequence.length) && (
-            <Card title="Anteprima" icon="align" sub={`${entries.length} sequenze · ${entries[0].sequence.length} colonne`}>
+            <Card title="Anteprima" icon="align" sub={`${entries.length} sequenze · ${entries[0].sequence.length} colonne`} collapsible defaultOpen={false} storageKey="pir.preview">
               <AlignmentView ids={entries.map((e) => e.code)} aligned={entries.map((e) => e.sequence)} reference={pirReference(entries.map((e) => e.kind))} />
             </Card>
           )}
@@ -288,7 +332,7 @@ export default function PirEditor() {
             setGenerate(false);
             setParams({});
             setName(`Allineamento ${target} · ${templates.map((t) => t.id).join(", ")}`);
-            setContent(pir);
+            load(pir);
             setMeta({ templates });
             setDirty(true);
             toast.push("Allineamento generato: controllalo e salvalo");
@@ -296,7 +340,7 @@ export default function PirEditor() {
         />
       )}
       {toDelete && docId && projectId && (
-        <Confirm text="Eliminare questo documento?" confirmLabel="Elimina" onCancel={() => setToDelete(false)} onConfirm={() => api.deleteDocument(projectId, docId).then(() => { setToDelete(false); setParams({}); setContent(""); setName(""); reload(); }).catch(toast.error)} />
+        <Confirm text="Eliminare questo documento?" confirmLabel="Elimina" onCancel={() => setToDelete(false)} onConfirm={() => api.deleteDocument(projectId, docId).then(() => { setToDelete(false); setParams({}); load(""); setName(""); reload(); }).catch(toast.error)} />
       )}
     </div>
   );

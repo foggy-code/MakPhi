@@ -1,0 +1,78 @@
+/*
+ * Griglia modificabile dell'Editor PIR (components/PirGrid). Celle a geometria fissa (--cw × --rh): la colonna sotto
+ * il puntatore si calcola dalla posizione. Nomi delle voci e righello restano fermi durante lo scorrimento.
+ */
+.pirg {
+  position: relative;
+  overflow: auto;
+  max-height: 60vh;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  outline: none;
+  user-select: none;
+}
+.pirg:focus-visible { box-shadow: var(--ring); }
+.pirg-ruler {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  height: var(--rh);
+  background: var(--panel-3);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.pirg-ruler > span {
+  position: absolute;
+  top: 3px;
+  width: var(--cw);
+  display: flex;
+  justify-content: flex-end;
+  white-space: nowrap;
+  font-size: 11px;
+  border-right: 1px solid var(--chart-axis);
+}
+.pirg-ruler .pirg-name { color: var(--muted); font-family: var(--font); font-size: 11px; background: var(--panel-3); }
+.pirg-body { position: relative; }
+.pirg-row { position: absolute; left: 0; right: 0; height: var(--rh); line-height: var(--rh); }
+.pirg-name {
+  position: sticky;
+  left: 0;
+  z-index: var(--z-raised);
+  width: var(--name-w);
+  height: var(--rh);
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--panel-2);
+  border-right: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+}
+.pirg-kind { display: inline-block; min-width: 58px; margin-right: 6px; color: var(--muted); font-family: var(--font); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.03em; }
+.pirg-target .pirg-name { font-weight: 700; box-shadow: inset 3px 0 0 var(--accent); }
+.pirg-seq { position: absolute; top: 0; display: flex; color: var(--text); cursor: cell; }
+.pirg-seq > span { flex: none; width: var(--cw); text-align: center; }
+.pirg-seq > span.pirg-gap { color: var(--muted); }
+.pirg-seq > span.pirg-mark { color: var(--accent); font-weight: 700; }
+.pirg-sel {
+  position: absolute;
+  pointer-events: none;
+  background: var(--accent-soft);
+  outline: 1px solid var(--accent);
+}
+.pirg-cursor {
+  position: absolute;
+  width: var(--cw);
+  height: var(--rh);
+  pointer-events: none;
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-radius: 2px;
+}
+.pirg-tools { flex-wrap: wrap; gap: 6px; }
+.pirg-sep { width: 1px; align-self: stretch; background: var(--border); margin: 0 2px; }

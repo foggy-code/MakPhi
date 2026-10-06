@@ -53,6 +53,9 @@ const PATHS: Record<string, string> = {
   fileText: "M14 3H6v18h12V7zM14 3v4h4M9 13h6M9 17h6M9 9h2",
   move: "M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3",
   list: "M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01",
+  // annulla / ripristina (Editor PIR)
+  undo: "M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11",
+  redo: "M15 14l5-5-5-5M20 9H9.5a5.5 5.5 0 0 0 0 11H13",
 };
 
 const FILLED = new Set(["play", "stop", "starFill"]);
