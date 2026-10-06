@@ -61,6 +61,15 @@ function GenerateDialog({ onClose, onDone }: { onClose: () => void; onDone: (pir
   );
 }
 
+const DOCS_PREF = "bioloom.pir.docs";
+function readDocsPref(): boolean {
+  try {
+    return localStorage.getItem(DOCS_PREF) !== "0";
+  } catch {
+    return true;
+  }
+}
+
 export default function PirEditor() {
   const { projectId } = useProject();
   const toast = useToast();
@@ -72,6 +81,18 @@ export default function PirEditor() {
   const [nameDirty, setNameDirty] = useState(false);
   const [generate, setGenerate] = useState(false);
   const [toDelete, setToDelete] = useState(false);
+  // elenco dei documenti a sinistra (nascosto: la griglia prende tutta la larghezza)
+  const [showDocs, setShowDocs] = useState(readDocsPref);
+  const toggleDocs = () => {
+    setShowDocs((v) => {
+      try {
+        localStorage.setItem(DOCS_PREF, v ? "0" : "1");
+      } catch {
+        // preferenza non salvata
+      }
+      return !v;
+    });
+  };
   // allineamento aperto nel banco di lavoro e suo stato (testo e metadati da salvare)
   const [source, setSource] = useState<PirSource>({ key: 0, text: "", meta: {} });
   const [ws, setWs] = useState<PirWorkspaceState>({ content: "", meta: {}, dirty: false, valid: false });
@@ -156,14 +177,15 @@ export default function PirEditor() {
         lead="Allineamento bersaglio–template nel formato di MODELLER. Correggi a mano i gap nelle regioni critiche (loop, siti attivi) prima di modellare."
         actions={
           <>
+            <button className="btn" onClick={toggleDocs} aria-pressed={showDocs} title="Mostra o nasconde l'elenco dei documenti del progetto"><Icon name="folder" /> Documenti</button>
             <button className="btn" onClick={() => setGenerate(true)}><Icon name="wand" /> Genera con MODELLER</button>
             <TextFileButton accept=".pir,.ali,.txt,.fasta,.fa,.aln,.sto,.msf" onText={openFile}>Apri file</TextFileButton>
             <button className="btn" onClick={() => { setParams({}); setName(""); open("", {}, false); }}><Icon name="plus" /> Nuovo</button>
           </>
         }
       />
-      <div className="split">
-        <Card title="Documenti del progetto" icon="folder" sub={docs?.length ? String(docs.length) : undefined}>
+      <div className={showDocs ? "split" : "stack"}>
+        {showDocs && <Card title="Documenti del progetto" icon="folder" sub={docs?.length ? String(docs.length) : undefined}>
           {!docs?.length ? <Empty icon="file" title="Nessun documento">Genera un allineamento o salvane uno dalla pagina Allineamenti.</Empty> : (
             <div className="table-wrap" style={{ maxHeight: 560, overflowY: "auto" }}>
               <table className="table">
@@ -180,7 +202,7 @@ export default function PirEditor() {
               </table>
             </div>
           )}
-        </Card>
+        </Card>}
         <div className="stack">
           <PirWorkspace
             source={source}

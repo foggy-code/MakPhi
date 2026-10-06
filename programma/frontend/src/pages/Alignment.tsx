@@ -24,7 +24,14 @@ import { useAsync, useJob } from "../lib/hooks";
 
 type Mode = "pairwise" | "multiple" | "structural" | "seq2struct";
 const MATRICES = ["BLOSUM62", "BLOSUM45", "BLOSUM80", "PAM250", "PAM30", "GONNET1992"];
-const MODE_LABEL: Record<Mode, string> = { pairwise: "Pairwise", multiple: "Multiplo", structural: "Strutturale", seq2struct: "Sequenza → struttura" };
+const MODE_LABEL: Record<Mode, string> = { pairwise: "Pairwise", multiple: "Multiplo", structural: "Strutturale", seq2struct: "Seq → struttura" };
+/** Una riga di spiegazione per modalità, sotto il selettore. */
+const MODE_HINT: Record<Mode, string> = {
+  pairwise: "Due sequenze, algoritmo globale o locale.",
+  multiple: "Tre o più sequenze (Clustal Omega, MAFFT, MUSCLE o integrato).",
+  seq2struct: "Bersaglio su uno o più template con MODELLER: il PIR per la modellazione, da correggere qui.",
+  structural: "Sovrapposizione di due strutture 3D e deviazione per residuo.",
+};
 const ALGORITHM_LABEL: Record<string, string> = { global: "Globale (Needleman-Wunsch)", local: "Locale (Smith-Waterman)" };
 /** Scelta automatica e programma integrato per modalità (i programmi esterni prendono il nome dalle informazioni di sistema). */
 const BUILTIN_TOOLS: Record<"multiple" | "structural", Record<string, string>> = {
@@ -326,9 +333,12 @@ export default function Alignment() {
   return (
     <div className="page">
       <PageHead title="Allineamenti" lead="Allineamenti di sequenza (pairwise o multipli), di una sequenza su una o più strutture (MODELLER, per la modellazione) e sovrapposizione di strutture 3D. I risultati si esportano in FASTA, Clustal o PIR per MODELLER." />
-      <div className="split">
-        <Card title="Nuovo allineamento" icon="align">
+      {/* con un risultato la pagina va a tutta larghezza: il modulo si richiude in una barra e il job si riduce */}
+      <div className={jobId ? "stack" : "split"}>
+        <Card key={jobId ? "with-result" : "new"} title="Nuovo allineamento" icon="align" collapsible defaultOpen={!jobId}
+          sub={jobId ? `${MODE_LABEL[mode]} · apri per cambiare i parametri o avviarne un altro` : undefined}>
           <Tabs value={mode} onChange={setMode} tabs={(["pairwise", "multiple", "seq2struct", "structural"] as const).map((m) => ({ value: m, label: MODE_LABEL[m] }))} />
+          <p className="small text-2" style={{ margin: "6px 0 10px" }}>{MODE_HINT[mode]}</p>
           <div className="stack">
             {mode === "pairwise" && (
               <>
@@ -429,7 +439,7 @@ export default function Alignment() {
           </div>
         </Card>
         <div className="stack">
-          {jobId ? <JobPanel summary={summary} log={log} onCancel={cancel} /> : <Card><Empty icon="align" title="Configura e avvia un allineamento">Pairwise e multiplo allineano sequenze; Sequenza → struttura allinea il bersaglio a uno o più template con MODELLER e apre il PIR da correggere; Strutturale sovrappone due strutture 3D e ne misura la deviazione per residuo.</Empty></Card>}
+          {jobId ? <JobPanel summary={summary} log={log} onCancel={cancel} compact={summary?.status === "completed"} /> : <Card><Empty icon="align" title="Configura e avvia un allineamento">Pairwise e multiplo allineano sequenze; Sequenza → struttura allinea il bersaglio a uno o più template con MODELLER e apre il PIR da correggere; Strutturale sovrappone due strutture 3D e ne misura la deviazione per residuo.</Empty></Card>}
           {job?.status === "completed" && job.result && (job.kind === "align2d"
             ? <SequenceStructureResult key={job.id} jobId={job.id} result={job.result as Align2dResult} />
             : <Results key={job.id} jobId={job.id} result={job.result as AlignResult} params={job.params} />)}

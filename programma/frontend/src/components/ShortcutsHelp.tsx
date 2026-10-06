@@ -1,4 +1,4 @@
-import { shortcutHelp } from "../lib/shortcuts";
+import { gridHelp, shortcutHelp } from "../lib/shortcuts";
 import { Modal } from "./ui";
 
 type Row = { keys: string[]; label: string };
@@ -44,6 +44,7 @@ export function ShortcutsHelp({ mac, onClose }: { mac: boolean; onClose: () => v
       <div className="stack">
         <Group title="Generali" rows={rows.filter((r) => r.keys[0] !== "g")} />
         <Group title="Vai a una pagina" rows={rows.filter((r) => r.keys[0] === "g")} />
+        <Group title="Griglia degli allineamenti (Editor PIR, Allineamenti)" rows={gridHelp(mac)} />
         <p className="small text-2">
           Mentre scrivi in un campo valgono solo {mac ? "⌘" : "Ctrl"} K ed Esc: gli altri tasti restano al campo. Con un dialogo
           aperto la navigazione è sospesa. Le lettere delle pagine compaiono anche accanto alle voci della barra laterale.

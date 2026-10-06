@@ -94,7 +94,55 @@
   outline-offset: -1px;
   border-radius: 2px;
 }
-.pirg-tools { flex-wrap: wrap; gap: 6px; }
+/* barra unica, ferma sotto la barra superiore quando la pagina scorre */
+.pirg-tools {
+  position: sticky;
+  top: 58px;
+  z-index: calc(var(--z-sticky) + 1);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  background: var(--panel);
+  font-size: 13px;
+}
+.pirg-tools .check select { margin-left: 6px; width: auto; }
+/* menu "Altro" */
+.pirg-more { position: relative; }
+.pirg-more > summary { list-style: none; cursor: pointer; }
+.pirg-more > summary::-webkit-details-marker { display: none; }
+.pirg-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: var(--z-overlay);
+  display: grid;
+  min-width: 300px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+.pirg-menu > button { padding: 7px 10px; border: 0; border-radius: 6px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.pirg-menu > button:hover, .pirg-menu > button:focus-visible { background: var(--accent-soft); }
+.pirg-menu > .check { padding: 7px 10px; border-top: 1px solid var(--border); margin-top: 4px; }
+/* tavolozza a comparsa sotto la cella del cursore */
+.pirg-wrap { position: relative; }
+.pirg-popover { position: absolute; z-index: var(--z-overlay); width: min(440px, 100%); box-shadow: var(--shadow); border-radius: var(--radius-sm); }
+.pirg-popover .pirg-palette { background: var(--panel); }
+/* griglia a schermo intero */
+.pirg-root.pirg-full {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  padding: 12px 20px;
+  overflow: auto;
+  background: var(--bg);
+}
+.pirg-full .pirg-tools { top: 0; background: var(--bg); }
+.pirg-full .pirg { max-height: calc(100vh - 150px); }
 .pirg-sep { width: 1px; align-self: stretch; background: var(--border); margin: 0 2px; }
 
 /*
@@ -189,3 +237,26 @@
 /* annotazioni: fascia verticale sui residui annotati, dietro alle lettere */
 .pirg-band { position: absolute; top: 0; bottom: 0; border-left: 1px solid; border-right: 1px solid; pointer-events: none; }
 .pirg-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; }
+
+/* banco di lavoro: griglia a sinistra, pannello a schede a destra (sotto sugli schermi stretti) */
+.pirw { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 400px); gap: 16px; align-items: start; }
+.pirw.pirw-empty { grid-template-columns: minmax(0, 1fr); }
+.pirw-main, .pirw-side { display: grid; gap: 16px; min-width: 0; }
+.pirw-side { position: sticky; top: 70px; max-height: calc(100vh - 86px); overflow-y: auto; align-content: start; }
+.pirw-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.pirw-tabs > button {
+  padding: 5px 9px; border: 1px solid var(--border); border-radius: 999px; background: var(--panel);
+  color: var(--text-2); font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.pirw-tabs > button.on { border-color: var(--accent); background: var(--accent-soft); color: var(--text); font-weight: 600; }
+.pirw-tabs > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pirw-count { margin-left: 5px; padding: 0 6px; border-radius: 999px; background: var(--panel-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+.pirw-list { max-height: 60vh; overflow-y: auto; }
+@media (max-width: 1280px) {
+  .pirw { grid-template-columns: minmax(0, 1fr); }
+  .pirw-side { position: static; max-height: none; }
+}
+/* la griglia resta nella sua colonna: i contenitori non si allargano quanto il contenuto */
+.pirg-root, .pirg-wrap, .pirw-main > .card, .pirw-main .card-body { min-width: 0; }
+.pirg-root { max-width: 100%; }
+.pirg { max-width: 100%; }

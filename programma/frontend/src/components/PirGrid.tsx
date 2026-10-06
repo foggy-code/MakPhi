@@ -11,7 +11,6 @@ import { conflictText, type GapConflict, type SS3 } from "../lib/pirSecondary";
 import { dsspLabel } from "../lib/qualityView";
 import { SS3_LABEL } from "../lib/residues";
 import { Icon } from "./Icon";
-import { Segmented } from "./ui";
 import "../styles/pir.css";
 
 // Geometria fissa delle celle: la colonna sotto il puntatore si ricava dalla posizione, senza misurare gli span.
@@ -148,6 +147,10 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
   const pendingReveal = useRef(false);
   // problema raggiunto con l'ultimo F8 e cella in cui ha portato il cursore
   const lastIssue = useRef<{ issue: PirIssue; r: number; c: number } | null>(null);
+  // tavolozza delle sostituzioni a comparsa vicino al cursore; griglia a schermo intero; menu "Altro"
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [full, setFull] = useState(false);
+  const moreRef = useRef<HTMLDetailsElement>(null);
   const statusId = useId();
 
   const sel: Selection = normSel({ r0: anchor.r, c0: anchor.c, r1: cursor.r, c1: cursor.c });
@@ -307,8 +310,12 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
         moveTo(r, next.from, false);
         lastIssue.current = { issue: next, r, c: Math.min(Math.max(0, next.from), Math.max(0, width - 1)) };
       } else say("Nessun controllo da guardare.");
+    } else if (k === "Enter") {
+      setPaletteOpen((o) => !o);
     } else if (k === "Escape") {
-      setAnchor(cursor);
+      if (paletteOpen) setPaletteOpen(false);
+      else if (full && sel.r0 === sel.r1 && sel.c0 === sel.c1) setFull(false);
+      else setAnchor(cursor);
       say(null);
     } else if (!mod && !e.altKey && k.length === 1 && /[a-z]/i.test(k)) actions.substitute(k);
     else handled = false;
@@ -408,59 +415,73 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
   const shownIssues = hereIssues.length || kinds[cursor.r] !== "sequence" ? hereIssues : issues.filter((i) => i.from <= cursor.c && cursor.c <= i.to);
   const firstIssue = shownIssues[0];
 
+  /** Posizione della tavolozza: sotto la cella del cursore, tenuta dentro il riquadro della griglia. */
+  const palettePos = (): CSSProperties => {
+    const box = boxRef.current;
+    if (!box) return {};
+    const top = RH + HH + (cursor.r + 1) * stride - box.scrollTop + 4;
+    const left = NAME_W + cursor.c * CW - box.scrollLeft;
+    return { top: Math.min(Math.max(RH + HH, top), box.clientHeight - 8), left: Math.max(0, Math.min(left, box.clientWidth - 440)) };
+  };
+
+  /** voce del menu "Altro": esegue e chiude il menu */
+  const more = (f: () => unknown) => () => {
+    if (moreRef.current) moreRef.current.open = false;
+    f();
+    refocus();
+  };
+
   return (
-    <div className="stack-sm">
-      <div className="row small pirg-tools">
-        <button type="button" className="btn btn-sm" disabled={!canUndo} onClick={run(onUndo)} title="Annulla (Ctrl+Z)"><Icon name="undo" size={14} /> Annulla</button>
-        <button type="button" className="btn btn-sm" disabled={!canRedo} onClick={run(onRedo)} title="Ripristina (Ctrl+Y)"><Icon name="redo" size={14} /> Ripristina</button>
+    <div className={`stack-sm pirg-root${full ? " pirg-full" : ""}`}>
+      <div className="pirg-tools" role="toolbar" aria-label="Strumenti della griglia">
+        <button type="button" className="btn btn-sm" disabled={!canUndo} onClick={run(onUndo)} title="Annulla (Ctrl+Z)" aria-label="Annulla"><Icon name="undo" size={14} /></button>
+        <button type="button" className="btn btn-sm" disabled={!canRedo} onClick={run(onRedo)} title="Ripristina (Ctrl+Y)" aria-label="Ripristina"><Icon name="redo" size={14} /></button>
         <span className="pirg-sep" />
         <button type="button" className="btn btn-sm" onClick={run(actions.insert)} title="Inserisce un gap prima della selezione nelle righe selezionate (Spazio o -)">+ gap</button>
         <button type="button" className="btn btn-sm" onClick={run(actions.deleteAt)} title="Toglie il gap nella prima colonna della selezione (Canc)">− gap</button>
-        <button type="button" className="btn btn-sm" onClick={run(() => actions.slide(-1))} title="Sposta il blocco selezionato a sinistra sopra un gap; un blocco di soli gap scavalca i residui (Alt+←)">← blocco</button>
-        <button type="button" className="btn btn-sm" onClick={run(() => actions.slide(1))} title="Sposta il blocco selezionato a destra sopra un gap; un blocco di soli gap scavalca i residui (Alt+→)">blocco →</button>
-        <button type="button" className="btn btn-sm btn-ghost" onClick={run(actions.squeeze)} title="Toglie le colonne in cui tutte le voci hanno un gap">Togli colonne di soli gap</button>
-        {onEditHeader && (
-          <button type="button" className="btn btn-sm btn-ghost" onClick={() => onEditHeader(cursor.r)}
-            title="Codice e seconda riga della voce sotto il cursore, campo per campo (anche con doppio clic sul nome)">Seconda riga…</button>
-        )}
-        {lockToggle && (
-          <label className="check right" title="I residui dei template devono corrispondere al file della struttura: sbloccali solo per correggere un PIR che non corrisponde già">
-            <input type="checkbox" checked={templatesEditable} onChange={(e) => onTemplatesEditable(e.target.checked)} />
-            Residui dei template modificabili
-          </label>
-        )}
-      </div>
-      <div className="row small pirg-tools">
-        {/* con il mouse il focus torna alla griglia (le lettere non vanno alle scorciatoie globali); con la tastiera resta qui */}
-        <span onClick={(e) => { if (e.detail > 0) refocus(); }}>
-          <Segmented label="Colori della griglia" value={colorMode} options={COLOR_MODES} onChange={setColorMode} />
-        </span>
-        <span className="text-2">{MODE_LEGEND[colorMode]}</span>
+        <button type="button" className="btn btn-sm" onClick={run(() => actions.slide(-1))} title="Sposta il blocco selezionato a sinistra; un blocco di soli gap scavalca i residui (Alt+←)" aria-label="Sposta il blocco a sinistra">← blocco</button>
+        <button type="button" className="btn btn-sm" onClick={run(() => actions.slide(1))} title="Sposta il blocco selezionato a destra; un blocco di soli gap scavalca i residui (Alt+→)" aria-label="Sposta il blocco a destra">blocco →</button>
+        <button type="button" className="btn btn-sm" onClick={() => { setPaletteOpen((o) => !o); refocus(); }} aria-expanded={paletteOpen}
+          title="Tavolozza delle sostituzioni per il residuo sotto il cursore (Invio o doppio clic; una lettera sostituisce subito)">Sostituisci…</button>
+        <span className="pirg-sep" />
+        <label className="check" title={MODE_LEGEND[colorMode]}>
+          Colori
+          <select className="input input-sm" value={colorMode} onChange={(e) => { setColorMode(e.target.value as ColorMode); refocus(); }} aria-label="Colori della griglia">
+            {COLOR_MODES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+          </select>
+        </label>
+        <details className="pirg-more" ref={moreRef}>
+          <summary className="btn btn-sm">Altro ▾</summary>
+          <div className="pirg-menu" role="menu">
+            <button type="button" role="menuitem" onClick={more(actions.squeeze)}>Togli colonne di soli gap</button>
+            {onEditHeader && <button type="button" role="menuitem" onClick={more(() => onEditHeader(cursor.r))}>Seconda riga della voce…</button>}
+            {markers && <button type="button" role="menuitem" onClick={more(() => actions.marker("/"))}>Inserisci colonna «/» (separatore di catena)</button>}
+            {markers && <button type="button" role="menuitem" onClick={more(() => actions.marker("."))}>Inserisci colonna «.» (ligando) nelle righe selezionate</button>}
+            {onAnnotate && <button type="button" role="menuitem" onClick={more(() => onAnnotate(sel.c0, sel.c1))}>Annota la selezione…</button>}
+            {onTrimEnds && <button type="button" role="menuitem" onClick={more(onTrimEnds)}>Ritaglia le estremità senza template</button>}
+            {lockToggle && (
+              <label className="check" title="I residui dei template devono corrispondere al file della struttura: sbloccali solo per correggere un PIR che non corrisponde già">
+                <input type="checkbox" checked={templatesEditable} onChange={(e) => { if (moreRef.current) moreRef.current.open = false; onTemplatesEditable(e.target.checked); }} />
+                Residui dei template modificabili
+              </label>
+            )}
+          </div>
+        </details>
         <span className="right row" style={{ gap: 6 }}>
-          {markers && (
-            <>
-              <button type="button" className="btn btn-sm btn-ghost" onClick={run(() => actions.marker("/"))}
-                title="Inserisce prima della selezione una colonna con il separatore di catena «/» in tutte le voci">Inserisci «/»</button>
-              <button type="button" className="btn btn-sm btn-ghost" onClick={run(() => actions.marker("."))}
-                title="Inserisce prima della selezione una colonna con «.» (blocco di un ligando) nelle righe selezionate e gap nelle altre">Inserisci «.»</button>
-            </>
+          {issues.length > 0 && (
+            <button type="button" className="btn btn-sm btn-ghost pirg-issues" title="Controlli da guardare: F8 / Maiusc+F8 portano il cursore al successivo / precedente"
+              onClick={() => { refocus(); boxRef.current?.dispatchEvent(new KeyboardEvent("keydown", { key: "F8", bubbles: true })); }}>
+              {issueSummary(issues)} · F8
+            </button>
           )}
-          {onAnnotate && (
-            <button type="button" className="btn btn-sm btn-ghost" onClick={() => onAnnotate(sel.c0, sel.c1)}
-              title="Dà un nome ai residui del bersaglio nelle colonne selezionate (sito attivo, disolfuro…): una fascia colorata che segue i gap">Annota la selezione…</button>
-          )}
-          {onTrimEnds && (
-            <button type="button" className="btn btn-sm btn-ghost" onClick={() => { onTrimEnds(); refocus(); }}
-              title="Toglie le colonne iniziali e finali in cui nessun template ha un residuo (code del bersaglio senza stampo)">Ritaglia le estremità</button>
-          )}
+          <button type="button" className="btn btn-sm" onClick={() => { setFull((f) => !f); refocus(); }} aria-pressed={full}
+            title={full ? "Torna alla pagina (Esc)" : "Griglia a schermo intero"}>
+            <Icon name={full ? "minimize" : "maximize"} size={14} /> {full ? "Riduci" : "Espandi"}
+          </button>
         </span>
       </div>
-      {issues.length > 0 && (
-        <div className="small pirg-issues">
-          <b>Controlli:</b> {issueSummary(issues)} · F8 / Maiusc+F8 portano il cursore al successivo / precedente (segni colorati sul righello)
-        </div>
-      )}
       {isRagged(rows) && <div className="small" style={{ color: "var(--warn)" }}>Le voci hanno lunghezze diverse: la prima modifica le pareggia con gap in coda.</div>}
+      <div className="pirg-wrap">
       <div
         ref={boxRef}
         className="pirg"
@@ -493,6 +514,7 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
           onDoubleClick={(e) => {
             const cell = cellAt(e);
             if (cell && cell.c < 0) onEditHeader?.(cell.r);
+            else if (cell) setPaletteOpen(true);
           }}>
           {bands.filter((b) => b.to >= c0 && b.from < c1).map((b, k) => (
             <div key={`b${k}`} className="pirg-band" style={{ left: NAME_W + b.from * CW, width: (b.to - b.from + 1) * CW, background: `${b.color}26`, borderColor: b.color }} />
@@ -522,6 +544,18 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
           <div className="pirg-cursor" style={{ top: cursor.r * stride, left: NAME_W + cursor.c * CW }} />
         </div>
       </div>
+      {paletteOpen && (
+        <div className="pirg-popover" style={palettePos()}>
+          <Palette current={ch} locked={isLocked(kinds[cursor.r], templatesEditable)}
+            onClose={() => { setPaletteOpen(false); refocus(); }}
+            onPick={(aa) => {
+              actions.substitute(aa);
+              setPaletteOpen(false);
+              refocus();
+            }} />
+        </div>
+      )}
+      </div>
       <div className="aln-status" id={statusId} aria-live="polite" aria-atomic="true">
         Colonna <b>{cursor.c + 1}</b> di {width} · <b>{ids[cursor.r]}</b>:{" "}
         {pos === null
@@ -537,14 +571,7 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
         {(selCols > 1 || selRows > 1) && <> · selezione {selRows} × {selCols}</>}
         {message && <span key={message.n}> · <span style={{ color: "var(--warn)" }}>{message.text}</span></span>}
       </div>
-      <Palette current={ch} locked={isLocked(kinds[cursor.r], templatesEditable)}
-        onPick={(aa) => {
-          actions.substitute(aa);
-          refocus();
-        }} />
-      <div className="tiny text-2">
-        Frecce: muovi · Maiusc+frecce o trascina: seleziona · clic sul nome: tutta la riga · Spazio / -: inserisci gap · Canc / Backspace: togli gap · Alt+← →: sposta il blocco · una lettera: sostituisci il residuo · F8: controllo successivo · Ctrl+Z / Ctrl+Y: annulla / ripristina
-      </div>
+      <div className="tiny text-2">Tasti: frecce, Spazio / Canc per i gap, Alt+frecce per i blocchi, una lettera per sostituire, F8 per i controlli · elenco completo con «?»</div>
     </div>
   );
 }
@@ -556,7 +583,7 @@ const signed = (n: number) => (n > 0 ? `+${n}` : String(n).replace("-", "−"));
  * Tavolozza delle sostituzioni per il residuo sotto il cursore: i 20 amminoacidi raggruppati per classe chimica, con il
  * punteggio BLOSUM62 dal residuo attuale (positivo = sostituzione frequente fra proteine omologhe).
  */
-function Palette({ current, locked, onPick }: { current: string; locked: boolean; onPick: (aa: string) => void }) {
+function Palette({ current, locked, onPick, onClose }: { current: string; locked: boolean; onPick: (aa: string) => void; onClose: () => void }) {
   const wt = current.toUpperCase();
   const residue = /^[A-Z]$/.test(wt);
   const reason = !residue ? "porta il cursore su un residuo" : locked ? "residuo di una struttura: bloccato" : null;
@@ -566,6 +593,7 @@ function Palette({ current, locked, onPick }: { current: string; locked: boolean
         <b>Sostituisci</b>
         {residue && <span className="mono">{residueText(wt)}</span>}
         <span className="text-2">{reason ?? "clic su un amminoacido o premi la sua lettera · BLOSUM62 dal residuo attuale: + conservativa, − radicale"}</span>
+        <button type="button" className="btn btn-sm btn-ghost right" onClick={onClose} aria-label="Chiudi la tavolozza (Esc)"><Icon name="x" size={14} /></button>
       </div>
       <div className="pirg-palette-groups">
         {RESIDUE_CLASSES.map((cls) => (

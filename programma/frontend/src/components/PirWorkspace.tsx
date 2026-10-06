@@ -18,7 +18,7 @@ import { alignmentDiff, diffCells, ranges } from "../lib/pirDiff";
 import { annotationColumns, readAnnotations, residuesInColumns, type PirAnnotation } from "../lib/pirAnnotations";
 import { emptyHistory, record, redo, rewritePir, squareUp, trimUncoveredEnds, undo, type History } from "../lib/pirEdit";
 import { columnOfResidue, originalSequences, pirMutations, residueLabels, residuesOf, revertMutations, type PirMutation } from "../lib/pirMutations";
-import { chainBreakIssues, conflictIssues, mismatchIssues, uncoveredIssues } from "../lib/pirIssues";
+import { chainBreakIssues, conflictIssues, issueSummary, mismatchIssues, sortIssues, uncoveredIssues } from "../lib/pirIssues";
 import { columnCodes, columnStates, gapConflicts, secondaryKey } from "../lib/pirSecondary";
 import { templateLabel } from "../lib/workflowView";
 
@@ -51,6 +51,17 @@ function savedOriginal(meta: Record<string, unknown> | undefined): Record<string
   if (!v || typeof v !== "object" || Array.isArray(v)) return null;
   return Object.values(v).every((s) => typeof s === "string") ? (v as Record<string, string>) : null;
 }
+
+type Panel = "checks" | "subst" | "ss" | "notes" | "3d" | "verify" | "preview";
+const PANELS: { value: Panel; label: string }[] = [
+  { value: "checks", label: "Controlli" },
+  { value: "subst", label: "Sostituzioni" },
+  { value: "ss", label: "Str. secondaria" },
+  { value: "notes", label: "Annotazioni" },
+  { value: "3d", label: "3D" },
+  { value: "verify", label: "Verifica" },
+  { value: "preview", label: "Anteprima" },
+];
 
 /** Allineamento da aprire: cambiando `key` il banco di lavoro ricomincia (nuova cronologia, template bloccati). */
 export interface PirSource {
@@ -85,6 +96,8 @@ export function PirWorkspace({ source, savedKey = 0, onState, title, right, empt
   empty?: ReactNode;
 }) {
   const toast = useToast();
+  // scheda del pannello laterale
+  const [panel, setPanel] = useState<Panel>("checks");
   const [content, setContent] = useState("");
   const [meta, setMeta] = useState<Record<string, unknown>>({});
   // modifiche dopo l'ultimo caricamento o salvataggio
@@ -371,8 +384,12 @@ export function PirWorkspace({ source, savedKey = 0, onState, title, right, empt
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content, metaOut, dirty, report]);
 
+  const panelCount = (p: Panel) => (p === "checks" ? issues.length : p === "subst" ? mutationReport.mutations.length : p === "notes" ? annotations.length : 0);
+
   return (
     <>
+      <div className={`pirw${entries.length ? "" : " pirw-empty"}`}>
+        <div className="pirw-main">
       <Card icon="file" title={title} right={<>{dirty && <Badge tone="warn">modifiche non salvate</Badge>}{right}</>}>
             <div className="stack-sm">
               {entries.length > 0 && (
@@ -443,19 +460,36 @@ export function PirWorkspace({ source, savedKey = 0, onState, title, right, empt
               ]} />
             </div>
       </Card>
-          {entries.length > 0 && <PirStructureView open={view3d} onToggle={setView3d} focus={structureFocus} onPick={pick3d} />}
-          <AnnotationsCard
-            annotations={annotations}
-            missing={new Set(annotationCols.filter((x) => !x.cols).map((x) => x.a.id))}
-            labelOf={labelOf}
-            onGo={(a) => {
-              const cols = annotationColumns(targetSeq, a);
-              if (!cols) return;
-              setTab("grid");
-              setGridFocus({ r: entries.findIndex((e) => e.kind === "sequence"), c: cols.from, n: Date.now() });
-            }}
-            onDelete={(a) => setAnnotations(annotations.filter((x) => x.id !== a.id))}
-          />
+        </div>
+        {entries.length > 0 && (
+          <aside className="pirw-side" aria-label="Dettagli dell'allineamento">
+            <div className="pirw-tabs" role="tablist">
+              {PANELS.map((p) => (
+                <button key={p.value} type="button" role="tab" aria-selected={panel === p.value} className={panel === p.value ? "on" : ""} onClick={() => setPanel(p.value)}>
+                  {p.label}{panelCount(p.value) ? <span className="pirw-count">{panelCount(p.value)}</span> : null}
+                </button>
+              ))}
+            </div>
+            {panel === "checks" && (
+              <Card title="Controlli" icon="shield" sub={issues.length ? issueSummary(issues) : "nessuno"}>
+                {!issues.length ? <p className="small text-2">Nessun controllo da guardare.</p> : (
+                  <div className="table-wrap pirw-list">
+                    <table className="table">
+                      <tbody>
+                        {sortIssues(issues).map((i, k) => (
+                          <tr key={k}>
+                            <td><Badge tone={i.severity === "err" ? "err" : i.severity === "warn" ? "warn" : "info"}>{i.severity === "err" ? "errore" : i.severity === "warn" ? "avviso" : "nota"}</Badge></td>
+                            <td className="small">{i.text}{i.row !== null ? <div className="tiny text-2">{entries[i.row]?.code} · colonna {i.from + 1}{i.to > i.from ? `–${i.to + 1}` : ""}</div> : <div className="tiny text-2">colonna {i.from + 1}{i.to > i.from ? `–${i.to + 1}` : ""}</div>}</td>
+                            <td className="num"><button type="button" className="btn btn-sm btn-ghost" onClick={() => { setTab("grid"); setGridFocus({ r: i.row ?? cursorCell.r, c: i.from, n: Date.now() }); }}>Vai</button></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </Card>
+            )}
+            {panel === "subst" && (mutationReport.mutations.length || mutationReport.lengthChanged.length || mutationReport.duplicated.length ? (
           <PirMutations
             report={mutationReport}
             onGo={(m) => {
@@ -465,7 +499,8 @@ export function PirWorkspace({ source, savedKey = 0, onState, title, right, empt
             onRevert={revert}
             onResetReference={resetReference}
           />
-          {entries.length > 0 && (
+            ) : <Card title="Sostituzioni" icon="flask"><p className="small text-2">Nessuna sostituzione: porta il cursore su un residuo del bersaglio e premi una lettera, o Invio per la tavolozza.</p></Card>)}
+            {panel === "ss" && (
             <PirSecondaryCard
               entries={ssEntries}
               conflicts={gridSecondary?.conflicts ?? []}
@@ -485,8 +520,26 @@ export function PirWorkspace({ source, savedKey = 0, onState, title, right, empt
                 setGridFocus({ r, c, n: Date.now() });
               }}
             />
-          )}
-          {report && (
+            )}
+            {panel === "notes" && (annotations.length ? (
+          <AnnotationsCard
+            annotations={annotations}
+            missing={new Set(annotationCols.filter((x) => !x.cols).map((x) => x.a.id))}
+            labelOf={labelOf}
+            onGo={(a) => {
+              const cols = annotationColumns(targetSeq, a);
+              if (!cols) return;
+              setTab("grid");
+              setGridFocus({ r: entries.findIndex((e) => e.kind === "sequence"), c: cols.from, n: Date.now() });
+            }}
+            onDelete={(a) => setAnnotations(annotations.filter((x) => x.id !== a.id))}
+          />
+            ) : <Card title="Annotazioni" icon="tag"><p className="small text-2">Nessuna annotazione: seleziona delle colonne e scegli «Altro ▾ → Annota la selezione…».</p></Card>)}
+            {panel === "3d" && (
+          <PirStructureView open={view3d} onToggle={setView3d} focus={structureFocus} onPick={pick3d} />
+            )}
+            {panel === "verify" && (report ? (
+          <>
             <Card title="Verifica" icon="shield" sub={`${report.errors.length} errori · ${report.warnings.length} avvisi`}
               right={report.valid ? <Badge tone="ok">valido per MODELLER</Badge> : <Badge tone="err">da correggere</Badge>}>
               <div className="stack">
@@ -527,12 +580,16 @@ export function PirWorkspace({ source, savedKey = 0, onState, title, right, empt
                 )}
               </div>
             </Card>
-          )}
-          {entries.length > 1 && entries.every((e) => e.sequence.length === entries[0].sequence.length) && (
+          </>
+            ) : <Card title="Verifica" icon="shield"><p className="small text-2">Verifica in corso…</p></Card>)}
+            {panel === "preview" && entries.length > 1 && entries.every((e) => e.sequence.length === entries[0].sequence.length) && (
             <Card title="Anteprima" icon="align" sub={`${entries.length} sequenze · ${entries[0].sequence.length} colonne`} collapsible defaultOpen={false} storageKey="pir.preview">
               <AlignmentView ids={entries.map((e) => e.code)} aligned={entries.map((e) => e.sequence)} reference={pirReference(entries.map((e) => e.kind))} />
             </Card>
-          )}
+            )}
+          </aside>
+        )}
+      </div>
       {!content.trim() && empty}
       {annotating && (
         <AnnotationDialog
