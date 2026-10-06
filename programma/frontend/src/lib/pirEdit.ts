@@ -3,9 +3,12 @@
 // Regole comuni:
 // - si toccano solo i gap "-": residui, separatori di catena "/" e blocchi di ligandi "." non cambiano mai ordine;
 // - dopo ogni operazione le righe vengono pareggiate con gap in coda e le colonne finali di soli gap tolte, così
-//   l'allineamento resta rettangolare (requisito di MODELLER) senza che la larghezza cresca a ogni inserimento.
+//   l'allineamento resta rettangolare (requisito di MODELLER) senza che la larghezza cresca a ogni inserimento;
+// - un'operazione che non cambia nulla restituisce null (nessun passo vuoto nella cronologia);
+// - il testo PIR si riscrive sostituendo solo le righe delle sequenze (rewritePir): commenti, seconde righe, testo dopo
+//   l'`*` e minuscole dei residui non toccati restano come sono.
 
-import type { PirEntry } from "./pir";
+import { pirLayout, rawSequence } from "./pir";
 
 export const GAP = "-";
 
@@ -29,6 +32,9 @@ const rowsOf = (s: Selection) => {
   return Array.from({ length: n.r1 - n.r0 + 1 }, (_, i) => n.r0 + i);
 };
 
+/** Le due liste di righe sono identiche. */
+export const sameRows = (a: string[], b: string[]) => a.length === b.length && a.every((s, i) => s === b[i]);
+
 /** Pareggia le righe con gap in coda e toglie le colonne finali fatte solo di gap. */
 export function squareUp(rows: string[]): string[] {
   let width = Math.max(0, ...rows.map((s) => s.length));
@@ -36,34 +42,36 @@ export function squareUp(rows: string[]): string[] {
   return rows.map((s) => (s.length >= width ? s.slice(0, width) : s + GAP.repeat(width - s.length)));
 }
 
-/** Inserisce `n` gap nella colonna `col` delle righe selezionate: il resto della riga scorre a destra. */
-export function insertGaps(rows: string[], sel: Selection, col: number, n = 1): string[] {
+const changed = (before: string[], after: string[]) => (sameRows(before, after) ? null : after);
+
+/**
+ * Inserisce `n` gap nella colonna `col` delle righe selezionate: il resto della riga scorre a destra. Null se non
+ * cambia nulla (un gap in coda viene tolto subito insieme alla colonna finale di soli gap).
+ */
+export function insertGaps(rows: string[], sel: Selection, col: number, n = 1): string[] | null {
   const targets = new Set(rowsOf(sel));
-  return squareUp(rows.map((s, r) => (targets.has(r) ? s.slice(0, col) + GAP.repeat(n) + s.slice(col) : s)));
+  return changed(rows, squareUp(rows.map((s, r) => (targets.has(r) ? s.slice(0, col) + GAP.repeat(n) + s.slice(col) : s))));
 }
 
 /**
  * Toglie fino a `n` gap a partire dalla colonna `col` delle righe selezionate (il resto della riga scorre a
- * sinistra). Una riga senza gap in quella colonna resta com'è. Restituisce null se nessuna riga cambia.
+ * sinistra). Una riga senza gap in quella colonna resta com'è. Null se nessuna riga cambia.
  */
 export function deleteGaps(rows: string[], sel: Selection, col: number, n = 1): string[] | null {
   const targets = new Set(rowsOf(sel));
-  let changed = false;
   const out = rows.map((s, r) => {
     if (!targets.has(r)) return s;
     let k = 0;
     while (k < n && s[col + k] === GAP) k++;
-    if (!k) return s;
-    changed = true;
-    return s.slice(0, col) + s.slice(col + k);
+    return k ? s.slice(0, col) + s.slice(col + k) : s;
   });
-  return changed ? squareUp(out) : null;
+  return changed(rows, squareUp(out));
 }
 
 /**
  * Sposta di una colonna il blocco selezionato: a sinistra se la colonna subito prima del blocco è un gap in tutte
- * le righe selezionate (il gap passa dopo il blocco), a destra nel caso opposto. Restituisce null se il blocco non
- * può muoversi (un residuo di fronte o il bordo dell'allineamento).
+ * le righe selezionate (il gap passa dopo il blocco), a destra nel caso opposto. Null se il blocco non può muoversi
+ * (un residuo di fronte o il bordo dell'allineamento) o se lo spostamento non cambia nulla (blocco di soli gap).
  */
 export function slideBlock(rows: string[], sel: Selection, dir: -1 | 1): string[] | null {
   const s = normSel(sel);
@@ -79,7 +87,7 @@ export function slideBlock(rows: string[], sel: Selection, dir: -1 | 1): string[
       ? row.slice(0, free) + block + GAP + row.slice(s.c1 + 1)
       : row.slice(0, s.c0) + GAP + block + row.slice(free + 1);
   }
-  return squareUp(out);
+  return changed(rows, squareUp(out));
 }
 
 /** Toglie le colonne fatte solo di gap; null se non ce ne sono. */
@@ -94,24 +102,47 @@ export function removeGapColumns(rows: string[]): string[] | null {
 /** Righe di lunghezza diversa (l'allineamento non è rettangolare). */
 export const isRagged = (rows: string[]) => rows.some((s) => s.length !== rows[0].length);
 
-/** Testo PIR con le sequenze date al posto di quelle delle voci (intestazioni invariate, righe da 75 caratteri). */
-export function serializePir(entries: PirEntry[], rows: string[] = entries.map((e) => e.sequence)): string {
-  return entries
-    .map((e, i) => {
-      const seq = `${rows[i] ?? e.sequence}*`;
-      const lines = seq.match(/.{1,75}/g) ?? ["*"];
-      return [`>P1;${e.code}`, e.header, ...lines].join("\n");
-    })
-    .join("\n\n")
-    .concat("\n");
-}
+/** Larghezza delle righe di sequenza riscritte, se il testo non ne suggerisce un'altra. */
+export const LINE_WIDTH = 75;
 
-/** Numero del residuo (da 1) nella colonna di una riga PIR: contano le lettere, non gap, "/" o "."; null fuori dai residui. */
-export function pirResidueNumber(seq: string, col: number): number | null {
-  if (!/[A-Za-z]/.test(seq[col] ?? "")) return null;
-  let n = 0;
-  for (let c = 0; c <= col; c++) if (/[A-Za-z]/.test(seq[c])) n++;
-  return n;
+const isLetter = (c: string | undefined) => !!c && /[A-Za-z]/.test(c);
+
+/**
+ * Testo PIR con le righe allineate date al posto delle sequenze delle voci (nello stesso ordine di parsePir). Cambiano
+ * solo le righe della sequenza fino all'`*`: il resto del testo (righe prima della prima voce, seconde righe, testo dopo
+ * l'`*`, righe vuote) resta com'è. Un residuo uguale all'originale a meno delle maiuscole tiene la lettera originale
+ * (es. "w", l'acqua di MODELLER). Le righe vanno a capo come nel testo originale (75 caratteri se la sequenza era su
+ * una riga sola). Una voce senza seconda riga ne riceve una minima (`sequence:<codice>::::::::`).
+ */
+export function rewritePir(text: string, rows: string[]): string {
+  const { lines, layout } = pirLayout(text);
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  // dall'ultima voce alla prima: le sostituzioni non spostano le righe delle voci precedenti
+  for (let i = layout.length - 1; i >= 0; i--) {
+    const e = layout[i];
+    const row = rows[i];
+    if (row === undefined) continue;
+    const raw = rawSequence(lines, e);
+    const letters = raw.split("").filter(isLetter);
+    let k = 0;
+    const seq = row
+      .split("")
+      .map((c) => {
+        if (!isLetter(c)) return c;
+        const before = letters[k++];
+        return before !== undefined && before.toUpperCase() === c.toUpperCase() ? before : c;
+      })
+      .join("");
+    const end = e.starLine >= 0 ? e.starLine + 1 : e.seqEnd;
+    const block = lines.slice(e.seqStart, end).filter((l) => l.trim());
+    const width = block.length > 1 ? Math.max(10, block[0].trim().length) : LINE_WIDTH;
+    const tail = e.starLine >= 0 ? lines[e.starLine].slice(lines[e.starLine].indexOf("*") + 1) : "";
+    const out = `${seq}*`.match(new RegExp(`.{1,${width}}`, "g")) ?? ["*"];
+    out[out.length - 1] += tail;
+    if (e.headerLine < 0) out.unshift(`sequence:${lines[e.codeLine].trim().slice(4).trim()}::::::::`);
+    lines.splice(e.seqStart, end - e.seqStart, ...out);
+  }
+  return lines.join(eol);
 }
 
 /** Cronologia delle modifiche (annulla / ripristina) su istantanee di testo. */

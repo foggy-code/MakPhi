@@ -6,7 +6,8 @@ import { AlignmentView } from "../components/AlignmentView";
 import { TextFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
-import { PirGrid } from "../components/PirGrid";
+import { PirGrid, type GridFocus } from "../components/PirGrid";
+import { PirMutations } from "../components/PirMutations";
 import { SequencePicker, TemplatePicker } from "../components/Pickers";
 import { Alert, Badge, BarCell, Card, Confirm, Disclosure, Empty, Modal, PageHead, Tabs } from "../components/ui";
 import { FormSection, InfoChips } from "../components/WorkflowParts";
@@ -16,8 +17,18 @@ import { fileStem } from "../lib/files";
 import { downloadText, fmtBytes, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
 import { parsePir, pirIdentities } from "../lib/pir";
-import { emptyHistory, record, redo, serializePir, undo, type History } from "../lib/pirEdit";
+import { emptyHistory, record, redo, rewritePir, squareUp, undo, type History } from "../lib/pirEdit";
+import { originalSequences, pirMutations, residuesOf, revertMutations, type PirMutation } from "../lib/pirMutations";
 import { templateLabel } from "../lib/workflowView";
+
+/** Chiave dei metadati del documento con le sequenze originali (riferimento delle sostituzioni). */
+const ORIGINAL_KEY = "original_sequences";
+
+function savedOriginal(meta: Record<string, unknown> | undefined): Record<string, string> | null {
+  const v = meta?.[ORIGINAL_KEY];
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  return Object.values(v).every((s) => typeof s === "string") ? (v as Record<string, string>) : null;
+}
 
 function GenerateDialog({ onClose, onDone }: { onClose: () => void; onDone: (pir: string, templates: TemplateRef[], name: string) => void }) {
   const { projectId } = useProject();
@@ -84,14 +95,27 @@ export default function PirEditor() {
   const [history, setHistory] = useState<History>(emptyHistory);
   // le battute di fila nel testo PIR formano un solo passo della cronologia
   const lastTyping = useRef(0);
+  // sequenze originali (senza gap) per codice: il riferimento delle sostituzioni
+  const [original, setOriginal] = useState<Record<string, string>>({});
+  const [templatesEditable, setTemplatesEditable] = useState(false);
+  const [confirmUnlock, setConfirmUnlock] = useState(false);
+  const [gridFocus, setGridFocus] = useState<GridFocus | null>(null);
+  // documento appena salvato: il cambio di indirizzo che segue non lo ricarica (cronologia e sblocco restano)
+  const justSaved = useRef<string | null>(null);
 
-  /** Contenuto caricato da fuori (documento, file, job): nuova cronologia. */
-  const load = (text: string) => {
+  /**
+   * Contenuto caricato da fuori (documento, file, job): nuova cronologia, template di nuovo bloccati. Il riferimento delle
+   * sostituzioni è quello salvato con il documento, se c'è, altrimenti le sequenze appena caricate.
+   */
+  const load = (text: string, savedMeta?: Record<string, unknown>) => {
     setContent(text);
     setHistory(emptyHistory());
+    setTemplatesEditable(false);
+    setOriginal(savedOriginal(savedMeta) ?? originalSequences(parsePir(text)));
   };
   /** Modifica dell'utente: lo stato precedente va nella cronologia. */
   const change = (text: string, typing = false) => {
+    if (text === content) return;
     const now = Date.now();
     if (!typing || now - lastTyping.current > 1000) setHistory((h) => record(h, content));
     lastTyping.current = typing ? now : 0;
@@ -109,9 +133,13 @@ export default function PirEditor() {
 
   useEffect(() => {
     if (!docId || !projectId) return;
+    if (docId === justSaved.current) {
+      justSaved.current = null;
+      return;
+    }
     api.document(projectId, docId).then((d) => {
       setName(d.name);
-      load(d.content ?? "");
+      load(d.content ?? "", d.meta);
       setMeta(d.meta ?? {});
       setDirty(false);
     }).catch(toast.error);
@@ -141,6 +169,38 @@ export default function PirEditor() {
   const entries = useMemo(() => parsePir(content), [content]);
   const identities = useMemo(() => pirIdentities(entries), [entries]);
   const templatesMeta = (meta.templates as TemplateRef[] | undefined) ?? [];
+  const mutationReport = useMemo(() => pirMutations(original, entries), [original, entries]);
+  const mutated = useMemo(() => new Set(mutationReport.mutations.map((m) => `${m.row}:${m.column}`)), [mutationReport]);
+
+  /** Modifica dalla griglia: le voci comparse dopo il caricamento (testo incollato, codici nuovi) prendono come riferimento la sequenza di adesso. */
+  const editRows = (rows: string[]) => {
+    setOriginal((o) => ({ ...originalSequences(entries), ...o }));
+    change(rewritePir(content, rows));
+  };
+  /** Riporta all'originale le sostituzioni date; il focus torna alla griglia, sul primo residuo ripristinato. */
+  const revert = (list: PirMutation[]) => {
+    const rows = revertMutations(entries.map((e) => e.sequence), list);
+    if (rows) change(rewritePir(content, squareUp(rows)));
+    setTab("grid");
+    setGridFocus({ r: list[0]?.row, c: list[0]?.column, n: Date.now() });
+  };
+  /** Le voci che hanno cambiato lunghezza prendono come riferimento la sequenza di adesso; le altre restano com'erano. */
+  const resetReference = () => {
+    const changed = new Set(mutationReport.lengthChanged);
+    setOriginal((o) => ({ ...o, ...Object.fromEntries(entries.filter((e) => changed.has(e.code)).map((e) => [e.code, residuesOf(e.sequence)])) }));
+    setTab("grid");
+    setGridFocus({ n: Date.now() });
+  };
+  /**
+   * Metadati da salvare. Il riferimento delle sostituzioni serve finché una voce differisce dal suo originale; altrimenti
+   * si salva null: il server unisce i metadati, quindi togliere la chiave lascerebbe quello vecchio.
+   */
+  const metaToSave = () => {
+    const out: Record<string, unknown> = { ...meta };
+    const differs = mutationReport.mutations.length > 0 || mutationReport.lengthChanged.length > 0;
+    out[ORIGINAL_KEY] = differs ? Object.fromEntries(entries.filter((e) => e.code in original).map((e) => [e.code, original[e.code]])) : null;
+    return out;
+  };
 
   /** Apre un file PIR così com'è; un allineamento in altro formato (FASTA, Clustal...) viene convertito in PIR. */
   const openFile = async (text: string, file: File) => {
@@ -169,9 +229,12 @@ export default function PirEditor() {
   const save = async (asNew = false) => {
     if (!projectId) return;
     try {
-      const d = await api.saveDocument(projectId, { name: name || "Allineamento PIR", kind: "pir", content, meta }, asNew ? undefined : docId ?? undefined);
+      const saved = metaToSave();
+      const d = await api.saveDocument(projectId, { name: name || "Allineamento PIR", kind: "pir", content, meta: saved }, asNew ? undefined : docId ?? undefined);
       setDirty(false);
+      setMeta(d.meta ?? saved);
       reload();
+      if (d.id !== docId) justSaved.current = d.id;
       setParams({ doc: d.id });
       toast.push("Documento salvato");
       return d;
@@ -243,12 +306,18 @@ export default function PirEditor() {
                 <PirGrid
                   ids={entries.map((e) => e.code)}
                   kinds={entries.map((e) => e.kind)}
+                  headers={entries.map((e) => e.header)}
                   rows={entries.map((e) => e.sequence)}
-                  onEdit={(rows) => change(serializePir(entries, rows))}
+                  onEdit={editRows}
                   onUndo={() => step("undo")}
                   onRedo={() => step("redo")}
                   canUndo={history.past.length > 0}
                   canRedo={history.future.length > 0}
+                  templatesEditable={templatesEditable}
+                  onTemplatesEditable={(on) => (on ? setConfirmUnlock(true) : setTemplatesEditable(false))}
+                  mutated={mutated}
+                  focus={gridFocus}
+                  onFocusDone={() => setGridFocus(null)}
                 />
               ) : (
                 <textarea
@@ -257,7 +326,11 @@ export default function PirEditor() {
                   spellCheck={false}
                   aria-label="Allineamento in formato PIR"
                   value={content}
-                  onChange={(e) => change(e.target.value, true)}
+                  onChange={(e) => {
+                    // mentre si scrive un allineamento nuovo resta la casella di testo (la griglia le toglierebbe il focus)
+                    if (!entries.length) setTab("text");
+                    change(e.target.value, true);
+                  }}
                   placeholder={">P1;target\nsequence:target:::::::0.00: 0.00\nMKTAYIAKQR-QISFVKSHF*\n\n>P1;1ABC_A\nstructureX:1ABC_A:1:A:120:A::::\nMKSAYIAKQRAQISFVKSHF*"}
                   style={{ whiteSpace: "pre", overflowX: "auto" }}
                 />
@@ -271,6 +344,15 @@ export default function PirEditor() {
               ]} />
             </div>
           </Card>
+          <PirMutations
+            report={mutationReport}
+            onGo={(m) => {
+              setTab("grid");
+              setGridFocus({ r: m.row, c: m.column, n: Date.now() });
+            }}
+            onRevert={revert}
+            onResetReference={resetReference}
+          />
           {report && (
             <Card title="Verifica" icon="shield" sub={`${report.errors.length} errori · ${report.warnings.length} avvisi`}
               right={report.valid ? <Badge tone="ok">valido per MODELLER</Badge> : <Badge tone="err">da correggere</Badge>}>
@@ -336,6 +418,23 @@ export default function PirEditor() {
             setMeta({ templates });
             setDirty(true);
             toast.push("Allineamento generato: controllalo e salvalo");
+          }}
+        />
+      )}
+      {confirmUnlock && (
+        <Confirm
+          text={
+            <>
+              I residui dei template devono essere quelli del file della struttura: MODELLER ne legge le coordinate e si ferma se un residuo
+              dell'allineamento non corrisponde. Sblocca solo per correggere un PIR che già non corrisponde al file. Le sostituzioni restano
+              nell'elenco e si possono annullare.
+            </>
+          }
+          confirmLabel="Sblocca i template"
+          onCancel={() => setConfirmUnlock(false)}
+          onConfirm={() => {
+            setTemplatesEditable(true);
+            setConfirmUnlock(false);
           }}
         />
       )}
