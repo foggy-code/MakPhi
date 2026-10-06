@@ -30,7 +30,7 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from ..core import eta as eta_estimate
 from ..core.db import Database, encode_json, now_iso
@@ -651,13 +651,13 @@ class PipelineService:
                            "best": bool(metrics.get("best_in_sequence")), "error": r.get("error")}
         return {**names, "cells": cells}
 
-    def export_csv(self, job_id: str, files: Optional[dict[int, str]] = None) -> str:
-        """Tabella di tutti gli elementi. Pipeline M × N: una riga per coppia con sequenza, template e migliore della
-        sequenza; `files` (ZIP): percorso del modello nell'archivio per elemento."""
+    def export_csv(self, job_id: str) -> str:
+        """Tabella di tutti gli elementi. Pipeline M × N: la tabella delle metriche (una riga per coppia, come
+        `metriche.csv` dello ZIP)."""
         rows = self.db.query(f"SELECT {ITEM_COLUMNS} FROM pipeline_items WHERE job_id=? ORDER BY idx", (job_id,))
         params = self._params(job_id)
         if is_cross(params):
-            return _cross_csv(rows, params, files)
+            return _write_csv(CROSS_FIELDS, self._metric_rows(job_id, rows, params, None))
         buf = io.StringIO()
         fields = ["idx", "name", "length", "status", "template", "template_source", "identity", "coverage", "evalue",
                   "twilight", "dope", "zdope", "ga341", "grade", "grade_score", "rama_favored", "clashscore",
@@ -709,11 +709,24 @@ class PipelineService:
                 zf.writestr("report/non_generati.txt", "Report non generati\n\n" + "\n".join(missing) + "\n")
             zf.writestr("parametri.json", json.dumps(job["params"], indent=2, ensure_ascii=False))
 
+    def _consensus(self, job_id: str, row: dict) -> tuple:
+        """(punteggio, fascia) del consenso dal rapporto di qualità del modello della coppia; (None, None) senza."""
+        try:
+            path = self.jobs.file_path(job_id, f"{row['best_model']}.quality.json")
+            cons = (json.loads(path.read_text(encoding="utf-8")) or {}).get("consensus") or {}
+        except (AppError, OSError, ValueError, TypeError):
+            return None, None
+        return cons.get("score"), cons.get("band")
+
+    def _metric_rows(self, job_id: str, rows: list[dict], params: dict, files: Optional[dict[int, str]]) -> list[dict]:
+        return _metric_rows(rows, params, files, lambda r: self._consensus(job_id, r))
+
     def _export_cross_zip(self, job: dict, rows: list[dict], dest: Path) -> None:
         """ZIP di una pipeline M × N: una cartella per template, `template/<template>/`, con modello, report e
         rapporto di qualità (se l'analisi era richiesta) di ogni coppia, tutti chiamati `<sequenza>__<template>`;
-        `riepilogo.csv` (una riga per coppia, con il percorso del modello nell'archivio), `migliori.csv` (una riga per
-        sequenza), le matrici sequenze × template in `matrici/` e `parametri.json`. Report generati uno alla volta."""
+        `metriche.csv` (una riga per coppia con tutte le metriche di MODELLER, del template e dell'analisi di qualità,
+        e il percorso del modello nell'archivio), `migliori.csv` (una riga per sequenza, con le stesse metriche del
+        modello migliore) e `parametri.json`. Report generati uno alla volta."""
         job_id, params = job["id"], job.get("params") or {}
         names = pair_axes(params)
         reports = ReportService(self.jobs, self.compute, self.db)
@@ -742,65 +755,68 @@ class PipelineService:
                 zf.writestr(f"{base}.html", text)
             if missing:
                 zf.writestr("report_non_generati.txt", "Report non generati\n\n" + "\n".join(missing) + "\n")
-            zf.writestr("riepilogo.csv", self.export_csv(job_id, files))
-            matrix = self.matrix(job_id)
-            zf.writestr("migliori.csv", _best_csv(matrix, files))
-            for key, filename in MATRIX_FILES:
-                zf.writestr(f"matrici/{filename}.csv", _matrix_csv(matrix, key))
+            every = self.db.query(f"SELECT {ITEM_COLUMNS} FROM pipeline_items WHERE job_id=? ORDER BY idx", (job_id,))
+            metric_rows = self._metric_rows(job_id, every, params, files)
+            zf.writestr("metriche.csv", _write_csv(CROSS_FIELDS, metric_rows))
+            zf.writestr("migliori.csv", _write_csv(BEST_FIELDS, _best_rows(metric_rows, params)))
             zf.writestr("parametri.json", json.dumps(params, indent=2, ensure_ascii=False))
 
 
-# matrici sequenze × template dello ZIP M × N: campo della cella → nome del file
-MATRIX_FILES = (("zdope", "zdope"), ("dope", "dope"), ("ga341", "ga341"), ("molpdf", "molpdf"),
-                ("identity", "identita"), ("coverage", "copertura"))
-CROSS_FIELDS = ["idx", "sequence", "template", "template_id", "length", "status", "identity", "coverage", "twilight",
-                "dope", "zdope", "ga341", "molpdf", "best_in_sequence", "grade", "grade_score", "rama_favored",
-                "clashscore", "file", "error"]
+# tabella delle metriche di una pipeline M × N (metriche.csv e /export.csv): una riga per coppia
+CROSS_FIELDS = ["idx", "sequence", "template", "template_id", "length", "status", "best_in_sequence", "file",
+                "identity", "coverage", "twilight", "dope", "zdope", "ga341", "molpdf", "grade", "grade_score",
+                "rama_favored", "rama_outliers", "clashscore", "helix_pct", "strand_pct", "residues",
+                "consensus_score", "consensus_band", "prosa_z", "procheck_core", "procheck_g_overall", "error"]
+# metriche dell'analisi di qualità salvate nell'elemento (quality.summary_metrics, nelle metriche della riga)
+QUALITY_FIELDS = ("rama_outliers", "helix_pct", "strand_pct", "residues", "prosa_z", "procheck_core",
+                  "procheck_g_overall")
+# migliori.csv: una riga per sequenza, con le stesse metriche del modello migliore
+BEST_FIELDS = ["sequence", "best_template", "template_id", "completed", "templates", "file",
+               *[f for f in CROSS_FIELDS if f not in ("idx", "sequence", "template", "template_id", "status",
+                                                     "best_in_sequence", "file", "error")]]
 
 
-def _cross_csv(rows: list[dict], params: dict, files: Optional[dict[int, str]]) -> str:
+def _metric_rows(rows: list[dict], params: dict, files: Optional[dict[int, str]],
+                 consensus_of: Callable[[dict], tuple]) -> list[dict]:
+    """Una riga di metriche per coppia: MODELLER, template, analisi di qualità e consenso (dal rapporto di qualità)."""
     names = pair_axes(params)
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=CROSS_FIELDS, extrasaction="ignore")
-    writer.writeheader()
+    out = []
     for r in rows:
         _with_pair(r, params, names)
         metrics = r.get("metrics") if isinstance(r.get("metrics"), dict) else {}
-        out = {**r, "sequence": r["pair"]["sequence"], "template": r["pair"]["template"],
-               "template_id": r["pair"]["template_id"], "zdope": metrics.get("zdope"), "molpdf": metrics.get("molpdf"),
-               "best_in_sequence": 1 if r["best_in_sequence"] else 0,
-               "file": (files or {}).get(int(r["idx"]), "" if files is not None else r.get("best_model") or "")}
-        writer.writerow({k: _csv_safe(out.get(k)) for k in CROSS_FIELDS})
-    return buf.getvalue()
+        score, band = consensus_of(r) if r.get("status") == "completed" else (None, None)
+        out.append({**r, "sequence": r["pair"]["sequence"], "template": r["pair"]["template"],
+                    "template_id": r["pair"]["template_id"], "zdope": metrics.get("zdope"),
+                    "molpdf": metrics.get("molpdf"), **{k: metrics.get(k) for k in QUALITY_FIELDS},
+                    "consensus_score": score, "consensus_band": band,
+                    "best_in_sequence": 1 if r["best_in_sequence"] else 0,
+                    "file": (files or {}).get(int(r["idx"]), "" if files is not None else r.get("best_model") or "")})
+    return out
 
 
-def _matrix_csv(matrix: dict, key: str) -> str:
-    """Matrice di un campo: una riga per sequenza, una colonna per template; vuota la cella senza valore."""
+def _write_csv(fields: list[str], rows: list[dict]) -> str:
     buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(["sequenza", *matrix["templates"]])
-    for name, row in zip(matrix["sequences"], matrix["cells"]):
-        writer.writerow([_csv_safe(name), *(_csv_safe((c or {}).get(key)) for c in row)])
-    return buf.getvalue()
-
-
-def _best_csv(matrix: dict, files: dict[int, str]) -> str:
-    """Una riga per sequenza: template del modello migliore (zDOPE) con le sue metriche e coppie completate."""
-    fields = ["sequence", "best_template", "template_id", "zdope", "dope", "ga341", "identity", "coverage", "grade",
-              "grade_score", "completed", "templates", "file"]
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=fields)
+    writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()
-    for name, row in zip(matrix["sequences"], matrix["cells"]):
-        t, best = next(((t, c) for t, c in enumerate(row) if c and c.get("best")), (None, None))
-        cell = best or {}
-        out = {"sequence": name, "best_template": matrix["templates"][t] if t is not None else "",
-               "template_id": matrix["template_ids"][t] if t is not None and t < len(matrix["template_ids"]) else "",
-               **{k: cell.get(k) for k in ("zdope", "dope", "ga341", "identity", "coverage", "grade", "grade_score")},
-               "completed": sum(1 for c in row if c and c.get("status") == "completed"), "templates": len(row),
-               "file": files.get(int(cell["idx"]), "") if best else ""}
-        writer.writerow({k: _csv_safe(out.get(k)) for k in fields})
+    for row in rows:
+        writer.writerow({k: _csv_safe(row.get(k)) for k in fields})
     return buf.getvalue()
+
+
+def _best_rows(metric_rows: list[dict], params: dict) -> list[dict]:
+    """Una riga per sequenza: template del modello migliore (zDOPE) con tutte le sue metriche e coppie completate."""
+    names = pair_axes(params)
+    by_sequence: dict[int, list[dict]] = {}
+    for r in metric_rows:
+        by_sequence.setdefault(r["pair"]["sequence_index"], []).append(r)
+    out = []
+    for s, name in enumerate(names["sequences"]):
+        group = by_sequence.get(s, [])
+        best = next((r for r in group if r["best_in_sequence"]), None) or {}
+        out.append({**best, "sequence": name, "best_template": best.get("template", ""),
+                    "completed": sum(1 for r in group if r.get("status") == "completed"),
+                    "templates": len(names["templates"])})
+    return out
 
 
 def _zip_stem(name: str, idx: int, used: set[str]) -> str:
@@ -972,11 +988,11 @@ template/<template>/     una cartella per template, con i modelli di tutte le se
   <seq>__<tpl>.pdb       miglior modello (DOPE minimo) della coppia
   <seq>__<tpl>.html      report HTML della coppia (autonomo, stampabile in PDF)
   <seq>__<tpl>.quality.json  rapporto di qualità della coppia (se l'analisi era richiesta)
-riepilogo.csv            una riga per coppia: sequenza, template, identità, copertura, punteggi, migliore
-                         della sequenza (best_in_sequence = 1) e percorso del modello nell'archivio (file)
-migliori.csv             una riga per sequenza: template del modello migliore e sue metriche
-matrici/                 una matrice per metrica (righe = sequenze, colonne = template): zdope, dope,
-                         ga341, molpdf, identita, copertura; cella vuota = coppia senza modello
+metriche.csv             una riga per coppia con tutte le metriche: sequenza, template, migliore della
+                         sequenza (best_in_sequence = 1), percorso del modello nell'archivio (file),
+                         identità, copertura, punteggi di MODELLER e analisi di qualità; si filtra o si
+                         riassume per sequenza o per template (tabella pivot)
+migliori.csv             una riga per sequenza: template del modello migliore con le stesse metriche
 parametri.json           parametri con cui è stata eseguita la pipeline (ordine di sequenze e template)
 
 Modello migliore di una sequenza: zDOPE più basso fra i suoi template (a parità il DOPE). L'analisi di
@@ -987,5 +1003,9 @@ Legenda delle colonne principali
 - twilight: 1 se identità < soglia o copertura < soglia (zona crepuscolare; il modello c'è comunque)
 - dope: energia DOPE (più negativa = migliore, confrontabile fra template della stessa sequenza)
 - zdope: DOPE normalizzato (< -1 buono); ga341: > 0.7 ripiegamento affidabile; molpdf: funzione obiettivo
-- grade: voto BioLoom A-D
+- grade / grade_score: voto BioLoom A-D e suo punteggio (Ramachandran, clashscore, zDOPE)
+- rama_favored / rama_outliers: % di residui in regioni favorite / outlier di Ramachandran
+- clashscore: contatti sterici gravi ogni 1000 atomi; helix_pct / strand_pct: struttura secondaria (%)
+- consensus_score / consensus_band: consenso fra i metodi (0-100) e fascia (buona, intermedia, scarsa)
+- prosa_z, procheck_core, procheck_g_overall: ProSA II e PROCHECK, solo con l'analisi estesa
 """

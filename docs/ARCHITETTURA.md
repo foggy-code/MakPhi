@@ -952,9 +952,13 @@ M sequenze e N template danno M × N elementi; nessun limite su N (resta quello 
   `GET /api/pipeline/{id}/matrix`: matrice sequenze × template con stato, zDOPE, DOPE, GA341, molpdf, identità,
   copertura, voto e migliore di ogni coppia (400 `matrix_unsupported` per le altre pipeline).
 - **ZIP:** una cartella per template, `template/<template>/<sequenza>__<template>.{pdb,html,quality.json}` (rapporto
-  di qualità di ogni coppia, se l'analisi era richiesta); `riepilogo.csv` (una riga per coppia con `best_in_sequence` e il percorso del modello
-  nell'archivio), `migliori.csv` (una riga per sequenza), `matrici/{zdope,dope,ga341,molpdf,identita,copertura}.csv`,
-  `parametri.json`, `LEGGIMI.txt`. Il report della coppia ha il titolo "sequenza × template".
+  di qualità di ogni coppia, se l'analisi era richiesta); `metriche.csv`, un'unica tabella con una riga per coppia
+  (`CROSS_FIELDS`: sequenza, template, `best_in_sequence`, percorso del modello nell'archivio, identità, copertura,
+  zona crepuscolare, DOPE, zDOPE, GA341, molpdf, voto, Ramachandran favorite e outlier, clashscore, elica, filamento,
+  residui, consenso e fascia dal rapporto di qualità, ProSA e PROCHECK con l'analisi estesa); `migliori.csv` (una riga
+  per sequenza con le stesse metriche del migliore); `parametri.json`, `LEGGIMI.txt`. Niente matrici separate: la
+  tabella si riassume per sequenza o per template con una tabella pivot. `GET /api/pipeline/{id}/export.csv` restituisce
+  la stessa tabella (percorsi nei risultati del job). Il report della coppia ha il titolo "sequenza × template".
 - **Controlli preventivi:** nota `pipeline_pairs` con il numero di coppie; stima su M × N modellazioni, ognuna con la
   sua analisi.
 - **Interfaccia:** scelta "Uso dei template" sotto il selettore dei template fissi, con il conteggio delle coppie (il
