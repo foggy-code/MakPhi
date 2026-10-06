@@ -412,8 +412,21 @@ def runtime_checks(est: dict, *, process_seconds: Optional[float] = None, timeou
 
 
 def pipeline_estimate(items: int, *, residues: int, models: int, refinement: str, quality: bool, extended: bool,
-                      search: Optional[tuple[float, float]], parallel: int) -> dict:
-    """Pipeline: (ricerca + modellazione) per sequenza × sequenze / elementi in parallelo."""
+                      search: Optional[tuple[float, float]], parallel: int, templates: int = 0) -> dict:
+    """Pipeline: (ricerca + modellazione) per sequenza × sequenze / elementi in parallelo.
+
+    `templates` > 0: pipeline M × N, `items` sequenze modellate ciascuna su `templates` template (un elemento per
+    coppia, senza ricerca, ognuno con la sua analisi di qualità se richiesta)."""
+    if templates:
+        pairs = items * templates
+        model = modeling_seconds(residues, models, refinement, "best" if quality else "none", extended)
+        lanes = max(1, min(int(parallel), max(1, pairs)))
+        seconds = math.ceil(max(1, pairs) / lanes) * model
+        detail = (f"{items} {'sequenza' if items == 1 else 'sequenze'} × {templates} template = {pairs} "
+                  f"{'modello' if pairs == 1 else 'modelli'} di {residues} residui in media, {lanes} in parallelo, "
+                  f"{models} {'modello' if models == 1 else 'modelli'} ciascuno")
+        return estimate(seconds, seconds / ESTIMATE_SPREAD, seconds * ESTIMATE_SPREAD, detail=detail,
+                        basis=MODELING_BASIS)
     model = modeling_seconds(residues, models, refinement, "best" if quality else "none", extended)
     lanes = max(1, min(int(parallel), max(1, int(items))))
     s_lo, s_hi = search or (0.0, 0.0)

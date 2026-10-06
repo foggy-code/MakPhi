@@ -26,6 +26,7 @@ import type {
   LigandRef,
   PackageSummary,
   PipelineItem,
+  PipelineMatrix,
   PipelinePage,
   PipelineRequest,
   PirReport,
@@ -346,12 +347,14 @@ export const api = {
   qmean: (body: { project_id?: string; source: StructureSource; mode?: "local" | "remote"; fallback?: boolean; database?: string }) =>
     post<JobSummary>("/api/qmean", body),
   pipeline: (body: PipelineRequest) => post<JobSummary>("/api/pipeline", body),
-  pipelineItems: (id: string, q: { page: number; size: number; status?: string; sort?: string; direction?: string; q?: string }) => {
+  /** `sequence`, `template` (indici) e `best` valgono per le pipeline M × N */
+  pipelineItems: (id: string, q: { page: number; size: number; status?: string; sort?: string; direction?: string; q?: string; sequence?: number; template?: number; best?: boolean }) => {
     const params = new URLSearchParams();
     Object.entries(q).forEach(([k, v]) => v !== undefined && v !== "" && params.set(k, String(v)));
     return get<PipelinePage>(`/api/pipeline/${id}/items?${params}`);
   },
   pipelineItem: (id: string, idx: number) => get<PipelineItem & { sequence: string }>(`/api/pipeline/${id}/items/${idx}`),
+  pipelineMatrix: (id: string) => get<PipelineMatrix>(`/api/pipeline/${id}/matrix`),
   pipelineCsvUrl: (id: string) => `/api/pipeline/${id}/export.csv`,
   pipelineZipUrl: (id: string) => `/api/pipeline/${id}/export.zip`,
 

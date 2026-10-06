@@ -280,8 +280,8 @@ def test_concurrent_analyses(client_with_ubq):
 
 
 def test_quality_report_includes_interfaces(client_with_ubq):
-    """Report di un'analisi di qualità: la sezione "Analisi strutturale" compare con le interfacce del dimero, e non
-    per 1UBQ (una catena, nessun disolfuro)."""
+    """Report di un'analisi di qualità: la sezione "Analisi strutturale" compare dopo l'analisi, con le interazioni e
+    le interfacce del dimero; per 1UBQ (una catena, nessun disolfuro) solo con le interazioni."""
     c = client_with_ubq
     tid = _upload(c, "ubq_dimer.pdb", "UBQD")
     params = {"dope": False, "procheck": False, "prosa": False}
@@ -291,13 +291,16 @@ def test_quality_report_includes_interfaces(client_with_ubq):
     assert 'id="analisi"' not in before
     _analysis(c, {"source": {"type": "template", "id": tid}})
     html = c.get(f"/api/jobs/{qjob['id']}/report").text
-    assert 'id="analisi"' in html and "Interfacce fra catene" in html and "Ponti disolfuro" not in html
+    assert 'id="analisi"' in html and "Interfacce fra catene" in html and 'id="disolfuri"' not in html
+    assert 'id="interazioni"' in html and "<summary>Legami idrogeno (" in html
     assert '<span class="tag err">bassa</span>' in html and "Krissinel" in html and "Janin" in html
     assert "GLN A62" in html or "A62" in html
     ujob = c.post("/api/quality", json={"source": UBQ, **params}).json()
     assert wait_job(c, ujob["id"])["status"] == "completed"
-    _analysis(c, {"source": UBQ})
     assert 'id="analisi"' not in c.get(f"/api/jobs/{ujob['id']}/report").text
+    _analysis(c, {"source": UBQ})
+    text = c.get(f"/api/jobs/{ujob['id']}/report").text
+    assert 'id="interazioni"' in text and 'id="interfacce"' not in text and 'id="disolfuri"' not in text
 
 
 def test_report_lookup_for_job_models(client_with_ubq):
@@ -311,9 +314,15 @@ def test_report_lookup_for_job_models(client_with_ubq):
     assert done["status"] == "completed" and done["result"]["superposed_file"] == "superposed.pdb"
     core = c.app.state.core
     service = ReportService(core.jobs, core.compute, core.db)
-    assert service._analysis(core.jobs.get(aln["id"]), "superposed.pdb") is None
+
+    def lookup() -> dict:
+        data: dict = {}
+        service._structure_tools(data, core.jobs.get(aln["id"]), "superposed.pdb")
+        return data
+
+    assert lookup() == {"analysis": None, "pockets": None, "electrostatics": None}
     job = _analysis(c, {"source": {"type": "job", "job_id": aln["id"], "file": "superposed.pdb"}})
-    summary = service._analysis(core.jobs.get(aln["id"]), "superposed.pdb")
+    summary = lookup()["analysis"]
     assert summary["job_id"] == job["id"] and [p["chains"] for p in summary["interfaces"]] == [["A", "B"]]
 
 

@@ -1226,11 +1226,57 @@ export interface PipelineItem {
   metrics: Record<string, unknown> & {
     search_cached_at?: string; template_predicted?: boolean; plddt_removed?: number;
     templates?: PipelineTemplateChoice[]; combined_coverage?: number; excluded_templates?: number;
+    /** pipeline M × N: zDOPE di MODELLER (criterio del migliore) e migliore della sequenza */
+    zdope?: number | null; molpdf?: number | null; best_in_sequence?: boolean;
   };
   error: string | null;
   started_at: string | null;
   finished_at: string | null;
+  /** solo pipeline M × N: sequenza e template della coppia (indici e nomi) */
+  pair?: PipelinePair;
+  /** solo pipeline M × N: modello con lo zDOPE più basso fra i template della sequenza */
+  best_in_sequence?: boolean;
 }
+
+export interface PipelinePair {
+  sequence_index: number;
+  template_index: number;
+  sequence: string;
+  /** etichetta del template (id e catene, es. 1UBQ_A): cartella dello ZIP e colonna della matrice */
+  template: string;
+  template_id: string;
+}
+
+/** Nomi delle righe (sequenze) e delle colonne (template) di una pipeline M × N. */
+export interface PipelinePairs {
+  sequences: string[];
+  templates: string[];
+  template_ids: string[];
+}
+
+/** Cella della matrice M × N (GET /api/pipeline/{id}/matrix); null = coppia non (ancora) creata. */
+export interface PipelineMatrixCell {
+  idx: number;
+  status: PipelineItem["status"];
+  dope: number | null;
+  zdope: number | null;
+  ga341: number | null;
+  molpdf: number | null;
+  identity: number | null;
+  coverage: number | null;
+  grade: string | null;
+  grade_score: number | null;
+  best_model: string | null;
+  best: boolean;
+  error: string | null;
+}
+
+export interface PipelineMatrix extends PipelinePairs {
+  cells: (PipelineMatrixCell | null)[][];
+}
+
+/** Uso dei template fissi: un modello con tutti i template, oppure uno per ogni coppia sequenza × template. */
+export type FixedCombination = "combined" | "each";
 
 /** Template scelto per un elemento della pipeline in modalità multi. */
 export type PipelineTemplateChoice = Pick<SuggestedTemplate, "template_id" | "role" | "reason" | "identity" | "coverage" | "rank_score" | "predicted">;
@@ -1247,6 +1293,8 @@ export interface PipelineRequest {
   /** solo modalità multi: template complementari al massimo per sequenza (2–5, predefinito 3) */
   max_templates?: number;
   templates?: TemplateRef[];
+  /** solo template fissi: "combined" (predefinito) = un modello con tutti i template; "each" = M × N */
+  fixed_combination?: FixedCombination;
   engine?: SearchEngine;
   evalue?: number;
   twilight?: { filter: boolean; identity: number; coverage: number };
@@ -1274,6 +1322,8 @@ export interface PipelinePage {
   pages: number;
   size: number;
   counts: Record<string, number>;
+  /** solo pipeline M × N */
+  pairs?: PipelinePairs;
 }
 
 export interface TemplateRef {

@@ -161,6 +161,32 @@ def _apply_ligand_options(specs: list[TemplateSpec], opts: modeller.ModelOptions
             s.ligands = mine
 
 
+def model_remarks(m: dict, target_code: str, templates: list[dict], *, transferred: list[str] = (),
+                  multi: Optional[dict] = None, symmetry_weight: float = 1.0, extra: tuple[str, ...] = ()) -> list[str]:
+    """Righe REMARK 999 BIOLOOM di tracciabilità di un modello (`quality.inject_remarks`): `extra` per prime, bersaglio,
+    template (con il ritaglio pLDDT dei predetti), ligandi trasferiti, catene e simmetria di un complesso, punteggi di
+    MODELLER e, se il modello è stato analizzato (`m["quality"]`), il voto."""
+    multi = multi or {"chains": [], "symmetry": {"applied": False}}
+    q = m.get("quality")
+    return [
+        *extra,
+        f"MODEL {m['file']} TARGET {target_code}",
+        f"TEMPLATES {' '.join(t['code'] for t in templates)}",
+        *(f"TEMPLATE {t['code']} {plddt.predictor_tag(t.get('predictor'), str(t.get('id') or t['code']))} "
+          + (f"PLDDT<{t['plddt']['threshold']:g} REMOVED {t['plddt']['removed']}" if t.get("plddt")
+             else "PLDDT_TRIM OFF")
+          for t in templates if t.get("predicted")),
+        *([f"LIGANDS {len(transferred)} " + " ".join(g.replace(" ", ":") for g in transferred)] if transferred else []),
+        *([f"CHAINS {len(multi['chains'])} " + " ".join(
+            f"{c['model_chain']}={c['template_chain'] or '?'}" for c in multi["chains"])] if multi["chains"] else []),
+        *([f"SYMMETRY CA WEIGHT {symmetry_weight:g} " + " ".join(",".join(g) for g in multi["symmetry"]["groups"])]
+          if multi["symmetry"].get("applied") else []),
+        f"DOPE {m.get('dope')} ZDOPE {m.get('zdope')} GA341 {m.get('ga341')}",
+        *([f"GRADE {q['grade']} ({q['grade_score']}) RAMA_FAVORED {q['rama_favored']} CLASHSCORE {q['clashscore']}"]
+          if q else []),
+    ]
+
+
 def _removed_text(trim: dict) -> str:
     """"11 residui con pLDDT < 70", con i frammenti isolati se ce ne sono ("… e 3 in frammenti isolati di meno di 5
     residui")."""
@@ -647,44 +673,9 @@ class ComputeService:
         interfaces_check = self._complex_assessor(ctx, workdir, entries, templates, multi) if multi["chains"] else None
 
         def assess(m: dict) -> None:
-            """Analisi di un modello: rapporto accanto al modello, metriche nel riepilogo, REMARK nel PDB."""
-            sub = ctx.sub(m["file"], workdir / f"qa_{Path(m['file']).stem}")
-            report = quality.analyze(workdir / m["file"], sub, with_dope=True,
-                                     dope_workdir=workdir / f"qa_{Path(m['file']).stem}",
-                                     with_procheck=extended_quality, with_prosa=extended_quality)
-            # il consenso del modello include GA341 (e zDOPE, se il DOPE non è stato calcolato) di MODELLER
-            report["consensus"] = consensus.compute(report, modeller=m)
-            if verify is not None:  # ligandi trasferiti: verifica con il confronto dei siti del template
-                checked = verify(m["file"], sub.log)
-                if checked is not None:
-                    report["ligands"] = checked
-                    m["ligands"] = ligands.summary(checked)
-            if interfaces_check is not None:  # complesso: interfacce e confronto con il template
-                assessed = interfaces_check(m["file"], sub.log, sub.check)
-                if assessed is not None:
-                    report["complex"] = assessed
-                    m["complex"] = complexes.brief(assessed)
-            atomic_write_json(workdir / f"{m['file']}.quality.json", report)
-            m["quality"] = quality.summary_metrics(report)
-            quality.inject_remarks(workdir / m["file"], [
-                f"MODEL {m['file']} TARGET {target_code}",
-                f"TEMPLATES {' '.join(t['code'] for t in templates)}",
-                *(f"TEMPLATE {t['code']} {plddt.predictor_tag(t.get('predictor'), str(t.get('id') or t['code']))} "
-                  + (f"PLDDT<{t['plddt']['threshold']:g} REMOVED {t['plddt']['removed']}" if t.get("plddt")
-                     else "PLDDT_TRIM OFF")
-                  for t in templates if t.get("predicted")),
-                *([f"LIGANDS {len(transferred)} " + " ".join(g.replace(" ", ":") for g in transferred)]
-                  if transferred else []),
-                *([f"CHAINS {len(multi['chains'])} " + " ".join(
-                    f"{c['model_chain']}={c['template_chain'] or '?'}" for c in multi["chains"])] if multi["chains"]
-                  else []),
-                *([f"SYMMETRY CA WEIGHT {opts.symmetry_weight:g} "
-                   + " ".join(",".join(g) for g in multi["symmetry"]["groups"])] if multi["symmetry"]["applied"]
-                  else []),
-                f"DOPE {m.get('dope')} ZDOPE {m.get('zdope')} GA341 {m.get('ga341')}",
-                f"GRADE {m['quality']['grade']} ({m['quality']['grade_score']}) "
-                f"RAMA_FAVORED {m['quality']['rama_favored']} CLASHSCORE {m['quality']['clashscore']}",
-            ])
+            self.assess_model(ctx, workdir, m, target_code=target_code, templates=templates,
+                              extended_quality=extended_quality, verify=verify, interfaces_check=interfaces_check,
+                              transferred=transferred, multi=multi, symmetry_weight=opts.symmetry_weight)
 
         workers = min(len(targets), QUALITY_MODELS_PARALLEL, max(1, int(ctx.settings.effective_workers())))
         if workers > 1:
@@ -746,6 +737,37 @@ class ComputeService:
                                  "template": multi["template"], "mode": "complex" if complex_target else "pir",
                                  "assessment": assessed}
         return result
+
+    def assess_model(self, ctx: JobContext, workdir: Path, m: dict, *, target_code: str, templates: list[dict],
+                     extended_quality: bool = False, verify: Optional[Callable] = None,
+                     interfaces_check: Optional[Callable] = None, transferred: list[str] = (),
+                     multi: Optional[dict] = None, symmetry_weight: float = 1.0) -> dict:
+        """Analisi di qualità di un modello di MODELLER (`m`: voce del riepilogo con file, DOPE, zDOPE, GA341): rapporto
+        `<modello>.quality.json` accanto al modello, metriche in `m["quality"]`, righe REMARK 999 nel PDB.
+
+        `verify`: verifica dei ligandi trasferiti; `interfaces_check`: interfacce di un complesso (vedi
+        `run_modeling`)."""
+        sub = ctx.sub(m["file"], workdir / f"qa_{Path(m['file']).stem}")
+        report = quality.analyze(workdir / m["file"], sub, with_dope=True,
+                                 dope_workdir=workdir / f"qa_{Path(m['file']).stem}",
+                                 with_procheck=extended_quality, with_prosa=extended_quality)
+        # il consenso del modello include GA341 (e zDOPE, se il DOPE non è stato calcolato) di MODELLER
+        report["consensus"] = consensus.compute(report, modeller=m)
+        if verify is not None:  # ligandi trasferiti: verifica con il confronto dei siti del template
+            checked = verify(m["file"], sub.log)
+            if checked is not None:
+                report["ligands"] = checked
+                m["ligands"] = ligands.summary(checked)
+        if interfaces_check is not None:  # complesso: interfacce e confronto con il template
+            assessed = interfaces_check(m["file"], sub.log, sub.check)
+            if assessed is not None:
+                report["complex"] = assessed
+                m["complex"] = complexes.brief(assessed)
+        atomic_write_json(workdir / f"{m['file']}.quality.json", report)
+        m["quality"] = quality.summary_metrics(report)
+        quality.inject_remarks(workdir / m["file"], model_remarks(
+            m, target_code, templates, transferred=transferred, multi=multi, symmetry_weight=symmetry_weight))
+        return report
 
     @staticmethod
     def _complex_plan(entries: list, templates: list[dict], opts: modeller.ModelOptions,

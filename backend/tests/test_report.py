@@ -954,3 +954,152 @@ def test_document_sections_cannot_stay_open():
     with pytest.raises(report.ReportStructureError, match="ripetuta"):
         doc.section("a", "di nuovo A")
     assert doc.html() == '<section id="a"><h2>A</h2></section>'
+
+
+# ---------------------------------------------------------------------------------------------- report completo
+def _real_analysis(path=DATA / "ubq_dimer.pdb") -> dict:
+    """Riepilogo di un'analisi strutturale vera (interazioni, interfacce del dimero, conservazione) come lo prepara
+    services/analysis.report_summary."""
+    from bioloom.domain import conservation, interactions, interfaces, structure
+    from bioloom.services.analysis import report_summary
+
+    model = structure.first_model(structure.load_structure(path, "dimero"))
+    inter = interactions.analyze(model)
+    third = HUMAN_UB[:30] + "A" * 10 + HUMAN_UB[40:]
+    cons = conservation.compute(model, ["human", "yeast", "variant"], [HUMAN_UB, YEAST_UB, third], source="prova")
+    result = {"source": {"type": "template", "id": "DIMER"}, "interactions": inter,
+              "interfaces": interfaces.analyze(model, inter), "conservation": cons, "warnings": []}
+    return report_summary({"id": "an1", "finished_at": "2026-10-02T10:00:00+00:00", "result": result})
+
+
+def _real_pockets() -> dict:
+    from bioloom.domain import pockets
+    from bioloom.services.structure_tools import pockets_summary
+
+    result = {**pockets.read_output(DATA / "fpocket_1ubq_out", "structure"), "params": {"program": "fpocket 4.2.3"},
+              "warnings": []}
+    return pockets_summary({"id": "pk1", "finished_at": "2026-10-02T10:00:00+00:00", "result": result})
+
+
+def _fake_apbs(monkeypatch):
+    """PDB2PQR e APBS simulati: PQR reale di 1UBQ e mappa sintetica (test_electrostatics._FakeTools)."""
+    from bioloom.engines import tools
+
+    monkeypatch.setattr(tools, "missing_message", lambda *_a, **_k: None)
+    monkeypatch.setattr(tools, "find", lambda key: key)
+
+
+def _real_electrostatics(tmp_path, monkeypatch) -> dict:
+    from bioloom.engines import electrostatics as engine
+    from bioloom.services.structure_tools import electrostatics_summary
+
+    from .test_electrostatics import _FakeTools
+
+    _fake_apbs(monkeypatch)
+    result = engine.run(DATA / "1UBQ.pdb", _FakeTools(), tmp_path / "apbs")
+    return electrostatics_summary({"id": "es1", "finished_at": "2026-10-02T10:00:00+00:00", "result": result})
+
+
+def _labels(text: str) -> list[str]:
+    return [s.get("aria-label") for s in svgs(text)]
+
+
+def test_full_report_has_every_chart_and_table(ubq_quality, tmp_path, monkeypatch):
+    """Report di un modello con tutto: punteggi dei modelli, tracce del consenso, profili per residuo (DOPE, RSA,
+    B-factor), PROCHECK, interazioni, interfacce, conservazione, tasche, elettrostatica, predizione e la tabella per
+    residuo; ogni grafico è SVG ben formato e le tabelle lunghe stanno in blocchi richiudibili."""
+    from bioloom.domain import procheck
+
+    rep = json.loads(json.dumps(ubq_quality))
+    rep["procheck"] = procheck.parse_sum((DATA / "procheck_1ubq.sum").read_text())
+    prediction = _prediction_summary()
+    prediction["plausibility"]["residues"] = [
+        {"chain": "A", "resnum": str(i + 1), "lddt": 0.2 if 30 <= i <= 36 else 0.9, "plddt": 90.0,
+         "divergent": 30 <= i <= 36, "confident": True} for i in range(76)]
+    analysis, pockets_info = _real_analysis(), _real_pockets()
+    electro = _real_electrostatics(tmp_path, monkeypatch)
+    text = report.render(model_data(rep, analysis=analysis, pockets=pockets_info, electrostatics=electro,
+                                    prediction=prediction))
+    parser = _check_document(text)
+    assert {"modelli", "qualita", "analisi", "tasche", "elettrostatica", "predizione", "dati-residui"} <= \
+        set(parser.sections)
+    labels = _labels(text)
+    for title in ("DOPE per modello (più basso è migliore)", "zDOPE per modello (sotto −1 simile a una struttura nativa)",
+                  report.TRACKS_TITLE, "Superficie accessibile relativa (RSA, %)", "B-factor per residuo (Å²)",
+                  "Composizione della struttura secondaria (% dei residui)",
+                  "Ramachandran secondo PROCHECK (% dei residui non Gly e non Pro)",
+                  "Conservazione per residuo (0–1)", "Druggability per tasca (≥ 0,5 probabilmente druggabile)",
+                  "Volume per tasca (Å³)", "Potenziale di superficie per residuo (kT/e)",
+                  "lDDT-Cα del modello rispetto alla predizione", "pLDDT della predizione (ESMFold)"):
+        assert title in labels, title
+    assert any(label.startswith("ΔSASA dei residui d'interfaccia · catene A – B") for label in labels)
+    # tasche: una barra per tasca, la 2 sola druggabile; tabella con tutti i residui che la rivestono
+    svg = next(s for s in svgs(text) if s.get("aria-label").startswith("Druggability per tasca"))
+    bars = [r for r in svg.iter(f"{NS}rect") if r.get("class") == "bar"]
+    assert len(bars) == 4 and [b.get("fill") for b in bars].count(report.BAR_COLOR["ok"]) == 1
+    assert "MET A1, GLU A18, PRO A19, SER A57, ASN A60, ILE A61, GLN A62, LYS A63" in text
+    # interazioni: un blocco per tipo con tutte le righe, conteggi come nel riepilogo
+    s = analysis["summary"]
+    block = re.search(rf"<summary>Legami idrogeno \({s['hbonds']}\)</summary>(.*?)</details>", text, re.S).group(1)
+    assert block.count("<tr") == s["hbonds"] + 1
+    assert f"<summary>Ponti salini ({s['salt_bridges']})</summary>" in text
+    # tabella per residuo: 76 righe in un blocco richiudibile
+    block = re.search(r"<summary>Tabella completa \(76 residui\)</summary>(.*?)</details>", text, re.S).group(1)
+    assert block.count("<tr") == 77
+    # elettrostatica: tabella completa dei residui
+    assert f"<summary>Tutti i residui ({len(electro['residues'])})</summary>" in text
+    for ref in ("Le Guilloux V., Schmidtke P., Tufféry P. (2009)", "Baker N.A., Sept D.", "Capra J.A., Singh M.",
+                "McDonald I.K., Thornton J.M."):
+        assert ref in text, ref
+    # in stampa i blocchi richiudibili si aprono
+    assert "details::details-content{content-visibility:visible}" in text
+
+
+def test_bar_chart_handles_negative_and_missing_values():
+    svg = report.bars_svg([("a", -3.0, "accent"), ("b", None, "ok"), (EVIL, 2.0, "nessuno")], title=EVIL)
+    root = ET.fromstring(svg)
+    bars = [r for r in root.iter(f"{NS}rect") if r.get("class") == "bar"]
+    assert len(bars) == 2 and bars[1].get("fill") == report.BAR_COLOR["accent"]  # colore sconosciuto: predefinito
+    assert "<script>" not in svg and root.get("aria-label") == EVIL
+    assert report.bars_svg([("a", None, "ok")], title="vuoto") == ""
+    assert report.stack_svg([("a", 0, "#000000")], title="vuoto") == ""
+
+
+def test_consensus_tracks_mark_regions(ubq_quality):
+    cons = consensus.compute(ubq_quality, modeller={"ga341": 1.0, "zdope": -2.47})
+    residues = ubq_quality["residues"]
+    root = ET.fromstring(report.tracks_svg(residues, cons))
+    regions = [r for r in root.iter(f"{NS}rect") if r.get("class") == "region"]
+    assert len(regions) == len(cons["regions"])
+    assert report.tracks_svg(residues[:10], cons) == ""  # residui non allineati alle segnalazioni
+
+
+def test_report_route_includes_analysis_pockets_and_electrostatics(client_with_ubq, monkeypatch):
+    """Dalla rotta: l'analisi strutturale, le tasche e l'elettrostatica più recenti sulla stessa struttura entrano nel
+    report dell'analisi di qualità (fpocket e APBS simulati con le uscite reali di 1UBQ)."""
+    from bioloom.domain import pockets
+    from bioloom.engines import electrostatics as es_engine
+    from bioloom.engines import pockets as pk_engine
+
+    from .test_electrostatics import _FakeTools
+
+    c = client_with_ubq
+    source = {"type": "template", "id": "1UBQ"}
+    _fake_apbs(monkeypatch)
+    monkeypatch.setattr(pk_engine, "run", lambda _path, _ctx, _work: {
+        **pockets.read_output(DATA / "fpocket_1ubq_out", "structure"), "params": {}, "warnings": []})
+    real = es_engine.run
+    monkeypatch.setattr(es_engine, "run", lambda path, _ctx, work, **kw: real(
+        path, _FakeTools(), work, **{k: v for k, v in kw.items() if k != "progress"}))
+    qjob = c.post("/api/quality", json={"source": source, "dope": False, "procheck": False, "prosa": False}).json()
+    assert wait_job(c, qjob["id"])["status"] == "completed"
+    text = c.get(f"/api/jobs/{qjob['id']}/report").text
+    assert 'id="tasche"' not in text and 'id="elettrostatica"' not in text
+    for path in ("/api/analysis", "/api/pockets", "/api/electrostatics"):
+        done = wait_job(c, c.post(path, json={"source": source}).json()["id"])
+        assert done["status"] == "completed", done.get("error")
+    text = c.get(f"/api/jobs/{qjob['id']}/report").text
+    _check_document(text)
+    for sid in ("analisi", "interazioni", "tasche", "elettrostatica", "dati-residui"):
+        assert f'id="{sid}"' in text, sid
+    assert "Druggability per tasca (≥ 0,5 probabilmente druggabile)" in _labels(text)

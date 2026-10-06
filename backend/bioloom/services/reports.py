@@ -17,8 +17,9 @@ rotta del consenso (`ComputeService.consensus`), che controlla che QMEAN riguard
 * **mutate / alascan (F9.2):** il file è il mutante o il selvatico riottimizzato (`files` del risultato), con la sezione
   "Mutagenesi in silico" (classe, motivazioni, DOPE ed energia, confronto, protocollo) e la qualità del modello; la
   scansione di alanina ha il report senza modello (`/report`), con la tabella e gli hot spot.
-* **analisi strutturale (F7):** in ogni report, i ponti disolfuro e le interfacce dell'analisi `analysis` completata
-  più recente sulla stessa struttura (stessa sorgente e stessa impronta del file), se ce ne sono.
+* **analisi strutturale (F7, F7b):** in ogni report, l'analisi `analysis` (interazioni, interfacce, conservazione), le
+  tasche `pockets` e l'elettrostatica `electrostatics` completate più recenti sulla stessa struttura (stessa sorgente e
+  stessa impronta del file), se ci sono.
 * **confronto con una predizione (F9.3):** il job `predict` indicato (`predict_job`, con i controlli della rotta del
   consenso) oppure, senza, il confronto completato più recente sulla stessa struttura: sezione con l'esito e consenso
   con l'accordo con la predizione. Senza confronto il report non cambia.
@@ -42,6 +43,7 @@ from ..domain import consensus, report, sequences, structure
 from ..engines import modeller
 from .analysis import AnalysisService, report_summary
 from .compute import ComputeService, describe_source, load_quality_report
+from .structure_tools import ELECTROSTATICS, POCKETS, StructureToolsService, electrostatics_summary, pockets_summary
 
 MODEL_KINDS = ("model", "loop", "pipeline", "refine")
 # modello di un elemento di pipeline: items/<idx>_<nome>/<file>
@@ -121,7 +123,7 @@ class ReportService:
                            f"rifinitura e mutagenesi, per le analisi di qualità e le scansioni di alanina, non per i job "
                            f"di tipo '{kind}'.", code="report_unsupported")
         data["image_png"] = image_png
-        data["analysis"] = self._analysis(job, _rel(model) if model else None)
+        self._structure_tools(data, job, _rel(model) if model else None)
         found = self._prediction(job, _rel(model) if model else None, predict_job)
         if found is not None:  # F9.3: sezione del confronto e consenso con l'accordo con la predizione
             data["prediction"] = found
@@ -134,25 +136,35 @@ class ReportService:
         """Report del modello migliore di un elemento completato (ZIP della pipeline: senza immagine né QMEAN)."""
         rel = _rel(row.get("best_model") or "")
         data, _stem = self._pipeline_data(job, rel, None, row=row)
-        data["analysis"] = self._analysis(job, rel)
+        self._structure_tools(data, job, rel)
         return report.render(data)
 
-    def _analysis(self, job: dict, model: Optional[str]) -> Optional[dict]:
-        """Disolfuri e interfacce dell'analisi strutturale (F7) più recente sulla stessa struttura, se ne ha: stessa
-        sorgente (il modello del job, o la struttura dell'analisi di qualità) e stessa impronta del file."""
+    def _fingerprint(self, source: dict) -> Optional[str]:
+        try:
+            path, _label = self.compute.resolve_structure(source)
+            return cache.content_hash(path)
+        except (AppError, OSError):
+            return None
+
+    def _structure_tools(self, data: dict, job: dict, model: Optional[str]) -> None:
+        """Analisi strutturale (F7: interazioni, interfacce, conservazione), tasche (fpocket) ed elettrostatica (APBS)
+        più recenti sulla stessa struttura, se ci sono: stessa sorgente (il modello del job, o la struttura
+        dell'analisi di qualità) e stessa impronta del file. Ciascuna è facoltativa: senza, la sezione non c'è."""
+        data["analysis"] = data["pockets"] = data["electrostatics"] = None
         if model:
             source: object = {"type": "job", "job_id": job["id"], "file": model}
         else:
             source = (job.get("params") or {}).get("source")
         if not isinstance(source, dict):
-            return None
-        try:
-            path, _label = self.compute.resolve_structure(source)
-            fingerprint: Optional[str] = cache.content_hash(path)
-        except (AppError, OSError):
-            fingerprint = None
+            return
+        fingerprint = self._fingerprint(source)
         found = AnalysisService(self.jobs, self.compute).latest(source, fingerprint)
-        return report_summary(found) if found else None
+        data["analysis"] = report_summary(found) if found else None
+        tools = StructureToolsService(self.jobs, self.compute)
+        found = tools.latest(POCKETS, source, fingerprint)
+        data["pockets"] = pockets_summary(found) if found else None
+        found = tools.latest(ELECTROSTATICS, source, fingerprint)
+        data["electrostatics"] = electrostatics_summary(found) if found else None
 
     def _prediction(self, job: dict, model: Optional[str], predict_job: Optional[str]) -> Optional[dict]:
         """Confronto con una predizione (F9.3) della stessa struttura: quello indicato, con gli stessi controlli della
@@ -390,13 +402,18 @@ class ReportService:
         metrics = row.get("metrics") if isinstance(row.get("metrics"), dict) else {}
         best = PurePosixPath(str(row.get("best_model") or "")).name
         data = self._base(job, "pipeline")
+        # pipeline M × N: l'elemento è la coppia <sequenza>__<template>
+        sequence, _sep, pair_template = str(row["name"]).partition("__") if params.get("fixed_combination") == "each" \
+            and params.get("template_mode") == "fixed" else (row["name"], "", "")
+        subject = f"{sequence} × {pair_template}" if pair_template else row["name"]
         data.update({
-            "title": f"{job.get('title') or 'Pipeline'} · {row['name']}", "model": rel, "quality": quality,
+            "title": f"{job.get('title') or 'Pipeline'} · {subject}", "model": rel, "quality": quality,
             "consensus": cons, "tools": self._tools(head, quality, qmean),
-            "target": {"name": row["name"], "sequence": row.get("sequence") or ""},
+            "target": {"name": sequence, "sequence": row.get("sequence") or ""},
             "templates": self._item_templates(job["id"], folder, alignment, row, metrics, head),
             "search": self._search(row), "alignment": alignment, "options": self._options(params),
-            "pipeline": {k: params.get(k) for k in ("template_mode", "engine", "evalue", "twilight", "max_templates")},
+            "pipeline": {k: params.get(k) for k in ("template_mode", "engine", "evalue", "twilight", "max_templates",
+                                                    "fixed_combination")},
             "models": self._models(entries, name, best, {best: (row.get("grade"), row.get("grade_score"))}),
             "warnings": self._item_warnings(alignment, row),
         })

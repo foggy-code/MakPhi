@@ -276,14 +276,23 @@ class AnalysisService:
 
 
 def report_summary(job: dict) -> Optional[dict]:
-    """Riepilogo per il report del modello: ponti disolfuro e interfacce (None se non ce ne sono)."""
+    """Riepilogo per il report del modello: tutte le interazioni (legami idrogeno, ponti salini, disolfuri,
+    aromatiche), le interfacce fra catene e la conservazione. None se il job non ha il risultato delle interazioni."""
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
-    inter = result.get("interactions") if isinstance(result.get("interactions"), dict) else {}
-    iface = result.get("interfaces") if isinstance(result.get("interfaces"), dict) else {}
-    ss = [d for d in inter.get("disulfides") or [] if isinstance(d, dict)]
-    pairs = [p for p in iface.get("pairs") or [] if isinstance(p, dict)]
-    if not ss and not pairs:
+    inter = result.get("interactions") if isinstance(result.get("interactions"), dict) else None
+    if inter is None:
         return None
+    iface = result.get("interfaces") if isinstance(result.get("interfaces"), dict) else {}
+
+    def rows(value: object) -> list[dict]:
+        return [d for d in value or [] if isinstance(d, dict)] if isinstance(value, list) else []
+
+    cons = result.get("conservation")
     return {"job_id": job.get("id"), "finished_at": job.get("finished_at"), "source": describe_source(result.get("source")),
-            "disulfides": ss, "interfaces": pairs, "method": iface.get("method"),
-            "summary": inter.get("summary") or {}}
+            "disulfides": rows(inter.get("disulfides")), "interfaces": rows(iface.get("pairs")),
+            "method": iface.get("method"), "interface_note": iface.get("note"), "min_delta": iface.get("min_delta"),
+            "summary": inter.get("summary") or {}, "hydrogens": inter.get("hydrogens"),
+            "hbonds": rows(inter.get("hbonds")), "salt_bridges": rows(inter.get("salt_bridges")),
+            "aromatic": rows(inter.get("aromatic")),
+            "conservation": cons if isinstance(cons, dict) else None,
+            "warnings": [str(w) for w in result.get("warnings") or []]}

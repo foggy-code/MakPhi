@@ -33,6 +33,35 @@ KINDS = (POCKETS, ELECTROSTATICS)
 LOOKUP_LIMIT = 200  # job completati esaminati per trovare il più recente di una struttura
 
 
+def _result(job: dict) -> dict:
+    return job.get("result") if isinstance(job.get("result"), dict) else {}
+
+
+def pockets_summary(job: dict) -> Optional[dict]:
+    """Riepilogo per il report del modello: tasche con i descrittori e i residui (senza le sfere alfa, che servono
+    solo al 3D), riepilogo e parametri di fpocket. None senza l'elenco delle tasche."""
+    result = _result(job)
+    if not isinstance(result.get("pockets"), list):
+        return None
+    pockets = [{k: v for k, v in p.items() if k not in ("spheres", "center")}
+               for p in result["pockets"] if isinstance(p, dict)]
+    return {"job_id": job.get("id"), "finished_at": job.get("finished_at"), "pockets": pockets,
+            "summary": result.get("summary") or {}, "params": result.get("params") or {},
+            "warnings": [str(w) for w in result.get("warnings") or []]}
+
+
+def electrostatics_summary(job: dict) -> Optional[dict]:
+    """Riepilogo per il report del modello: potenziale per residuo, cariche, parametri di PDB2PQR e APBS. None senza
+    i residui."""
+    result = _result(job)
+    if not isinstance(result.get("residues"), list):
+        return None
+    keys = ("forcefield", "ph", "net_charge", "charges", "grid", "parameters", "sampling", "scale", "map", "residues",
+            "summary")
+    return {"job_id": job.get("id"), "finished_at": job.get("finished_at"), **{k: result.get(k) for k in keys},
+            "warnings": [str(w) for w in result.get("warnings") or []]}
+
+
 class StructureToolsService:
     def __init__(self, jobs: JobManager, compute: ComputeService) -> None:
         self.jobs = jobs

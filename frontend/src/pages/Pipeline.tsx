@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { JobItemsEvent, JobSummary, PipelineItem, PipelinePage, PipelineRequest, PipelineResult, ResumeScope, SearchEngine, Sequence, TemplateItem, TemplateMode, TemplateRef } from "../api/types";
+import type { FixedCombination, JobItemsEvent, JobSummary, PipelineItem, PipelinePage, PipelineRequest, PipelineResult, ResumeScope, SearchEngine, Sequence, TemplateItem, TemplateMode, TemplateRef } from "../api/types";
 import { LaunchButton, PreflightPanel, usePreflight } from "../components/Preflight";
 import { pipelinePreflight } from "../lib/preflight";
 import { RecomputeOption } from "../components/CacheOption";
@@ -9,6 +9,7 @@ import { SequenceFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { PipelineItemActions, PipelineModelView } from "../components/PipelineItemActions";
+import { PipelineMatrix } from "../components/PipelineMatrix";
 import { TemplatePicker } from "../components/Pickers";
 import { FormSection } from "../components/WorkflowParts";
 import { PlddtOption } from "../components/PlddtOption";
@@ -41,6 +42,12 @@ function ItemDetail({ item: it }: { item: PipelineItem }) {
   const chosen = itemTemplates(it);
   const m = it.metrics ?? {};
   const items: { label: string; value: ReactNode }[] = [
+    ...(it.pair ? [
+      { label: "Sequenza", value: it.pair.sequence },
+      { label: "Template", value: <span className="mono">{it.pair.template}</span> },
+      { label: "Migliore della sequenza", value: it.best_in_sequence ? "sì (zDOPE più basso fra i template)" : "no" },
+      { label: "zDOPE", value: fmtNum(typeof m.zdope === "number" ? m.zdope : null, 2) },
+    ] : []),
     { label: "Lunghezza", value: `${it.length} aa` },
     { label: "Stato", value: it.status !== "completed" && it.stage ? `${STATUS_LABEL[it.status] ?? it.status} · ${it.stage}` : STATUS_LABEL[it.status] ?? it.status },
     { label: "Identità", value: it.identity == null ? "—" : `${fmtNum(it.identity, 1)}%` },
@@ -77,6 +84,8 @@ function ItemDetail({ item: it }: { item: PipelineItem }) {
 }
 
 const ITEM_COLUMNS = 12;
+/** template al massimo in un solo modello (services/compute._template_specs) */
+const MAX_COMBINED_TEMPLATES = 10;
 
 function Items({ jobId, running, cacheHits }: { jobId: string; running: boolean; cacheHits?: number }) {
   const [page, setPage] = useState(1);
@@ -85,8 +94,15 @@ function Items({ jobId, running, cacheHits }: { jobId: string; running: boolean;
   const [sort, setSort] = useState({ key: "idx", dir: "asc" });
   const [q, setQ] = useState("");
   const [view, setView] = useState<{ name: string; path: string } | null>(null);
+  // pipeline M × N: filtri per sequenza e per template, solo i migliori, vista a tabella o a matrice
+  const [seqFilter, setSeqFilter] = useState("");
+  const [tplFilter, setTplFilter] = useState("");
+  const [bestOnly, setBestOnly] = useState(false);
+  const [layout, setLayout] = useState<"table" | "matrix">("table");
   const open = useExpanded<number>();
-  const { data, reload } = useAsync<PipelinePage>(() => api.pipelineItems(jobId, { page, size, status, sort: sort.key, direction: sort.dir, q }), [jobId, page, size, status, sort.key, sort.dir, q]);
+  const { data, reload } = useAsync<PipelinePage>(
+    () => api.pipelineItems(jobId, { page, size, status, sort: sort.key, direction: sort.dir, q, sequence: seqFilter === "" ? undefined : Number(seqFilter), template: tplFilter === "" ? undefined : Number(tplFilter), best: bestOnly || undefined }),
+    [jobId, page, size, status, sort.key, sort.dir, q, seqFilter, tplFilter, bestOnly]);
   // la pagina si ricarica quando il flusso dell'elenco segnala elementi cambiati; polling solo senza flusso
   const refresh = useThrottled(reload, 1000);
   const live = useJobsFeed((type, event) => {
@@ -104,14 +120,17 @@ function Items({ jobId, running, cacheHits }: { jobId: string; running: boolean;
   if (!data) return null;
   const counts = data.counts;
   const indices = data.items.map((it) => it.idx);
+  const pairs = data.pairs;
+  const label = (it: PipelineItem) => (it.pair ? `${it.pair.sequence} × ${it.pair.template}` : it.name);
+  const totalItems = Object.values(counts).reduce((a, b) => a + b, 0);
   return (
     <Card
       icon="list"
-      title="Risultati per sequenza"
+      title={pairs ? "Risultati per sequenza e template" : "Risultati per sequenza"}
       sub={searchCacheHitsLabel(cacheHits) ?? undefined}
       right={
         <>
-          {data.items.length > 1 && (
+          {data.items.length > 1 && layout === "table" && (
             <ExpandAll allOpen={indices.every((i) => open.has(i))} onExpand={() => open.expandAll(indices)} onCollapse={open.collapseAll} noun="righe della pagina" />
           )}
           {/* il file del job (tutte le righe), diverso dal CSV del grafico qui sotto */}
@@ -124,8 +143,20 @@ function Items({ jobId, running, cacheHits }: { jobId: string; running: boolean;
     >
       <div className="stack">
         {parts.length > 0 && (
-          <StackBar parts={parts} title="Stato delle sequenze" subtitle={`${plural(data.total, "sequenza", "sequenze")} della pipeline`} filename={`pipeline_${jobId.slice(0, 8)}_stati`} />
+          <StackBar parts={parts} title={pairs ? "Stato delle coppie" : "Stato delle sequenze"}
+            subtitle={pairs ? `${plural(pairs.sequences.length, "sequenza", "sequenze")} × ${pairs.templates.length} template = ${plural(totalItems, "modello", "modelli")}` : `${plural(data.total, "sequenza", "sequenze")} della pipeline`}
+            filename={`pipeline_${jobId.slice(0, 8)}_stati`} />
         )}
+        {pairs && (
+          <div className="row small" style={{ gap: 12, flexWrap: "wrap" }}>
+            <Segmented label="Vista dei risultati" value={layout} onChange={setLayout} options={[{ value: "table", label: "Tabella" }, { value: "matrix", label: "Matrice sequenze × template" }]} />
+            <span className="text-2">Il migliore di ogni sequenza è il modello con lo zDOPE più basso fra i suoi template; ogni coppia ha la sua analisi di qualità.</span>
+          </div>
+        )}
+        {pairs && layout === "matrix" ? (
+          <PipelineMatrix jobId={jobId} running={running} onOpen={(c, seqName, tpl) => c.best_model && setView({ name: `${seqName} × ${tpl}`, path: c.best_model })} />
+        ) : (
+        <>
         <div className="row">
           {["all", "completed", "running", "searching", "modeling", "pending", "failed", "filtered", "cancelled"].map((s) => {
             const n = s === "all" ? Object.values(counts).reduce((a, b) => a + b, 0) : counts[s] ?? 0;
@@ -138,6 +169,19 @@ function Items({ jobId, running, cacheHits }: { jobId: string; running: boolean;
           })}
           <input className="input input-sm right" style={{ width: 220 }} placeholder="Cerca sequenza o template" aria-label="Cerca sequenza o template" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
         </div>
+        {pairs && (
+          <div className="row small" style={{ gap: 10, flexWrap: "wrap" }}>
+            <select className="input input-sm" style={{ width: 200 }} value={seqFilter} aria-label="Filtro per sequenza" onChange={(e) => { setSeqFilter(e.target.value); setPage(1); }}>
+              <option value="">Tutte le sequenze ({pairs.sequences.length})</option>
+              {pairs.sequences.map((n, i) => <option key={n} value={i}>{n}</option>)}
+            </select>
+            <select className="input input-sm" style={{ width: 200 }} value={tplFilter} aria-label="Filtro per template" onChange={(e) => { setTplFilter(e.target.value); setPage(1); }}>
+              <option value="">Tutti i template ({pairs.templates.length})</option>
+              {pairs.templates.map((t, i) => <option key={t} value={i}>{t}</option>)}
+            </select>
+            <label className="check"><input type="checkbox" checked={bestOnly} onChange={(e) => { setBestOnly(e.target.checked); setPage(1); }} /> Solo il migliore di ogni sequenza</label>
+          </div>
+        )}
         <div className="table-wrap">
           <table className="table">
             <thead>
@@ -161,15 +205,16 @@ function Items({ jobId, running, cacheHits }: { jobId: string; running: boolean;
                     <tr className={`clickable${isOpen ? " row-open" : ""}`} onClick={() => open.toggle(it.idx)}>
                       <td><ExpandButton open={isOpen} onClick={() => open.toggle(it.idx)} label={`dettagli di ${it.name}`} /></td>
                       <td className="shell-sub">{it.idx + 1}</td>
-                      <td><b>{it.name}</b><div className="shell-sub">{it.length} aa</div></td>
+                      <td><b>{it.pair ? it.pair.sequence : it.name}</b><div className="shell-sub">{it.length} aa</div></td>
                       <td>
                         <StatusBadge status={it.status} />
                         {it.status !== "completed" && it.stage && <div className="shell-sub ellipsis" style={{ maxWidth: 180 }} title={it.error ?? it.stage}>{it.error ?? it.stage}</div>}
                       </td>
                       <td className="nowrap" title={itemTemplatesTooltip(it)}>
-                        {itemTemplates(it).length ? itemTemplates(it).map((t, i) => (
+                        {it.pair ? <span className="mono">{it.pair.template}</span> : itemTemplates(it).length ? itemTemplates(it).map((t, i) => (
                           <span key={t.id}>{i > 0 && <br />}{t.id}{t.role === "complementare" && <span className="shell-sub"> (compl.)</span>}</span>
                         )) : "—"}{" "}
+                        {it.best_in_sequence && <Badge tone="ok" title="Modello con lo zDOPE più basso fra i template della sequenza">migliore</Badge>}
                         {it.twilight ? <Badge tone="warn" title="Identità o copertura sotto soglia">crepuscolare</Badge> : null}
                         {(it.template_source === "alphafold" || it.metrics?.template_predicted) && (
                           <Badge tone="warn" title={`Modello predetto da AlphaFold DB, non struttura sperimentale${it.metrics?.plddt_removed ? `: tolti ${it.metrics.plddt_removed} residui a basso pLDDT` : ""}`}>AlphaFold</Badge>
@@ -179,12 +224,12 @@ function Items({ jobId, running, cacheHits }: { jobId: string; running: boolean;
                       </td>
                       <td className="num"><BarCell value={it.identity} /></td>
                       <td className="num"><BarCell value={it.coverage} /></td>
-                      <td className="num">{fmtNum(it.dope, 0)}</td>
+                      <td className="num">{fmtNum(it.dope, 0)}{it.pair && typeof it.metrics?.zdope === "number" && <div className="shell-sub">z {fmtNum(it.metrics.zdope, 2)}</div>}</td>
                       <td className="num">{it.grade ? <span className="row" style={{ justifyContent: "flex-end", gap: 6 }}><Grade grade={it.grade} /> {fmtNum(it.grade_score, 0)}</span> : "—"}</td>
                       <td className="num">{fmtNum(it.rama_favored)}</td>
                       <td className="num">{fmtNum(it.clashscore, 1)}</td>
                       <td className="nowrap" onClick={(e) => e.stopPropagation()}>
-                        <PipelineItemActions jobId={jobId} item={it} onView={() => it.best_model && setView({ name: it.name, path: it.best_model })} />
+                        <PipelineItemActions jobId={jobId} item={it} onView={() => it.best_model && setView({ name: label(it), path: it.best_model })} />
                       </td>
                     </tr>
                     {isOpen && (
@@ -209,6 +254,8 @@ function Items({ jobId, running, cacheHits }: { jobId: string; running: boolean;
             <button type="button" className="btn btn-sm" disabled={data.page >= data.pages} aria-label="Pagina successiva" onClick={() => setPage(data.page + 1)}>›</button>
           </div>
         </div>
+        </>
+        )}
       </div>
       {view && <PipelineModelView jobId={jobId} name={view.name} model={view.path} onClose={() => setView(null)} />}
     </Card>
@@ -225,6 +272,7 @@ export default function Pipeline() {
   const [mode, setMode] = useState<TemplateMode>("auto");
   const [maxTemplates, setMaxTemplates] = useState(MAX_TEMPLATES_DEFAULT);
   const [templates, setTemplates] = useState<TemplateRef[]>([]);
+  const [combination, setCombination] = useState<FixedCombination>("combined");
   const [engine, setEngine] = useState<SearchEngine>("rcsb");
   const [evalue, setEvalue] = useState(0.001);
   const [twFilter, setTwFilter] = useState(false);
@@ -247,6 +295,9 @@ export default function Pipeline() {
   useLiveJobList(recent, setRecent, reloadRecent, (j) => j.kind === "pipeline" && (!projectId || j.project_id === projectId));
   const { job, summary, log, cancel, resume } = useJob<PipelineResult>(jobId, { withLog: true });
   const count = (fasta.match(/^>/gm) ?? []).length;
+  const cross = mode === "fixed" && combination === "each";
+  // un modello con tutti i template: al massimo 10 (MODELLER); un modello per template: nessun limite
+  const tooManyCombined = mode === "fixed" && !cross && templates.length > MAX_COMBINED_TEMPLATES;
   const running = summary ? isActive(summary.status) : false;
   const wasRunning = useRef(running);
   useEffect(() => {
@@ -273,6 +324,7 @@ export default function Pipeline() {
     template_mode: mode,
     max_templates: clampMaxTemplates(maxTemplates),
     templates,
+    fixed_combination: combination,
     engine,
     evalue,
     twilight: { filter: twFilter, identity: twIdentity, coverage: twCoverage },
@@ -281,7 +333,7 @@ export default function Pipeline() {
     extended_quality: quality && extended,
     parallel,
     use_cache: !recompute,
-  }), [projectId, name, fasta, mode, maxTemplates, templates, engine, evalue, twFilter, twIdentity, twCoverage, models, refinement, plddtTrim, plddtMin, quality, extended, parallel, recompute]);
+  }), [projectId, name, fasta, mode, maxTemplates, templates, combination, engine, evalue, twFilter, twIdentity, twCoverage, models, refinement, plddtTrim, plddtMin, quality, extended, parallel, recompute]);
   const preflight = usePreflight(useMemo(() => pipelinePreflight(body, count), [body, count]), 800);
 
   const submit = async () => {
@@ -373,7 +425,24 @@ export default function Pipeline() {
                     </Disclosure>
                   </>
                 ) : (
-                  <TemplatePicker value={templates} onChange={setTemplates} />
+                  <>
+                    <TemplatePicker value={templates} onChange={setTemplates} max={cross ? Number.POSITIVE_INFINITY : MAX_COMBINED_TEMPLATES} />
+                    <Segmented label="Uso dei template" value={combination} onChange={setCombination} options={[
+                      { value: "combined", label: "Un modello con tutti i template" },
+                      { value: "each", label: "Un modello per ogni template (sequenze × template)" },
+                    ]} />
+                    {cross ? (
+                      <span className="small text-2">
+                        {count && templates.length
+                          ? `${plural(count, "sequenza", "sequenze")} × ${plural(templates.length, "template", "template")} = ${plural(count * templates.length, "modello", "modelli")}, uno per coppia. `
+                          : "Ogni sequenza si modella su ogni template, uno alla volta. "}
+                        Ogni coppia ha la sua analisi di qualità; per ogni sequenza il migliore è il modello con lo zDOPE più basso. Nessun limite sul numero di template.
+                      </span>
+                    ) : (
+                      <span className="small text-2">I template scelti si usano insieme in un solo modello per sequenza (al massimo {MAX_COMBINED_TEMPLATES}).</span>
+                    )}
+                    {tooManyCombined && <Alert tone="warn">Un modello con tutti i template ne accetta al massimo {MAX_COMBINED_TEMPLATES}: togline qualcuno oppure scegli un modello per ogni template.</Alert>}
+                  </>
                 )}
               </FormSection>
               <FormSection title="Modellazione e qualità">
@@ -390,12 +459,12 @@ export default function Pipeline() {
                   <Field label="In parallelo"><input className="input" type="number" min={1} max={8} value={parallel} onChange={(e) => setParallel(Number(e.target.value))} /></Field>
                 </div>
                 {predictedPossible && <PlddtOption enabled={plddtTrim} threshold={plddtMin} onEnabled={setPlddtTrim} onThreshold={setPlddtMin} />}
-                <label className="check"><input type="checkbox" checked={quality} onChange={(e) => setQuality(e.target.checked)} /> Analisi di qualità del modello migliore</label>
+                <label className="check"><input type="checkbox" checked={quality} onChange={(e) => setQuality(e.target.checked)} /> {cross ? "Analisi di qualità del modello di ogni coppia" : "Analisi di qualità del modello migliore"}</label>
                 {quality && <label className="check"><input type="checkbox" checked={extended} onChange={(e) => setExtended(e.target.checked)} /> Includi PROCHECK e ProSA II (qualche secondo in più per sequenza)</label>}
               </FormSection>
               {/* controlli preventivi: licenza, motore e database, tempi e limiti dei servizi, spazio */}
               <PreflightPanel state={preflight} />
-              <LaunchButton preflight={preflight} disabled={count < 1 || (mode === "fixed" && !templates.length)} onLaunch={submit}>Avvia pipeline</LaunchButton>
+              <LaunchButton preflight={preflight} disabled={count < 1 || (mode === "fixed" && !templates.length) || tooManyCombined} onLaunch={submit}>Avvia pipeline</LaunchButton>
             </div>
           </Card>
           <Card icon="activity" title="Pipeline recenti">

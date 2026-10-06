@@ -6,6 +6,12 @@ nel documento lo ribadisce), immagine 3D facoltativa incorporata come data URI d
 Le regole `@media print` tolgono l'indice, ripetono le intestazioni delle tabelle e non spezzano grafici, blocchi di
 allineamento e righe a metà pagina.
 
+Il report è unico e contiene tutti i dati e i grafici del modello che l'interfaccia mostra (punteggi dei modelli,
+tracce del consenso, profili per residuo, PROCHECK, interazioni, conservazione, tasche, elettrostatica, confronto con
+una predizione, scansione di alanina). Le tabelle lunghe (tutti i residui, tutte le interazioni, i clash oltre i primi
+20) stanno in blocchi `<details>`: chiusi sullo schermo, aperti in stampa con `::details-content` dove il browser lo
+supporta (Chrome/Edge; negli altri si apre il blocco prima di stampare).
+
 Logica pura: `render(data)` riceve i dati già raccolti dal servizio (`services/reports.py`) e restituisce il testo.
 
 Sicurezza: nomi di sequenze e di file, titoli e metadati (RCSB, UniProt, AlphaFold DB, file caricati) non sono
@@ -286,6 +292,8 @@ REGION_LABEL = {"favored": "favorita", "allowed": "consentita", "outlier": "outl
 RAMA_PANELS = (("general", "Caso generale (anche pre-prolina)"), ("glycine", "Glicina"), ("proline", "Prolina"))
 SS_FILL = {"H": "#c0392b", "E": "#d4a106", "C": "#cfd8dc"}
 SS_LABEL = {"H": "elica (H, G, I)", "E": "filamento β (E, B)", "C": "coil"}
+DSSP_STATE = {"H": "H α-elica", "G": "G elica 3₁₀", "I": "I elica π", "E": "E filamento", "B": "B ponte β",
+              "T": "T ripiegamento", "S": "S curva", "-": "– nessuno", "P": "P elica di poliprolina"}
 
 
 def _svg_open(width: int, height: int, label: str) -> str:
@@ -508,6 +516,215 @@ def ss_strip_svg(residues: list[dict]) -> str:
     out.extend(_x_axis(residues, lambda k: x(k + 0.5), pt, pt + bar + 4))
     out.append("</svg>")
     return "".join(out)
+
+
+# colori fissi dei grafici a barre (scelti dal codice, mai dai dati): stessi toni del CSS del documento
+BAR_COLOR = {"accent": "#1d4e89", "ok": "#1e7b4a", "warn": "#c77700", "err": "#b3261e", "info": "#2f7f9e",
+             "muted": "#9aa5b1", "pos": "#1d4ed8", "neg": "#c62828", "chain2": "#7c3aed"}
+
+
+def bars_svg(items: list[tuple[str, Any, str]], *, title: str, digits: int = 2, threshold: Optional[float] = None,
+             threshold_label: str = "", y_range: Optional[tuple[float, float]] = None, height: int = 200,
+             dots: bool = False) -> str:
+    """Grafico a barre verticali dallo zero (anche negative): `items` = (etichetta, valore, chiave di BAR_COLOR); un
+    valore assente lascia lo spazio vuoto. Etichette ruotate oltre 12 barre, una ogni tante oltre 40. Con `dots` un
+    punto per valore su una scala adattata ai dati (senza lo zero: punteggi come il DOPE, vicini fra loro e lontani
+    da zero). '' senza valori."""
+    n = len(items)
+    numeric = [float(v) for _l, v, _c in items if _isnum(v)]
+    if not numeric:
+        return ""
+    rotate = n > 12
+    width, pl, pr, pt, pb = 760, 58, 14, 24, (62 if rotate else 30)
+    height += pb - 30
+    pw, ph = width - pl - pr, height - pt - pb
+    if y_range:
+        lo, hi = y_range
+    elif dots:
+        extra = [float(threshold)] if _isnum(threshold) else []
+        lo, hi = min(numeric + extra), max(numeric + extra)
+        margin = (hi - lo) * 0.12 or max(1.0, abs(hi) * 0.01)
+        lo, hi = lo - margin, hi + margin
+    else:
+        extra = [float(threshold)] if _isnum(threshold) else []
+        lo, hi = min(numeric + extra + [0.0]), max(numeric + extra + [0.0])
+        margin = (hi - lo) * 0.06 or 1.0
+        lo, hi = (lo - margin if lo < 0 else lo), (hi + margin if hi > 0 else hi)
+
+    def y(v: float) -> float:
+        return pt + (hi - max(lo, min(hi, v))) / (hi - lo) * ph
+
+    band = pw / n
+    bw = max(0.6, band * (0.8 if n <= 200 else 1.0))
+    out = [_svg_open(width, height, title),
+           f'<text x="{pl}" y="14" font-size="11" font-weight="bold" fill="#1f2933">{_e(title)}</text>',
+           f'<rect x="{pl}" y="{pt}" width="{pw}" height="{ph}" fill="#f7f9fb" stroke="#9aa5b1"/>']
+    ticks = (lo, (lo + hi) / 2, hi) if dots else sorted({lo, hi, *([0.0] if lo < 0 < hi else [])})
+    for value in ticks:
+        out.append(f'<text x="{pl - 5}" y="{_f(y(value) + 3)}" text-anchor="end" fill="#52606d">{_num(value, digits)}</text>')
+    zero = y(0.0)
+    for i, (label, value, color) in enumerate(items):
+        if not _isnum(value):
+            continue
+        fill = BAR_COLOR.get(color, BAR_COLOR["accent"])
+        tip = f"<title>{_e(label)}: {_num(value, digits)}</title>"
+        if dots:
+            cx = pl + (i + 0.5) * band
+            out.append(f'<line x1="{_f(cx)}" x2="{_f(cx)}" y1="{pt}" y2="{pt + ph}" stroke="#d9e2ec"/>')
+            out.append(f'<circle class="dot" cx="{_f(cx)}" cy="{_f(y(float(value)))}" r="5" fill="{fill}">{tip}</circle>')
+            continue
+        top, bottom = sorted((y(float(value)), zero))
+        out.append(f'<rect class="bar" x="{_f(pl + i * band + (band - bw) / 2)}" y="{_f(top)}" width="{_f(bw)}" '
+                   f'height="{_f(max(0.6, bottom - top))}" fill="{fill}">{tip}</rect>')
+    if lo < 0 < hi and not dots:
+        out.append(f'<line x1="{pl}" x2="{pl + pw}" y1="{_f(zero)}" y2="{_f(zero)}" stroke="#52606d"/>')
+    if _isnum(threshold):
+        ty = y(float(threshold))
+        out.append(f'<line x1="{pl}" x2="{pl + pw}" y1="{_f(ty)}" y2="{_f(ty)}" stroke="#c62828" stroke-dasharray="5 3"/>')
+        if threshold_label:
+            out.append(f'<text x="{pl + pw - 2}" y="{_f(ty - 3)}" text-anchor="end" fill="#c62828">'
+                       f"{_e(threshold_label)}</text>")
+    step = max(1, math.ceil(n / 40))
+    for i in range(0, n, step):
+        cx, ly = pl + (i + 0.5) * band, pt + ph + 12
+        label = _e(str(items[i][0])[:16])
+        if rotate:
+            out.append(f'<text x="{_f(cx)}" y="{_f(ly)}" text-anchor="end" fill="#52606d" '
+                       f'transform="rotate(-45 {_f(cx)} {_f(ly)})">{label}</text>')
+        else:
+            out.append(f'<text x="{_f(cx)}" y="{_f(ly)}" text-anchor="middle" fill="#52606d">{label}</text>')
+    out.append("</svg>")
+    return "".join(out)
+
+
+def stack_svg(parts: list[tuple[str, Any, str]], *, title: str) -> str:
+    """Barra orizzontale impilata delle percentuali (etichetta, valore, colore esadecimale costante), con il valore
+    nei tratti abbastanza larghi. '' se il totale è zero."""
+    values = [(label, float(v), color) for label, v, color in parts if _isnum(v) and v > 0]
+    total = sum(v for _l, v, _c in values)
+    if total <= 0:
+        return ""
+    width, pl, pr, bar = 760, 8, 8, 26
+    pw = width - pl - pr
+    out = [_svg_open(width, bar + 4, title)]
+    x = float(pl)
+    for label, value, color in values:
+        w = value / total * pw
+        out.append(f'<rect class="seg" x="{_f(x)}" y="2" width="{_f(w)}" height="{bar}" fill="{color}">'
+                   f"<title>{_e(label)}: {_num(value / total * 100, 1, '%')}</title></rect>")
+        if w > 44:
+            out.append(f'<text x="{_f(x + w / 2)}" y="{_f(2 + bar / 2 + 4)}" text-anchor="middle" fill="#ffffff" '
+                       f'font-weight="bold">{_num(value / total * 100, 1, "%")}</text>')
+        x += w
+    out.append("</svg>")
+    return "".join(out)
+
+
+def _stack_figure(parts: list[tuple[str, Any, str]], *, title: str) -> str:
+    svg = stack_svg(parts, title=title)
+    if not svg:
+        return ""
+    legend = "".join(f'<span class="swatch" style="background:{color}"></span>{_e(label)} {_num(v, 1, "%")}'
+                     for label, v, color in parts if _isnum(v))
+    return f"<figure><figcaption><b>{_e(title)}</b></figcaption>{svg}<figcaption>{legend}</figcaption></figure>"
+
+
+def _runs(flags: list[bool]) -> list[tuple[int, int]]:
+    """Tratti consecutivi (inizio, fine compresa) dei valori veri."""
+    out, start = [], None
+    for i, flag in enumerate(list(flags) + [False]):
+        if flag and start is None:
+            start = i
+        elif not flag and start is not None:
+            out.append((start, i - 1))
+            start = None
+    return out
+
+
+# colori delle segnalazioni del consenso (come --sig-* del tema chiaro dell'interfaccia)
+SIGNAL_FILL = {"rama": "#dc2626", "clash": "#b45309", "dope": "#7c3aed", "qmean": "#0369a1", "prosa": "#047857"}
+DISORDER_FILL, PREDICTOR_FILL = "#64748b", "#be185d"
+TRACKS_TITLE = "Segnalazioni per residuo"
+
+
+def tracks_svg(residues: list[dict], cons: dict) -> str:
+    """Tracce del consenso lungo la sequenza (come ConsensusTracks dell'interfaccia): una riga per metodo con i
+    residui segnalati, il numero di metodi per residuo, le regioni problematiche (piene; tratteggiate se attese in
+    una regione disordinata) e, se ci sono, disordine predetto e divergenza dalla predizione. '' senza i dati."""
+    per = cons.get("per_residue") if isinstance(cons.get("per_residue"), dict) else {}
+    flags = per.get("flags") or []
+    n = len(residues)
+    if n < 2 or len(flags) != n:
+        return ""
+    lanes: list[tuple[str, list[bool], str]] = []
+    for s in per.get("signals") or []:
+        key = _choice(s.get("key"), SIGNAL_FILL, "")
+        if key:
+            lanes.append((str(s.get("label") or key), [key in (f or []) for f in flags], SIGNAL_FILL[key]))
+    dis = cons.get("disorder") if isinstance(cons.get("disorder"), dict) else {}
+    if len(dis.get("flags") or []) == n:
+        lanes.append(("Disordine predetto", [bool(f) for f in dis["flags"]], DISORDER_FILL))
+    pred = cons.get("predictor") if isinstance(cons.get("predictor"), dict) else {}
+    if len(pred.get("flags") or []) == n:
+        lanes.append(("Diverge dalla predizione", [bool(f) for f in pred["flags"]], PREDICTOR_FILL))
+    width, pl, pr, pt, lane, gap, count_h = 760, 132, 14, 22, 11, 4, 26
+    pw = width - pl - pr
+    counts = [len(f or []) for f in flags]
+    top_count = max(3, *counts)
+    rows_h = len(lanes) * (lane + gap) + count_h + gap + lane
+    height = pt + rows_h + 30
+
+    def x(i: float) -> float:
+        return pl + i * pw / n
+
+    out = [_svg_open(width, height, TRACKS_TITLE),
+           f'<text x="{pl}" y="14" font-size="11" font-weight="bold" fill="#1f2933">{TRACKS_TITLE}</text>']
+    y0 = pt
+    for label, values, color in lanes:
+        out.append(f'<text x="{pl - 6}" y="{_f(y0 + lane - 2)}" text-anchor="end" fill="#1f2933">{_e(label)}</text>')
+        out.append(f'<rect x="{pl}" y="{_f(y0)}" width="{pw}" height="{lane}" fill="#f7f9fb"/>')
+        for a, b in _runs(values):
+            out.append(f'<rect class="trk" x="{_f(x(a))}" y="{_f(y0)}" width="{_f(max(0.8, x(b + 1) - x(a)))}" '
+                       f'height="{lane}" fill="{color}"/>')
+        y0 += lane + gap
+    out.append(f'<text x="{pl - 6}" y="{_f(y0 + count_h - 4)}" text-anchor="end" fill="#1f2933">Metodi per residuo</text>')
+    out.append(f'<rect x="{pl}" y="{_f(y0)}" width="{pw}" height="{count_h}" fill="#f7f9fb"/>')
+    for i, c in enumerate(counts):
+        if c:
+            h = count_h * min(c, top_count) / top_count
+            tone = "#b3261e" if c >= 2 else "#c77700"
+            out.append(f'<rect x="{_f(x(i))}" y="{_f(y0 + count_h - h)}" width="{_f(max(0.8, x(i + 1) - x(i)))}" '
+                       f'height="{_f(h)}" fill="{tone}"><title>{_e(_residue_label(residues[i]))}: {c} metodi'
+                       "</title></rect>")
+    y0 += count_h + gap
+    out.append(f'<text x="{pl - 6}" y="{_f(y0 + lane - 2)}" text-anchor="end" fill="#1f2933">Regioni problematiche</text>')
+    out.append(f'<rect x="{pl}" y="{_f(y0)}" width="{pw}" height="{lane}" fill="#f7f9fb"/>')
+    for r in cons.get("regions") or []:
+        a, b = r.get("start_index"), r.get("end_index")
+        if not (isinstance(a, int) and isinstance(b, int) and 0 <= a <= b < n):
+            continue
+        style = ('fill="#fff6e6" stroke="#c77700" stroke-dasharray="3 2"' if r.get("expected")
+                 else 'fill="#b3261e"')
+        out.append(f'<rect class="region" x="{_f(x(a))}" y="{_f(y0)}" width="{_f(max(1.0, x(b + 1) - x(a)))}" '
+                   f'height="{lane}" {style}><title>{_e(r.get("text"))}</title></rect>')
+    y0 += lane
+    out.extend(_x_axis(residues, lambda k: x(k + 0.5), pt, y0 + 2))
+    out.append("</svg>")
+    return "".join(out)
+
+
+def _tracks_legend(cons: dict) -> str:
+    per = cons.get("per_residue") if isinstance(cons.get("per_residue"), dict) else {}
+    parts = [f'<span class="swatch" style="background:{SIGNAL_FILL[s["key"]]}"></span>{_e(s.get("label"))}'
+             for s in per.get("signals") or [] if isinstance(s, dict) and s.get("key") in SIGNAL_FILL]
+    if isinstance(cons.get("disorder"), dict):
+        parts.append(f'<span class="swatch" style="background:{DISORDER_FILL}"></span>disordine predetto')
+    if isinstance(cons.get("predictor"), dict):
+        parts.append(f'<span class="swatch" style="background:{PREDICTOR_FILL}"></span>diverge dalla predizione')
+    parts.append('<span class="swatch" style="background:#b3261e"></span>regione problematica (piena) o 2+ metodi')
+    parts.append('<span class="swatch" style="background:#fff6e6;box-shadow:inset 0 0 0 1px #c77700"></span>regione '
+                 "attesa in disordine predetto")
+    return "".join(parts)
 
 
 # ---------------------------------------------------------------------------------------------- blocchi di testo
@@ -815,6 +1032,55 @@ LEGEND.update({
                 "sperimentale di hot spot: ΔΔG di legame ≥ 2 kcal/mol, Bogan & Thorn 1998)."),
 })
 
+# interazioni, conservazione, tasche ed elettrostatica (F7, F7b): fonti e voci della legenda
+REFERENCES.update({
+    "mcdonald": "McDonald I.K., Thornton J.M. (1994) Satisfying hydrogen bonding potential in proteins. J. Mol. Biol. "
+                "238:777–793.",
+    "mcgaughey": "McGaughey G.B., Gagné M., Rappé A.K. (1998) π-Stacking interactions. Alive and well in proteins. J. "
+                 "Biol. Chem. 273:15458–15463.",
+    "gallivan": "Gallivan J.P., Dougherty D.A. (1999) Cation-π interactions in structural biology. Proc. Natl. Acad. "
+                "Sci. USA 96:9459–9464.",
+    "salentin": "Salentin S., Schreiber S., Haupt V.J., Adasme M.F., Schroeder M. (2015) PLIP: fully automated "
+                "protein–ligand interaction profiler. Nucleic Acids Res. 43:W443–W447.",
+    "capra": "Capra J.A., Singh M. (2007) Predicting functionally important residues from sequence conservation. "
+             "Bioinformatics 23:1875–1882.",
+    "henikoff1994": "Henikoff S., Henikoff J.G. (1994) Position-based sequence weights. J. Mol. Biol. 243:574–578.",
+    "fpocket": "Le Guilloux V., Schmidtke P., Tufféry P. (2009) Fpocket: an open source platform for ligand pocket "
+               "detection. BMC Bioinformatics 10:168.",
+    "schmidtke": "Schmidtke P., Barril X. (2010) Understanding and predicting druggability. A high-throughput method for "
+                 "detection of drug binding sites. J. Med. Chem. 53:5858–5867.",
+    "apbs": "Baker N.A., Sept D., Joseph S., Holst M.J., McCammon J.A. (2001) Electrostatics of nanosystems: "
+            "application to microtubules and the ribosome. Proc. Natl. Acad. Sci. USA 98:10037–10041.",
+    "pdb2pqr": "Jurrus E. et al. (2018) Improvements to the APBS biomolecular solvation software suite. Protein Sci. "
+               "27:112–128.",
+    "propka": "Olsson M.H.M., Søndergaard C.R., Rostkowski M., Jensen J.H. (2011) PROPKA3: consistent treatment of "
+              "internal and surface residues in empirical pKa predictions. J. Chem. Theory Comput. 7:525–537.",
+    "sitkoff": "Sitkoff D., Sharp K.A., Honig B. (1994) Accurate calculation of hydration free energies using "
+               "macroscopic solvent models. J. Phys. Chem. 98:1978–1988.",
+})
+LEGEND.update({
+    "interactions": ("Interazioni", "legami idrogeno con D…A ≤ 3,5 Å e D…A–AA ≥ 90°, con l'idrogeno H…A ≤ 2,5 Å e "
+                     "D–H…A ≥ 120° (Baker & Hubbard 1984; McDonald & Thornton 1994), idrogeni del file o posizionati "
+                     "dove la geometria è fissa; ponti salini con un O carico di Asp/Glu entro 4,0 Å da un N di "
+                     "Lys/Arg/His (Barlow & Thornton 1983); π-stacking con centroidi ≤ 5,5 Å e catione-π entro 6,0 Å "
+                     "dal centroide (McGaughey et al. 1998; Gallivan & Dougherty 1999; parametri di PLIP, Salentin et "
+                     "al. 2015). Solo amminoacidi: acque, ligandi e ioni esclusi."),
+    "conservation": ("Conservazione", "punteggio 0–1 per residuo = (1 − entropia di Shannon normalizzata) × (1 − "
+                     "frazione di gap) della colonna dell'allineamento multiplo, con i pesi delle sequenze di Henikoff "
+                     "(Henikoff & Henikoff 1994; Capra & Singh 2007); colonne con troppi gap senza punteggio. 1 = "
+                     "conservato."),
+    "pockets": ("Tasche (fpocket)", "sfere alfa (vuote, tangenti a 4 atomi) con raggio 3,4–6,2 Å raggruppate in tasche "
+                "di almeno 15 sfere (Le Guilloux et al. 2009); druggability 0–1 da regressione logistica sui "
+                "descrittori della tasca (Schmidtke & Barril 2010): da 0,5 probabilmente in grado di legare una piccola "
+                "molecola simile a un farmaco. Indicatore statistico, non una previsione di affinità."),
+    "electrostatics": ("Potenziale elettrostatico", "cariche e raggi di PDB2PQR (Jurrus et al. 2018) con protonazione "
+                       "di PROPKA 3 (Olsson et al. 2011), equazione di Poisson-Boltzmann linearizzata risolta da APBS "
+                       "(Baker et al. 2001); potenziale per residuo = media sugli atomi esposti della mappa interpolata "
+                       "sulla superficie accessibile, in kT/e (1 kT/e ≈ 25,7 mV a 298 K)."),
+    "bfactor": ("B-factor", "fattore di spostamento atomico della struttura sperimentale (Å², colonna B-factor del file): "
+                "valori alti indicano parti mobili o poco definite dalla densità elettronica."),
+})
+
 
 # ---------------------------------------------------------------------------------------------- composizione
 CSS = """
@@ -851,6 +1117,7 @@ th{background:var(--soft);font-size:11px;text-transform:uppercase;letter-spacing
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 tr.best td{background:#e8f3ec;font-weight:600}
 tr.chosen td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+tr.flagged td{background:#fdecea}
 .tag{display:inline-block;font-size:11px;padding:0 6px;border-radius:10px;border:1px solid currentColor;
 margin-left:4px;font-weight:600}
 .tag.ok{color:var(--ok)}.tag.warn{color:var(--warn)}.tag.err{color:var(--err)}.tag.info{color:var(--accent)}
@@ -858,6 +1125,9 @@ margin-left:4px;font-weight:600}
 break-inside:avoid}
 .note.warn{border-color:var(--warn);background:#fff6e6}.note.err{border-color:var(--err);background:#fdecea}
 .note.ok{border-color:var(--ok);background:#e8f3ec}
+details{margin:6px 0 12px}
+details>summary{cursor:pointer;color:var(--accent);font-size:13px;font-weight:600;margin:4px 0}
+table.dense{font-size:12px}table.dense td,table.dense th{padding:3px 6px}
 pre{font:12px/1.35 ui-monospace,"SFMono-Regular",Menlo,Consolas,"Liberation Mono",monospace;margin:4px 0 10px;
 white-space:pre;overflow-x:auto}
 pre.aln b.id{font-weight:400;background:#d7e8f7}
@@ -872,6 +1142,7 @@ ol.refs li{margin:3px 0}
 dl.legend dt{font-size:13px;text-transform:none;letter-spacing:0;color:var(--ink);font-weight:700;margin-top:8px}
 footer{margin-top:32px;padding-top:10px;padding-bottom:28px;border-top:1px solid var(--line);font-size:12px;
 color:var(--muted)}
+@media screen and (max-width:760px){main,header.doc,footer{padding:0 16px}table{display:block;overflow-x:auto}}
 @page{size:A4;margin:14mm 12mm}
 @media print{
 body{font-size:10.5pt}
@@ -885,7 +1156,9 @@ thead{display:table-header-group}
 pre{white-space:pre-wrap;overflow:visible;font-size:8.5pt}
 pre.aln{white-space:pre;font-size:7.5pt}
 a{color:inherit;text-decoration:none}
+details>summary{color:var(--ink);list-style:none}
 }
+@media print{details::details-content{content-visibility:visible}}
 """
 
 
@@ -958,9 +1231,15 @@ def _grade(letter: Any, big: bool = False) -> str:
     return f'<span class="grade {cls}{" big" if big else ""}">{_e(letter or "—")}</span>'
 
 
-def _table(head: list[tuple[str, bool]], rows: list[str]) -> str:
+def _table(head: list[tuple[str, bool]], rows: list[str], dense: bool = False) -> str:
     cols = "".join(('<th class="num">' if num else "<th>") + f"{_e(label)}</th>" for label, num in head)
-    return f"<table><thead><tr>{cols}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+    return (f"<table{' class=\"dense\"' if dense else ''}><thead><tr>{cols}</tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>")
+
+
+def _details(summary: str, *chunks: str) -> str:
+    """Blocco richiudibile (chiuso sullo schermo, aperto in stampa dove il browser lo consente): tabelle lunghe."""
+    return f"<details><summary>{_e(summary)}</summary>{''.join(chunks)}</details>"
 
 
 def _td(value: str, num: bool = False) -> str:
@@ -1237,6 +1516,9 @@ def _options(doc: _Doc, data: dict) -> None:
         choice = "ricerca automatica" if auto else "template fisso"
         if pipe.get("template_mode") == "multi":
             choice = f"più template complementari (al massimo {_e(pipe.get('max_templates') or 3)})"
+        elif not auto and pipe.get("fixed_combination") == "each":
+            choice = ("template fissi, un modello per ogni template (sequenze × template); migliore della sequenza = "
+                      "zDOPE più basso")
         rows += [("Scelta del template", choice),
                  ("Motore di ricerca", _e(pipe.get("engine")) if auto else "—"),
                  ("E-value massimo", _sci(pipe.get("evalue")) if auto else "—"),
@@ -1273,6 +1555,25 @@ def _models(doc: _Doc, data: dict) -> None:
                     ("Voto", False)], rows))
     doc.add('<p class="small muted">Il modello migliore ha il DOPE più basso; il voto c\'è solo per i modelli '
             "analizzati.</p>")
+    figs = []
+    if len(models) >= 2:
+        color = ["ok" if m.get("best") else "info" if m.get("kind") == "loop" else "accent" for m in models]
+        names = [re.sub(r"\.pdb$", "", str(m.get("file") or ""))[-16:] for m in models]
+        for key, label, digits in (("dope", "DOPE per modello (più basso è migliore)", 0),
+                                   ("zdope", "zDOPE per modello (sotto −1 simile a una struttura nativa)", 2),
+                                   ("molpdf", "molpdf per modello (più basso è migliore)", 0),
+                                   ("ga341", "GA341 per modello (sopra 0,7 ripiegamento affidabile)", 2),
+                                   ("grade_score", "Punteggio del voto BioLoom per modello", 1)):
+            values = [m.get(key) for m in models]
+            if sum(1 for v in values if _isnum(v)) >= 2:
+                figs.append(bars_svg(list(zip(names, values, color)), title=label, digits=digits, height=150, dots=True,
+                                     y_range=(0.0, 1.0) if key == "ga341" else (0.0, 100.0) if key == "grade_score"
+                                     else None, threshold=0.7 if key == "ga341" else -1.0 if key == "zdope" else None))
+    if figs:
+        doc.add('<h3 id="punteggi-modelli">Punteggi dei modelli</h3>', *(f"<figure>{f}</figure>" for f in figs if f),
+                f'<p class="small muted"><span class="swatch" style="background:{BAR_COLOR["ok"]}"></span>migliore'
+                f'<span class="swatch" style="background:{BAR_COLOR["info"]}"></span>loop'
+                f'<span class="swatch" style="background:{BAR_COLOR["accent"]}"></span>altri modelli</p>')
     doc.explain("dope", "zdope", "molpdf", "grade")
     doc.cite("modeller", "dope")
     if any(_isnum(m.get("ga341")) for m in models):
@@ -1292,7 +1593,7 @@ def _grade_block(doc: _Doc, quality: dict) -> None:
     doc.explain("grade")
 
 
-def _consensus_block(doc: _Doc, cons: Optional[dict]) -> None:
+def _consensus_block(doc: _Doc, cons: Optional[dict], residues: Optional[list] = None) -> None:
     if not cons:
         return
     doc.add('<h3 id="consenso">Consenso tra i metodi</h3>')
@@ -1341,6 +1642,9 @@ def _consensus_block(doc: _Doc, cons: Optional[dict]) -> None:
         doc.add(_table([("Segnale per residuo", False), ("Regola", False), ("Residui segnalati", True)],
                        ["<tr>" + _td(f"<b>{_e(s.get('label'))}</b>") + _td(_e(s.get("rule")))
                         + _td(_e(s.get("flagged")), True) + "</tr>" for s in signals]))
+    tracks = tracks_svg([r for r in residues if isinstance(r, dict)] if isinstance(residues, list) else [], cons)
+    if tracks:
+        doc.add(f'<figure>{tracks}<figcaption>{_tracks_legend(cons)}</figcaption></figure>')
     for w in cons.get("warnings") or []:
         doc.add(f'<p class="small muted">{_e(w)}</p>')
     doc.explain("consensus", "regions")
@@ -1404,12 +1708,35 @@ def _profiles_block(doc: _Doc, quality: dict, cons: Optional[dict]) -> None:
                                 threshold_label="0,6", flag_above=False, y_range=(0.0, 1.0)))
         doc.explain("qmean")
         doc.cite("qmean")
+    prosa_profile = [p for p in ((quality.get("prosa") or {}).get("profile")) or [] if isinstance(p, dict)]
     if aligned and values.get("prosa"):
         figs.append(profile_svg(residues, values["prosa"], title="Energia ProSA (finestra di 10 residui)",
                                 threshold=0.0, threshold_label="0"))
         doc.explain("prosa")
         doc.cite("prosa", "prosa_b")
-    if ((quality.get("structure") or {}).get("bfactor_kind")) == "plddt":
+    elif sum(1 for p in prosa_profile if _isnum(p.get("energy_w10"))) >= 2:
+        # profilo di ProSA non attribuibile ai residui del rapporto: per indice sequenziale, come nell'interfaccia
+        same = len(prosa_profile) == len(residues)
+        rows = residues if same else [{"chain": "", "resnum": str(p.get("index")), "resname": ""} for p in prosa_profile]
+        figs.append(profile_svg(rows, [p.get("energy_w10") for p in prosa_profile],
+                                title="Energia ProSA (finestra di 10 residui)", threshold=0.0, threshold_label="0"))
+        doc.explain("prosa")
+        doc.cite("prosa", "prosa_b")
+    if any(_isnum(r.get("rsa")) for r in residues):
+        figs.append(profile_svg(residues, [100 * float(r["rsa"]) if _isnum(r.get("rsa")) else None for r in residues],
+                                title="Superficie accessibile relativa (RSA, %)", threshold=20.0,
+                                threshold_label="20% (sotto: sepolto)", flag_above=False, mark=False,
+                                y_range=(0.0, max(100.0, max(100 * float(r["rsa"]) for r in residues
+                                                             if _isnum(r.get("rsa"))))), digits=0))
+        doc.explain("sasa")
+        doc.cite("sasa", "tien")
+    kind = (quality.get("structure") or {}).get("bfactor_kind")
+    if kind != "plddt" and sum(1 for r in residues if _isnum(r.get("bfactor"))) >= 2 and \
+            len({r.get("bfactor") for r in residues if _isnum(r.get("bfactor"))}) > 1:
+        figs.append(profile_svg(residues, [r.get("bfactor") for r in residues], title="B-factor per residuo (Å²)",
+                                digits=1))
+        doc.explain("bfactor")
+    if kind == "plddt":
         esm = (quality.get("structure") or {}).get("predictor") == "esmfold"
         figs.append(profile_svg(residues, [r.get("bfactor") for r in residues],
                                 title=f"Confidenza pLDDT ({'ESMFold' if esm else 'AlphaFold'})",
@@ -1443,6 +1770,15 @@ def _secondary_block(doc: _Doc, quality: dict) -> None:
     doc.add('<h3 id="struttura-secondaria">Struttura secondaria</h3>',
             f"<p>{_e(ss.get('method'))}: elica {_num(ss.get('helix_pct'), 1, '%')}, filamento β "
             f"{_num(ss.get('strand_pct'), 1, '%')}, coil {_num(ss.get('coil_pct'), 1, '%')}.</p>")
+    doc.add(_stack_figure([(SS_LABEL["H"], ss.get("helix_pct"), SS_FILL["H"]),
+                           (SS_LABEL["E"], ss.get("strand_pct"), SS_FILL["E"]),
+                           (SS_LABEL["C"], ss.get("coil_pct"), "#7b8794")],
+                          title="Composizione della struttura secondaria (% dei residui)"))
+    detail = ss.get("detail") if isinstance(ss.get("detail"), dict) else {}
+    if detail:
+        doc.add('<p class="small muted">Stati DSSP: '
+                + ", ".join(f"{_e(DSSP_STATE.get(k, k))} {_e(v)}" for k, v in sorted(detail.items(), key=lambda kv: str(kv[0]))
+                            if _isnum(v)) + ".</p>")
     strip = ss_strip_svg(residues)
     if strip:
         doc.add(f"<figure>{strip}<figcaption>"
@@ -1466,17 +1802,26 @@ def _clash_block(doc: _Doc, quality: dict, limit: int = 20) -> None:
             f"{_e(clash.get('atoms'))} atomi pesanti.</p>")
     if listed:
         rows = ["<tr>" + _td(_e(c.get("atom1"))) + _td(_e(c.get("atom2"))) + _td(_num(c.get("distance"), 2), True)
-                + _td(_num(c.get("overlap"), 2), True) + "</tr>" for c in listed[:limit]]
-        doc.add(_table([("Atomo 1", False), ("Atomo 2", False), ("Distanza (Å)", True), ("Sovrapposizione (Å)", True)],
-                       rows))
+                + _td(_num(c.get("overlap"), 2), True) + "</tr>" for c in listed]
+        head = [("Atomo 1", False), ("Atomo 2", False), ("Distanza (Å)", True), ("Sovrapposizione (Å)", True)]
+        doc.add(_table(head, rows[:limit]))
+        if len(rows) > limit:
+            doc.add(_details(f"Altri {len(rows) - limit} contatti", _table(head, rows[limit:], dense=True)))
         total = clash.get("count") if _isnum(clash.get("count")) else len(listed)
-        if total > min(limit, len(listed)):
-            doc.add(f'<p class="small muted">Mostrati i {min(limit, len(listed))} contatti con la sovrapposizione '
+        if total > len(listed):
+            doc.add(f'<p class="small muted">Il rapporto elenca i {len(listed)} contatti con la sovrapposizione '
                     f"maggiore su {_e(total)}.</p>")
     else:
         doc.add(_note("Nessun contatto sterico grave (sovrapposizione oltre 0,4 Å).", "ok"))
     doc.explain("clash")
     doc.cite("probe")
+
+
+PROCHECK_FIELDS = (("residues", "Residui analizzati", 0, ""), ("bad_contacts", "Contatti cattivi", 0, ""),
+                   ("max_deviation", "Deviazione massima", 1, ""), ("bond_len_angle", "Lunghezze e angoli di legame", 1, ""),
+                   ("mc_bond_lengths_ok", "Lunghezze di legame della catena principale nella norma", 1, "%"),
+                   ("mc_bond_angles_ok", "Angoli di legame della catena principale nella norma", 1, "%"),
+                   ("planar_groups_ok", "Gruppi planari nella norma", 1, "%"))
 
 
 def _external_block(doc: _Doc, quality: dict) -> None:
@@ -1491,6 +1836,15 @@ def _external_block(doc: _Doc, quality: dict) -> None:
                 f"{_num(rama.get('allowed'), 1, '%')}, generose {_num(rama.get('generous'), 1, '%')}, non consentite "
                 f"{_num(rama.get('disallowed'), 1, '%')}; G-factor globale {_num(g.get('overall'), 2)} (diedri "
                 f"{_num(g.get('dihedrals'), 2)}, covalenti {_num(g.get('covalent'), 2)}).</p>")
+        doc.add(_stack_figure([("core", rama.get("core"), "#1e7b4a"), ("consentite", rama.get("allowed"), "#2f7f9e"),
+                               ("generose", rama.get("generous"), "#c77700"),
+                               ("non consentite", rama.get("disallowed"), "#b3261e")],
+                              title="Ramachandran secondo PROCHECK (% dei residui non Gly e non Pro)"))
+        rows = [(label, _num(pc.get(key), digits, unit)) for key, label, digits, unit in PROCHECK_FIELDS
+                if _isnum(pc.get(key))]
+        if rows:
+            doc.add(_table([("Parametro di PROCHECK", False), ("Valore", True)],
+                           ["<tr>" + _td(_e(k)) + _td(v, True) + "</tr>" for k, v in rows], dense=True))
         doc.explain("procheck")
         doc.cite("procheck")
     if isinstance(pr, dict):
@@ -1524,7 +1878,7 @@ def _quality(doc: _Doc, data: dict) -> None:
         doc.explain("plddt")
         doc.cite("esmfold" if esm else "alphafold", "afdb", "lddt")
     _grade_block(doc, quality)
-    _consensus_block(doc, data.get("consensus"))
+    _consensus_block(doc, data.get("consensus"), quality.get("residues"))
     _rama_block(doc, quality)
     _profiles_block(doc, quality, data.get("consensus"))
     _secondary_block(doc, quality)
@@ -1624,18 +1978,166 @@ def _ligands(doc: _Doc, data: dict) -> None:
 PLAUSIBILITY_TONE ={"bassa": "err", "incerta": "warn", "compatibile": "ok"}
 
 
+INTERACTION_KIND = {"backbone": "scheletro", "mixed": "misto", "sidechain": "catene laterali"}
+AROMATIC_KIND = {"pi_parallel": "π-stacking parallelo", "pi_tshaped": "π-stacking a T", "cation_pi": "catione-π"}
+
+
+def _end(end: Any) -> str:
+    """Estremità di un'interazione: residuo e atomo (o anello)."""
+    e = _dict(end)
+    return _e(f"{_residue_label(e)} {e.get('atom') or ''}".strip())
+
+
+def _inter_chain(row: dict) -> str:
+    return ' <span class="tag info">fra catene</span>' if row.get("inter_chain") else ""
+
+
+def _interaction_tables(doc: _Doc, info: dict) -> None:
+    """Legami idrogeno, ponti salini e interazioni aromatiche, ciascuno in un blocco richiudibile."""
+    hb = [h for h in info.get("hbonds") or [] if isinstance(h, dict)]
+    if hb:
+        rows = ["<tr>" + _td(_end(h.get("a"))) + _td(_end(h.get("b"))) + _td(_num(h.get("distance"), 2), True)
+                + _td(_num(h.get("ha_distance"), 2), True) + _td(_num(h.get("angle"), 0, "°"), True)
+                + _td(_e(_lookup(INTERACTION_KIND, h.get("kind"), h.get("kind") or "—")) + _inter_chain(h)) + "</tr>"
+                for h in hb]
+        doc.add(_details(f"Legami idrogeno ({len(hb)})",
+                         _table([("Donatore", False), ("Accettore", False), ("D…A (Å)", True), ("H…A (Å)", True),
+                                 ("D–H…A", True), ("Tipo", False)], rows, dense=True)))
+    sb = [s for s in info.get("salt_bridges") or [] if isinstance(s, dict)]
+    if sb:
+        rows = ["<tr>" + _td(_end(s.get("a"))) + _td(_end(s.get("b"))) + _td(_num(s.get("distance"), 2), True)
+                + _td(_e(s.get("pairs")), True)
+                + _td(("istidina (carica se protonata)" if s.get("his") else "—") + _inter_chain(s)) + "</tr>"
+                for s in sb]
+        doc.add(_details(f"Ponti salini ({len(sb)})",
+                         _table([("Catione", False), ("Anione", False), ("Distanza (Å)", True),
+                                 ("Coppie entro 4 Å", True), ("Note", False)], rows, dense=True)))
+    ar = [a for a in info.get("aromatic") or [] if isinstance(a, dict)]
+    if ar:
+        rows = ["<tr>" + _td(_e(_lookup(AROMATIC_KIND, a.get("type"), a.get("type") or "—"))) + _td(_end(a.get("a")))
+                + _td(_end(a.get("b"))) + _td(_num(a.get("distance"), 2), True) + _td(_num(a.get("angle"), 0, "°"), True)
+                + _td(_num(a.get("offset"), 2), True) + _td(_inter_chain(a) or "—") + "</tr>" for a in ar]
+        doc.add(_details(f"Interazioni aromatiche ({len(ar)})",
+                         _table([("Tipo", False), ("Residuo 1 (catione o anello)", False), ("Anello", False),
+                                 ("Distanza (Å)", True), ("Angolo", True), ("Spostamento (Å)", True),
+                                 ("Catene", False)], rows, dense=True)))
+
+
+def _interfaces_block(doc: _Doc, pairs: list[dict]) -> None:
+    rows = []
+    for p in pairs:
+        chains = [str(c) for c in p.get("chains") or []][:2]
+        counts = p.get("counts") if isinstance(p.get("counts"), dict) else {}
+        inter = p.get("interactions") if isinstance(p.get("interactions"), dict) else {}
+        level = (p.get("plausibility") or {}).get("level")
+        aromatic = [inter.get(k) for k in ("pi_stacking", "cation_pi") if _isnum(inter.get(k))]
+        rows.append("<tr>" + _td(_e(" – ".join(chains))) + _td(_num(p.get("area"), 0), True)
+                    + _td(_e(" / ".join(str(counts.get(c, "—")) for c in chains)), True)
+                    + _td(_e(inter.get("hbonds", "—")), True) + _td(_e(inter.get("salt_bridges", "—")), True)
+                    + _td(_e(inter.get("disulfides", "—")), True)
+                    + _td(_e(sum(aromatic)) if aromatic else "—", True)
+                    + _td(_num(100 * p["apolar_fraction"], 0, "%") if _isnum(p.get("apolar_fraction")) else "—",
+                          True)
+                    + _td(f'<span class="tag {_lookup(PLAUSIBILITY_TONE, level, "")}">{_e(level or "—")}</span>')
+                    + "</tr>")
+    doc.add('<h3 id="interfacce">Interfacce fra catene</h3>',
+            _table([("Catene", False), ("Area (Å²)", True), ("Residui", True), ("Legami H", True),
+                    ("Ponti salini", True), ("Disolfuri", True), ("Aromatiche", True), ("Area apolare", True),
+                    ("Plausibilità", False)], rows))
+    for p in pairs:
+        residues = p.get("residues") if isinstance(p.get("residues"), dict) else {}
+        chains = [str(c) for c in p.get("chains") or []][:2]
+        parts = []
+        for chain in chains:
+            names = ", ".join(_residue_label(r) for r in residues.get(chain) or [] if isinstance(r, dict))
+            parts.append(f"<b>{_e(chain)}</b>: {_e(names) or '—'}")
+        text = (p.get("plausibility") or {}).get("text")
+        comp = _dict(_dict(p.get("composition")).get("percent"))
+        composition = ", ".join(f"{k} {_num(v, 0, '%')}" for k, v in comp.items() if _isnum(v))
+        doc.add(f'<p class="small">Residui d\'interfaccia (ΔSASA &gt; 1 Å²) — {"; ".join(parts)}.'
+                + (f" Plausibilità: {_e(text)}." if text else "")
+                + (f" Composizione: {_e(composition)}." if composition else "") + "</p>")
+        items = []
+        for k, chain in enumerate(chains):
+            for r in residues.get(chain) or []:
+                if isinstance(r, dict):
+                    items.append((f"{chain}{r.get('resnum')}", r.get("delta"), "accent" if k == 0 else "chain2"))
+        fig = bars_svg(items, title=f"ΔSASA dei residui d'interfaccia · catene {' – '.join(chains)} (Å²)", digits=1,
+                       height=170) if items else ""
+        if fig:
+            legend = "".join(f'<span class="swatch" style="background:{BAR_COLOR["accent" if k == 0 else "chain2"]}">'
+                             f"</span>catena {_e(c)}" for k, c in enumerate(chains))
+            doc.add(f"<figure>{fig}<figcaption>{legend}</figcaption></figure>")
+    limits = next(((p.get("plausibility") or {}).get("limits") for p in pairs if p.get("plausibility")), None)
+    if limits:
+        doc.add(_note(_e(limits), "warn"))
+    doc.explain("interface")
+    doc.cite("sasa", "krissinel", "janin2008", "loconte", "baker", "barlow")
+
+
+def _conservation_block(doc: _Doc, cons: dict) -> None:
+    residues = [r for r in cons.get("residues") or [] if isinstance(r, dict)]
+    doc.add('<h3 id="conservazione">Conservazione</h3>',
+            f"<p>{_e(cons.get('sequences'))} sequenze, {_e(cons.get('columns'))} colonne · {_e(cons.get('source'))}. "
+            f'<span class="small muted">{_e(cons.get("method"))}</span></p>')
+    lines = [f"Catena <b>{_e(c.get('chain'))}</b>: riga {_e(c.get('row'))} (identità {_num(c.get('identity'), 1, '%')}, "
+             f"copertura {_num(c.get('coverage'), 1, '%')}) · {_e(c.get('scored'))} di {_e(c.get('residues'))} residui "
+             f"con punteggio, media {_num(c.get('mean'), 2)}" for c in cons.get("chains") or [] if isinstance(c, dict)]
+    lines += [f"Catena <b>{_e(u.get('chain'))}</b> senza conservazione: la riga più simile ({_e(u.get('best_row'))}) "
+              f"ha identità {_num(u.get('identity'), 1, '%')} e copertura {_num(u.get('coverage'), 1, '%')}"
+              for u in cons.get("unmatched") or [] if isinstance(u, dict)]
+    if lines:
+        doc.add("<ul>", *(f'<li class="small">{line}.</li>' for line in lines), "</ul>")
+    for w in cons.get("warnings") or []:
+        doc.add(_note(_e(w), "warn"))
+    rows = [{**r, "resname": r.get("aa")} for r in residues]
+    fig = profile_svg(rows, [r.get("score") for r in residues], title="Conservazione per residuo (0–1)",
+                      y_range=(0.0, 1.0), guides=((0.5, "0,5"),))
+    if fig:
+        doc.add(f"<figure>{fig}<figcaption>Linea interrotta: residui senza punteggio (gap oltre la soglia o non "
+                "allineati alla riga).</figcaption></figure>")
+    doc.explain("conservation")
+    doc.cite("capra", "henikoff1994")
+
+
 def _structural(doc: _Doc, data: dict) -> None:
-    """Ponti disolfuro e interfacce fra catene dall'analisi strutturale (F7) della stessa struttura, se ce ne sono."""
+    """Analisi strutturale (F7) della stessa struttura: interazioni (legami idrogeno, ponti salini, disolfuri,
+    aromatiche), interfacce fra catene con la superficie sepolta per residuo e conservazione."""
     info = data.get("analysis")
     if not isinstance(info, dict):
         return
     ss = [d for d in info.get("disulfides") or [] if isinstance(d, dict)]
     pairs = [p for p in info.get("interfaces") or [] if isinstance(p, dict)]
-    if not ss and not pairs:
+    s = _dict(info.get("summary"))
+    if not (s or ss or pairs or isinstance(info.get("conservation"), dict)
+            or any(info.get(k) for k in ("hbonds", "salt_bridges", "aromatic"))):
         return
     doc.section("analisi", "Analisi strutturale")
     doc.add(f'<p class="small muted">Dall\'analisi strutturale {_e(info.get("job_id"))} del '
             f"{_date(info.get('finished_at'))} sulla stessa struttura.</p>")
+    for w in info.get("warnings") or []:
+        doc.add(_note(_e(w), "warn"))
+    if s:
+        inter = _dict(s.get("inter_chain"))
+        multi = _isnum(s.get("chains")) and s["chains"] > 1
+
+        def across(key: str) -> str:
+            return f" · {_e(inter.get(key))} fra catene" if multi and inter.get(key) is not None else ""
+
+        hydrogens = "del file" if info.get("hydrogens") == "explicit" else "posizionati"
+        aromatic = sum(v for v in (s.get("pi_stacking"), s.get("cation_pi")) if _isnum(v))
+        doc.add('<h3 id="interazioni">Interazioni</h3>', '<div class="cards">',
+                _card("Legami idrogeno", _e(s.get("hbonds")),
+                      f"{_e(s.get('hbonds_backbone'))} scheletro, {_e(s.get('hbonds_mixed'))} misti, "
+                      f"{_e(s.get('hbonds_sidechain'))} catene laterali · idrogeni {hydrogens}{across('hbonds')}"),
+                _card("Ponti salini", _e(s.get("salt_bridges")), "N–O ≤ 4,0 Å" + across("salt_bridges")),
+                _card("Ponti disolfuro", _e(s.get("disulfides")), "SG–SG 2,0 ± 0,2 Å" + across("disulfides")),
+                _card("Aromatiche", _e(aromatic),
+                      f"{_e(s.get('pi_stacking'))} π-stacking, {_e(s.get('cation_pi'))} catione-π{across('aromatic')}"),
+                "</div>")
+        doc.explain("interactions")
+        doc.cite("baker", "mcdonald", "barlow", "mcgaughey", "gallivan", "salentin")
+    _interaction_tables(doc, info)
     if ss:
         rows = ["<tr>" + _td(_e(_residue_label(d.get("a") or {}))) + _td(_e(_residue_label(d.get("b") or {})))
                 + _td(_num(d.get("distance"), 2), True) + _td(_num(d.get("ca_distance"), 2), True)
@@ -1646,36 +2148,11 @@ def _structural(doc: _Doc, data: dict) -> None:
         doc.explain("disulfide")
         doc.cite("richardson")
     if pairs:
-        rows = []
-        for p in pairs:
-            chains = [str(c) for c in p.get("chains") or []][:2]
-            counts = p.get("counts") if isinstance(p.get("counts"), dict) else {}
-            inter = p.get("interactions") if isinstance(p.get("interactions"), dict) else {}
-            level = (p.get("plausibility") or {}).get("level")
-            rows.append("<tr>" + _td(_e(" – ".join(chains))) + _td(_num(p.get("area"), 0), True)
-                        + _td(_e(" / ".join(str(counts.get(c, "—")) for c in chains)), True)
-                        + _td(_e(inter.get("hbonds", "—")), True) + _td(_e(inter.get("salt_bridges", "—")), True)
-                        + _td(_num(100 * p["apolar_fraction"], 0, "%") if _isnum(p.get("apolar_fraction")) else "—",
-                              True)
-                        + _td(f'<span class="tag {_lookup(PLAUSIBILITY_TONE, level, "")}">{_e(level or "—")}</span>')
-                        + "</tr>")
-        doc.add('<h3 id="interfacce">Interfacce fra catene</h3>',
-                _table([("Catene", False), ("Area (Å²)", True), ("Residui", True), ("Legami H", True),
-                        ("Ponti salini", True), ("Area apolare", True), ("Plausibilità", False)], rows))
-        for p in pairs:
-            residues = p.get("residues") if isinstance(p.get("residues"), dict) else {}
-            parts = []
-            for chain in [str(c) for c in p.get("chains") or []][:2]:
-                names = ", ".join(_residue_label(r) for r in residues.get(chain) or [] if isinstance(r, dict))
-                parts.append(f"<b>{_e(chain)}</b>: {_e(names) or '—'}")
-            text = (p.get("plausibility") or {}).get("text")
-            doc.add(f'<p class="small">Residui d\'interfaccia (ΔSASA &gt; 1 Å²) — {"; ".join(parts)}.'
-                    + (f" Plausibilità: {_e(text)}." if text else "") + "</p>")
-        limits = next(((p.get("plausibility") or {}).get("limits") for p in pairs if p.get("plausibility")), None)
-        if limits:
-            doc.add(_note(_e(limits), "warn"))
-        doc.explain("interface")
-        doc.cite("sasa", "krissinel", "janin2008", "loconte", "baker", "barlow")
+        _interfaces_block(doc, pairs)
+    if info.get("interface_note"):
+        doc.add(f'<p class="small muted">{_e(info["interface_note"])}</p>')
+    if isinstance(info.get("conservation"), dict):
+        _conservation_block(doc, info["conservation"])
     doc.end()
 
 
@@ -1860,6 +2337,7 @@ def _refinement(doc: _Doc, data: dict) -> None:
 
 # ---------------------------------------------------------------------------------------------- mutagenesi (F9.2)
 MUTATION_TONE = {"destabilizing": "err", "uncertain": "warn", "neutral": "ok"}
+SCAN_COLOR = MUTATION_TONE  # chiavi di BAR_COLOR con gli stessi nomi dei toni
 SIGNAL_LEVEL = {"strong": ("forte", "err"), "moderate": ("moderato", "warn"), "gain": ("possibile guadagno", "info"),
                 "info": ("informativo", "info")}
 
@@ -2035,6 +2513,21 @@ def _scan(doc: _Doc, data: dict) -> None:
     doc.add(_table([("Mutazione", False), ("Effetto", False), ("ΔDOPE", True), ("Residui eq.", True),
                     ("ΔDOPE fra catene", True), ("ΔΔE kJ/mol", True), ("RSA", True), ("DSSP", False),
                     ("Interfaccia", False), ("Motivo principale", False)], rows))
+    scanned = [_dict(r) for r in scan.get("rows") or []]
+    color = [_lookup(SCAN_COLOR, _dict(r.get("assessment")).get("code"), "muted") for r in scanned]
+    names = [str(r.get("label") or "") for r in scanned]
+    figs = [bars_svg(list(zip(names, [_dict(r.get(part)).get(key) for r in scanned], color)), title=title, digits=digits,
+                     height=170, threshold=threshold, threshold_label=label)
+            for part, key, title, digits, threshold, label in (
+                ("dope", "delta_eq", "ΔDOPE per residuo scandito (residui equivalenti)", 2, 1.0, "1 (moderato)"),
+                ("dope", "interchain_delta_eq", "ΔDOPE fra le catene (residui equivalenti)", 2, 0.5, "0,5"),
+                ("energy", "ddE", "ΔΔE con OpenMM (kJ/mol)", 0, 50.0, "50 (moderato)"))]
+    if any(figs):
+        doc.add(*(f"<figure>{f}</figure>" for f in figs if f),
+                '<p class="small muted">' + "".join(f'<span class="swatch" style="background:{BAR_COLOR[c]}"></span>{t}'
+                                                    for c, t in (("err", "probabilmente destabilizzante"),
+                                                                 ("warn", "incerta"), ("ok", "probabilmente neutra")))
+                + "</p>")
     skipped = [x for x in scan.get("skipped") or [] if isinstance(x, dict)]
     if skipped:
         doc.add("<h3>Residui esclusi</h3>", "<ul>",
@@ -2083,6 +2576,20 @@ def _prediction(doc: _Doc, data: dict) -> None:
             _card("GDT-TS", _num(comp.get("gdt_ts"), 1), f"RMSD {_num(comp.get('rmsd'), 2, ' Å')}"),
             _card("pLDDT della predizione", _num(pl.get("mean"), 1),
                   f"{_e(plaus.get('confident_residues'))} su {_e(plaus.get('pairs'))} residui ≥ 70"), "</div>")
+    pairs = [r for r in plaus.get("residues") or [] if isinstance(r, dict)]
+    if pairs:
+        rows = [{**r, "resname": ""} for r in pairs]
+        shade = [(a, b, "residui divergenti dove la predizione è sicura")
+                 for a, b in _runs([bool(r.get("divergent") and r.get("confident")) for r in pairs])]
+        figs = [profile_svg(rows, [r.get("lddt") for r in pairs], title="lDDT-Cα del modello rispetto alla predizione",
+                            threshold=0.5, threshold_label="0,5 (sotto: diverge)", flag_above=False, y_range=(0.0, 1.0),
+                            shade=shade),
+                profile_svg(rows, [r.get("plddt") for r in pairs], title=f"pLDDT della predizione ({label})",
+                            y_range=(0.0, 100.0), digits=0, guides=((90.0, "90"), (70.0, "70"), (50.0, "50")))]
+        doc.add(*(f"<figure>{f}</figure>" for f in figs if f))
+        if any(figs):
+            doc.add('<p class="small muted">Sfondo rosa: residui che divergono dove la predizione è sicura (pLDDT ≥ 70); '
+                    "punti rossi: lDDT sotto 0,5.</p>")
     regions = [r for r in plaus.get("regions") or [] if isinstance(r, dict)]
     if regions:
         rows = ["<tr>" + _td(f"{_e(r.get('start'))}–{_e(r.get('end'))} ({_e(r.get('chain'))})")
@@ -2103,6 +2610,201 @@ def _prediction(doc: _Doc, data: dict) -> None:
         doc.add(_note(_e(plaus["limits"]), "warn"))
     doc.explain("prediction", "plddt")
     doc.cite("esmfold" if info.get("predictor") == "esmfold" else "alphafold", "afdb", "lddt", "tmscore", "xu_zhang")
+    doc.end()
+
+
+def _pocket_residues(p: dict) -> str:
+    return ", ".join(_residue_label(r) for r in p.get("residues") or [] if isinstance(r, dict))
+
+
+def _pockets(doc: _Doc, data: dict) -> None:
+    """Tasche di fpocket (F7b) della stessa struttura: riepilogo, druggability e volume per tasca, tabella con i
+    descrittori e i residui che rivestono ogni tasca."""
+    info = _dict(data.get("pockets"))
+    if not info:
+        return
+    pockets = [p for p in info.get("pockets") or [] if isinstance(p, dict)]
+    s = _dict(info.get("summary"))
+    best = _dict(s.get("best"))
+    threshold = s.get("threshold") if _isnum(s.get("threshold")) else 0.5
+    doc.section("tasche", "Tasche (fpocket)")
+    doc.add(f'<p class="small muted">Dal calcolo delle tasche {_e(info.get("job_id"))} del '
+            f"{_date(info.get('finished_at'))} sulla stessa struttura"
+            + (f" ({_e(_dict(info.get('params')).get('program'))})" if _dict(info.get("params")).get("program") else "")
+            + ".</p>")
+    for w in info.get("warnings") or []:
+        doc.add(_note(_e(w), "warn"))
+    doc.add('<div class="cards">', _card("Tasche", _e(s.get("count", len(pockets)))),
+            _card("Probabilmente druggabili", _e(s.get("druggable")), f"druggability ≥ {_num(threshold, 1)}"),
+            _card("Druggability migliore", _num(best.get("druggability"), 3),
+                  f"tasca {_e(best.get('id'))} · {_e(best.get('residues'))} residui" if best else ""),
+            _card("Volume della migliore", _num(best.get("volume"), 0, " Å³") if best else "—"), "</div>")
+    if not pockets:
+        doc.add('<p class="small muted">fpocket non ha trovato tasche.</p>')
+    else:
+        names = [f"T{p.get('id')}" for p in pockets]
+        color = ["ok" if p.get("druggable") else "muted" for p in pockets]
+        for key, title, digits, extra in (
+                ("druggability", "Druggability per tasca (≥ 0,5 probabilmente druggabile)", 3,
+                 {"threshold": threshold, "threshold_label": _num(threshold, 1), "y_range": (0.0, 1.0)}),
+                ("volume", "Volume per tasca (Å³)", 0, {}),
+                ("score", "Punteggio di fpocket per tasca", 3, {})):
+            fig = bars_svg(list(zip(names, [p.get(key) for p in pockets], color)), title=title, digits=digits,
+                           height=160, **extra)
+            if fig:
+                doc.add(f"<figure>{fig}</figure>")
+        doc.add(f'<p class="small muted"><span class="swatch" style="background:{BAR_COLOR["ok"]}"></span>'
+                f'probabilmente druggabile<span class="swatch" style="background:{BAR_COLOR["muted"]}"></span>altre '
+                "tasche; in ordine di druggability.</p>")
+        rows = []
+        for p in pockets:
+            tag = ' <span class="tag ok">druggabile</span>' if p.get("druggable") else ""
+            rows.append("<tr>" + _td(_e(p.get("rank")), True) + _td(f"Tasca {_e(p.get('id'))}{tag}")
+                        + _td(_num(p.get("druggability"), 3), True) + _td(_num(p.get("score"), 3), True)
+                        + _td(_num(p.get("volume"), 0), True) + _td(_e(p.get("alpha_spheres")), True)
+                        + _td(_num(p.get("hydrophobicity_score"), 1), True) + _td(_e(p.get("polarity_score")), True)
+                        + _td(_e(p.get("charge_score")), True) + _td(_num(p.get("sasa_apolar"), 0), True)
+                        + _td(_num(p.get("sasa_polar"), 0), True)
+                        + _td(f'{len(p.get("residues") or [])}<div class="small muted">{_e(_pocket_residues(p))}</div>')
+                        + "</tr>")
+        doc.add(_table([("#", True), ("Tasca", False), ("Druggability", True), ("Punteggio", True), ("Volume (Å³)", True),
+                        ("Sfere alfa", True), ("Idrofobicità", True), ("Polarità", True), ("Carica", True),
+                        ("SASA apolare (Å²)", True), ("SASA polare (Å²)", True), ("Residui", False)], rows,
+                       dense=True))
+    doc.explain("pockets")
+    doc.cite("fpocket", "schmidtke")
+    doc.end()
+
+
+ES_PARAMS = (("pdie", "Dielettrico della proteina", ""), ("sdie", "Dielettrico del solvente", ""),
+             ("ionic_strength", "Forza ionica", " M"), ("ion_radius", "Raggio degli ioni", " Å"),
+             ("temperature", "Temperatura", " K"), ("srad", "Raggio della sonda", " Å"))
+
+
+def _electrostatics(doc: _Doc, data: dict) -> None:
+    """Potenziale elettrostatico di superficie (F7b, PDB2PQR + APBS): riepilogo, profilo per residuo, residui
+    marcati, cariche, parametri del calcolo e la tabella completa."""
+    info = _dict(data.get("electrostatics"))
+    if not info:
+        return
+    s, charges, scale = _dict(info.get("summary")), _dict(info.get("charges")), _dict(info.get("scale"))
+    residues = [r for r in info.get("residues") or [] if isinstance(r, dict)]
+    threshold = s.get("threshold") if _isnum(s.get("threshold")) else None
+    mv = scale.get("mv_per_unit") if _isnum(scale.get("mv_per_unit")) else None
+    doc.section("elettrostatica", "Potenziale elettrostatico (APBS)")
+    doc.add(f'<p class="small muted">Dal calcolo {_e(info.get("job_id"))} del {_date(info.get("finished_at"))} sulla '
+            f"stessa struttura: campo di forza {_e(info.get('forcefield'))}, pH {_num(info.get('ph'), 1)}.</p>")
+    for w in info.get("warnings") or []:
+        doc.add(_note(_e(w), "warn"))
+    doc.add('<div class="cards">',
+            _card("Carica netta", _signed(info.get("net_charge"), 2),
+                  f"{_e(charges.get('positive'))} residui positivi, {_e(charges.get('negative'))} negativi"),
+            _card("Potenziale di superficie", f"{_num(s.get('min'), 1)} … {_num(s.get('max'), 1)}",
+                  f"kT/e · media {_num(s.get('mean'), 2)} · {_e(s.get('residues'))} residui esposti"),
+            _card("Residui marcati", f"{_e(s.get('positive'))} + / {_e(s.get('negative'))} −",
+                  f"|potenziale| &gt; {_num(threshold, 0)} kT/e"), "</div>")
+    if residues:
+        bound = max([abs(float(v)) for v in (s.get("min"), s.get("max"), threshold) if _isnum(v)] or [1.0])
+        guides = [(0.0, "0")] + ([(float(threshold), f"+{_num(threshold, 0)}"), (-float(threshold), _num(-threshold, 0))]
+                                 if threshold else [])
+        fig = profile_svg(residues, [r.get("potential") for r in residues],
+                          title="Potenziale di superficie per residuo (kT/e)", y_range=(-bound * 1.05, bound * 1.05),
+                          guides=guides, digits=1)
+        if fig:
+            doc.add(f"<figure>{fig}<figcaption>Media sugli atomi esposti; la linea si interrompe sui residui sepolti. "
+                    f"Linee grigie: ±{_num(threshold, 0)} kT/e (residui marcati oltre).</figcaption></figure>")
+        marked = sorted((r for r in residues if _isnum(r.get("potential")) and threshold
+                         and abs(r["potential"]) > threshold), key=lambda r: r["potential"])
+        head = [("Residuo", False), ("Carica", True), ("Potenziale (kT/e)", True), ("mV", True),
+                ("Atomi esposti", True)]
+
+        def row(r: dict) -> str:
+            pot = r.get("potential")
+            return ("<tr>" + _td(_e(_residue_label(r))) + _td(_signed(r.get("charge"), 2), True)
+                    + _td(_num(pot, 2), True) + _td(_num(pot * mv, 0) if _isnum(pot) and mv else "—", True)
+                    + _td(_e(r.get("exposed_atoms")), True) + "</tr>")
+
+        if marked:
+            table = _table(head, [row(r) for r in marked], dense=True)
+            doc.add(f"<h3>Residui marcati ({len(marked)})</h3>",
+                    table if len(marked) <= 20 else _details(f"Mostra i {len(marked)} residui marcati", table))
+        doc.add(_details(f"Tutti i residui ({len(residues)})", _table(head, [row(r) for r in residues], dense=True)))
+    by_type = _dict(charges.get("by_type"))
+    if by_type:
+        doc.add('<p class="small">Residui carichi per tipo: '
+                + _e(", ".join(f"{k} {v}" for k, v in by_type.items())) + ".</p>")
+    params = _dict(info.get("parameters"))
+    grid, sampling = _dict(info.get("grid")), _dict(info.get("sampling"))
+    rows = [(label, f"{_e(params.get(key))}{unit}") for key, label, unit in ES_PARAMS if params.get(key) is not None]
+    if grid.get("dime"):
+        rows.append(("Griglia di APBS", f"{_e(' × '.join(str(v) for v in grid.get('dime') or []))}, passo "
+                                        f"{_e(' / '.join(_num(v, 2) for v in grid.get('spacing') or []))} Å"
+                     + (" (ridotta per la memoria)" if grid.get("coarsened") else "")))
+    if sampling:
+        rows.append(("Campionamento", f"{_e(sampling.get('surface'))}, sonda {_num(sampling.get('probe'), 1)} Å, "
+                                      f"{_e(sampling.get('points_per_atom'))} punti per atomo"))
+    if mv:
+        rows.append(("Conversione", f"1 kT/e = {_num(mv, 2)} mV"))
+    if rows:
+        doc.add("<h3>Parametri del calcolo</h3>", "<table><tbody>",
+                *(f"<tr><th>{_e(k)}</th><td>{v}</td></tr>" for k, v in rows), "</tbody></table>")
+    doc.explain("electrostatics")
+    doc.cite("apbs", "pdb2pqr", "propka", "sasa")
+    if info.get("forcefield") == "PARSE":
+        doc.cite("sitkoff")
+    doc.end()
+
+
+def _residue_data(doc: _Doc, data: dict) -> None:
+    """Appendice: tutti i dati per residuo del rapporto di qualità e del consenso, in un blocco richiudibile."""
+    quality = _dict(data.get("quality"))
+    residues = [r for r in quality.get("residues") or [] if isinstance(r, dict)]
+    if not residues:
+        return
+    n = len(residues)
+    cons = _dict(data.get("consensus"))
+    per = _dict(cons.get("per_residue"))
+    flags = per.get("flags") if len(per.get("flags") or []) == n else None
+    values = _dict(per.get("values"))
+    qmean = values.get("qmean") if len(values.get("qmean") or []) == n else None
+    prosa = values.get("prosa") if len(values.get("prosa") or []) == n else None
+    dis = _dict(cons.get("disorder"))
+    disorder = dis.get("flags") if len(dis.get("flags") or []) == n else None
+    pred = _dict(cons.get("predictor"))
+    lddt = pred.get("lddt") if len(pred.get("lddt") or []) == n else None
+    plddt_kind = _dict(quality.get("structure")).get("bfactor_kind") == "plddt"
+    labels = {k: label for k, label, _r in consensus_mod.SIGNALS}
+    head = [("Residuo", False), ("DSSP", False), ("φ", True), ("ψ", True), ("Ramachandran", False), ("Clash", True),
+            ("RSA", True), ("DOPE", True), ("pLDDT" if plddt_kind else "B-factor", True)]
+    head += [("QMEAN locale", True)] if qmean else []
+    head += [("ProSA (fin. 10)", True)] if prosa else []
+    head += [("Disordine", False)] if disorder else []
+    head += [("lDDT predizione", True)] if lddt else []
+    head += [("Consenso", False)] if flags else []
+    rows = []
+    for i, r in enumerate(residues):
+        cells = [_td(_e(_residue_label(r))), _td(_e(r.get("ss") or "—")), _td(_num(r.get("phi"), 0), True),
+                 _td(_num(r.get("psi"), 0), True), _td(_e(_lookup(REGION_LABEL, r.get("rama"), r.get("rama") or "—"))),
+                 _td(_e(r.get("clashes") or 0), True),
+                 _td(_num(100 * r["rsa"], 0, "%") if _isnum(r.get("rsa")) else "—", True),
+                 _td(_num(r.get("dope"), 3), True), _td(_num(r.get("bfactor"), 1), True)]
+        if qmean:
+            cells.append(_td(_num(qmean[i], 2), True))
+        if prosa:
+            cells.append(_td(_num(prosa[i], 2), True))
+        if disorder:
+            cells.append(_td("sì" if disorder[i] else ""))
+        if lddt:
+            cells.append(_td(_num(lddt[i], 2), True))
+        if flags:
+            f = flags[i] or []
+            cells.append(_td(_e(", ".join(str(labels.get(k, k)) for k in f)) if f else ""))
+        cls = ' class="flagged"' if flags and len(flags[i] or []) >= 2 else ""
+        rows.append(f"<tr{cls}>" + "".join(cells) + "</tr>")
+    doc.section("dati-residui", "Dati per residuo", page_break=True)
+    doc.add(f'<p class="small muted">{n} residui del rapporto di qualità; evidenziati quelli segnalati da almeno 2 '
+            "metodi del consenso.</p>",
+            _details(f"Tabella completa ({n} residui)", _table(head, rows, dense=True)))
     doc.end()
 
 
@@ -2142,7 +2844,9 @@ def render(data: dict) -> str:
     molpdf, grade, grade_score, best, chosen, failure}], quality (rapporto di engines/quality), consensus
     (domain/consensus.compute), warnings [testo], image_png (byte di un PNG già verificato con `decode_png`) o None,
     ligands (verifica di domain/ligands per il modello senza rapporto di qualità; altrimenti quella del rapporto).
-    analysis (services/analysis.report_summary: job_id, finished_at, disulfides, interfaces) o None.
+    analysis (services/analysis.report_summary: job_id, finished_at, summary, hbonds, salt_bridges, disulfides,
+    aromatic, interfaces, conservation) o None. pockets (services/structure_tools.pockets_summary) ed electrostatics
+    (services/structure_tools.electrostatics_summary) o None: sezioni "Tasche" ed "Elettrostatica".
     complex (modelli a più catene, F5.3: chains, symmetry, template, assessment di domain/complexes.assess) o None.
     refine (solo kind "refine", F9.1: dal risultato del job di services/refine.py: label, protocol, openmm, added, input,
     energy, rmsd, quality {before, after}, comparison); con "refine" niente template, allineamento, parametri di
@@ -2178,8 +2882,11 @@ def render(data: dict) -> str:
     _ligands(doc, data)
     _complex(doc, data)
     _structural(doc, data)
+    _pockets(doc, data)
+    _electrostatics(doc, data)
     _prediction(doc, data)
     _warnings(doc, data)
+    _residue_data(doc, data)
     _legend_and_refs(doc)
     subject = data.get("title") or data.get("model") or ""
     title = ({"quality": "Report qualità", "refine": "Report rifinitura", "mutate": "Report mutagenesi",
