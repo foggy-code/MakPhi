@@ -9,6 +9,8 @@ import { JobPanel } from "../components/JobPanel";
 import { PirGrid, type GridFocus, type GridSecondary } from "../components/PirGrid";
 import { PirHeaderDialog } from "../components/PirHeaderDialog";
 import { PirMutations } from "../components/PirMutations";
+import { AnnotationDialog, AnnotationsCard } from "../components/PirAnnotations";
+import { PirStructureView, type StructureFocus } from "../components/PirStructureView";
 import { PirSecondaryCard } from "../components/PirSecondaryCard";
 import { SequencePicker, TemplatePicker } from "../components/Pickers";
 import { Alert, Badge, BarCell, Card, Confirm, Disclosure, Empty, Modal, PageHead, Tabs } from "../components/ui";
@@ -20,6 +22,8 @@ import { downloadText, fmtBytes, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
 import { parsePir, pirIdentities } from "../lib/pir";
 import { formatHeader, parseHeader, setEntryHeader } from "../lib/pirHeader";
+import { alignmentDiff, diffCells, ranges } from "../lib/pirDiff";
+import { annotationColumns, readAnnotations, residuesInColumns, type PirAnnotation } from "../lib/pirAnnotations";
 import { emptyHistory, record, redo, rewritePir, squareUp, trimUncoveredEnds, undo, type History } from "../lib/pirEdit";
 import { columnOfResidue, originalSequences, pirMutations, residuesOf, revertMutations, type PirMutation } from "../lib/pirMutations";
 import { chainBreakIssues, conflictIssues, mismatchIssues, uncoveredIssues } from "../lib/pirIssues";
@@ -117,6 +121,14 @@ export default function PirEditor() {
   const [gridFocus, setGridFocus] = useState<GridFocus | null>(null);
   // voce di cui si modifica la seconda riga nel modulo
   const [headerRow, setHeaderRow] = useState<number | null>(null);
+  // testo dell'ultima versione caricata o salvata, per il confronto; casella "mostra nella griglia"
+  const [savedContent, setSavedContent] = useState("");
+  const [showChanges, setShowChanges] = useState(false);
+  // residui del bersaglio della nuova annotazione (finestra aperta)
+  const [annotating, setAnnotating] = useState<{ from: number; to: number } | null>(null);
+  // vista 3D collegata: cella del cursore della griglia, vista aperta o no
+  const [cursorCell, setCursorCell] = useState({ r: 0, c: 0 });
+  const [view3d, setView3d] = useState(false);
   // documento appena salvato: il cambio di indirizzo che segue non lo ricarica (cronologia e sblocco restano)
   const justSaved = useRef<string | null>(null);
   // struttura secondaria: risposta del server con la chiave della richiesta (residui e template, non i gap)
@@ -131,6 +143,7 @@ export default function PirEditor() {
    */
   const load = (text: string, savedMeta?: Record<string, unknown>) => {
     setContent(text);
+    setSavedContent(text);
     setHistory(emptyHistory());
     setTemplatesEditable(false);
     setOriginal(savedOriginal(savedMeta) ?? originalSequences(parsePir(text)));
@@ -267,6 +280,60 @@ export default function PirEditor() {
     );
   };
 
+  /** Residui allineati diversamente rispetto all'ultima versione caricata o salvata. */
+  const diff = useMemo(() => (savedContent && savedContent !== content ? alignmentDiff(parsePir(savedContent), entries) : null), [savedContent, content, entries]);
+  const changedCells = useMemo(() => {
+    if (!diff || !showChanges) return undefined;
+    return diffCells(diff, entries.map((e) => e.sequence), entries.findIndex((e) => e.kind === "sequence"));
+  }, [diff, showChanges, entries]);
+
+  // annotazioni sui residui del bersaglio (metadati del documento) e loro colonne attuali
+  const annotations = useMemo(() => readAnnotations(meta), [meta]);
+  const targetSeq = entries.find((e) => e.kind === "sequence")?.sequence ?? "";
+  const annotationCols = useMemo(() => annotations.map((a) => ({ a, cols: annotationColumns(targetSeq, a) })), [annotations, targetSeq]);
+  const bands = useMemo(() => annotationCols.flatMap(({ a, cols }) => (cols ? [{ ...cols, color: a.color, label: a.label }] : [])), [annotationCols]);
+  const setAnnotations = (list: PirAnnotation[]) => {
+    setMeta((m) => ({ ...m, annotations: list }));
+    setDirty(true);
+  };
+  const annotate = (c0: number, c1: number) => {
+    const res = residuesInColumns(targetSeq, c0, c1);
+    if (!res) toast.push("Nelle colonne selezionate il bersaglio non ha residui: seleziona almeno un residuo del bersaglio.", "warn");
+    else setAnnotating(res);
+  };
+
+  /**
+   * Template da mostrare in 3D: la voce sotto il cursore se è un template con la struttura secondaria (residuo del file
+   * noto), altrimenti il primo template con un residuo nella colonna del cursore, altrimenti il primo template.
+   */
+  const structureFocus = useMemo<StructureFocus | null>(() => {
+    const usable = (i: number) => ssEntries[i]?.source === "dssp" && !!ssEntries[i]?.template && !!ssEntries[i]?.residue_ids;
+    const letterAt = (i: number) => /[A-Za-z]/.test(entries[i]?.sequence[cursorCell.c] ?? "");
+    let r = usable(cursorCell.r) && letterAt(cursorCell.r) ? cursorCell.r : entries.findIndex((_e, i) => usable(i) && letterAt(i));
+    if (r < 0) r = entries.findIndex((_e, i) => usable(i));
+    if (r < 0) return null;
+    const e = ssEntries[r]!;
+    const seq = entries[r].sequence;
+    let residue: string | null = null;
+    if (letterAt(r)) {
+      const index = seq.slice(0, cursorCell.c + 1).replace(/[^A-Za-z]/g, "").length;
+      residue = e.residue_ids?.[index - 1] ?? null;
+    }
+    return { code: entries[r].code, template: e.template!, residue };
+  }, [ssEntries, entries, cursorCell]);
+  /** Clic su un residuo nella vista 3D: il cursore va sulla colonna di quel residuo nella voce del template. */
+  const pick3d = (code: string, res: { chain: string; resnum: string }) => {
+    const r = entries.findIndex((e) => e.code === code);
+    const index = ssEntries[r]?.residue_ids?.findIndex((id) => id === `${res.chain}:${res.resnum}`) ?? -1;
+    const c = index >= 0 ? columnOfResidue(entries[r].sequence, index + 1) : null;
+    if (c === null) {
+      toast.push(`Il residuo ${res.chain}:${res.resnum} non è nella voce ${code} del PIR.`, "info");
+      return;
+    }
+    setTab("grid");
+    setGridFocus({ r, c, n: Date.now() });
+  };
+
   /** Controlli in tempo reale, per la griglia (segni sul righello, F8). */
   const issues = useMemo(() => {
     const rows = entries.map((e) => e.sequence);
@@ -347,6 +414,7 @@ export default function PirEditor() {
       const saved = metaToSave();
       const d = await api.saveDocument(projectId, { name: name || "Allineamento PIR", kind: "pir", content, meta: saved }, asNew ? undefined : docId ?? undefined);
       setDirty(false);
+      setSavedContent(content);
       setMeta(d.meta ?? saved);
       reload();
       if (d.id !== docId) justSaved.current = d.id;
@@ -417,6 +485,21 @@ export default function PirEditor() {
               {entries.length > 0 && (
                 <Tabs value={tab} onChange={setTab} tabs={[{ value: "grid", label: "Griglia" }, { value: "text", label: "Testo PIR" }]} />
               )}
+              {entries.length > 0 && diff && (diff.templates.length > 0 || diff.notComparable.length > 0) && (
+                <div className="row small pirg-diff-line">
+                  <span>
+                    <b>Rispetto alla versione caricata o salvata:</b>{" "}
+                    {diff.templates.map((d) => `residui ${ranges(d.changed)} del bersaglio allineati diversamente a ${d.code}`).join(" · ")}
+                    {diff.notComparable.length > 0 && <span className="text-2">{diff.templates.length ? " · " : ""}non confrontabili (residui aggiunti o tolti, codici nuovi): {diff.notComparable.join(", ")}</span>}
+                  </span>
+                  {diff.templates.length > 0 && (
+                    <label className="check right">
+                      <input type="checkbox" checked={showChanges} onChange={(e) => setShowChanges(e.target.checked)} />
+                      Mostra nella griglia
+                    </label>
+                  )}
+                </div>
+              )}
               {entries.length > 0 && tab === "grid" ? (
                 <PirGrid
                   ids={entries.map((e) => e.code)}
@@ -437,6 +520,10 @@ export default function PirEditor() {
                   issues={issues}
                   onEditHeader={setHeaderRow}
                   onTrimEnds={trimEnds}
+                  changed={changedCells}
+                  bands={bands}
+                  onAnnotate={annotate}
+                  onCursor={(r, c) => setCursorCell((x) => (x.r === r && x.c === c ? x : { r, c }))}
                 />
               ) : (
                 <textarea
@@ -463,6 +550,18 @@ export default function PirEditor() {
               ]} />
             </div>
           </Card>
+          {entries.length > 0 && <PirStructureView open={view3d} onToggle={setView3d} focus={structureFocus} onPick={pick3d} />}
+          <AnnotationsCard
+            annotations={annotations}
+            missing={new Set(annotationCols.filter((x) => !x.cols).map((x) => x.a.id))}
+            onGo={(a) => {
+              const cols = annotationColumns(targetSeq, a);
+              if (!cols) return;
+              setTab("grid");
+              setGridFocus({ r: entries.findIndex((e) => e.kind === "sequence"), c: cols.from, n: Date.now() });
+            }}
+            onDelete={(a) => setAnnotations(annotations.filter((x) => x.id !== a.id))}
+          />
           <PirMutations
             report={mutationReport}
             onGo={(m) => {
@@ -558,6 +657,21 @@ export default function PirEditor() {
             setMeta({ templates });
             setDirty(true);
             toast.push("Allineamento generato: controllalo e salvalo");
+          }}
+        />
+      )}
+      {annotating && (
+        <AnnotationDialog
+          from={annotating.from}
+          to={annotating.to}
+          onClose={() => {
+            setAnnotating(null);
+            setGridFocus({ n: Date.now() });
+          }}
+          onSave={(label, color) => {
+            setAnnotations([...annotations, { id: `a${Date.now().toString(36)}`, label, from: annotating.from, to: annotating.to, color }]);
+            setAnnotating(null);
+            setGridFocus({ n: Date.now() });
           }}
         />
       )}

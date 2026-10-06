@@ -39,7 +39,8 @@ def test_api_dssp_for_template_and_gor_for_target(client_with_ubq, ubq_ss):
     out = post(client_with_ubq, pir(HUMAN_UB, HUMAN_UB), UBQ_A)
     tpl = by_code(out, "1UBQ_A")
     assert tpl["source"] == "dssp" and tpl["matched_by"] == "code"
-    assert tpl["template"] == {"id": "1UBQ", "chains": ["A"]}
+    assert tpl["template"] == {"id": "1UBQ", "chains": ["A"], "format": "pdb"}
+    assert tpl["residue_ids"][:2] == ["A:1", "A:2"] and len(tpl["residue_ids"]) == 76
     assert tpl["ss"] == ubq_ss and len(tpl["ss"]) == 76
     # elica 24-33 e filamenti come nell'intestazione di 1UBQ (test_builtin_dssp_matches_header)
     assert set(tpl["ss"][23:33]) == {"H"} and set(tpl["ss"][2:5]) == {"E"}
@@ -59,7 +60,7 @@ def test_gaps_do_not_change_the_per_residue_result(client_with_ubq, ubq_ss):
 def test_template_found_from_code_alone(client_with_ubq, ubq_ss):
     out = post(client_with_ubq, pir(HUMAN_UB, HUMAN_UB))
     tpl = by_code(out, "1UBQ_A")
-    assert tpl["matched_by"] == "code_guess" and tpl["template"] == {"id": "1UBQ", "chains": ["A"]}
+    assert tpl["matched_by"] == "code_guess" and tpl["template"] == {"id": "1UBQ", "chains": ["A"], "format": "pdb"}
     assert tpl["ss"] == ubq_ss
 
 

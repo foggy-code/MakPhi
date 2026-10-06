@@ -885,7 +885,9 @@ export interface PirSecondaryEntry {
   ss: string | null;
   source: "dssp" | "gor" | null;
   method: string | null;
-  template: { id: string; chains: string[] } | null;
+  template: { id: string; chains: string[]; format?: "pdb" | "cif" } | null;
+  /** residuo del file per ogni lettera della voce ("A:27"; null se non c'è), solo per i template */
+  residue_ids?: (string | null)[];
   /** abbinamento al template della libreria: per codice, per posizione, dal solo codice */
   matched_by: "code" | "position" | "code_guess" | null;
   message: string | null;

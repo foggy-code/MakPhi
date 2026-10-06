@@ -181,3 +181,11 @@
 .pirg-aa-same:disabled { opacity: 1; border-color: var(--accent); background: var(--accent-soft); }
 .pirg-aa-conservative { background: var(--ok-soft); }
 .pirg-aa-radical { background: var(--err-soft); }
+
+/* confronto con la versione caricata o salvata: residui allineati diversamente */
+.pirg-seq > span.pirg-changed { outline: 2px dotted var(--accent-2); outline-offset: -2px; }
+.pirg-diff-line { flex-wrap: wrap; gap: 8px; padding: 6px 10px; border-radius: var(--radius-sm); background: var(--info-soft); color: var(--text); }
+
+/* annotazioni: fascia verticale sui residui annotati, dietro alle lettere */
+.pirg-band { position: absolute; top: 0; bottom: 0; border-left: 1px solid; border-right: 1px solid; pointer-events: none; }
+.pirg-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; }

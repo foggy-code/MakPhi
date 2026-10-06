@@ -99,6 +99,14 @@ interface Props {
   onEditHeader?: (row: number) => void;
   /** toglie le code del bersaglio senza template (la pagina aggiorna anche riferimento e numerazione) */
   onTrimEnds?: () => void;
+  /** residui allineati diversamente rispetto alla versione salvata, come "riga:colonna" */
+  changed?: Set<string>;
+  /** annotazioni del documento, già in colonne */
+  bands?: { from: number; to: number; color: string; label: string }[];
+  /** nuova annotazione sulle colonne selezionate */
+  onAnnotate?: (c0: number, c1: number) => void;
+  /** il cursore si è spostato (vista 3D collegata) */
+  onCursor?: (r: number, c: number) => void;
 }
 
 const isLocked = (kind: string | undefined, templatesEditable: boolean) => !templatesEditable && !!kind?.startsWith("structure");
@@ -110,7 +118,7 @@ const widthOf = (rows: string[]) => Math.max(0, ...rows.map((s) => s.length));
  * lettera sostituisce il residuo sotto il cursore. Le colonne fuori vista non si disegnano: allineamenti lunghi restano
  * fluidi. Il focus resta sulla griglia anche dopo i pulsanti, così le lettere non finiscono alle scorciatoie globali.
  */
-export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, canUndo, canRedo, templatesEditable, onTemplatesEditable, mutated, focus, onFocusDone, secondary, issues = [], onEditHeader, onTrimEnds }: Props) {
+export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, canUndo, canRedo, templatesEditable, onTemplatesEditable, mutated, focus, onFocusDone, secondary, issues = [], onEditHeader, onTrimEnds, changed, bands = [], onAnnotate, onCursor }: Props) {
   const [colorMode, setColorModeState] = useState<ColorMode>(readColorMode);
   const setColorMode = (m: ColorMode) => {
     setColorModeState(m);
@@ -190,6 +198,11 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
   }, [focus]);
 
   const refocus = () => boxRef.current?.focus({ preventScroll: true });
+
+  useEffect(() => {
+    onCursor?.(cursor.r, cursor.c);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cursor.r, cursor.c]);
 
   const moveTo = (r: number, c: number, extend: boolean) => {
     const next = { r: clampR(r), c: clampC(c) };
@@ -408,6 +421,10 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
             title="Inserisce prima della selezione una colonna con il separatore di catena «/» in tutte le voci">Inserisci «/»</button>
           <button type="button" className="btn btn-sm btn-ghost" onClick={run(() => actions.marker("."))}
             title="Inserisce prima della selezione una colonna con «.» (blocco di un ligando) nelle righe selezionate e gap nelle altre">Inserisci «.»</button>
+          {onAnnotate && (
+            <button type="button" className="btn btn-sm btn-ghost" onClick={() => onAnnotate(sel.c0, sel.c1)}
+              title="Dà un nome ai residui del bersaglio nelle colonne selezionate (sito attivo, disolfuro…): una fascia colorata che segue i gap">Annota la selezione…</button>
+          )}
           {onTrimEnds && (
             <button type="button" className="btn btn-sm btn-ghost" onClick={() => { onTrimEnds(); refocus(); }}
               title="Toglie le colonne iniziali e finali in cui nessun template ha un residuo (code del bersaglio senza stampo)">Ritaglia le estremità</button>
@@ -453,6 +470,9 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
             const cell = cellAt(e);
             if (cell && cell.c < 0) onEditHeader?.(cell.r);
           }}>
+          {bands.filter((b) => b.to >= c0 && b.from < c1).map((b, k) => (
+            <div key={`b${k}`} className="pirg-band" style={{ left: NAME_W + b.from * CW, width: (b.to - b.from + 1) * CW, background: `${b.color}26`, borderColor: b.color }} />
+          ))}
           {secondary && rows.map((_s, r) => (
             <Track key={`t${r}`} top={r * stride + RH} c0={c0} c1={c1} states={secondary.states[r]} source={secondary.sources[r]}
               conflicts={secondary.conflicts.filter((x) => x.row === r)} />
@@ -466,7 +486,10 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
               <div className="pirg-seq" style={{ left: NAME_W + c0 * CW }}>
                 {s.slice(c0, c1).split("").map((x, i) => (
                   <span key={c0 + i} style={cellStyle(x, r, c0 + i)}
-                    className={x === "-" ? "pirg-gap" : x === "/" || x === "." ? "pirg-mark" : mutated?.has(`${r}:${c0 + i}`) ? "pirg-mut" : undefined}>{x}</span>
+                    className={[
+                      x === "-" ? "pirg-gap" : x === "/" || x === "." ? "pirg-mark" : mutated?.has(`${r}:${c0 + i}`) ? "pirg-mut" : "",
+                      changed?.has(`${r}:${c0 + i}`) ? "pirg-changed" : "",
+                    ].join(" ").trim() || undefined}>{x}</span>
                 ))}
               </div>
             </div>
@@ -481,6 +504,7 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
           ? (ch === "/" ? "separatore di catena" : ch === "." ? "blocco di ligando" : "gap")
           : <>{pos.multichain ? <>catena <b>{pos.chain}</b> · </> : null}<b>{residueText(ch)}</b> {pos.number}{cls ? ` · ${cls.one}` : ""}</>}
         {ssText && <> · {ssText}</>}
+        {bands.filter((b) => b.from <= cursor.c && cursor.c <= b.to).map((b) => <span key={b.label}> · annotazione: <b>{b.label}</b></span>)}
         {firstIssue && (
           <> · <span className={`pirg-issue-text pirg-issue-text-${firstIssue.severity}`}>
             {firstIssue.text}{firstIssue.row !== null && firstIssue.row !== cursor.r ? ` (${ids[firstIssue.row]})` : ""}

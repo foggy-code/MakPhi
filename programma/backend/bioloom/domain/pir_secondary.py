@@ -91,15 +91,16 @@ def segment_chains(entry: PirEntry, spec_chains: list[str], file_chains: list[st
 
 def _map_piece(letters: list[str], rows: list[Row], chain: str, ss: dict[tuple[str, str], str], first_index: int,
                start: str) -> dict:
-    """Una catena della voce: stato DSSP per lettera, lettere diverse dal file, problemi."""
+    """Una catena della voce: stato DSSP e residuo del file ("A:27") per lettera, lettere diverse dal file, problemi."""
     out: list[str] = []
+    ids: list[Optional[str]] = []
     mismatches: list[dict] = []
     problems: list[str] = []
     pos = 0
     if start:
         found = next((i for i, row in enumerate(rows) if row[0] == start), None)
         if found is None:
-            return {"ss": [UNKNOWN] * len(letters), "mismatches": [], "count": 0,
+            return {"ss": [UNKNOWN] * len(letters), "ids": [None] * len(letters), "mismatches": [], "count": 0,
                     "problems": [f"residuo iniziale {start}:{chain} assente dal file"]}
         pos = found
     missing = max(0, len(letters) - (len(rows) - pos))
@@ -107,10 +108,12 @@ def _map_piece(letters: list[str], rows: list[Row], chain: str, ss: dict[tuple[s
     for k, letter in enumerate(letters):
         if pos >= len(rows):
             out.append(UNKNOWN)
+            ids.append(None)
             continue
         num, aa, _mse = rows[pos]
         pos += 1
         out.append(ss.get((chain, num), UNKNOWN))
+        ids.append(f"{chain}:{num}")
         if letter.upper() != "X" and aa != "X" and letter.upper() != aa:
             count += 1
             if len(mismatches) < MAX_MISMATCHES:
@@ -118,7 +121,7 @@ def _map_piece(letters: list[str], rows: list[Row], chain: str, ss: dict[tuple[s
                                    "residue": f"{aa} {chain}:{num}"})
     if missing:
         problems.append(f"la catena {chain} del file finisce prima della voce ({missing} lettere senza residuo)")
-    return {"ss": out, "mismatches": mismatches, "count": count, "problems": problems}
+    return {"ss": out, "ids": ids, "mismatches": mismatches, "count": count, "problems": problems}
 
 
 def template_secondary(entry: PirEntry, residues: dict[str, list[Row]], ss: dict[tuple[str, str], str],
@@ -128,6 +131,7 @@ def template_secondary(entry: PirEntry, residues: dict[str, list[Row]], ss: dict
     meglio)."""
     chains = segment_chains(entry, spec_chains, list(residues))
     out: list[str] = []
+    residue_ids: list[Optional[str]] = []
     mismatches: list[dict] = []
     mismatch_count = 0
     problems: list[str] = []
@@ -139,6 +143,7 @@ def template_secondary(entry: PirEntry, residues: dict[str, list[Row]], ss: dict
         if rows is None:
             problems.append(f"catena «{chain}» assente dal file" if chain else "catena non indicata")
             out.extend(UNKNOWN * len(letters))
+            residue_ids.extend([None] * len(letters))
             index += len(letters)
             continue
         start = _field(entry, 0) if k == 0 else ""
@@ -153,12 +158,13 @@ def template_secondary(entry: PirEntry, residues: dict[str, list[Row]], ss: dict
         best = min((_map_piece(letters, r, chain, ss, index, start) for r in readings),
                    key=lambda m: (len(m["problems"]), m["count"]))
         out.extend(best["ss"])
+        residue_ids.extend(best["ids"])
         mismatch_count += best["count"]
         mismatches.extend(best["mismatches"][:MAX_MISMATCHES - len(mismatches)])
         problems.extend(best["problems"])
         index += len(letters)
-    return {"ss": "".join(out), "chains": chains, "mismatches": mismatches, "mismatch_count": mismatch_count,
-            "problems": problems}
+    return {"ss": "".join(out), "residue_ids": residue_ids, "chains": chains, "mismatches": mismatches,
+            "mismatch_count": mismatch_count, "problems": problems}
 
 
 def target_secondary(entry: PirEntry) -> dict:
@@ -252,6 +258,7 @@ def annotate(text: str, templates: list[dict], resolve: Resolver) -> dict:
                 else:
                     result = template_secondary(e, residues, ss, chains, hetatm)
                     item.update(result, source="dssp", method="DSSP (Kabsch-Sander) sul file del template",
-                                template={"id": tid, "chains": result["chains"]})
+                                template={"id": tid, "chains": result["chains"],
+                                          "format": "cif" if path.suffix.lower() in (".cif", ".mmcif") else "pdb"})
         out.append(item)
     return {"entries": out}
