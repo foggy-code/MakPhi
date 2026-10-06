@@ -5,6 +5,7 @@ import { residueText } from "../lib/compareMetrics";
 import { AMINO } from "../lib/mutations";
 import { deleteGaps, insertGaps, isGapBlock, isRagged, normSel, removeGapColumns, sameRows, slideBlock, squareUp, type Selection } from "../lib/pirEdit";
 import { blosum62, blosumTone, isStandardAa, residuePositions, substitute } from "../lib/pirMutations";
+import { issueSummary, issuesAt, nextIssue, type PirIssue } from "../lib/pirIssues";
 import { conflictText, type GapConflict, type SS3 } from "../lib/pirSecondary";
 import { dsspLabel } from "../lib/qualityView";
 import { SS3_LABEL } from "../lib/residues";
@@ -65,6 +66,10 @@ interface Props {
   onFocusDone?: () => void;
   /** tracce della struttura secondaria (null o assente: nessuna traccia) */
   secondary?: GridSecondary | null;
+  /** controlli da guardare prima di modellare (F8 / Maiusc+F8 per passare dall'uno all'altro) */
+  issues?: PirIssue[];
+  /** apre il modulo della seconda riga per la voce (pulsante o doppio clic sul nome) */
+  onEditHeader?: (row: number) => void;
 }
 
 const isLocked = (kind: string | undefined, templatesEditable: boolean) => !templatesEditable && !!kind?.startsWith("structure");
@@ -76,7 +81,7 @@ const widthOf = (rows: string[]) => Math.max(0, ...rows.map((s) => s.length));
  * lettera sostituisce il residuo sotto il cursore. Le colonne fuori vista non si disegnano: allineamenti lunghi restano
  * fluidi. Il focus resta sulla griglia anche dopo i pulsanti, così le lettere non finiscono alle scorciatoie globali.
  */
-export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, canUndo, canRedo, templatesEditable, onTemplatesEditable, mutated, focus, onFocusDone, secondary }: Props) {
+export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, canUndo, canRedo, templatesEditable, onTemplatesEditable, mutated, focus, onFocusDone, secondary, issues = [], onEditHeader }: Props) {
   const width = widthOf(rows);
   // passo verticale fra le righe: con la struttura secondaria ogni riga ha la sua traccia sotto
   const stride = secondary ? RH + TH : RH;
@@ -227,7 +232,11 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
     else if (k === " " || k === "-") actions.insert();
     else if (k === "Delete") actions.deleteAt();
     else if (k === "Backspace") actions.deleteBefore();
-    else if (k === "Escape") {
+    else if (k === "F8") {
+      const next = nextIssue(issues, cursor.r, cursor.c, e.shiftKey ? -1 : 1);
+      if (next) moveTo(next.row ?? cursor.r, next.from, false);
+      else say("Nessun controllo da guardare.");
+    } else if (k === "Escape") {
       setAnchor(cursor);
       say(null);
     } else if (!mod && !e.altKey && k.length === 1 && /[a-z]/i.test(k)) actions.substitute(k);
@@ -291,17 +300,28 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
   }, [c0, c1]);
 
   const cursorRow = rows[cursor.r] ?? "";
-  const cursorHeader = headers[cursor.r] ?? "";
-  const positions = useMemo(() => residuePositions(cursorRow, cursorHeader), [cursorRow, cursorHeader]);
+  // numerazione di ogni riga (riga di stato e numero del primo residuo visibile accanto al nome)
+  const numbering = useMemo(() => rows.map((s, i) => residuePositions(s, headers[i] ?? "")), [rows, headers]);
+  const positions = numbering[cursor.r] ?? [];
+  const firstVisible = Math.floor(view.left / CW);
+  const firstNumber = (r: number) => {
+    const list = numbering[r] ?? [];
+    for (let c = firstVisible; c < list.length; c++) {
+      const p = list[c];
+      if (p) return p.multichain ? `${p.chain}:${p.number}` : String(p.number);
+    }
+    return "";
+  };
   const ch = cursorRow[cursor.c] ?? "";
   const pos = positions[cursor.c] ?? null;
   const cls = residueClass(ch);
   const selCols = sel.c1 - sel.c0 + 1;
   const selRows = sel.r1 - sel.r0 + 1;
   const ssText = secondary ? secondaryText(secondary, cursor.r, cursor.c) : null;
-  // gap che spezza un elemento in questa colonna: del template sotto il cursore, o di un template qualsiasi se il cursore è sul bersaglio
-  const conflict = secondary?.conflicts.find((x) => x.row === cursor.r && x.from <= cursor.c && cursor.c <= x.to)
-    ?? secondary?.conflicts.find((x) => kinds[cursor.r] === "sequence" && x.from <= cursor.c && cursor.c <= x.to);
+  // controlli nella cella; sul bersaglio anche quelli dei template nella stessa colonna
+  const hereIssues = issuesAt(issues, cursor.r, cursor.c);
+  const shownIssues = hereIssues.length || kinds[cursor.r] !== "sequence" ? hereIssues : issues.filter((i) => i.from <= cursor.c && cursor.c <= i.to);
+  const firstIssue = shownIssues[0];
 
   return (
     <div className="stack-sm">
@@ -314,11 +334,20 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
         <button type="button" className="btn btn-sm" onClick={run(() => actions.slide(-1))} title="Sposta il blocco selezionato a sinistra sopra un gap; un blocco di soli gap scavalca i residui (Alt+←)">← blocco</button>
         <button type="button" className="btn btn-sm" onClick={run(() => actions.slide(1))} title="Sposta il blocco selezionato a destra sopra un gap; un blocco di soli gap scavalca i residui (Alt+→)">blocco →</button>
         <button type="button" className="btn btn-sm btn-ghost" onClick={run(actions.squeeze)} title="Toglie le colonne in cui tutte le voci hanno un gap">Togli colonne di soli gap</button>
+        {onEditHeader && (
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => onEditHeader(cursor.r)}
+            title="Codice e seconda riga della voce sotto il cursore, campo per campo (anche con doppio clic sul nome)">Seconda riga…</button>
+        )}
         <label className="check right" title="I residui dei template devono corrispondere al file della struttura: sbloccali solo per correggere un PIR che non corrisponde già">
           <input type="checkbox" checked={templatesEditable} onChange={(e) => onTemplatesEditable(e.target.checked)} />
           Residui dei template modificabili
         </label>
       </div>
+      {issues.length > 0 && (
+        <div className="small pirg-issues">
+          <b>Controlli:</b> {issueSummary(issues)} · F8 / Maiusc+F8 portano il cursore al successivo / precedente (segni colorati sul righello)
+        </div>
+      )}
       {isRagged(rows) && <div className="small" style={{ color: "var(--warn)" }}>Le voci hanno lunghezze diverse: la prima modifica le pareggia con gap in coda.</div>}
       <div
         ref={boxRef}
@@ -337,8 +366,15 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
           {ruler.map((m) => (
             <span key={m.c} style={{ left: NAME_W + m.c * CW }}>{m.label}</span>
           ))}
+          {issues.filter((x) => x.to >= c0 && x.from < c1).map((x, k) => (
+            <i key={`i${k}`} className={`pirg-issue pirg-issue-${x.severity}`} style={{ left: NAME_W + x.from * CW, width: (x.to - x.from + 1) * CW }} />
+          ))}
         </div>
-        <div ref={bodyRef} className="pirg-body" style={{ width: NAME_W + width * CW, height: rows.length * stride }} onMouseDown={onMouseDown} aria-hidden="true">
+        <div ref={bodyRef} className="pirg-body" style={{ width: NAME_W + width * CW, height: rows.length * stride }} onMouseDown={onMouseDown} aria-hidden="true"
+          onDoubleClick={(e) => {
+            const cell = cellAt(e);
+            if (cell && cell.c < 0) onEditHeader?.(cell.r);
+          }}>
           {secondary && rows.map((_s, r) => (
             <Track key={`t${r}`} top={r * stride + RH} c0={c0} c1={c1} states={secondary.states[r]} source={secondary.sources[r]}
               conflicts={secondary.conflicts.filter((x) => x.row === r)} />
@@ -347,6 +383,7 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
             <div key={r} className={`pirg-row${kinds[r] === "sequence" ? " pirg-target" : ""}`} style={{ top: r * stride }}>
               <div className="pirg-name" title={`${ids[r]} · ${kinds[r]}`}>
                 <span className="pirg-kind">{kinds[r] === "sequence" ? "bersaglio" : "template"}</span>{ids[r]}
+                <span className="pirg-num" title="Numero del primo residuo visibile">{firstNumber(r)}</span>
               </div>
               <div className="pirg-seq" style={{ left: NAME_W + c0 * CW }}>
                 {s.slice(c0, c1).split("").map((x, i) => (
@@ -366,7 +403,11 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
           ? (ch === "/" ? "separatore di catena" : ch === "." ? "blocco di ligando" : "gap")
           : <>{pos.multichain ? <>catena <b>{pos.chain}</b> · </> : null}<b>{residueText(ch)}</b> {pos.number}{cls ? ` · ${cls.one}` : ""}</>}
         {ssText && <> · {ssText}</>}
-        {conflict && <> · <span className="pirg-conflict-text">{conflictText(conflict)} di {ids[conflict.row]}</span></>}
+        {firstIssue && (
+          <> · <span className={`pirg-issue-text pirg-issue-text-${firstIssue.severity}`}>
+            {firstIssue.text}{firstIssue.row !== null && firstIssue.row !== cursor.r ? ` (${ids[firstIssue.row]})` : ""}
+          </span>{shownIssues.length > 1 ? ` (+${shownIssues.length - 1})` : ""}</>
+        )}
         {(selCols > 1 || selRows > 1) && <> · selezione {selRows} × {selCols}</>}
         {message && <span key={message.n}> · <span style={{ color: "var(--warn)" }}>{message.text}</span></span>}
       </div>
@@ -376,7 +417,7 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
           refocus();
         }} />
       <div className="tiny text-2">
-        Frecce: muovi · Maiusc+frecce o trascina: seleziona · clic sul nome: tutta la riga · Spazio / -: inserisci gap · Canc / Backspace: togli gap · Alt+← →: sposta il blocco · una lettera: sostituisci il residuo · Ctrl+Z / Ctrl+Y: annulla / ripristina
+        Frecce: muovi · Maiusc+frecce o trascina: seleziona · clic sul nome: tutta la riga · Spazio / -: inserisci gap · Canc / Backspace: togli gap · Alt+← →: sposta il blocco · una lettera: sostituisci il residuo · F8: controllo successivo · Ctrl+Z / Ctrl+Y: annulla / ripristina
       </div>
     </div>
   );

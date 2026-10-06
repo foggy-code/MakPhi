@@ -114,7 +114,30 @@
 /* predizione del bersaglio: più sottile, a colori pieni (la trasparenza scendeva sotto 3:1) */
 .pirg-track-pred > i.pirg-ss-h, .pirg-track-pred > i.pirg-ss-e { top: 3.5px; height: 4px; }
 .pirg-track > b.pirg-ss-conflict { top: 0; height: 11px; outline: 2px solid var(--err); outline-offset: -1px; border-radius: 2px; background: var(--err-soft); }
-.pirg-conflict-text { color: var(--err); font-weight: 600; }
+/* controlli: segni sul righello, testo nella riga di stato, riepilogo sopra la griglia */
+.pirg-ruler > i.pirg-issue { position: absolute; bottom: 0; height: 4px; border-radius: 2px 2px 0 0; }
+.pirg-issue-err { background: var(--err); }
+.pirg-issue-warn { background: var(--warn); }
+.pirg-issue-info { background: var(--info); }
+.pirg-issue-text { font-weight: 600; }
+.pirg-issue-text-err { color: var(--err); }
+.pirg-issue-text-warn { color: var(--warn); }
+.pirg-issue-text-info { color: var(--info); }
+.pirg-issues { color: var(--text-2); }
+
+/* numero del primo residuo visibile, accanto al nome della voce */
+.pirg-num {
+  position: absolute;
+  top: 0;
+  right: 6px;
+  padding-left: 4px;
+  background: inherit;
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 10px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
 
 /* residuo diverso dall'originale (sostituzione) */
 .pirg-seq > span.pirg-mut { font-weight: 800; box-shadow: inset 0 -3px 0 var(--warn); }

@@ -7,6 +7,7 @@ import { TextFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { PirGrid, type GridFocus, type GridSecondary } from "../components/PirGrid";
+import { PirHeaderDialog } from "../components/PirHeaderDialog";
 import { PirMutations } from "../components/PirMutations";
 import { PirSecondaryCard } from "../components/PirSecondaryCard";
 import { SequencePicker, TemplatePicker } from "../components/Pickers";
@@ -18,8 +19,10 @@ import { fileStem } from "../lib/files";
 import { downloadText, fmtBytes, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
 import { parsePir, pirIdentities } from "../lib/pir";
+import { setEntryHeader } from "../lib/pirHeader";
 import { emptyHistory, record, redo, rewritePir, squareUp, undo, type History } from "../lib/pirEdit";
 import { columnOfResidue, originalSequences, pirMutations, residuesOf, revertMutations, type PirMutation } from "../lib/pirMutations";
+import { chainBreakIssues, conflictIssues, mismatchIssues, uncoveredIssues } from "../lib/pirIssues";
 import { columnCodes, columnStates, gapConflicts, secondaryKey } from "../lib/pirSecondary";
 import { templateLabel } from "../lib/workflowView";
 
@@ -112,6 +115,8 @@ export default function PirEditor() {
   const [templatesEditable, setTemplatesEditable] = useState(false);
   const [confirmUnlock, setConfirmUnlock] = useState(false);
   const [gridFocus, setGridFocus] = useState<GridFocus | null>(null);
+  // voce di cui si modifica la seconda riga nel modulo
+  const [headerRow, setHeaderRow] = useState<number | null>(null);
   // documento appena salvato: il cambio di indirizzo che segue non lo ricarica (cronologia e sblocco restano)
   const justSaved = useRef<string | null>(null);
   // struttura secondaria: risposta del server con la chiave della richiesta (residui e template, non i gap)
@@ -237,6 +242,17 @@ export default function PirEditor() {
     const sources = ssEntries.map((x) => x?.source ?? null);
     return { states, codes, sources, conflicts: gapConflicts(entries.map((e) => e.sequence), entries.map((e) => e.kind), states, sources) };
   }, [ssOn, ssData, ssEntries, entries]);
+  /** Controlli in tempo reale, per la griglia (segni sul righello, F8). */
+  const issues = useMemo(() => {
+    const rows = entries.map((e) => e.sequence);
+    const kinds = entries.map((e) => e.kind);
+    return [
+      ...chainBreakIssues(rows),
+      ...(ssOn ? mismatchIssues(rows, ssEntries) : []),
+      ...conflictIssues(gridSecondary?.conflicts ?? []),
+      ...uncoveredIssues(rows, kinds),
+    ];
+  }, [entries, ssOn, ssEntries, gridSecondary]);
   const toggleSs = (on: boolean) => {
     setSsOn(on);
     try {
@@ -393,6 +409,8 @@ export default function PirEditor() {
                   focus={gridFocus}
                   onFocusDone={() => setGridFocus(null)}
                   secondary={gridSecondary}
+                  issues={issues}
+                  onEditHeader={setHeaderRow}
                 />
               ) : (
                 <textarea
@@ -514,6 +532,30 @@ export default function PirEditor() {
             setMeta({ templates });
             setDirty(true);
             toast.push("Allineamento generato: controllalo e salvalo");
+          }}
+        />
+      )}
+      {headerRow !== null && entries[headerRow] && (
+        <PirHeaderDialog
+          code={entries[headerRow].code}
+          header={entries[headerRow].header}
+          onClose={() => {
+            setHeaderRow(null);
+            setGridFocus({ n: Date.now() });
+          }}
+          onSave={(code, header) => {
+            const before = entries[headerRow].code;
+            // la voce rinominata tiene il suo riferimento delle sostituzioni
+            if (code !== before) {
+              setOriginal((o) => {
+                if (!(before in o)) return o;
+                const { [before]: seq, ...rest } = o;
+                return { ...rest, [code]: seq };
+              });
+            }
+            change(setEntryHeader(content, headerRow, code, header));
+            setHeaderRow(null);
+            setGridFocus({ n: Date.now() });
           }}
         />
       )}
