@@ -45,6 +45,14 @@ describe("navigazione", () => {
     expect(nextIssue(list, 1, 10, 1)?.text).toBe("b");
   });
 
+  it("dopo un problema di colonna passa a quello di riga nella stessa colonna, anche sopra il cursore", () => {
+    const same: PirIssue[] = [{ row: null, from: 5, to: 5, severity: "err", text: "colonna" }, { row: 0, from: 5, to: 5, severity: "info", text: "riga" }];
+    const first = nextIssue(same, 2, 3, 1)!;
+    expect(first.text).toBe("colonna");
+    expect(nextIssue(same, 2, 5, 1, first)?.text).toBe("riga");
+    expect(nextIssue(same, 0, 5, -1, same[1])?.text).toBe("colonna");
+  });
+
   it("Maiusc+F8 va al precedente", () => {
     expect(nextIssue(list, 1, 10, -1)?.text).toBe("c");
     expect(nextIssue(list, 0, 0, -1)?.text).toBe("a");

@@ -25,7 +25,7 @@ import { formatHeader, parseHeader, setEntryHeader } from "../lib/pirHeader";
 import { alignmentDiff, diffCells, ranges } from "../lib/pirDiff";
 import { annotationColumns, readAnnotations, residuesInColumns, type PirAnnotation } from "../lib/pirAnnotations";
 import { emptyHistory, record, redo, rewritePir, squareUp, trimUncoveredEnds, undo, type History } from "../lib/pirEdit";
-import { columnOfResidue, originalSequences, pirMutations, residuesOf, revertMutations, type PirMutation } from "../lib/pirMutations";
+import { columnOfResidue, originalSequences, pirMutations, residueLabels, residuesOf, revertMutations, type PirMutation } from "../lib/pirMutations";
 import { chainBreakIssues, conflictIssues, mismatchIssues, uncoveredIssues } from "../lib/pirIssues";
 import { columnCodes, columnStates, gapConflicts, secondaryKey } from "../lib/pirSecondary";
 import { templateLabel } from "../lib/workflowView";
@@ -42,6 +42,17 @@ function readSsPref(): boolean {
     return true;
   }
 }
+
+/** Ciò che una modifica può cambiare insieme, e che annulla / ripristina riportano insieme. */
+interface Snapshot {
+  content: string;
+  /** riferimento delle sostituzioni (rinominare una voce o ritagliare lo cambia insieme al testo) */
+  original: Record<string, string>;
+  /** meta.annotations */
+  annotations: unknown;
+}
+
+const sameSnapshot = (a: Snapshot, b: Snapshot) => a.content === b.content && a.original === b.original && a.annotations === b.annotations;
 
 function savedOriginal(meta: Record<string, unknown> | undefined): Record<string, string> | null {
   const v = meta?.[ORIGINAL_KEY];
@@ -111,7 +122,7 @@ export default function PirEditor() {
   const [generate, setGenerate] = useState(false);
   const [toDelete, setToDelete] = useState(false);
   const [tab, setTab] = useState<"grid" | "text">("grid");
-  const [history, setHistory] = useState<History>(emptyHistory);
+  const [history, setHistory] = useState<History<Snapshot>>(emptyHistory);
   // le battute di fila nel testo PIR formano un solo passo della cronologia
   const lastTyping = useRef(0);
   // sequenze originali (senza gap) per codice: il riferimento delle sostituzioni
@@ -149,19 +160,22 @@ export default function PirEditor() {
     setOriginal(savedOriginal(savedMeta) ?? originalSequences(parsePir(text)));
   };
   /** Modifica dell'utente: lo stato precedente va nella cronologia. */
+  const snapshot = (): Snapshot => ({ content, original, annotations: meta.annotations });
   const change = (text: string, typing = false) => {
     if (text === content) return;
     const now = Date.now();
-    if (!typing || now - lastTyping.current > 1000) setHistory((h) => record(h, content));
+    if (!typing || now - lastTyping.current > 1000) setHistory((h) => record(h, snapshot(), sameSnapshot));
     lastTyping.current = typing ? now : 0;
     setContent(text);
     setDirty(true);
   };
   const step = (dir: "undo" | "redo") => {
-    const r = dir === "undo" ? undo(history, content) : redo(history, content);
+    const r = dir === "undo" ? undo(history, snapshot()) : redo(history, snapshot());
     if (!r) return;
     setHistory(r.history);
-    setContent(r.value);
+    setContent(r.value.content);
+    setOriginal(r.value.original);
+    setMeta((m) => ({ ...m, annotations: r.value.annotations }));
     setDirty(true);
     lastTyping.current = 0;
   };
@@ -272,10 +286,18 @@ export default function PirEditor() {
     const first = parseInt(h.startRes, 10);
     if (r.start && Number.isFinite(first)) text = setEntryHeader(text, ti, t.code, formatHeader({ ...h, startRes: String(first + r.start) }));
     setOriginal((o) => (o[t.code] === undefined ? o : { ...o, [t.code]: o[t.code].slice(r.start, o[t.code].length - r.end) }));
+    // le annotazioni seguono i residui rimasti; quelle tutte nelle code tolte spariscono
+    const remaining = t.sequence.replace(/[^A-Za-z]/g, "").length - r.start - r.end;
+    const shifted = annotations
+      .map((a) => ({ ...a, from: Math.max(1, a.from - r.start), to: Math.min(remaining, a.to - r.start) }))
+      .filter((a) => a.to >= a.from && a.to >= 1 && a.from <= remaining);
+    const dropped = annotations.length - shifted.length;
+    if (r.start || dropped) setMeta((m) => ({ ...m, annotations: shifted }));
     change(text);
     toast.push(
       `Tolti dal bersaglio ${r.start} residui all'inizio e ${r.end} alla fine.`
-        + (r.start && !Number.isFinite(first) ? " La numerazione ora parte dal primo residuo rimasto." : ""),
+        + (r.start && !Number.isFinite(first) ? " La numerazione ora parte dal primo residuo rimasto." : "")
+        + (dropped ? ` ${dropped === 1 ? "Un'annotazione era" : `${dropped} annotazioni erano`} tutta nelle code tolte ed è stata eliminata.` : ""),
       "info",
     );
   };
@@ -290,9 +312,15 @@ export default function PirEditor() {
   // annotazioni sui residui del bersaglio (metadati del documento) e loro colonne attuali
   const annotations = useMemo(() => readAnnotations(meta), [meta]);
   const targetSeq = entries.find((e) => e.kind === "sequence")?.sequence ?? "";
+  // numeri dei residui del bersaglio come nella griglia (residuo iniziale della seconda riga, catene)
+  const targetHeader = entries.find((e) => e.kind === "sequence")?.header ?? "";
+  const targetLabels = useMemo(() => residueLabels(targetSeq, targetHeader), [targetSeq, targetHeader]);
+  const labelOf = (n: number) => targetLabels[n - 1] ?? String(n);
   const annotationCols = useMemo(() => annotations.map((a) => ({ a, cols: annotationColumns(targetSeq, a) })), [annotations, targetSeq]);
   const bands = useMemo(() => annotationCols.flatMap(({ a, cols }) => (cols ? [{ ...cols, color: a.color, label: a.label }] : [])), [annotationCols]);
+  /** Nuove annotazioni (aggiunta, eliminazione): un passo della cronologia. */
   const setAnnotations = (list: PirAnnotation[]) => {
+    setHistory((h) => record(h, snapshot(), sameSnapshot));
     setMeta((m) => ({ ...m, annotations: list }));
     setDirty(true);
   };
@@ -489,7 +517,7 @@ export default function PirEditor() {
                 <div className="row small pirg-diff-line">
                   <span>
                     <b>Rispetto alla versione caricata o salvata:</b>{" "}
-                    {diff.templates.map((d) => `residui ${ranges(d.changed)} del bersaglio allineati diversamente a ${d.code}`).join(" · ")}
+                    {diff.templates.map((d) => `residui ${ranges(d.changed, targetLabels)} del bersaglio allineati diversamente a ${d.code}`).join(" · ")}
                     {diff.notComparable.length > 0 && <span className="text-2">{diff.templates.length ? " · " : ""}non confrontabili (residui aggiunti o tolti, codici nuovi): {diff.notComparable.join(", ")}</span>}
                   </span>
                   {diff.templates.length > 0 && (
@@ -554,6 +582,7 @@ export default function PirEditor() {
           <AnnotationsCard
             annotations={annotations}
             missing={new Set(annotationCols.filter((x) => !x.cols).map((x) => x.a.id))}
+            labelOf={labelOf}
             onGo={(a) => {
               const cols = annotationColumns(targetSeq, a);
               if (!cols) return;
@@ -664,6 +693,7 @@ export default function PirEditor() {
         <AnnotationDialog
           from={annotating.from}
           to={annotating.to}
+          labelOf={labelOf}
           onClose={() => {
             setAnnotating(null);
             setGridFocus({ n: Date.now() });

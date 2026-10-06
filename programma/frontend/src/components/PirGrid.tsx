@@ -140,6 +140,8 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
   const bodyRef = useRef<HTMLDivElement>(null);
   const drag = useRef(false);
   const pendingReveal = useRef(false);
+  // problema raggiunto con l'ultimo F8 e cella in cui ha portato il cursore
+  const lastIssue = useRef<{ issue: PirIssue; r: number; c: number } | null>(null);
   const statusId = useId();
 
   const sel: Selection = normSel({ r0: anchor.r, c0: anchor.c, r1: cursor.r, c1: cursor.c });
@@ -172,7 +174,7 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
     if (x < box.scrollLeft) box.scrollLeft = Math.max(0, x - CW * 4);
     else if (x + CW > box.scrollLeft + visible) box.scrollLeft = x + CW * 5 - visible;
     const y = RH + HH + r * stride; // righello e istogramma stanno sopra le righe
-    if (y < box.scrollTop + RH) box.scrollTop = Math.max(0, y - RH - stride);
+    if (y < box.scrollTop + RH + HH) box.scrollTop = Math.max(0, y - RH - HH - stride);
     else if (y + stride > box.scrollTop + box.clientHeight) box.scrollTop = y + stride * 2 - box.clientHeight;
   };
 
@@ -289,9 +291,14 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
     else if (k === "Delete") actions.deleteAt();
     else if (k === "Backspace") actions.deleteBefore();
     else if (k === "F8") {
-      const next = nextIssue(issues, cursor.r, cursor.c, e.shiftKey ? -1 : 1);
-      if (next) moveTo(next.row ?? cursor.r, next.from, false);
-      else say("Nessun controllo da guardare.");
+      // se il cursore è ancora dove l'ha portato l'ultimo F8, si passa al problema vicino nell'elenco
+      const prev = lastIssue.current && lastIssue.current.r === cursor.r && lastIssue.current.c === cursor.c ? lastIssue.current.issue : null;
+      const next = nextIssue(issues, cursor.r, cursor.c, e.shiftKey ? -1 : 1, prev);
+      if (next) {
+        const r = next.row ?? cursor.r;
+        moveTo(r, next.from, false);
+        lastIssue.current = { issue: next, r, c: Math.min(Math.max(0, next.from), Math.max(0, width - 1)) };
+      } else say("Nessun controllo da guardare.");
     } else if (k === "Escape") {
       setAnchor(cursor);
       say(null);
@@ -414,7 +421,10 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
         </label>
       </div>
       <div className="row small pirg-tools">
-        <Segmented label="Colori della griglia" value={colorMode} options={COLOR_MODES} onChange={setColorMode} />
+        {/* con il mouse il focus torna alla griglia (le lettere non vanno alle scorciatoie globali); con la tastiera resta qui */}
+        <span onClick={(e) => { if (e.detail > 0) refocus(); }}>
+          <Segmented label="Colori della griglia" value={colorMode} options={COLOR_MODES} onChange={setColorMode} />
+        </span>
         <span className="text-2">{MODE_LEGEND[colorMode]}</span>
         <span className="right row" style={{ gap: 6 }}>
           <button type="button" className="btn btn-sm btn-ghost" onClick={run(() => actions.marker("/"))}

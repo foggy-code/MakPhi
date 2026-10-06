@@ -152,7 +152,8 @@ export function trimUncoveredEnds(rows: string[], kinds: string[]): TrimResult |
   const templates = kinds.map((k, i) => (k.startsWith("structure") ? i : -1)).filter((i) => i >= 0);
   if (target < 0 || !templates.length) return null;
   const width = Math.max(0, ...rows.map((s) => s.length));
-  const covered = (c: number) => templates.some((r) => isLetter(rows[r][c]));
+  // coperta: un template, o un'altra voce che non è il bersaglio (non si tolgono residui ad altre sequenze)
+  const covered = (c: number) => rows.some((s, r) => r !== target && isLetter(s[c]));
   const marker = (c: number) => rows.some((s) => s[c] === "/" || s[c] === ".");
   let from = 0;
   while (from < width && !covered(from) && !marker(from)) from++;
@@ -225,28 +226,32 @@ export function rewritePir(text: string, rows: string[]): string {
   return lines.join(eol);
 }
 
-/** Cronologia delle modifiche (annulla / ripristina) su istantanee di testo. */
-export interface History {
-  past: string[];
-  future: string[];
+/**
+ * Cronologia delle modifiche (annulla / ripristina) su istantanee: di testo, o di tutto ciò che una modifica cambia
+ * insieme (l'Editor PIR registra testo, riferimento delle sostituzioni e annotazioni).
+ */
+export interface History<T = string> {
+  past: T[];
+  future: T[];
 }
 
 export const HISTORY_LIMIT = 200;
 
-export const emptyHistory = (): History => ({ past: [], future: [] });
+export const emptyHistory = <T = string>(): History<T> => ({ past: [], future: [] });
 
-/** Registra lo stato `prev` prima di una modifica (il ramo "ripristina" si perde). */
-export function record(h: History, prev: string): History {
-  if (h.past[h.past.length - 1] === prev) return { past: h.past, future: [] };
+/** Registra lo stato `prev` prima di una modifica (il ramo "ripristina" si perde); `same` evita istantanee doppie. */
+export function record<T>(h: History<T>, prev: T, same: (a: T, b: T) => boolean = (a, b) => a === b): History<T> {
+  const last = h.past[h.past.length - 1];
+  if (last !== undefined && same(last, prev)) return { past: h.past, future: [] };
   return { past: [...h.past, prev].slice(-HISTORY_LIMIT), future: [] };
 }
 
-export function undo(h: History, current: string): { history: History; value: string } | null {
+export function undo<T>(h: History<T>, current: T): { history: History<T>; value: T } | null {
   if (!h.past.length) return null;
   return { history: { past: h.past.slice(0, -1), future: [current, ...h.future] }, value: h.past[h.past.length - 1] };
 }
 
-export function redo(h: History, current: string): { history: History; value: string } | null {
+export function redo<T>(h: History<T>, current: T): { history: History<T>; value: T } | null {
   if (!h.future.length) return null;
   return { history: { past: [...h.past, current], future: h.future.slice(1) }, value: h.future[0] };
 }

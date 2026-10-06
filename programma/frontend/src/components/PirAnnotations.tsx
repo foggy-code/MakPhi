@@ -2,10 +2,14 @@ import { useState } from "react";
 import { ANNOTATION_COLORS, type PirAnnotation } from "../lib/pirAnnotations";
 import { Card, Field, Modal } from "./ui";
 
+/** "35–37" con i numeri della griglia (`labelOf`: numero del residuo n-esimo del bersaglio, da 1). */
+const span = (from: number, to: number, labelOf: (n: number) => string) => (from === to ? labelOf(from) : `${labelOf(from)}–${labelOf(to)}`);
+
 /** Nome e colore di una nuova annotazione sui residui `from`–`to` del bersaglio. */
-export function AnnotationDialog({ from, to, onClose, onSave }: {
+export function AnnotationDialog({ from, to, labelOf, onClose, onSave }: {
   from: number;
   to: number;
+  labelOf: (n: number) => string;
   onClose: () => void;
   onSave: (label: string, color: string) => void;
 }) {
@@ -14,7 +18,7 @@ export function AnnotationDialog({ from, to, onClose, onSave }: {
   const ok = label.trim().length > 0 && label.trim().length <= 80;
   return (
     <Modal
-      title={`Annotazione sui residui ${from === to ? from : `${from}–${to}`} del bersaglio`}
+      title={`Annotazione sui residui ${span(from, to, labelOf)} del bersaglio`}
       onClose={onClose}
       footer={
         <>
@@ -44,8 +48,9 @@ export function AnnotationDialog({ from, to, onClose, onSave }: {
 }
 
 /** Elenco delle annotazioni del documento, con il salto alla colonna e l'eliminazione. */
-export function AnnotationsCard({ annotations, missing, onGo, onDelete }: {
+export function AnnotationsCard({ annotations, missing, labelOf, onGo, onDelete }: {
   annotations: PirAnnotation[];
+  labelOf: (n: number) => string;
   /** annotazioni i cui residui non ci sono più nel bersaglio */
   missing: Set<string>;
   onGo: (a: PirAnnotation) => void;
@@ -62,7 +67,7 @@ export function AnnotationsCard({ annotations, missing, onGo, onDelete }: {
               <tr key={a.id}>
                 <td><i className="pirg-swatch" style={{ background: a.color }} /> {a.label}</td>
                 <td className="num">
-                  {a.from === a.to ? a.from : `${a.from}–${a.to}`}
+                  {missing.has(a.id) ? `${a.from}–${a.to} (posizioni)` : span(a.from, a.to, labelOf)}
                   {missing.has(a.id) && <div className="tiny" style={{ color: "var(--warn)" }}>residui non più nel bersaglio</div>}
                 </td>
                 <td className="num" style={{ whiteSpace: "nowrap" }}>

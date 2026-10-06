@@ -30,5 +30,7 @@ describe("confronto con la versione salvata", () => {
   it("intervalli leggibili", () => {
     expect(ranges([3, 4, 5, 9, 11, 12])).toBe("4–6, 10, 12–13");
     expect(ranges([])).toBe("");
+    // con i numeri della voce (residuo iniziale 24, o catene)
+    expect(ranges([0, 1, 3], ["24", "25", "26", "B:1"])).toBe("24–25, B:1");
   });
 });

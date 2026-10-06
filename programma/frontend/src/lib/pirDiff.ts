@@ -76,18 +76,22 @@ export function diffCells(diff: AlignmentDiff, rows: string[], targetRow: number
   return out;
 }
 
-/** "24–28, 40" (numeri da 1) da indici da 0 ordinati. */
-export function ranges(indices: number[]): string {
+/**
+ * "24–28, 40" da indici di residui (da 0): con `labels` (numeri della griglia, lib/pirMutations residueLabels) i numeri
+ * sono quelli della voce, altrimenti le posizioni da 1.
+ */
+export function ranges(indices: number[], labels?: string[]): string {
+  const label = (i: number) => labels?.[i] ?? String(i + 1);
   const parts: string[] = [];
   let start = -1;
   let prev = -2;
   for (const i of [...indices].sort((x, y) => x - y)) {
     if (i !== prev + 1) {
-      if (start >= 0) parts.push(start === prev ? `${start + 1}` : `${start + 1}–${prev + 1}`);
+      if (start >= 0) parts.push(start === prev ? label(start) : `${label(start)}–${label(prev)}`);
       start = i;
     }
     prev = i;
   }
-  if (start >= 0) parts.push(start === prev ? `${start + 1}` : `${start + 1}–${prev + 1}`);
+  if (start >= 0) parts.push(start === prev ? label(start) : `${label(start)}–${label(prev)}`);
   return parts.join(", ");
 }

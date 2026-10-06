@@ -16,6 +16,9 @@ describe("seconda riga PIR", () => {
     expect(headerErrors("1ABC_A", ok)).toEqual({});
     const bad = { ...ok, kind: "struct", startRes: "5x5", startChain: "AB", resolution: "alta", name: "a:b" };
     expect(Object.keys(headerErrors("1 ABC", bad)).sort()).toEqual(["code", "kind", "name", "resolution", "startChain", "startRes"]);
+    // valori che MODELLER e BioLoom leggono: +N come residuo finale, tipo "structure"
+    expect(headerErrors("1abc", parseHeader("structureX:1abc:1:A:+76:A::::"))).toEqual({});
+    expect(headerErrors("1abc", parseHeader("structure:1abc:FIRST:@:LAST:@::::"))).toEqual({});
   });
 
   it("sostituisce codice e seconda riga senza toccare il resto", () => {

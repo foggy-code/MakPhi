@@ -34,7 +34,10 @@ export function formatHeader(h: PirHeader): string {
   return HEADER_FIELDS.map((k) => h[k].trim()).join(":");
 }
 
-const RES = /^(?:-?\d+[A-Za-z]?|FIRST|LAST|\.|@)?$/i;
+// residuo: numero con codice d'inserzione, +N (N residui dal primo, come in MODELLER), FIRST, LAST, "." o "@"
+const RES = /^(?:-?\d+[A-Za-z]?|\+\d+|FIRST|LAST|\.|@)?$/i;
+/** tipi letti da MODELLER e da BioLoom: anche "structure" senza lettera */
+const KINDS = new Set<string>([...HEADER_KINDS, "structure"]);
 const CHAIN = /^[A-Za-z0-9@.]?$/;
 const NUM = /^(?:-?\d+(?:\.\d+)?)?$/;
 const CODE = /^[A-Za-z0-9_.-]+$/;
@@ -43,7 +46,7 @@ const CODE = /^[A-Za-z0-9_.-]+$/;
 export function headerErrors(code: string, h: PirHeader): Partial<Record<keyof PirHeader | "code", string>> {
   const e: Partial<Record<keyof PirHeader | "code", string>> = {};
   if (!CODE.test(code.trim())) e.code = "Solo lettere, cifre, _ . - e niente spazi.";
-  if (!HEADER_KINDS.includes(h.kind as (typeof HEADER_KINDS)[number])) e.kind = "Tipo non valido.";
+  if (!KINDS.has(h.kind)) e.kind = "Tipo non valido.";
   for (const k of HEADER_FIELDS) if (h[k].includes(":")) e[k] = "Senza «:» (separa i campi).";
   if (h.kind.startsWith("structure") && h.file.trim() && !CODE.test(h.file.trim())) e.file = "Solo lettere, cifre, _ . - e niente spazi.";
   if (!e.startRes && !RES.test(h.startRes.trim())) e.startRes = "Numero del residuo (es. 5 o 52A), FIRST o vuoto.";

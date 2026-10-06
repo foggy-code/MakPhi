@@ -153,6 +153,11 @@ export function residuePositions(seq: string, header: string): (ResiduePosition 
   return out;
 }
 
+/** Numero di ogni residuo della voce, in ordine (come nella griglia: "48", o "B:2" con più catene). */
+export function residueLabels(seq: string, header: string): string[] {
+  return residuePositions(seq, header).flatMap((p) => (p ? [p.multichain ? `${p.chain}:${p.number}` : String(p.number)] : []));
+}
+
 /** "K48R", o "B:K2R" in una voce con più catene. */
 export const mutationLabel = (p: ResiduePosition, wt: string, mut: string) => `${p.multichain ? `${p.chain}:` : ""}${wt}${p.number}${mut}`;
 

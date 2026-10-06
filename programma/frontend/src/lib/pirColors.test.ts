@@ -29,6 +29,14 @@ describe("ritaglio delle estremità", () => {
     expect(trimUncoveredEnds(["M-TAYI", "--TAYI"], kinds)).toEqual({ rows: ["TAYI", "TAYI"], start: 1, end: 0 });
   });
 
+  it("non toglie residui alle altre voci che non sono template", () => {
+    const kinds3 = ["sequence", "structureX", "sequence"];
+    // l'altra sequenza ha residui all'inizio: lì non si ritaglia
+    expect(trimUncoveredEnds(["MKTAYI", "--TAYI", "MKTA--"], kinds3)).toBeNull();
+    // dove anche l'altra sequenza ha solo gap, sì
+    expect(trimUncoveredEnds(["MKTAYI", "--TAY-", "--TA--"], kinds3)).toEqual({ rows: ["TAY", "TAY", "TA-"], start: 2, end: 1 });
+  });
+
   it("non scavalca separatori e ligandi, null se non c'è nulla da togliere", () => {
     expect(trimUncoveredEnds(["MK/TA", "--/TA"], kinds)).toBeNull();
     expect(trimUncoveredEnds(["TAYI", "TAYI"], kinds)).toBeNull();

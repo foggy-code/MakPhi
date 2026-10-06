@@ -82,13 +82,18 @@ export function issuesAt(list: PirIssue[], r: number, c: number): PirIssue[] {
   return list.filter((i) => i.from <= c && c <= i.to && (i.row === null || i.row === r));
 }
 
+const sameIssue = (a: PirIssue, b: PirIssue) => a.row === b.row && a.from === b.from && a.to === b.to && a.text === b.text;
+
 /**
  * Prossimo problema dopo la cella (dir 1) o prima (dir −1), in ordine di colonna e riga, ricominciando dall'altro capo.
- * Null se non ce ne sono.
+ * `last`: il problema raggiunto con l'ultimo F8, se il cursore non si è mosso da allora: si passa al suo vicino
+ * nell'elenco (così un problema di riga nella stessa colonna di uno di colonna non viene saltato). Null se non ce ne sono.
  */
-export function nextIssue(list: PirIssue[], r: number, c: number, dir: 1 | -1): PirIssue | null {
+export function nextIssue(list: PirIssue[], r: number, c: number, dir: 1 | -1, last?: PirIssue | null): PirIssue | null {
   if (!list.length) return null;
   const sorted = sortIssues(list);
+  const at = last ? sorted.findIndex((i) => sameIssue(i, last)) : -1;
+  if (at >= 0) return sorted[(at + dir + sorted.length) % sorted.length];
   const key = (i: PirIssue) => [i.from, i.row ?? r] as const;
   const after = (i: PirIssue) => {
     const [ic, ir] = key(i);
