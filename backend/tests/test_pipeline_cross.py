@@ -17,7 +17,7 @@ import zipfile
 import pytest
 
 from bioloom.core.errors import AppError
-from bioloom.domain import sequences
+from bioloom.domain import consensus, sequences
 from bioloom.engines import quality
 from bioloom.services import pipeline as pipeline_service
 from bioloom.services.compute import model_remarks
@@ -70,6 +70,7 @@ class FakeModeller:
                 self.assessed.append((target.name, ids[0]))
             report = quality.analyze(sub.workdir / model, None, with_dope=False)
             report["dope"] = {"score": entry["dope"], "zscore": None, "profile": []}  # zDOPE del rapporto assente
+            report["consensus"] = consensus.compute(report, modeller=entry)
             (sub.workdir / f"{model}.quality.json").write_text(json.dumps(report))
             best["quality"] = {**quality.summary_metrics(report), "zdope": None}
             quality.inject_remarks(sub.workdir / model, model_remarks(best, target.name, templates))
@@ -171,20 +172,32 @@ def test_zip_has_one_folder_per_template(cross):
         for label in LABELS:
             base = f"template/{label}/{n}__{label}"
             assert {f"{base}.pdb", f"{base}.html", f"{base}.quality.json"} <= names, base
-    assert {"LEGGIMI.txt", "riepilogo.csv", "migliori.csv", "parametri.json", "matrici/zdope.csv", "matrici/dope.csv",
-            "matrici/identita.csv", "matrici/copertura.csv"} <= names
+    # un'unica tabella delle metriche al posto di riepilogo.csv e delle matrici separate
+    assert {"LEGGIMI.txt", "metriche.csv", "migliori.csv", "parametri.json"} <= names
+    assert "riepilogo.csv" not in names and not any(x.startswith("matrici/") for x in names)
     assert "report_non_generati.txt" not in names
-    summary = list(csv.DictReader(io.StringIO(zf.read("riepilogo.csv").decode())))
-    assert len(summary) == 6
-    row = next(s for s in summary if s["sequence"] == "b" and s["template"] == "T3_B")
+    table = list(csv.DictReader(io.StringIO(zf.read("metriche.csv").decode())))
+    assert len(table) == 6 and list(table[0]) == pipeline_service.CROSS_FIELDS
+    row = next(s for s in table if s["sequence"] == "b" and s["template"] == "T3_B")
     assert row["best_in_sequence"] == "1" and row["file"] == "template/T3_B/b__T3_B.pdb" and row["zdope"] == "-1.5"
     assert row["file"] in names
+    # metriche dell'analisi di qualità e consenso (dal rapporto) in ogni riga; ProSA e PROCHECK solo con l'estesa
+    for r in table:
+        assert r["grade"] in ("A", "B", "C", "D") and float(r["rama_favored"]) > 90 and r["clashscore"] != ""
+        assert r["helix_pct"] != "" and r["residues"] == "76" and r["rama_outliers"] != ""
+        assert float(r["consensus_score"]) > 0 and r["consensus_band"] in ("buona", "intermedia", "scarsa")
+        assert r["prosa_z"] == "" and r["procheck_core"] == ""
+    assert [[r["zdope"] for r in table if r["sequence"] == n] for n in NAMES] == [["-1.0", "-1.8", "-0.5"],
+                                                                                  ["-0.9", "-1.2", "-1.5"]]
     best = list(csv.DictReader(io.StringIO(zf.read("migliori.csv").decode())))
+    assert list(best[0]) == pipeline_service.BEST_FIELDS
     assert [(b["sequence"], b["best_template"], b["completed"], b["templates"]) for b in best] == [
         ("a", "T2_A", "3", "3"), ("b", "T3_B", "3", "3")]
     assert best[0]["grade"] in "ABCD" and best[0]["file"] == "template/T2_A/a__T2_A.pdb"
-    matrix = list(csv.reader(io.StringIO(zf.read("matrici/zdope.csv").decode())))
-    assert matrix == [["sequenza", *LABELS], ["a", "-1.0", "-1.8", "-0.5"], ["b", "-0.9", "-1.2", "-1.5"]]
+    assert best[0]["zdope"] == "-1.8" and best[0]["consensus_score"] != ""
+    # la tabella del job (/export.csv) è la stessa, con il percorso del modello nei risultati del job
+    route = list(csv.DictReader(io.StringIO(client.get(f"/api/pipeline/{job_id}/export.csv").text)))
+    assert list(route[0]) == pipeline_service.CROSS_FIELDS and route[1]["file"].startswith("items/0001_a__T2_A/")
     # report della coppia: titolo con sequenza × template, bersaglio con il nome della sequenza
     html = zf.read("template/T2_A/a__T2_A.html").decode()
     assert "a × T2_A" in html and "un modello per ogni template" in html
