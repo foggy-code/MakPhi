@@ -57,6 +57,20 @@ describe("slideBlock", () => {
   it("null se il blocco è fatto di soli gap in coda", () => {
     expect(slideBlock(["MK--", "MKTA"], sel(0, 3), 1)).toBeNull();
   });
+
+  it("un blocco di soli gap scavalca i residui: si sposta l'inserzione, i residui restano in ordine", () => {
+    expect(slideBlock(["MK--TAY", "MKGGTAY"], sel(0, 2, 0, 3), 1)).toEqual(["MKT--AY", "MKGGTAY"]);
+    expect(slideBlock(["MK--TAY", "MKGGTAY"], sel(0, 2, 0, 3), -1)).toEqual(["M--KTAY", "MKGGTAY"]);
+    // più righe insieme; le colonne finali di soli gap si tolgono
+    expect(slideBlock(["A--BE", "C--DF"], sel(0, 1, 1, 2), 1)).toEqual(["AB--E", "CD--F"]);
+    expect(slideBlock(["A--B", "C--D"], sel(0, 1, 1, 2), 1)).toEqual(["AB", "CD"]);
+  });
+
+  it("i gap non scavalcano separatori di catena e ligandi", () => {
+    expect(slideBlock(["MK--/TA", "MKGG/TA"], sel(0, 2, 0, 3), 1)).toBeNull();
+    expect(slideBlock(["MK.--T", "MK.GGT"], sel(0, 3, 0, 4), -1)).toBeNull();
+    expect(slideBlock(["--MK", "GGMK"], sel(0, 0, 0, 1), -1)).toBeNull();
+  });
 });
 
 describe("removeGapColumns", () => {

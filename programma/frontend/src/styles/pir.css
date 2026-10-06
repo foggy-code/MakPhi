@@ -76,6 +76,36 @@
 .pirg-tools { flex-wrap: wrap; gap: 6px; }
 .pirg-sep { width: 1px; align-self: stretch; background: var(--border); margin: 0 2px; }
 
+/*
+ * traccia della struttura secondaria sotto ogni riga: elica e filamento pieni, coil come linea sottile, sconosciuto
+ * tratteggiato; la predizione del bersaglio (GOR) più tenue; i gap che spezzano un elemento contornati in rosso
+ */
+.pirg-track { position: absolute; left: 0; right: 0; height: 12px; }
+.pirg-track-name {
+  position: sticky;
+  left: 0;
+  z-index: var(--z-raised);
+  width: var(--name-w);
+  height: 12px;
+  padding: 0 8px;
+  background: var(--panel-2);
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 9.5px;
+  line-height: 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+.pirg-track > i, .pirg-track > b { position: absolute; top: 2px; height: 7px; }
+.pirg-ss-h { background: var(--helix); border-radius: 3px; }
+.pirg-ss-e { background: var(--strand); clip-path: polygon(0 0, calc(100% - 5px) 0, 100% 50%, calc(100% - 5px) 100%, 0 100%); }
+.pirg-track > i.pirg-ss-c { top: 5px; height: 1.5px; background: var(--coil); }
+.pirg-track > i.pirg-ss-u { top: 5px; height: 0; border-top: 1.5px dotted var(--muted); }
+.pirg-track-pred > i { opacity: 0.55; }
+.pirg-track > b.pirg-ss-conflict { top: 0; height: 11px; outline: 2px solid var(--err); outline-offset: -1px; border-radius: 2px; background: var(--err-soft); }
+.pirg-conflict-text { color: var(--err); font-weight: 600; }
+
 /* residuo diverso dall'originale (sostituzione) */
 .pirg-seq > span.pirg-mut { font-weight: 800; box-shadow: inset 0 -3px 0 var(--warn); }
 

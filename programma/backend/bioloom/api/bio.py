@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from ..core.container import Core
 from ..core.errors import AppError
-from ..domain import disorder, secondary, sequences
+from ..domain import disorder, pir_secondary, secondary, sequences
 from ..engines import remote
 from ..services.coverage import MAX_RANGES, MAX_TEMPLATES, CoverageService
 from .deps import get_core
@@ -113,6 +113,26 @@ class PirIn(BaseModel):
 @router.post("/pir/validate")
 def validate_pir(body: PirIn) -> dict:
     return sequences.validate_pir(body.content)
+
+
+class PirSecondaryIn(BaseModel):
+    content: str = Field(..., max_length=MAX_TEXT)
+    templates: list[TemplateIn] = Field(default_factory=list, max_length=MAX_TEMPLATES)
+
+
+@router.post("/pir/secondary")
+def pir_secondary_structure(body: PirSecondaryIn, core: Core = Depends(get_core)) -> dict:
+    """Struttura secondaria per residuo di ogni voce del PIR: DSSP sul file dei template della libreria (abbinati ai
+    template del documento per codice o posizione, o dal codice stesso), predizione GOR per il bersaglio. Un carattere
+    per lettera della voce: l'editor lo riporta sulle colonne, qualunque sia la posizione dei gap."""
+
+    def resolve(template_id: str):
+        try:
+            return core.library.path(template_id)
+        except AppError:
+            return None
+
+    return pir_secondary.annotate(body.content, [t.model_dump() for t in body.templates], resolve)
 
 
 @router.get("/uniprot/search")

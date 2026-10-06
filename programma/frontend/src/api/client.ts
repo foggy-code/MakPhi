@@ -30,6 +30,7 @@ import type {
   PipelinePage,
   PipelineRequest,
   PirReport,
+  PirSecondary,
   PreflightRequest,
   PreflightResult,
   PredictRequest,
@@ -246,6 +247,7 @@ export const api = {
   convertAlignment: async (ids: string[], aligned: string[], format: string) =>
     request<string>("POST", "/api/alignments/convert", { ids, aligned, format }),
   validatePir: (content: string) => post<PirReport>("/api/pir/validate", { content }),
+  pirSecondary: (content: string, templates: TemplateRef[]) => post<PirSecondary>("/api/pir/secondary", { content, templates }),
   uniprotSearch: (q: string) => get<UniProtHit[]>(`/api/uniprot/search?q=${enc(q)}`),
   uniprot: (acc: string) => get<UniProtEntry>(`/api/uniprot/${enc(acc)}`),
   uniprotDomains: (acc: string) => get<InterProDomain[]>(`/api/uniprot/${enc(acc)}/domains`),

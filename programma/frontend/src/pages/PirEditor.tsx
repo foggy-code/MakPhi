@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { Align2dResult, DocumentItem, PirReport, TemplateRef } from "../api/types";
+import type { Align2dResult, DocumentItem, PirReport, PirSecondary, PirSecondaryEntry, TemplateRef } from "../api/types";
 import { AlignmentView } from "../components/AlignmentView";
 import { TextFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
-import { PirGrid, type GridFocus } from "../components/PirGrid";
+import { PirGrid, type GridFocus, type GridSecondary } from "../components/PirGrid";
 import { PirMutations } from "../components/PirMutations";
+import { PirSecondaryCard } from "../components/PirSecondaryCard";
 import { SequencePicker, TemplatePicker } from "../components/Pickers";
 import { Alert, Badge, BarCell, Card, Confirm, Disclosure, Empty, Modal, PageHead, Tabs } from "../components/ui";
 import { FormSection, InfoChips } from "../components/WorkflowParts";
@@ -18,11 +19,22 @@ import { downloadText, fmtBytes, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
 import { parsePir, pirIdentities } from "../lib/pir";
 import { emptyHistory, record, redo, rewritePir, squareUp, undo, type History } from "../lib/pirEdit";
-import { originalSequences, pirMutations, residuesOf, revertMutations, type PirMutation } from "../lib/pirMutations";
+import { columnOfResidue, originalSequences, pirMutations, residuesOf, revertMutations, type PirMutation } from "../lib/pirMutations";
+import { columnCodes, columnStates, gapConflicts, secondaryKey } from "../lib/pirSecondary";
 import { templateLabel } from "../lib/workflowView";
 
 /** Chiave dei metadati del documento con le sequenze originali (riferimento delle sostituzioni). */
 const ORIGINAL_KEY = "original_sequences";
+
+/** Preferenza "struttura secondaria nella griglia" (solo in questo browser). */
+const SS_PREF = "bioloom.pir.secondary";
+function readSsPref(): boolean {
+  try {
+    return localStorage.getItem(SS_PREF) !== "0";
+  } catch {
+    return true;
+  }
+}
 
 function savedOriginal(meta: Record<string, unknown> | undefined): Record<string, string> | null {
   const v = meta?.[ORIGINAL_KEY];
@@ -102,6 +114,11 @@ export default function PirEditor() {
   const [gridFocus, setGridFocus] = useState<GridFocus | null>(null);
   // documento appena salvato: il cambio di indirizzo che segue non lo ricarica (cronologia e sblocco restano)
   const justSaved = useRef<string | null>(null);
+  // struttura secondaria: risposta del server con la chiave della richiesta (residui e template, non i gap)
+  const [ssOn, setSsOn] = useState(readSsPref);
+  const [ssData, setSsData] = useState<{ key: string; data: PirSecondary } | null>(null);
+  const [ssLoading, setSsLoading] = useState(false);
+  const [ssError, setSsError] = useState<string | null>(null);
 
   /**
    * Contenuto caricato da fuori (documento, file, job): nuova cronologia, template di nuovo bloccati. Il riferimento delle
@@ -171,6 +188,45 @@ export default function PirEditor() {
   const templatesMeta = (meta.templates as TemplateRef[] | undefined) ?? [];
   const mutationReport = useMemo(() => pirMutations(original, entries), [original, entries]);
   const mutated = useMemo(() => new Set(mutationReport.mutations.map((m) => `${m.row}:${m.column}`)), [mutationReport]);
+
+  // struttura secondaria: si richiede solo quando cambiano residui, voci o template (spostare i gap non la cambia)
+  const ssKey = useMemo(() => secondaryKey(entries, templatesMeta), [entries, templatesMeta]);
+  useEffect(() => {
+    if (!ssOn || !entries.length || ssData?.key === ssKey) return;
+    const text = content;
+    const t = setTimeout(() => {
+      setSsLoading(true);
+      api.pirSecondary(text, templatesMeta)
+        .then((data) => {
+          setSsData({ key: ssKey, data });
+          setSsError(null);
+        })
+        .catch((e) => setSsError(e instanceof Error ? e.message : String(e)))
+        .finally(() => setSsLoading(false));
+    }, 500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ssKey, ssOn]);
+  /** Voce della risposta per ogni riga: per posizione se il codice coincide, altrimenti per codice. */
+  const ssEntries = useMemo<(PirSecondaryEntry | null)[]>(() => {
+    const list = ssData?.data.entries ?? [];
+    return entries.map((e, i) => (list[i]?.code === e.code ? list[i] : list.find((x) => x.code === e.code) ?? null));
+  }, [ssData, entries]);
+  const gridSecondary = useMemo<GridSecondary | null>(() => {
+    if (!ssOn || !ssData) return null;
+    const states = entries.map((e, i) => (ssEntries[i]?.ss ? columnStates(e.sequence, ssEntries[i]!.ss!) : null));
+    const codes = entries.map((e, i) => (ssEntries[i]?.source === "dssp" && ssEntries[i]?.ss ? columnCodes(e.sequence, ssEntries[i]!.ss!) : null));
+    const sources = ssEntries.map((x) => x?.source ?? null);
+    return { states, codes, sources, conflicts: gapConflicts(entries.map((e) => e.sequence), entries.map((e) => e.kind), states, sources) };
+  }, [ssOn, ssData, ssEntries, entries]);
+  const toggleSs = (on: boolean) => {
+    setSsOn(on);
+    try {
+      localStorage.setItem(SS_PREF, on ? "1" : "0");
+    } catch {
+      // preferenza non salvata (archivio del browser non disponibile): vale fino alla chiusura della pagina
+    }
+  };
 
   /** Modifica dalla griglia: le voci comparse dopo il caricamento (testo incollato, codici nuovi) prendono come riferimento la sequenza di adesso. */
   const editRows = (rows: string[]) => {
@@ -318,6 +374,7 @@ export default function PirEditor() {
                   mutated={mutated}
                   focus={gridFocus}
                   onFocusDone={() => setGridFocus(null)}
+                  secondary={gridSecondary}
                 />
               ) : (
                 <textarea
@@ -353,6 +410,27 @@ export default function PirEditor() {
             onRevert={revert}
             onResetReference={resetReference}
           />
+          {entries.length > 0 && (
+            <PirSecondaryCard
+              entries={ssEntries}
+              conflicts={gridSecondary?.conflicts ?? []}
+              codes={entries.map((e) => e.code)}
+              enabled={ssOn}
+              loading={ssLoading}
+              error={ssError}
+              onToggle={toggleSs}
+              onGoColumn={(r, c) => {
+                setTab("grid");
+                setGridFocus({ r, c, n: Date.now() });
+              }}
+              onGoResidue={(r, index) => {
+                const c = columnOfResidue(entries[r]?.sequence ?? "", index);
+                if (c === null) return;
+                setTab("grid");
+                setGridFocus({ r, c, n: Date.now() });
+              }}
+            />
+          )}
           {report && (
             <Card title="Verifica" icon="shield" sub={`${report.errors.length} errori · ${report.warnings.length} avvisi`}
               right={report.valid ? <Badge tone="ok">valido per MODELLER</Badge> : <Badge tone="err">da correggere</Badge>}>

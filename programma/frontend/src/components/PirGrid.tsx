@@ -3,8 +3,11 @@ import { CLASS_TINT } from "../lib/alignmentView";
 import { RESIDUE_CLASSES, residueClass } from "../lib/aminoAcids";
 import { residueText } from "../lib/compareMetrics";
 import { AMINO } from "../lib/mutations";
-import { deleteGaps, insertGaps, isRagged, normSel, removeGapColumns, sameRows, slideBlock, squareUp, type Selection } from "../lib/pirEdit";
+import { deleteGaps, insertGaps, isGapBlock, isRagged, normSel, removeGapColumns, sameRows, slideBlock, squareUp, type Selection } from "../lib/pirEdit";
 import { blosum62, blosumTone, isStandardAa, residuePositions, substitute } from "../lib/pirMutations";
+import { conflictText, type GapConflict, type SS3 } from "../lib/pirSecondary";
+import { dsspLabel } from "../lib/qualityView";
+import { SS3_LABEL } from "../lib/residues";
 import { Icon } from "./Icon";
 import "../styles/pir.css";
 
@@ -12,11 +15,25 @@ import "../styles/pir.css";
 const CW = 14;
 const RH = 22;
 const NAME_W = 170;
+/** altezza della traccia della struttura secondaria sotto ogni riga */
+const TH = 12;
 /** colonne disegnate oltre i bordi visibili (scorrimento orizzontale senza vuoti) */
 const OVERSCAN = 24;
 
 const TINT: Record<string, CSSProperties> = {};
 for (const c of RESIDUE_CLASSES) for (const l of c.letters) TINT[l] = { background: `${c.color}${CLASS_TINT}` };
+
+/** Struttura secondaria da disegnare sotto le righe (una voce per riga dell'allineamento). */
+export interface GridSecondary {
+  /** stati per colonna; null = nessuna struttura secondaria per quella voce */
+  states: (SS3[] | null)[];
+  /** codici DSSP a 8 stati per colonna (dettaglio nella riga di stato) */
+  codes: (string[] | null)[];
+  /** "dssp" (template), "gor" (predizione del bersaglio) o null */
+  sources: (string | null)[];
+  /** gap che spezzano un'elica o un filamento di un template */
+  conflicts: GapConflict[];
+}
 
 /** Richiesta di portare il focus sulla griglia, e il cursore su una cella se indicata (`n` cambia a ogni richiesta). */
 export interface GridFocus {
@@ -46,6 +63,8 @@ interface Props {
   focus?: GridFocus | null;
   /** la richiesta di focus è stata eseguita (la pagina la azzera, così non si ripete quando la griglia ricompare) */
   onFocusDone?: () => void;
+  /** tracce della struttura secondaria (null o assente: nessuna traccia) */
+  secondary?: GridSecondary | null;
 }
 
 const isLocked = (kind: string | undefined, templatesEditable: boolean) => !templatesEditable && !!kind?.startsWith("structure");
@@ -57,8 +76,10 @@ const widthOf = (rows: string[]) => Math.max(0, ...rows.map((s) => s.length));
  * lettera sostituisce il residuo sotto il cursore. Le colonne fuori vista non si disegnano: allineamenti lunghi restano
  * fluidi. Il focus resta sulla griglia anche dopo i pulsanti, così le lettere non finiscono alle scorciatoie globali.
  */
-export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, canUndo, canRedo, templatesEditable, onTemplatesEditable, mutated, focus, onFocusDone }: Props) {
+export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, canUndo, canRedo, templatesEditable, onTemplatesEditable, mutated, focus, onFocusDone, secondary }: Props) {
   const width = widthOf(rows);
+  // passo verticale fra le righe: con la struttura secondaria ogni riga ha la sua traccia sotto
+  const stride = secondary ? RH + TH : RH;
   const [anchor, setAnchor] = useState({ r: 0, c: 0 });
   const [cursor, setCursor] = useState({ r: 0, c: 0 });
   const [view, setView] = useState({ left: 0, width: 1200 });
@@ -99,9 +120,9 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
     const visible = box.clientWidth - NAME_W;
     if (x < box.scrollLeft) box.scrollLeft = Math.max(0, x - CW * 4);
     else if (x + CW > box.scrollLeft + visible) box.scrollLeft = x + CW * 5 - visible;
-    const y = (r + 1) * RH;
-    if (y < box.scrollTop + RH) box.scrollTop = Math.max(0, y - RH * 2);
-    else if (y + RH > box.scrollTop + box.clientHeight) box.scrollTop = y + RH * 2 - box.clientHeight;
+    const y = RH + r * stride; // il righello sta sopra le righe
+    if (y < box.scrollTop + RH) box.scrollTop = Math.max(0, y - RH - stride);
+    else if (y + stride > box.scrollTop + box.clientHeight) box.scrollTop = y + stride * 2 - box.clientHeight;
   };
 
   // dopo una modifica la griglia può essersi allargata: il cursore si porta in vista a DOM aggiornato
@@ -160,7 +181,9 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
     deleteBefore: () => sel.c0 > 0
       ? edit(deleteGaps(rows, sel, sel.c0 - 1), "Nessun gap da togliere prima della selezione.", -1)
       : (say("Sei alla prima colonna."), false),
-    slide: (dir: -1 | 1) => edit(slideBlock(rows, sel, dir), dir < 0 ? "Il blocco non può andare a sinistra: c'è un residuo o il bordo." : "Il blocco non può andare a destra: c'è un residuo di fronte.", dir),
+    slide: (dir: -1 | 1) => edit(slideBlock(rows, sel, dir), isGapBlock(rows, sel)
+      ? "I gap non scavalcano il bordo, un separatore di catena «/» o un ligando «.»."
+      : dir < 0 ? "Il blocco non può andare a sinistra: c'è un residuo o il bordo." : "Il blocco non può andare a destra: c'è un residuo di fronte.", dir),
     squeeze: () => edit(removeGapColumns(rows), "Nessuna colonna fatta solo di gap."),
     /** sostituisce il residuo sotto il cursore */
     substitute: (aa: string) => {
@@ -220,7 +243,7 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
     const rect = bodyRef.current?.getBoundingClientRect();
     const box = boxRef.current;
     if (!rect || !box) return null;
-    const r = clampR(Math.floor((e.clientY - rect.top) / RH));
+    const r = clampR(Math.floor((e.clientY - rect.top) / stride));
     const xName = e.clientX - box.getBoundingClientRect().left;
     if (xName < NAME_W) return { r, c: -1 };
     return { r, c: clampC(Math.floor((e.clientX - rect.left - NAME_W) / CW)) };
@@ -275,6 +298,10 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
   const cls = residueClass(ch);
   const selCols = sel.c1 - sel.c0 + 1;
   const selRows = sel.r1 - sel.r0 + 1;
+  const ssText = secondary ? secondaryText(secondary, cursor.r, cursor.c) : null;
+  // gap che spezza un elemento in questa colonna: del template sotto il cursore, o di un template qualsiasi se il cursore è sul bersaglio
+  const conflict = secondary?.conflicts.find((x) => x.row === cursor.r && x.from <= cursor.c && cursor.c <= x.to)
+    ?? secondary?.conflicts.find((x) => kinds[cursor.r] === "sequence" && x.from <= cursor.c && cursor.c <= x.to);
 
   return (
     <div className="stack-sm">
@@ -284,8 +311,8 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
         <span className="pirg-sep" />
         <button type="button" className="btn btn-sm" onClick={run(actions.insert)} title="Inserisce un gap prima della selezione nelle righe selezionate (Spazio o -)">+ gap</button>
         <button type="button" className="btn btn-sm" onClick={run(actions.deleteAt)} title="Toglie il gap nella prima colonna della selezione (Canc)">− gap</button>
-        <button type="button" className="btn btn-sm" onClick={run(() => actions.slide(-1))} title="Sposta il blocco selezionato a sinistra sopra un gap (Alt+←)">← blocco</button>
-        <button type="button" className="btn btn-sm" onClick={run(() => actions.slide(1))} title="Sposta il blocco selezionato a destra sopra un gap (Alt+→)">blocco →</button>
+        <button type="button" className="btn btn-sm" onClick={run(() => actions.slide(-1))} title="Sposta il blocco selezionato a sinistra sopra un gap; un blocco di soli gap scavalca i residui (Alt+←)">← blocco</button>
+        <button type="button" className="btn btn-sm" onClick={run(() => actions.slide(1))} title="Sposta il blocco selezionato a destra sopra un gap; un blocco di soli gap scavalca i residui (Alt+→)">blocco →</button>
         <button type="button" className="btn btn-sm btn-ghost" onClick={run(actions.squeeze)} title="Toglie le colonne in cui tutte le voci hanno un gap">Togli colonne di soli gap</button>
         <label className="check right" title="I residui dei template devono corrispondere al file della struttura: sbloccali solo per correggere un PIR che non corrisponde già">
           <input type="checkbox" checked={templatesEditable} onChange={(e) => onTemplatesEditable(e.target.checked)} />
@@ -311,9 +338,13 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
             <span key={m.c} style={{ left: NAME_W + m.c * CW }}>{m.label}</span>
           ))}
         </div>
-        <div ref={bodyRef} className="pirg-body" style={{ width: NAME_W + width * CW, height: rows.length * RH }} onMouseDown={onMouseDown} aria-hidden="true">
+        <div ref={bodyRef} className="pirg-body" style={{ width: NAME_W + width * CW, height: rows.length * stride }} onMouseDown={onMouseDown} aria-hidden="true">
+          {secondary && rows.map((_s, r) => (
+            <Track key={`t${r}`} top={r * stride + RH} c0={c0} c1={c1} states={secondary.states[r]} source={secondary.sources[r]}
+              conflicts={secondary.conflicts.filter((x) => x.row === r)} />
+          ))}
           {rows.map((s, r) => (
-            <div key={r} className={`pirg-row${kinds[r] === "sequence" ? " pirg-target" : ""}`} style={{ top: r * RH }}>
+            <div key={r} className={`pirg-row${kinds[r] === "sequence" ? " pirg-target" : ""}`} style={{ top: r * stride }}>
               <div className="pirg-name" title={`${ids[r]} · ${kinds[r]}`}>
                 <span className="pirg-kind">{kinds[r] === "sequence" ? "bersaglio" : "template"}</span>{ids[r]}
               </div>
@@ -325,8 +356,8 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
               </div>
             </div>
           ))}
-          <div className="pirg-sel" style={{ top: sel.r0 * RH, left: NAME_W + sel.c0 * CW, width: selCols * CW, height: selRows * RH }} />
-          <div className="pirg-cursor" style={{ top: cursor.r * RH, left: NAME_W + cursor.c * CW }} />
+          <div className="pirg-sel" style={{ top: sel.r0 * stride, left: NAME_W + sel.c0 * CW, width: selCols * CW, height: (selRows - 1) * stride + RH }} />
+          <div className="pirg-cursor" style={{ top: cursor.r * stride, left: NAME_W + cursor.c * CW }} />
         </div>
       </div>
       <div className="aln-status" id={statusId} aria-live="polite" aria-atomic="true">
@@ -334,6 +365,8 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
         {pos === null
           ? (ch === "/" ? "separatore di catena" : ch === "." ? "blocco di ligando" : "gap")
           : <>{pos.multichain ? <>catena <b>{pos.chain}</b> · </> : null}<b>{residueText(ch)}</b> {pos.number}{cls ? ` · ${cls.one}` : ""}</>}
+        {ssText && <> · {ssText}</>}
+        {conflict && <> · <span className="pirg-conflict-text">{conflictText(conflict)} di {ids[conflict.row]}</span></>}
         {(selCols > 1 || selRows > 1) && <> · selezione {selRows} × {selCols}</>}
         {message && <span key={message.n}> · <span style={{ color: "var(--warn)" }}>{message.text}</span></span>}
       </div>
@@ -388,6 +421,45 @@ function Palette({ current, locked, onPick }: { current: string; locked: boolean
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** Stato della struttura secondaria nella cella, per la riga di stato. */
+function secondaryText(secondary: GridSecondary, r: number, c: number): string | null {
+  const state = secondary.states[r]?.[c];
+  if (!state || state === " ") return null;
+  if (state === "?") return "struttura secondaria sconosciuta";
+  if (secondary.sources[r] === "dssp") return `${dsspLabel(secondary.codes[r]?.[c] ?? state)} (DSSP)`;
+  return `${SS3_LABEL[state]} (predetta)`;
+}
+
+/** Tratti consecutivi con lo stesso valore nelle colonne [c0, c1). */
+function runs<T>(values: T[], c0: number, c1: number, skip: (v: T) => boolean): { from: number; to: number; value: T }[] {
+  const out: { from: number; to: number; value: T }[] = [];
+  for (let c = c0; c < c1; c++) {
+    const v = values[c];
+    if (v === undefined || skip(v)) continue;
+    const last = out[out.length - 1];
+    if (last && last.value === v && last.to === c - 1) last.to = c;
+    else out.push({ from: c, to: c, value: v });
+  }
+  return out;
+}
+
+const SS_CLASS: Record<string, string> = { H: "pirg-ss-h", E: "pirg-ss-e", C: "pirg-ss-c", "?": "pirg-ss-u" };
+
+/** Traccia della struttura secondaria sotto una riga: eliche, filamenti, coil, e i gap che spezzano un elemento. */
+function Track({ top, c0, c1, states, source, conflicts }: { top: number; c0: number; c1: number; states: SS3[] | null; source: string | null; conflicts: GapConflict[] }) {
+  return (
+    <div className={`pirg-track${source === "gor" ? " pirg-track-pred" : ""}`} style={{ top }}>
+      <div className="pirg-track-name">{source === "dssp" ? "DSSP" : source === "gor" ? "predetta (GOR)" : "—"}</div>
+      {states && runs(states, c0, c1, (v) => v === " ").map((x) => (
+        <i key={x.from} className={SS_CLASS[x.value]} style={{ left: NAME_W + x.from * CW, width: (x.to - x.from + 1) * CW }} />
+      ))}
+      {conflicts.filter((x) => x.to >= c0 && x.from < c1).map((x) => (
+        <b key={`k${x.from}`} className="pirg-ss-conflict" title={conflictText(x)} style={{ left: NAME_W + x.from * CW, width: (x.to - x.from + 1) * CW }} />
+      ))}
     </div>
   );
 }

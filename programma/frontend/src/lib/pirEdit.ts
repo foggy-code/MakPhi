@@ -76,6 +76,7 @@ export function deleteGaps(rows: string[], sel: Selection, col: number, n = 1): 
 export function slideBlock(rows: string[], sel: Selection, dir: -1 | 1): string[] | null {
   const s = normSel(sel);
   const targets = rowsOf(s);
+  if (isGapBlock(rows, s)) return slideGaps(rows, s, dir);
   const free = dir < 0 ? s.c0 - 1 : s.c1 + 1;
   if (free < 0) return null;
   if (!targets.every((r) => rows[r][free] === GAP || (dir > 0 && free >= rows[r].length))) return null;
@@ -86,6 +87,38 @@ export function slideBlock(rows: string[], sel: Selection, dir: -1 | 1): string[
     out[r] = dir < 0
       ? row.slice(0, free) + block + GAP + row.slice(s.c1 + 1)
       : row.slice(0, s.c0) + GAP + block + row.slice(free + 1);
+  }
+  return changed(rows, squareUp(out));
+}
+
+/** Il blocco selezionato è fatto solo di gap in tutte le righe selezionate. */
+export function isGapBlock(rows: string[], sel: Selection): boolean {
+  const s = normSel(sel);
+  return rowsOf(s).every((r) => rows[r].slice(s.c0, s.c1 + 1).padEnd(s.c1 - s.c0 + 1, GAP).split("").every((c) => c === GAP));
+}
+
+/** Caratteri che i gap non scavalcano: devono restare nella stessa colonna in tutte le voci. */
+const FIXED = new Set(["/", "."]);
+
+/**
+ * Sposta di una colonna un blocco di soli gap (una zona di inserzione o delezione): il carattere subito oltre il blocco
+ * passa dall'altra parte, quindi i residui restano in ordine e cambia solo dove cade il gap. Null al bordo, se oltre il
+ * blocco c'è un separatore di catena o un ligando ("/", ".") o se non cambia nulla.
+ */
+function slideGaps(rows: string[], s: Selection, dir: -1 | 1): string[] | null {
+  const width = s.c1 - s.c0 + 1;
+  const near = dir < 0 ? s.c0 - 1 : s.c1 + 1;
+  if (near < 0) return null;
+  const out = rows.slice();
+  for (const r of rowsOf(s)) {
+    const row = out[r].padEnd(s.c1 + 1, GAP);
+    const c = row[near];
+    if (c === undefined) continue; // oltre la fine della riga: niente da scambiare
+    if (FIXED.has(c)) return null;
+    const gaps = GAP.repeat(width);
+    out[r] = dir < 0
+      ? row.slice(0, near) + gaps + c + row.slice(s.c1 + 1)
+      : row.slice(0, s.c0) + c + gaps + row.slice(near + 1);
   }
   return changed(rows, squareUp(out));
 }
