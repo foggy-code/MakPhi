@@ -420,6 +420,13 @@ table.table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .table td.num, .table th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .table tr.clickable { cursor: pointer; }
 .table tr.clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 0; }
+/* pipeline M × N: matrice sequenze × template (celle colorate per la metrica scelta) */
+.pipeline-matrix th { text-transform: none; letter-spacing: 0; } /* nomi di sequenze e template come sono */
+.pipeline-matrix th[scope="row"] { position: sticky; left: 0; background: var(--panel); text-align: left; z-index: 1; color: var(--text); }
+.pipeline-matrix td { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pipeline-matrix td.clickable { cursor: pointer; }
+.pipeline-matrix td.clickable:hover { filter: brightness(0.94); }
+.pipeline-matrix td.clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .bar-cell { display: flex; align-items: center; gap: 8px; min-width: 110px; }
 .bar-cell .bar { flex: 1; height: 6px; background: var(--panel-3); border-radius: 3px; overflow: hidden; }
 .bar-cell .bar > div { height: 100%; border-radius: 3px; }

@@ -929,6 +929,40 @@ ricerca e poi `select_complementary`; `run_modeling` riceve tutti i template sce
 - **Interfaccia:** la colonna Template elenca i template (complementari segnati), con le motivazioni nel suggerimento;
   il report dell'elemento dice "più template complementari (al massimo N)".
 
+**Pipeline, sequenze × template** (`template_mode: "fixed"`, `fixed_combination: "each"`; predefinito `"combined"`,
+un modello per sequenza con tutti i template, al massimo 10): ogni sequenza si modella su ogni template, uno alla volta.
+M sequenze e N template danno M × N elementi; nessun limite su N (resta quello di 2000 sequenze).
+
+- **Elementi:** uno per coppia, in ordine di sequenza: `idx` = sequenza × N + template (`pipeline.pair_of`), nome
+  `<sequenza>__<template>` (cartella `items/<idx>_<sequenza>__<template>/`), `template` = id del template. L'etichetta
+  del template è id e catene sanificati (`1UBQ_A`, `template_labels`, salvate in `params.template_labels`). Nessuna
+  colonna nuova: sequenza e template si ricavano dalla posizione, quindi la ripresa (che azzera le righe) non li perde.
+  Lo stesso template con le stesse catene due volte è un errore della sottomissione.
+- **Modellazione:** `run_modeling` con il solo template della coppia e il nome della sequenza come bersaglio; con
+  l'analisi di qualità richiesta, ogni coppia analizza il proprio modello migliore per DOPE, come la pipeline normale.
+  Identità e copertura dall'allineamento (`report.alignment_identity`), zona crepuscolare solo segnalata. Nel PDB la
+  riga `REMARK 999 BIOLOOM PIPELINE SEQUENCE <s> TEMPLATE <t>`, aggiunta alle REMARK dell'analisi (`model_remarks`).
+  Nelle metriche lo zDOPE resta quello di MODELLER anche dopo l'analisi.
+- **Migliore della sequenza:** quando tutte le coppie di una sequenza sono concluse (`_close_sequences`, una volta per
+  esecuzione, sotto un lock) il modello con lo zDOPE di MODELLER più basso (a parità il DOPE, poi l'ordine dei template)
+  diventa il migliore (`metrics.best_in_sequence`). A fine esecuzione si chiudono anche le sequenze non toccate da una
+  ripresa, così il migliore si ricalcola sempre sulle coppie completate.
+- **Consultazione:** `GET /api/pipeline/{id}/items` accetta `sequence`, `template` (indici) e `best`; ogni riga ha
+  `pair` (indici, nomi, id del template) e `best_in_sequence`, la risposta `pairs` (nomi di righe e colonne).
+  `GET /api/pipeline/{id}/matrix`: matrice sequenze × template con stato, zDOPE, DOPE, GA341, molpdf, identità,
+  copertura, voto e migliore di ogni coppia (400 `matrix_unsupported` per le altre pipeline).
+- **ZIP:** una cartella per template, `template/<template>/<sequenza>__<template>.{pdb,html,quality.json}` (rapporto
+  di qualità di ogni coppia, se l'analisi era richiesta); `riepilogo.csv` (una riga per coppia con `best_in_sequence` e il percorso del modello
+  nell'archivio), `migliori.csv` (una riga per sequenza), `matrici/{zdope,dope,ga341,molpdf,identita,copertura}.csv`,
+  `parametri.json`, `LEGGIMI.txt`. Il report della coppia ha il titolo "sequenza × template".
+- **Controlli preventivi:** nota `pipeline_pairs` con il numero di coppie; stima su M × N modellazioni, ognuna con la
+  sua analisi.
+- **Interfaccia:** scelta "Uso dei template" sotto il selettore dei template fissi, con il conteggio delle coppie (il
+  selettore non limita più il numero di template). Nei risultati filtri per sequenza e per template, "solo il
+  migliore", badge "migliore", zDOPE sotto il DOPE e la vista "Matrice sequenze × template"
+  (`components/PipelineMatrix.tsx`, logica in `lib/pipelineMatrix.ts`): celle colorate per la metrica scelta (DOPE e
+  molpdf rispetto alla riga), stella sul migliore, conteggio dei migliori per template, clic per il modello nel 3D.
+
 ### Modelli AlphaFold DB
 
 Per le proteine senza struttura sperimentale omologa un modello di AlphaFold DB (EBI) fa da template o da
@@ -1849,10 +1883,11 @@ elenchi), `interfaces`, `conservation` (o null), `warnings`. Il log riporta la d
 0,46 s (tre calcoli della SASA); quattro copie del dimero, 4816 atomi e 8 catene, analisi completa con la conservazione
 2,6 s (il test fissa un limite largo di 60 s). Il costo è quello della SASA: complesso + catene isolate + coppie.
 
-**Report** (`domain/report.py`, `services/reports.py`): la sezione "Analisi strutturale" (ponti disolfuro con SG–SG,
-Cα–Cα e χ3; interfacce con area, residui, legami H, ponti salini, area apolare, plausibilità e limiti) compare nei
-report del modello, dell'elemento di pipeline (anche nello ZIP) e dell'analisi di qualità quando l'analisi strutturale
-più recente della stessa struttura ha disolfuri o interfacce. Il report non ricalcola nulla.
+**Report** (`domain/report.py`, `services/reports.py`): la sezione "Analisi strutturale" (conteggi e tabelle complete
+delle interazioni; ponti disolfuro con SG–SG, Cα–Cα e χ3; interfacce con area, residui, legami H, ponti salini, area
+apolare, composizione, plausibilità, limiti e ΔSASA per residuo; conservazione con il profilo per residuo) compare nei
+report del modello, dell'elemento di pipeline (anche nello ZIP) e dell'analisi di qualità quando esiste un'analisi
+strutturale della stessa struttura. Tasche ed elettrostatica (F7b) hanno le loro sezioni. Il report non ricalcola nulla.
 
 **Interfaccia** (`components/StructuralAnalysis.tsx`, logica in `lib/interactions.ts`):
 
@@ -2398,7 +2433,10 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
   | Modelli | risultato del job o `models.json` dell'elemento; voto solo per i modelli analizzati |
   | Qualità | `<modello>.quality.json` (o risultato del job quality); consenso ricomposto con GA341 e zDOPE del modello (`consensus.compute`), oppure dalla rotta del consenso quando c'è QMEAN |
   | Ligandi e metalli | campo `ligands` del rapporto di qualità; per il modello migliore senza analisi, `ligands.verification` del risultato. Sezione solo se presente: esito, classe, coordinazione con i donatori e le distanze attese, residui entro 4 Å, confronto con il sito del template, motivazione; nei parametri i gruppi trasferiti e da quale template |
-  | Analisi strutturale | ponti disolfuro e interfacce (area, residui, interazioni fra le catene, plausibilità con i limiti) del job `analysis` completato più recente sulla stessa struttura (`AnalysisService.latest`: stessa sorgente, `{job, file}` per i modelli, e stessa impronta del file); la sezione "Analisi strutturale" compare solo se ce ne sono (vedi [Analisi strutturale](#analisi-strutturale)) |
+  | Analisi strutturale | job `analysis` completato più recente sulla stessa struttura (`AnalysisService.latest`: stessa sorgente, `{job, file}` per i modelli, e stessa impronta del file), riassunto da `analysis.report_summary`: conteggi delle interazioni, tabelle complete di legami idrogeno, ponti salini e interazioni aromatiche (blocchi richiudibili), ponti disolfuro, interfacce (area, residui, interazioni fra le catene, composizione, plausibilità con i limiti, ΔSASA per residuo in un grafico a barre) e conservazione (righe usate, profilo per residuo). La sezione compare quando c'è un'analisi (vedi [Analisi strutturale](#analisi-strutturale)) |
+  | Tasche | job `pockets` più recente sulla stessa struttura (`StructureToolsService.latest`, stessi criteri), riassunto da `structure_tools.pockets_summary` (senza le sfere alfa): riepilogo, druggability, volume e punteggio di fpocket per tasca (barre, la druggabile in verde) e tabella con i descrittori e tutti i residui che rivestono ogni tasca |
+  | Elettrostatica | job `electrostatics` più recente sulla stessa struttura, riassunto da `structure_tools.electrostatics_summary`: carica netta, intervallo del potenziale, profilo del potenziale per residuo con le soglie, residui marcati, tabella completa (richiudibile), cariche per tipo, parametri di PDB2PQR e APBS |
+  | Dati per residuo | appendice con tutti i residui del rapporto: DSSP, φ, ψ, Ramachandran, clash, RSA, DOPE, B-factor o pLDDT e, se ci sono, QMEAN locale, ProSA, disordine, lDDT rispetto alla predizione e le segnalazioni del consenso (righe con almeno 2 metodi evidenziate); in un blocco richiudibile |
   | Mutagenesi | job `mutate` e `alascan` (F9.2): dal risultato del job; classe con le motivazioni pesate e l'avvertenza, siti (struttura secondaria, RSA, BLOSUM62, superficie apolare sepolta, interazioni perse, interfaccia), DOPE totale, locale e fra le catene, energia di OpenMM con i riferimenti, metriche del selvatico riottimizzato e del mutante, protocollo e fonti; per la scansione la tabella ordinata, gli esclusi e gli hot spot. Sezioni bilanciate (`doc.section`/`doc.end`) |
   | Interfacce del complesso | modelli a più catene (F5.3): `complex` del risultato (catene del modello e del template, simmetria) e il confronto delle interfacce del rapporto di qualità del modello (per il migliore senza analisi, quello del risultato): tabella con area (e quella del template), residui conservati, Fnat, iRMS, LRMS, DockQ ed esito, testo motivato per interfaccia e limiti; nei parametri la riga "Simmetria fra catene" (vedi [Complessi e omo-oligomeri](#complessi-e-omo-oligomeri)) |
   | Confronto con una predizione | F9.3: il job `predict` indicato (`predict_job=`, con i controlli della rotta del consenso: un'altra struttura è un 400) oppure il confronto completato più recente sulla stessa struttura (stessa sorgente e impronta; uno che non vale più per il rapporto si tralascia). Sezione "Confronto con una predizione (ESMFold)" bilanciata con l'esito, TM-score, lDDT, GDT-TS, pLDDT, regioni divergenti con la confidenza e le regioni del consenso, note e limiti; consenso con l'accordo con la predizione (vedi [Confronto con un predittore esterno](#confronto-con-un-predittore-esterno)). Senza confronto il report non cambia |
@@ -2421,14 +2459,33 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
   - accanto ai profili, il disordine predetto del consenso (F5.5): FoldIndex per residuo con la soglia 0 e, sullo sfondo,
     le regioni disordinate lunghe (i singoli residui sotto 0 non si segnano); nel consenso una nota con le regioni,
     "attese poco affidabili";
-  - striscia della struttura secondaria a 3 stati.
+  - striscia della struttura secondaria a 3 stati e barra impilata della composizione (con il conteggio degli 8 stati
+    DSSP); barra impilata delle regioni di Ramachandran di PROCHECK con la tabella dei parametri geometrici;
+  - profili di RSA (soglia 20%), B-factor (solo strutture sperimentali con valori non tutti uguali) ed energia ProSA dal
+    profilo di ProSA quando non è attribuibile ai residui del consenso;
+  - tracce del consenso (`tracks_svg`, come `ConsensusTracks` dell'interfaccia): una riga per metodo con i residui
+    segnalati, il numero di metodi per residuo, le regioni problematiche (tratteggiate se attese nel disordine predetto)
+    e, se ci sono, disordine predetto e divergenza dalla predizione;
+  - punteggi dei modelli (DOPE, zDOPE, molpdf, GA341, voto): un punto per modello su una scala adattata ai dati
+    (`bars_svg(dots=True)`: i DOPE di modelli diversi differiscono di poche decine su migliaia), il migliore in verde;
+  - grafici a barre (`bars_svg`) per ΔSASA d'interfaccia, druggability, volume e punteggio delle tasche, ΔDOPE e ΔΔE
+    della scansione di alanina (colore della classe stimata); profili per la conservazione, il potenziale elettrostatico,
+    lDDT e pLDDT del confronto con una predizione.
+- **Tabelle lunghe:** tutti i residui, tutte le interazioni, i clash oltre i primi 20 e i residui dell'elettrostatica
+  stanno in blocchi `<details>`, chiusi sullo schermo; in stampa `details::details-content{content-visibility:visible}`
+  li apre nei browser che supportano lo pseudo-elemento (verificato su Chrome; quelli senza stampano solo il titolo del
+  blocco, che va aperto prima di stampare). Sugli
+  schermi stretti le tabelle scorrono in orizzontale invece di allargare la pagina.
 - **Legenda e fonti:** solo le metriche presenti, con le soglie usate da BioLoom, e solo le fonti dei metodi presenti
   (Šali & Blundell 1993, Shen & Sali 2006, Melo et al. 2002, John & Sali 2003, Benkert et al. 2011, Sippl 1993,
   Wiederstein & Sippl 2007, Laskowski et al. 1993, Jumper et al. 2021, Tunyasuvunakool et al. 2021, Mariani et al.
   2013, Ramachandran et al. 1963, Lovell et al. 2003, Word et al. 1999, Kabsch & Sander 1983, Shrake & Rupley 1973,
   Tien et al. 2013, Rost 1999, Prilusky et al. 2005, Uversky et al. 2000, Kyte & Doolittle 1982, Ward et al. 2004;
   con l'analisi strutturale Richardson 1981, Krissinel & Henrick 2007, Janin et al. 2008, Lo Conte et al. 1999,
-  Baker & Hubbard 1984, Barlow & Thornton 1983; con le interfacce di un complesso Basu & Wallner 2016, Méndez et al.
+  Baker & Hubbard 1984, Barlow & Thornton 1983, McDonald & Thornton 1994, McGaughey et al. 1998, Gallivan & Dougherty
+  1999, Salentin et al. 2015, e con la conservazione Capra & Singh 2007, Henikoff & Henikoff 1994; con le tasche Le
+  Guilloux et al. 2009, Schmidtke & Barril 2010; con l'elettrostatica Baker et al. 2001, Jurrus et al. 2018, Olsson et
+  al. 2011, Sitkoff et al. 1994 (PARSE); con le interfacce di un complesso Basu & Wallner 2016, Méndez et al.
   2003; con il confronto con una predizione Lin et al. 2023, Zhang & Skolnick 2004, Xu & Zhang 2010).
 - **Stampa:** `@page` A4 e regole `@media print`: niente indice, intestazioni delle tabelle ripetute, nessuna
   interruzione dentro grafici, blocchi di allineamento, riquadri e righe, allineamento e qualità da una pagina nuova,

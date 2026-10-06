@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel, Field
 
@@ -132,6 +132,9 @@ class PipelineIn(BaseModel):
                             "max_templates template complementari della ricerca")
     max_templates: int = Field(3, ge=2, le=5, description="Solo modalità multi: template al massimo per sequenza")
     templates: list[TemplateRef] = []
+    fixed_combination: Literal["combined", "each"] = Field(
+        "combined", description="Solo template fissi: combined = un modello per sequenza con tutti i template; each = "
+                                "un modello per ogni coppia sequenza × template (M × N)")
     engine: Literal["rcsb", "ncbi", "local", "mmseqs", "alphafold"] = "rcsb"
     evalue: float = Field(1e-3, gt=0, le=100)
     twilight: dict = {"filter": False, "identity": 25.0, "coverage": 40.0}
@@ -253,9 +256,18 @@ def submit_pipeline(body: PipelineIn, core: Core = Depends(get_core)) -> dict:
 
 @router.get("/pipeline/{job_id}/items")
 def pipeline_items(job_id: str, page: int = 1, size: int = 25, status: Optional[str] = None, sort: str = "idx",
-                   direction: str = "asc", q: str = "", core: Core = Depends(get_core)) -> dict:
+                   direction: str = "asc", q: str = "", sequence: Optional[int] = Query(None, ge=0),
+                   template: Optional[int] = Query(None, ge=0), best: bool = False,
+                   core: Core = Depends(get_core)) -> dict:
+    """`sequence`, `template` e `best` (solo i migliori di ogni sequenza) valgono per le pipeline M × N."""
     return core.pipeline.items(job_id, page=page, size=size, status=status, sort=sort, direction=direction,
-                               search_text=q)
+                               search_text=q, sequence=sequence, template=template, best_only=best)
+
+
+@router.get("/pipeline/{job_id}/matrix")
+def pipeline_matrix(job_id: str, core: Core = Depends(get_core)) -> dict:
+    """Pipeline M × N: matrice sequenze × template con le metriche di ogni coppia."""
+    return core.pipeline.matrix(job_id)
 
 
 @router.get("/pipeline/{job_id}/items/{idx}")

@@ -35,7 +35,7 @@ from .analysis import AnalysisService
 from .mutations import MutationService
 from .compute import MAX_SEQUENCE, _apply_ligand_options, _record, _template_specs, complex_templates
 from .coverage import CoverageService
-from .pipeline import effective_parallel
+from .pipeline import effective_parallel, is_cross
 from .templates import normalize_id
 
 if TYPE_CHECKING:
@@ -405,14 +405,25 @@ class PreflightService:
         if extended:
             self._optional_tools(out, procheck=True, prosa=True)
         mean = round(sum(len(r.sequence) for r in records) / max(1, items))
+        # pipeline M × N: un modello per coppia sequenza × template (nessun limite sul numero di template)
+        pairs = len(p.get("templates") or []) if is_cross(p) else 0
+        if pairs:
+            checks.append(rules.check(
+                "info", "pipeline_pairs",
+                f"{items} {'sequenza' if items == 1 else 'sequenze'} × {pairs} template = {items * pairs} "
+                f"{'modello' if items * pairs == 1 else 'modelli'} da costruire, uno per coppia"
+                + (", ognuno con la sua analisi di qualità" if quality else "")
+                + "; il migliore di ogni sequenza è quello con lo zDOPE più basso."))
         out["estimate"] = rules.pipeline_estimate(items, residues=mean, models=opts.models,
                                                   refinement=opts.refinement, quality=quality, extended=extended,
-                                                  search=search_time, parallel=parallel)
+                                                  search=search_time, parallel=parallel, templates=pairs)
         checks += rules.runtime_checks(out["estimate"], what="La pipeline",
                                        process_seconds=rules.building_seconds(max(len(r.sequence) for r in records),
                                                                               opts.models, opts.refinement),
                                        timeout_seconds=self.settings.job_timeout_minutes * 60)
         per_item = [rules.modeling_bytes(len(r.sequence), opts.models, 1 if quality else 0) for r in records]
+        if pairs:  # un elemento per coppia: N per sequenza
+            per_item = [item for item in per_item for _k in range(pairs)]
         largest = sorted((s for _r, s in per_item), reverse=True)[:parallel]
         self._disk(out, sum(r for r, _s in per_item), sum(largest))
         checks += rules.identical_models_checks(opts.models, opts.refinement)

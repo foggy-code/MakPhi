@@ -770,6 +770,17 @@ def test_pipeline_fixed_template_and_local_engine(client_with_ubq, env, monkeypa
     assert codes(mm, "error") == ["mmseqs_database_missing"]
 
 
+def test_pipeline_pairs_estimate(client_with_ubq, env):
+    """Pipeline M × N: una nota con il numero di coppie e la stima su tutti i modelli."""
+    params = pipeline_params(f">a\n{YEAST_UB}\n>b\n{HUMAN_UB}\n", template_mode="fixed", fixed_combination="each",
+                             templates=[{"id": "1UBQ", "chains": ["A"]}, {"id": "1UBQ", "chains": []}])
+    out = run(client_with_ubq, "pipeline", params)
+    assert "2 sequenze × 2 template = 4 modelli" in by_code(out, "pipeline_pairs")["message"]
+    assert "4 modelli" in out["estimate"]["detail"]
+    combined = run(client_with_ubq, "pipeline", {**params, "fixed_combination": "combined"})
+    assert not [c for c in combined["checks"] if c["code"] == "pipeline_pairs"]
+
+
 def test_pipeline_disk_space(client, env):
     env["free"]["data"] = 20 * 1024 ** 2
     fasta = "".join(f">s{i}\n{YEAST_UB}\n" for i in range(10))  # circa 10 × 2,9 MB di risultati

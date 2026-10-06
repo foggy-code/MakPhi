@@ -1,5 +1,12 @@
 """Pipeline batch: da un multi-FASTA a modelli validati, un elemento per sequenza.
 
+Con template fissi e `fixed_combination` "each" (pipeline M × N, `is_cross`) ogni sequenza si modella su ogni template,
+uno alla volta: un elemento per coppia, `idx` = sequenza × N + template (`pair_of`), nome `<sequenza>__<template>`
+(cartella `items/<idx>_<sequenza>__<template>/`). Senza colonne nuove: sequenza e template si ricavano dalla posizione.
+Quando tutte le coppie di una sequenza sono concluse, il modello con lo zDOPE più basso diventa il migliore della
+sequenza (`metrics.best_in_sequence`, `_close_sequences`). L'analisi di qualità, se richiesta, si fa su ogni coppia
+(il modello migliore per DOPE fra quelli di MODELLER della coppia, come nella pipeline normale).
+
 Ogni elemento è una riga di `pipeline_items` (interrogabile con paginazione e ordinamento lato
 server); il job padre esegue gli elementi in parallelo con un pool dedicato e aggiorna il progresso.
 
@@ -31,15 +38,20 @@ from ..core.errors import AppError, Conflict, NotFound
 from ..core.events import ITEM
 from ..core.jobs import REQUEUABLE, JobCancelled, JobContext, JobManager, requeue_error
 from ..core.storage import remove_tree, safe_join
-from ..domain import sequences, template_rank
+from ..domain import ligands, sequences, template_rank
+from ..domain.report import alignment_identity
 from ..domain.sequences import SeqRecord
-from ..engines import search
-from .compute import ComputeService, PreparedTemplates
+from ..engines import quality, search
+from .compute import ComputeService, PreparedTemplates, model_remarks
 from .reports import ReportService
 
 # Scelta dei template: "auto" = il migliore della ricerca, "fixed" = scelti dall'utente, "multi" = fino a
 # `max_templates` template complementari della ricerca (domain/template_rank.select_complementary)
 TEMPLATE_MODES = ("auto", "fixed", "multi")
+# Uso dei template fissi: "combined" = un modello per sequenza con tutti i template insieme; "each" = un modello per
+# ogni coppia sequenza × template (M × N elementi, vedi `is_cross`)
+FIXED_COMBINATIONS = ("combined", "each")
+PAIR_SEP = "__"  # nome dell'elemento di una coppia: <sequenza>__<template> (nomi sanificati: mai "__" al loro interno)
 TERMINAL_ITEM = {"completed", "failed", "cancelled", "filtered"}
 # Elementi che una ripresa rielabora, per ambito: "incomplete" = tutto ciò che non è completato o filtrato
 # (falliti, annullati, interrotti, in corso o in attesa); "failed" = solo i falliti.
@@ -77,13 +89,21 @@ class PipelineService:
     def submit(self, params: dict, project_id: Optional[str]) -> dict:
         records = self.validate(params)
         stored = {**params, "sequences": [{"name": r.name, "length": len(r.sequence)} for r in records]}
+        if is_cross(params):
+            # M × N: elemento idx = sequenza × N + template (`pair_of`), in ordine di sequenza
+            labels = template_labels(params.get("templates") or [])
+            stored["template_labels"] = labels
+            rows = [(r.name + PAIR_SEP + label, r.sequence) for r in records for label in labels]
+            title = params.get("name") or f"Pipeline di {_seqs(len(records))} × {_tpls(len(labels))}"
+        else:
+            rows = [(r.name, r.sequence) for r in records]
+            title = params.get("name") or f"Pipeline di {_seqs(len(records))}"
 
         def prepare(job_id: str, _workdir: Path) -> None:
             self.db.executemany(
                 "INSERT INTO pipeline_items(job_id, idx, name, sequence, status) VALUES (?,?,?,?, 'pending')",
-                [(job_id, i, r.name, r.sequence) for i, r in enumerate(records)])
+                [(job_id, i, name, seq) for i, (name, seq) in enumerate(rows)])
 
-        title = params.get("name") or f"Pipeline di {_seqs(len(records))}"
         return self.jobs.submit("pipeline", stored, project_id=project_id, title=title, prepare=prepare)
 
     def validate(self, params: dict) -> list[SeqRecord]:
@@ -99,6 +119,17 @@ class PipelineService:
             raise AppError(f"Modalità dei template sconosciuta: '{mode}' (ammesse: {', '.join(TEMPLATE_MODES)}).")
         if mode == "fixed" and not params.get("templates"):
             raise AppError("In modalità 'template fisso' seleziona almeno un template.")
+        combination = params.get("fixed_combination") or "combined"
+        if combination not in FIXED_COMBINATIONS:
+            raise AppError(f"Uso dei template sconosciuto: '{combination}' (ammessi: {', '.join(FIXED_COMBINATIONS)}).")
+        if is_cross(params):
+            seen: set[tuple] = set()
+            for t in params.get("templates") or []:
+                key = (str(t.get("id") or "").upper(), tuple(sorted(str(c) for c in t.get("chains") or [])))
+                if key in seen:
+                    raise AppError(f"Il template {t.get('id')} è selezionato più volte con le stesse catene: ogni "
+                                   "template dà un modello per sequenza, due uguali darebbero lo stesso modello.")
+                seen.add(key)
         if mode == "multi":
             max_templates(params)  # errore subito, prima della coda
         if mode != "fixed" and parsed.ligands:
@@ -162,7 +193,7 @@ class PipelineService:
         if lost:
             detail += f"; {lost} {'completata' if lost == 1 else 'completate'} ma senza il file del modello"
         return self.jobs.requeue(job_id, prepare=prepare, statuses=RESUMABLE, check=count,
-                                 note=f"{_seqs(todo)} da rielaborare ({detail})")
+                                 note=f"{(_models if is_cross(self._params(job_id)) else _seqs)(todo)} da rielaborare ({detail})")
 
     def _missing_models(self, job_id: str, final_dir: Path) -> list[dict]:
         """Elementi completati il cui modello non è nella cartella definitiva del job."""
@@ -253,20 +284,33 @@ class PipelineService:
             f"SELECT COUNT(*) FROM pipeline_items WHERE job_id=? AND status IN ({','.join('?' * len(PROCESSED_ITEM))})",
             (ctx.job_id, *PROCESSED_ITEM)))
         parallel = effective_parallel(p, ctx.settings.effective_workers())
+        cross = is_cross(p)
+        unit = _models if cross else _seqs
+        noun = "modelli" if cross else "sequenze"
+        done_word = "elaborati" if cross else "elaborate"
         # template preparati una volta per esecuzione e riusati dagli elementi con lo stesso template (F1.2)
         prepared = PreparedTemplates(ctx.tmp_dir / "templates")
         done_lock = threading.Lock()
         done = {"n": already}
-        ctx.log(f"Pipeline di {_seqs(total)}, {parallel} in parallelo")
+        if cross:
+            n_tpl = len(p.get("templates") or [])
+            ctx.log(f"Pipeline di {_seqs(total // max(1, n_tpl))} × {_tpls(n_tpl)} = {_models(total)}, {parallel} in "
+                    "parallelo; migliore di ogni sequenza: zDOPE più basso")
+        else:
+            ctx.log(f"Pipeline di {_seqs(total)}, {parallel} in parallelo")
         skipped = total - already - len(items)
         if len(items) < total:
-            ctx.log(f"Ripresa: {_seqs(len(items))} da elaborare, {already} già elaborate"
-                    + (f", {skipped} lasciate come sono (annullate)" if skipped else ""))
+            ctx.log(f"Ripresa: {unit(len(items))} da elaborare, {already} già {done_word}"
+                    + (f", {skipped} lasciat{'i' if cross else 'e'} come sono (annullat{'i' if cross else 'e'})"
+                       if skipped else ""))
+        # M × N: una sequenza si chiude (migliore per zDOPE) appena le sue coppie sono concluse, una volta per
+        # esecuzione
+        closing = {"lock": threading.Lock(), "done": set()}
 
         def finished_one() -> None:
             with done_lock:
                 done["n"] += 1
-                ctx.progress(done["n"] / max(total, 1), f"{done['n']} di {total} sequenze elaborate")
+                ctx.progress(done["n"] / max(total, 1), f"{done['n']} di {total} {noun} {done_word}")
 
         def work(item: dict) -> None:
             try:
@@ -276,11 +320,19 @@ class PipelineService:
                              finished_at=now_iso())
             finally:
                 finished_one()
+            if cross and not ctx.cancelled:
+                self._close_sequences(ctx, p, closing, [pair_of(item["idx"], p)[0]])
 
-        ctx.progress(already / max(total, 1), f"{already} di {total} sequenze elaborate")
+        ctx.progress(already / max(total, 1), f"{already} di {total} {noun} {done_word}")
         try:
             with ThreadPoolExecutor(max_workers=parallel, thread_name_prefix=f"pipeline-{ctx.job_id[:6]}") as pool:
                 list(pool.map(work, items))
+                if cross and not ctx.cancelled:
+                    # sequenze non chiuse in questa esecuzione (ripresa che non le tocca, chiusura interrotta): il
+                    # migliore si ricalcola
+                    pending = [s for s in range(total // max(1, len(p.get("templates") or [])))
+                               if s not in closing["done"]]
+                    list(pool.map(lambda s: self._close_sequences(ctx, p, closing, [s]), pending))
         finally:
             remove_tree(prepared.root)  # anche senza scratch (cartella del job) non restano copie
         ctx.check()
@@ -300,10 +352,16 @@ class PipelineService:
         left = sum(n for status, n in counts.items() if status not in PROCESSED_ITEM)
         if left:
             one = left == 1
-            raise JobCancelled(f"{'Resta' if one else 'Restano'} {_seqs(left)} da elaborare "
-                               f"({'annullata' if one else 'annullate'} in precedenza): usa «Riprendi» per completarle.")
+            gone = ("annullato" if one else "annullati") if cross else ("annullata" if one else "annullate")
+            raise JobCancelled(f"{'Resta' if one else 'Restano'} {unit(left)} da elaborare "
+                               f"({gone} in precedenza): usa «Riprendi» per completarl{'i' if cross else 'e'}.")
         return {"total": total, "counts": counts, "search_cache_hits": cache_hits,
                 "templates_prepared": prepared.prepared, "templates_reused": prepared.reused}
+
+    def _params(self, job_id: str) -> dict:
+        """Parametri del job (non letti da `jobs.get(include_result=False)`)."""
+        row = self.db.query_one("SELECT params FROM jobs WHERE id=?", (job_id,)) or {}
+        return row["params"] if isinstance(row.get("params"), dict) else {}
 
     def _update(self, job_id: str, idx: int, **fields) -> None:
         if "metrics" in fields:
@@ -351,9 +409,12 @@ class PipelineService:
         # metriche finali
         search_info: dict = {}
         mode = p.get("template_mode", "auto")
+        cross = is_cross(p)
         try:
             if mode == "fixed":
                 templates = p.get("templates") or []
+                if cross:  # M × N: il template della coppia
+                    templates = [templates[pair_of(idx, p)[1]]]
                 self._update(job_id, idx, template=",".join(t.get("id", "") for t in templates),
                              template_source="scelto dall'utente")
             else:
@@ -416,9 +477,11 @@ class PipelineService:
             ctx.check()
             self._update(job_id, idx, status="modeling", stage="Modellazione")
             quality_mode = "best" if p.get("quality", True) else "none"
-            res = self.compute.run_modeling(sub, target=SeqRecord(name, item["sequence"]), templates_raw=templates,
-                                            alignment=None, options_raw=p.get("options") or {},
-                                            quality_mode=quality_mode,
+            # bersaglio con il nome della sequenza anche per le coppie (nel PIR e nei nomi dei modelli)
+            target_name = pair_names(item["name"])[0] if cross else name
+            res = self.compute.run_modeling(sub, target=SeqRecord(target_name, item["sequence"]),
+                                            templates_raw=templates, alignment=None,
+                                            options_raw=p.get("options") or {}, quality_mode=quality_mode,
                                             extended_quality=bool(p.get("extended_quality", False)),
                                             template_cache=prepared)
             best_model = next(m for m in res["models"] if m["best"])
@@ -428,12 +491,16 @@ class PipelineService:
             # template AlphaFold: provenienza e residui tolti per pLDDT basso nelle metriche dell'elemento
             predicted = [t for t in res.get("templates") or [] if t.get("predicted")]
             af_info = {"template_predicted": True, "plddt_removed": res.get("plddt_removed", 0)} if predicted else {}
-            return {"status": "completed", "stage": "Completato", "best_model": rel,
+            pair_fields = self._pair_result(sub, p, item, res, best_model) if cross else {}
+            return {"status": "completed", "stage": "Completato", "best_model": rel, **pair_fields,
                     "dope": best_model.get("dope"), "ga341": best_model.get("ga341"), "grade": q.get("grade"),
                     "grade_score": q.get("grade_score"), "rama_favored": q.get("rama_favored"),
                     "clashscore": q.get("clashscore"),
                     "metrics": {"zdope": best_model.get("zdope"), "molpdf": best_model.get("molpdf"),
-                                "models": len(res["models"]), **q, **search_info, **af_info},
+                                "models": len(res["models"]), **q, **search_info, **af_info,
+                                # M × N: lo zDOPE resta quello di MODELLER, il criterio del migliore della sequenza
+                                **({"zdope": best_model.get("zdope")} if cross and best_model.get("zdope") is not None
+                                   else {})},
                     "finished_at": now_iso()}
         except JobCancelled:
             raise
@@ -446,10 +513,73 @@ class PipelineService:
                          finished_at=now_iso())
         return None
 
+    # ------------------------------------------------------------------------------ coppie sequenza × template
+    def _pair_result(self, sub: JobContext, p: dict, item: dict, res: dict, best_model: dict) -> dict:
+        """Coppia M × N modellata: identità e copertura del template sull'allineamento (come il report), zona
+        crepuscolare segnalata (mai filtrata: il template l'ha scelto l'utente) e riga di tracciabilità della coppia
+        nel PDB, aggiunta alle REMARK scritte da `run_modeling` (voto compreso, se il modello è stato analizzato)."""
+        sequence, label = pair_names(item["name"])
+        fields: dict = {}
+        entries = sequences.parse_pir(res.get("alignment") or "")
+        target = next((e.sequence for e in entries if e.kind == "sequence"), "")
+        template = next((e.sequence for e in entries if e.is_template), "")
+        if target and template:
+            identity, coverage = alignment_identity(target, template)
+            if identity is not None and coverage is not None:
+                tw = p.get("twilight") or {}
+                fields.update(identity=round(identity, 1), coverage=round(coverage, 1),
+                              twilight=int(identity < float(tw.get("identity", 25))
+                                           or coverage < float(tw.get("coverage", 40))))
+        lig = res.get("ligands") if isinstance(res.get("ligands"), dict) else {}
+        transferred = [ligands.group_label(g["chain"], g["resnum"], g["resname"])
+                       for g in lig.get("transferred") or [] if isinstance(g, dict)]
+        templates = res.get("templates") or []
+        path = sub.workdir / best_model["file"]
+        if path.is_file() and templates:
+            quality.inject_remarks(path, model_remarks(
+                best_model, (res.get("target") or {}).get("code") or sequence, templates, transferred=transferred,
+                extra=(pair_remark(sequence, label),)))
+        return fields
+
+    def _close_sequences(self, ctx: JobContext, p: dict, closing: dict, seq_indices: list[int]) -> None:
+        """Chiude le sequenze indicate le cui coppie sono tutte concluse (nessuna in attesa o in lavorazione), una volta
+        per esecuzione: il modello con lo zDOPE più basso (a parità il DOPE, poi l'ordine dei template) diventa il
+        migliore della sequenza (`metrics.best_in_sequence`). Una ripresa che rifà delle coppie lo ricalcola."""
+        n = len(p.get("templates") or [])
+        if not n:
+            return
+        for s in seq_indices:
+            with closing["lock"]:
+                if s in closing["done"]:
+                    continue
+                rows = self.db.query("SELECT idx, name, status, best_model, dope, metrics FROM pipeline_items "
+                                     "WHERE job_id=? AND idx>=? AND idx<? ORDER BY idx", (ctx.job_id, s * n, s * n + n))
+                if not rows or any(r["status"] in OPEN_ITEM for r in rows):
+                    continue
+                closing["done"].add(s)
+            done = [r for r in rows if r["status"] == "completed" and r.get("best_model")]
+            best = min(done, key=_best_key) if done else None
+            for r in done:
+                metrics = r["metrics"] if isinstance(r.get("metrics"), dict) else {}
+                if bool(metrics.get("best_in_sequence")) != (r is best):
+                    self._update(ctx.job_id, r["idx"], metrics={**metrics, "best_in_sequence": r is best})
+            if best is not None:
+                sequence, label = pair_names(best["name"])
+                ctx.log(f"Sequenza {sequence}: modello migliore sul template {label} (zDOPE "
+                        f"{(best['metrics'] or {}).get('zdope')}, {len(done)} di {len(rows)} coppie completate)")
+
+
     # ------------------------------------------------------------------------------ consultazione
     def items(self, job_id: str, *, page: int = 1, size: int = 25, status: Optional[str] = None,
-              sort: str = "idx", direction: str = "asc", search_text: str = "") -> dict:
+              sort: str = "idx", direction: str = "asc", search_text: str = "", sequence: Optional[int] = None,
+              template: Optional[int] = None, best_only: bool = False) -> dict:
+        """Una pagina di elementi. Pipeline M × N: filtri per sequenza e per template (indici, dalla posizione
+        dell'elemento), solo i migliori di ogni sequenza, e in ogni riga `pair` e `best_in_sequence`; nella risposta
+        `pairs` con i nomi delle sequenze e dei template."""
         self.jobs.get(job_id, include_result=False)
+        params = self._params(job_id)
+        cross = is_cross(params)
+        n = max(1, len(params.get("templates") or []))
         where, args = ["job_id=?"], [job_id]
         if status and status != "all":
             where.append("status=?")
@@ -457,6 +587,15 @@ class PipelineService:
         if search_text:
             where.append("(name LIKE ? OR template LIKE ?)")
             args += [f"%{search_text}%", f"%{search_text}%"]
+        if cross and sequence is not None:
+            where.append("idx >= ? AND idx < ?")
+            args += [int(sequence) * n, int(sequence) * n + n]
+        if cross and template is not None:
+            where.append("idx % ? = ?")
+            args += [n, int(template)]
+        if cross and best_only:
+            where.append("metrics LIKE ?")
+            args.append('%"best_in_sequence": true%')
         clause = " AND ".join(where)
         total = int(self.db.scalar(f"SELECT COUNT(*) FROM pipeline_items WHERE {clause}", tuple(args)))
         size = max(1, min(size, 500))
@@ -469,17 +608,56 @@ class PipelineService:
             f"ORDER BY ({col} IS NULL), {col} {order}, idx LIMIT ? OFFSET ?", (*args, size, (page - 1) * size))
         counts = {r["status"]: r["n"] for r in self.db.query(
             "SELECT status, COUNT(*) AS n FROM pipeline_items WHERE job_id=? GROUP BY status", (job_id,))}
-        return {"items": rows, "total": total, "page": page, "pages": pages, "size": size, "counts": counts}
+        out = {"items": rows, "total": total, "page": page, "pages": pages, "size": size, "counts": counts}
+        if cross:
+            names = pair_axes(params)
+            for r in rows:
+                _with_pair(r, params, names)
+            out["pairs"] = names
+        return out
 
     def item(self, job_id: str, idx: int) -> dict:
         row = self.db.query_one(f"SELECT {ITEM_COLUMNS}, sequence FROM pipeline_items WHERE job_id=? AND idx=?",
                                 (job_id, idx))
         if not row:
             raise NotFound("Elemento della pipeline non trovato.")
+        params = self._params(job_id)
+        if is_cross(params):
+            _with_pair(row, params, pair_axes(params))
         return row
 
-    def export_csv(self, job_id: str) -> str:
+    MATRIX_FIELDS = ("status", "dope", "ga341", "identity", "coverage", "grade", "grade_score", "best_model")
+
+    def matrix(self, job_id: str) -> dict:
+        """Pipeline M × N: matrice sequenze × template con esito e metriche di ogni coppia (zDOPE, DOPE, GA341,
+        molpdf, identità, copertura, voto) e il migliore di ogni sequenza. Errore per le altre pipeline."""
+        job = self.jobs.get(job_id, include_result=False)
+        params = self._params(job_id)
+        if job["kind"] != "pipeline" or not is_cross(params):
+            raise AppError("La matrice c'è solo per le pipeline con un modello per ogni template (sequenze × template).",
+                           code="matrix_unsupported")
+        names = pair_axes(params)
+        n = len(names["templates"])
+        cells: list[list[Optional[dict]]] = [[None] * n for _ in names["sequences"]]
+        rows = self.db.query("SELECT idx, status, dope, ga341, identity, coverage, grade, grade_score, best_model, "
+                             "metrics, error FROM pipeline_items WHERE job_id=? ORDER BY idx", (job_id,))
+        for r in rows:
+            s, t = pair_of(r["idx"], params)
+            if s >= len(cells) or t >= n:
+                continue
+            metrics = r["metrics"] if isinstance(r.get("metrics"), dict) else {}
+            cells[s][t] = {"idx": r["idx"], **{k: r.get(k) for k in self.MATRIX_FIELDS},
+                           "zdope": metrics.get("zdope"), "molpdf": metrics.get("molpdf"),
+                           "best": bool(metrics.get("best_in_sequence")), "error": r.get("error")}
+        return {**names, "cells": cells}
+
+    def export_csv(self, job_id: str, files: Optional[dict[int, str]] = None) -> str:
+        """Tabella di tutti gli elementi. Pipeline M × N: una riga per coppia con sequenza, template e migliore della
+        sequenza; `files` (ZIP): percorso del modello nell'archivio per elemento."""
         rows = self.db.query(f"SELECT {ITEM_COLUMNS} FROM pipeline_items WHERE job_id=? ORDER BY idx", (job_id,))
+        params = self._params(job_id)
+        if is_cross(params):
+            return _cross_csv(rows, params, files)
         buf = io.StringIO()
         fields = ["idx", "name", "length", "status", "template", "template_source", "identity", "coverage", "evalue",
                   "twilight", "dope", "zdope", "ga341", "grade", "grade_score", "rama_favored", "clashscore",
@@ -502,6 +680,9 @@ class PipelineService:
         job = self.jobs.get(job_id)
         rows = self.db.query(f"SELECT {ITEM_COLUMNS}, sequence FROM pipeline_items WHERE job_id=? "
                              "AND status='completed' ORDER BY idx", (job_id,))
+        if is_cross(job.get("params") or {}):
+            self._export_cross_zip(job, rows, dest)
+            return
         reports = ReportService(self.jobs, self.compute, self.db)
         missing: list[str] = []
         used: set[str] = set()
@@ -528,6 +709,99 @@ class PipelineService:
                 zf.writestr("report/non_generati.txt", "Report non generati\n\n" + "\n".join(missing) + "\n")
             zf.writestr("parametri.json", json.dumps(job["params"], indent=2, ensure_ascii=False))
 
+    def _export_cross_zip(self, job: dict, rows: list[dict], dest: Path) -> None:
+        """ZIP di una pipeline M × N: una cartella per template, `template/<template>/`, con modello, report e
+        rapporto di qualità (se l'analisi era richiesta) di ogni coppia, tutti chiamati `<sequenza>__<template>`;
+        `riepilogo.csv` (una riga per coppia, con il percorso del modello nell'archivio), `migliori.csv` (una riga per
+        sequenza), le matrici sequenze × template in `matrici/` e `parametri.json`. Report generati uno alla volta."""
+        job_id, params = job["id"], job.get("params") or {}
+        names = pair_axes(params)
+        reports = ReportService(self.jobs, self.compute, self.db)
+        missing: list[str] = []
+        files: dict[int, str] = {}
+        with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("LEGGIMI.txt", README_CROSS_ZIP)
+            for r in rows:
+                try:
+                    model = self.jobs.file_path(job_id, r["best_model"])
+                except NotFound:
+                    continue
+                _s, t = pair_of(r["idx"], params)
+                label = names["templates"][t] if t < len(names["templates"]) else pair_names(r["name"])[1]
+                base = f"template/{label}/{r['name']}"
+                zf.write(model, f"{base}.pdb")
+                files[int(r["idx"])] = f"{base}.pdb"
+                quality_file = Path(str(model) + ".quality.json")
+                if quality_file.exists():
+                    zf.write(quality_file, f"{base}.quality.json")
+                try:
+                    text = reports.pipeline_item(job, r)
+                except Exception as exc:  # un report non generato non deve fermare l'esportazione
+                    missing.append(f"{r['name']}: {getattr(exc, 'message', None) or f'{type(exc).__name__}: {exc}'}")
+                    continue
+                zf.writestr(f"{base}.html", text)
+            if missing:
+                zf.writestr("report_non_generati.txt", "Report non generati\n\n" + "\n".join(missing) + "\n")
+            zf.writestr("riepilogo.csv", self.export_csv(job_id, files))
+            matrix = self.matrix(job_id)
+            zf.writestr("migliori.csv", _best_csv(matrix, files))
+            for key, filename in MATRIX_FILES:
+                zf.writestr(f"matrici/{filename}.csv", _matrix_csv(matrix, key))
+            zf.writestr("parametri.json", json.dumps(params, indent=2, ensure_ascii=False))
+
+
+# matrici sequenze × template dello ZIP M × N: campo della cella → nome del file
+MATRIX_FILES = (("zdope", "zdope"), ("dope", "dope"), ("ga341", "ga341"), ("molpdf", "molpdf"),
+                ("identity", "identita"), ("coverage", "copertura"))
+CROSS_FIELDS = ["idx", "sequence", "template", "template_id", "length", "status", "identity", "coverage", "twilight",
+                "dope", "zdope", "ga341", "molpdf", "best_in_sequence", "grade", "grade_score", "rama_favored",
+                "clashscore", "file", "error"]
+
+
+def _cross_csv(rows: list[dict], params: dict, files: Optional[dict[int, str]]) -> str:
+    names = pair_axes(params)
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=CROSS_FIELDS, extrasaction="ignore")
+    writer.writeheader()
+    for r in rows:
+        _with_pair(r, params, names)
+        metrics = r.get("metrics") if isinstance(r.get("metrics"), dict) else {}
+        out = {**r, "sequence": r["pair"]["sequence"], "template": r["pair"]["template"],
+               "template_id": r["pair"]["template_id"], "zdope": metrics.get("zdope"), "molpdf": metrics.get("molpdf"),
+               "best_in_sequence": 1 if r["best_in_sequence"] else 0,
+               "file": (files or {}).get(int(r["idx"]), "" if files is not None else r.get("best_model") or "")}
+        writer.writerow({k: _csv_safe(out.get(k)) for k in CROSS_FIELDS})
+    return buf.getvalue()
+
+
+def _matrix_csv(matrix: dict, key: str) -> str:
+    """Matrice di un campo: una riga per sequenza, una colonna per template; vuota la cella senza valore."""
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["sequenza", *matrix["templates"]])
+    for name, row in zip(matrix["sequences"], matrix["cells"]):
+        writer.writerow([_csv_safe(name), *(_csv_safe((c or {}).get(key)) for c in row)])
+    return buf.getvalue()
+
+
+def _best_csv(matrix: dict, files: dict[int, str]) -> str:
+    """Una riga per sequenza: template del modello migliore (zDOPE) con le sue metriche e coppie completate."""
+    fields = ["sequence", "best_template", "template_id", "zdope", "dope", "ga341", "identity", "coverage", "grade",
+              "grade_score", "completed", "templates", "file"]
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fields)
+    writer.writeheader()
+    for name, row in zip(matrix["sequences"], matrix["cells"]):
+        t, best = next(((t, c) for t, c in enumerate(row) if c and c.get("best")), (None, None))
+        cell = best or {}
+        out = {"sequence": name, "best_template": matrix["templates"][t] if t is not None else "",
+               "template_id": matrix["template_ids"][t] if t is not None and t < len(matrix["template_ids"]) else "",
+               **{k: cell.get(k) for k in ("zdope", "dope", "ga341", "identity", "coverage", "grade", "grade_score")},
+               "completed": sum(1 for c in row if c and c.get("status") == "completed"), "templates": len(row),
+               "file": files.get(int(cell["idx"]), "") if best else ""}
+        writer.writerow({k: _csv_safe(out.get(k)) for k in fields})
+    return buf.getvalue()
+
 
 def _zip_stem(name: str, idx: int, used: set[str]) -> str:
     """Nome di un elemento nell'archivio ZIP, uguale per modelli/, qualita/ e report/ e unico fra gli elementi.
@@ -550,6 +824,79 @@ def _zip_stem(name: str, idx: int, used: set[str]) -> str:
 
 def _seqs(n: int) -> str:
     return f"{n} sequenza" if n == 1 else f"{n} sequenze"
+
+
+def _tpls(n: int) -> str:
+    return f"{n} template"
+
+
+def _models(n: int) -> str:
+    return f"{n} modello" if n == 1 else f"{n} modelli"
+
+
+def is_cross(params: dict) -> bool:
+    """Pipeline M × N: template fissi, un modello per ogni coppia sequenza × template."""
+    return params.get("template_mode") == "fixed" and params.get("fixed_combination") == "each"
+
+
+def template_labels(templates: list[dict]) -> list[str]:
+    """Nome di ogni template fisso nelle coppie M × N (cartelle dello ZIP, colonne delle matrici): id e catene
+    sanificati (`1UBQ_A`), resi unici con un contatore."""
+    labels: list[str] = []
+    for i, t in enumerate(templates):
+        chains = [str(c).strip() for c in t.get("chains") or [] if str(c).strip()]
+        base = label = sequences.sanitize_code("_".join([str(t.get("id") or ""), *chains]), default=f"T{i + 1}")
+        n = 1
+        while label in labels:
+            n += 1
+            label = f"{base}_{n}"
+        labels.append(label)
+    return labels
+
+
+def pair_of(idx: int, params: dict) -> tuple[int, int]:
+    """(sequenza, template) dell'elemento `idx` di una pipeline M × N: gli elementi sono in ordine di sequenza."""
+    return divmod(int(idx), max(1, len(params.get("templates") or [])))
+
+
+def pair_names(name: str) -> tuple[str, str]:
+    """(sequenza, template) dal nome di un elemento M × N, `<sequenza>__<template>`."""
+    sequence, _sep, template = str(name).partition(PAIR_SEP)
+    return sequence, template
+
+
+def pair_remark(sequence: str, template: str) -> str:
+    """Riga REMARK 999 BIOLOOM della coppia: il PDB dice a quale sequenza e a quale template si riferisce."""
+    return f"PIPELINE SEQUENCE {sequence} TEMPLATE {template}"
+
+
+def pair_axes(params: dict) -> dict:
+    """Nomi delle sequenze (righe) e dei template (colonne) di una pipeline M × N, con gli id dei template."""
+    templates = params.get("templates") or []
+    labels = params.get("template_labels") or template_labels(templates)
+    return {"sequences": [str(s.get("name")) for s in params.get("sequences") or [] if isinstance(s, dict)],
+            "templates": list(labels), "template_ids": [str(t.get("id") or "") for t in templates]}
+
+
+def _with_pair(row: dict, params: dict, names: dict) -> None:
+    """Campi della coppia in una riga M × N: indici e nomi di sequenza e template, migliore della sequenza."""
+    s, t = pair_of(row["idx"], params)
+    sequence, label = pair_names(row["name"])
+    row["pair"] = {"sequence_index": s, "template_index": t,
+                   "sequence": names["sequences"][s] if s < len(names["sequences"]) else sequence,
+                   "template": names["templates"][t] if t < len(names["templates"]) else label,
+                   "template_id": names["template_ids"][t] if t < len(names["template_ids"]) else ""}
+    metrics = row.get("metrics") if isinstance(row.get("metrics"), dict) else {}
+    row["best_in_sequence"] = bool(metrics.get("best_in_sequence"))
+
+
+def _best_key(row: dict) -> tuple:
+    """Ordine dei modelli di una sequenza: zDOPE più basso, poi DOPE più basso, poi l'ordine dei template."""
+    metrics = row.get("metrics") if isinstance(row.get("metrics"), dict) else {}
+    zdope, dope = metrics.get("zdope"), row.get("dope")
+    number = (int, float)
+    return (zdope if isinstance(zdope, number) and not isinstance(zdope, bool) else float("inf"),
+            dope if isinstance(dope, number) and not isinstance(dope, bool) else float("inf"), row["idx"])
 
 
 def max_templates(params: dict) -> int:
@@ -612,4 +959,33 @@ Legenda delle colonne principali
 - grade: voto BioLoom A-D (Ramachandran, clashscore, zDOPE)
 - rama_favored: % di residui in regioni favorite del grafico di Ramachandran
 - clashscore: contatti sterici gravi ogni 1000 atomi (approssimato, atomi pesanti)
+"""
+
+README_CROSS_ZIP = """BioLoom v4 - esportazione pipeline sequenze x template
+=======================================================
+Ogni sequenza è stata modellata su ogni template, uno alla volta (un modello per coppia).
+Ogni file si chiama <sequenza>__<template>: il nome dice da solo a quale coppia si riferisce,
+anche fuori dalla sua cartella; nel PDB la riga "REMARK 999 BIOLOOM PIPELINE SEQUENCE ... TEMPLATE ..."
+ripete la coppia.
+
+template/<template>/     una cartella per template, con i modelli di tutte le sequenze su quel template:
+  <seq>__<tpl>.pdb       miglior modello (DOPE minimo) della coppia
+  <seq>__<tpl>.html      report HTML della coppia (autonomo, stampabile in PDF)
+  <seq>__<tpl>.quality.json  rapporto di qualità della coppia (se l'analisi era richiesta)
+riepilogo.csv            una riga per coppia: sequenza, template, identità, copertura, punteggi, migliore
+                         della sequenza (best_in_sequence = 1) e percorso del modello nell'archivio (file)
+migliori.csv             una riga per sequenza: template del modello migliore e sue metriche
+matrici/                 una matrice per metrica (righe = sequenze, colonne = template): zdope, dope,
+                         ga341, molpdf, identita, copertura; cella vuota = coppia senza modello
+parametri.json           parametri con cui è stata eseguita la pipeline (ordine di sequenze e template)
+
+Modello migliore di una sequenza: zDOPE più basso fra i suoi template (a parità il DOPE). L'analisi di
+qualità (voto, Ramachandran, clashscore), se richiesta, c'è per ogni coppia.
+
+Legenda delle colonne principali
+- identity / coverage: identità (%) e copertura (%) del template sulla sequenza, dall'allineamento
+- twilight: 1 se identità < soglia o copertura < soglia (zona crepuscolare; il modello c'è comunque)
+- dope: energia DOPE (più negativa = migliore, confrontabile fra template della stessa sequenza)
+- zdope: DOPE normalizzato (< -1 buono); ga341: > 0.7 ripiegamento affidabile; molpdf: funzione obiettivo
+- grade: voto BioLoom A-D
 """
