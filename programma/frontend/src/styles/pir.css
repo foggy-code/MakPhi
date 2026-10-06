@@ -12,6 +12,15 @@
   font-family: var(--mono);
   font-size: 12.5px;
   user-select: none;
+  /* colori delle tracce della struttura secondaria: almeno 3:1 su --panel-2 (pirTrackContrast.test.ts) */
+  --trk-helix: var(--helix);
+  --trk-strand: var(--strand);
+  --trk-coil: var(--coil);
+}
+/* tema chiaro: filamento e coil più scuri, quelli comuni scendono sotto 3:1 sul fondo chiaro */
+:root[data-theme="light"] .pirg {
+  --trk-strand: #b45309;
+  --trk-coil: #64748b;
 }
 .pirg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; box-shadow: var(--ring); }
 .pirg-ruler {
@@ -98,11 +107,12 @@
   white-space: nowrap;
 }
 .pirg-track > i, .pirg-track > b { position: absolute; top: 2px; height: 7px; }
-.pirg-ss-h { background: var(--helix); border-radius: 3px; }
-.pirg-ss-e { background: var(--strand); clip-path: polygon(0 0, calc(100% - 5px) 0, 100% 50%, calc(100% - 5px) 100%, 0 100%); }
-.pirg-track > i.pirg-ss-c { top: 5px; height: 1.5px; background: var(--coil); }
+.pirg-ss-h { background: var(--trk-helix); border-radius: 3px; }
+.pirg-ss-e { background: var(--trk-strand); clip-path: polygon(0 0, calc(100% - 5px) 0, 100% 50%, calc(100% - 5px) 100%, 0 100%); }
+.pirg-track > i.pirg-ss-c { top: 5px; height: 1.5px; background: var(--trk-coil); }
 .pirg-track > i.pirg-ss-u { top: 5px; height: 0; border-top: 1.5px dotted var(--muted); }
-.pirg-track-pred > i { opacity: 0.55; }
+/* predizione del bersaglio: più sottile, a colori pieni (la trasparenza scendeva sotto 3:1) */
+.pirg-track-pred > i.pirg-ss-h, .pirg-track-pred > i.pirg-ss-e { top: 3.5px; height: 4px; }
 .pirg-track > b.pirg-ss-conflict { top: 0; height: 11px; outline: 2px solid var(--err); outline-offset: -1px; border-radius: 2px; background: var(--err-soft); }
 .pirg-conflict-text { color: var(--err); font-weight: 600; }
 

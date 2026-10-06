@@ -64,6 +64,15 @@ function neighbour(row: string, states: SS3[], c: number, dir: -1 | 1): SS3 | nu
   return null;
 }
 
+/** La riga ha un residuo nella direzione `dir` dalla colonna, nella stessa catena. */
+function hasResidue(row: string, c: number, dir: -1 | 1): boolean {
+  for (let k = c + dir; k >= 0 && k < row.length; k += dir) {
+    if (row[k] === "/") return false;
+    if (isLetter(row[k])) return true;
+  }
+  return false;
+}
+
 /**
  * Gap che spezzano un'elica o un filamento di un template (DSSP): una inserzione del bersaglio dove il template ha un gap
  * fra due residui dello stesso elemento, o una delezione del bersaglio di fronte a residui di un elemento. MODELLER
@@ -82,7 +91,11 @@ export function gapConflicts(rows: string[], kinds: string[], states: (SS3[] | n
     for (let c = 0; c < row.length; c++) {
       let hit: Pick<GapConflict, "kind" | "element"> | null = null;
       const p = row[c];
-      if (isLetter(p) && t[c] === "-" && (s[c] === "H" || s[c] === "E")) hit = { kind: "deletion", element: s[c] as "H" | "E" };
+      // delezione solo all'interno della catena del bersaglio: residui del template prima e dopo il bersaglio (code
+      // N- e C-terminali) restano semplicemente fuori dal modello, non c'è nulla da accorciare
+      if (isLetter(p) && t[c] === "-" && (s[c] === "H" || s[c] === "E") && hasResidue(t, c, -1) && hasResidue(t, c, 1)) {
+        hit = { kind: "deletion", element: s[c] as "H" | "E" };
+      }
       else if (p === "-" && isLetter(t[c])) {
         const left = neighbour(row, s, c, -1);
         const right = neighbour(row, s, c, 1);

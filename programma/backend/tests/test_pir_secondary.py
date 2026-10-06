@@ -102,13 +102,43 @@ def test_two_chains_follow_the_slash(ubq_ss):
     assert len(out["ss"]) == 152 and out["mismatch_count"] == 0 and out["problems"] == []
 
 
-def test_selenomethionine_counts_as_met(tmp_path):
-    path = ubq_variant(tmp_path / "mse.pdb", hetatm={1: "MSE"})
+def test_selenomethionine_follows_the_ligand_option(tmp_path, ubq_ss):
+    """MSE nella copia per MODELLER solo con l'opzione dei ligandi; il DSSP la tiene sempre nella catena."""
+    path = ubq_variant(tmp_path / "mse.pdb", hetatm={27: "MSE"})
     residues, ss = pir_secondary.structure_data(path)
-    assert residues["A"][0] == ("1", "M")
-    [entry] = [e for e in parse_pir(pir(HUMAN_UB, HUMAN_UB)) if e.is_template]
-    out = pir_secondary.template_secondary(entry, residues, ss, ["A"])
-    assert out["mismatch_count"] == 0 and len(out["ss"]) == 76
+    assert residues["A"][26] == ("27", "M", True)
+    # l'elica 23-34 resta intera anche con la selenometionina in mezzo
+    assert "".join(ss[("A", str(n))] for n in range(24, 34)) == ubq_ss[23:33]
+    # il file di prova rinomina la Lys 27 di 1UBQ in MSE: con l'opzione dei ligandi nel PIR c'è una M
+    with_met = [e for e in parse_pir(pir(HUMAN_UB, HUMAN_UB[:26] + "M" + HUMAN_UB[27:])) if e.is_template][0]
+    without_met = [e for e in parse_pir(pir(HUMAN_UB, HUMAN_UB[:26] + HUMAN_UB[27:])) if e.is_template][0]
+    on = pir_secondary.template_secondary(with_met, residues, ss, ["A"], hetatm=True)
+    assert on["mismatch_count"] == 0 and on["ss"] == ubq_ss
+    off = pir_secondary.template_secondary(without_met, residues, ss, ["A"], hetatm=False)
+    assert off["mismatch_count"] == 0 and off["ss"] == ubq_ss[:26] + ubq_ss[27:]
+    # opzione non nota: la lettura che corrisponde alle lettere, in entrambi i casi
+    assert pir_secondary.template_secondary(with_met, residues, ss, ["A"])["mismatch_count"] == 0
+    assert pir_secondary.template_secondary(without_met, residues, ss, ["A"])["ss"] == off["ss"]
+
+
+def test_chains_in_file_order_unless_the_header_says_otherwise():
+    residues, ss = pir_secondary.structure_data(DATA / "ubq_dimer.pdb")
+    dimer = HUMAN_UB + "/" + HUMAN_UB
+    [ab] = [e for e in parse_pir(pir(dimer, dimer, "structureX:UBQD_AB:1:A:76:B::::", "UBQD_AB")) if e.is_template]
+    assert pir_secondary.template_secondary(ab, residues, ss, ["B", "A"])["chains"] == ["A", "B"]
+    [ba] = [e for e in parse_pir(pir(dimer, dimer, "structureX:UBQD_BA:1:B:76:A::::", "UBQD_BA")) if e.is_template]
+    assert pir_secondary.template_secondary(ba, residues, ss, ["B", "A"])["chains"] == ["B", "A"]
+    # il codice con le catene in ordine di file si abbina anche se il documento le elenca al contrario
+    assert "UBQD_AB" in pir_secondary.template_codes("UBQD", ["B", "A"])
+
+
+def test_pairing_follows_modelling():
+    """Come ComputeService._normalize_pir: voce per voce, codice se libero, altrimenti il primo template libero."""
+    text = pir(HUMAN_UB, HUMAN_UB, code="foo") + pir(HUMAN_UB, HUMAN_UB, code="1UBQ_A").split("\n\n", 1)[1]
+    entries = parse_pir(text)
+    specs = [{"id": "1UBQ", "chains": ["A"]}, {"id": "UBQD", "chains": ["A"]}]
+    pick = pir_secondary.pair_templates(entries, specs)
+    assert pick == {1: (0, "position"), 2: (1, "position")}
 
 
 def test_target_prediction_does_not_cross_chains():

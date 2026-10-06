@@ -44,6 +44,16 @@ describe("gapConflicts", () => {
     expect(gapConflicts(rows, kinds, states, dssp)).toEqual([{ row: 1, kind: "deletion", element: "E", from: 2, to: 3 }]);
   });
 
+  it("le code del template oltre il bersaglio non sono delezioni", () => {
+    const n = ["---MKTA", "AAAMKTA"];
+    expect(gapConflicts(n, kinds, [null, columnStates(n[1], "HHHCCCC")], dssp)).toEqual([]);
+    const c = ["MKTA---", "MKTAEEE"];
+    expect(gapConflicts(c, kinds, [null, columnStates(c[1], "CCCCEEE")], dssp)).toEqual([]);
+    // alla fine di una catena, prima del separatore
+    const chain = ["MK--/TA", "MKEE/TA"];
+    expect(gapConflicts(chain, kinds, [null, columnStates(chain[1], "CCEECC")], dssp)).toEqual([]);
+  });
+
   it("non scavalca le catene e ignora predizioni e voci senza struttura secondaria", () => {
     const rows = ["MKT/AYI", "MK-/-YI"];
     expect(gapConflicts(rows, kinds, [null, columnStates(rows[1], "HHHH")], dssp)).toEqual([]);

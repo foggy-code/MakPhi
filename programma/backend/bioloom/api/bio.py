@@ -59,6 +59,8 @@ def predict_disorder(body: DisorderIn) -> dict:
 class TemplateIn(BaseModel):
     id: str = Field(..., max_length=80)
     chains: list[str] = Field(default_factory=list, max_length=26)
+    # ligandi e selenometionine nella copia per MODELLER (None: non indicato)
+    hetatm: Optional[bool] = None
 
 
 class RangeIn(BaseModel):

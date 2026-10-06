@@ -118,7 +118,7 @@ export default function PirEditor() {
   const [ssOn, setSsOn] = useState(readSsPref);
   const [ssData, setSsData] = useState<{ key: string; data: PirSecondary } | null>(null);
   const [ssLoading, setSsLoading] = useState(false);
-  const [ssError, setSsError] = useState<string | null>(null);
+  const [ssError, setSsError] = useState<{ key: string; message: string } | null>(null);
 
   /**
    * Contenuto caricato da fuori (documento, file, job): nuova cronologia, template di nuovo bloccati. Il riferimento delle
@@ -194,23 +194,41 @@ export default function PirEditor() {
   useEffect(() => {
     if (!ssOn || !entries.length || ssData?.key === ssKey) return;
     const text = content;
+    const key = ssKey;
+    // una risposta arrivata dopo che residui o documento sono cambiati non sovrascrive quella giusta
+    let cancelled = false;
     const t = setTimeout(() => {
       setSsLoading(true);
       api.pirSecondary(text, templatesMeta)
         .then((data) => {
-          setSsData({ key: ssKey, data });
+          if (cancelled) return;
+          setSsData({ key, data });
           setSsError(null);
         })
-        .catch((e) => setSsError(e instanceof Error ? e.message : String(e)))
-        .finally(() => setSsLoading(false));
+        .catch((e) => !cancelled && setSsError({ key, message: e instanceof Error ? e.message : String(e) }))
+        .finally(() => !cancelled && setSsLoading(false));
     }, 500);
-    return () => clearTimeout(t);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+      setSsLoading(false);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ssKey, ssOn]);
-  /** Voce della risposta per ogni riga: per posizione se il codice coincide, altrimenti per codice. */
+  /**
+   * Voce della risposta per ogni riga: per posizione se il codice coincide, altrimenti per codice (codici ripetuti: solo
+   * per posizione). Finché arriva la risposta nuova si tiene quella precedente solo per le voci con lo stesso numero di
+   * residui: altrimenti gli stati finirebbero sui residui sbagliati.
+   */
   const ssEntries = useMemo<(PirSecondaryEntry | null)[]>(() => {
     const list = ssData?.data.entries ?? [];
-    return entries.map((e, i) => (list[i]?.code === e.code ? list[i] : list.find((x) => x.code === e.code) ?? null));
+    const repeated = new Set(entries.map((e) => e.code).filter((c, i, all) => all.indexOf(c) !== i));
+    return entries.map((e, i) => {
+      const x = list[i]?.code === e.code ? list[i] : repeated.has(e.code) ? undefined : list.find((y) => y.code === e.code);
+      if (!x) return null;
+      const residues = e.sequence.replace(/[^A-Za-z]/g, "").length;
+      return x.residues === residues ? x : null;
+    });
   }, [ssData, entries]);
   const gridSecondary = useMemo<GridSecondary | null>(() => {
     if (!ssOn || !ssData) return null;
@@ -417,7 +435,7 @@ export default function PirEditor() {
               codes={entries.map((e) => e.code)}
               enabled={ssOn}
               loading={ssLoading}
-              error={ssError}
+              error={ssError?.key === ssKey ? ssError.message : null}
               onToggle={toggleSs}
               onGoColumn={(r, c) => {
                 setTab("grid");

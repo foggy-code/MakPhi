@@ -19,12 +19,12 @@ SS_LABELS = {
 }
 
 
-def _backbone(model) -> list[dict]:
+def _backbone(model, accept=is_amino_residue) -> list[dict]:
     residues: list[dict] = []
     for chain in model:
         prev = None
         for res in chain:
-            if not is_amino_residue(res) or not all(k in res for k in ("N", "CA", "C", "O")):
+            if not accept(res) or not all(k in res for k in ("N", "CA", "C", "O")):
                 prev = None
                 continue
             entry = {
@@ -57,11 +57,13 @@ def _hbond_energy(acc: dict, don: dict) -> float:
     return max(energy, -9.9)
 
 
-def assign(model) -> list[dict]:
-    """Assegna gli stati DSSP a 8 classi a ogni residuo con backbone completo."""
+def assign(model, accept=is_amino_residue) -> list[dict]:
+    """Assegna gli stati DSSP a 8 classi a ogni residuo con backbone completo. `accept(residuo)`: residui considerati
+    (predefiniti gli ATOM con CA; l'Editor PIR aggiunge le selenometionine, così un'elica che ne contiene una resta
+    intera)."""
     from Bio.PDB.kdtrees import KDTree
 
-    res = _backbone(model)
+    res = _backbone(model, accept)
     n = len(res)
     if n == 0:
         return []
