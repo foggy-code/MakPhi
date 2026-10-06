@@ -260,3 +260,10 @@
 .pirg-root, .pirg-wrap, .pirw-main > .card, .pirw-main .card-body { min-width: 0; }
 .pirg-root { max-width: 100%; }
 .pirg { max-width: 100%; }
+
+/* blocchi da 75 colonne, uno sotto l'altro come le righe di un file PIR */
+.pirg-block { position: absolute; left: 0; right: 0; }
+.pirg-block + .pirg-block { border-top: 0; }
+.pirg-block .pirg-ruler { position: absolute; top: 0; left: 0; right: 0; }
+.pirg-block .pirg-hist { position: absolute; top: var(--rh); left: 0; right: 0; }
+.pirg-block .pirg-band { bottom: auto; }

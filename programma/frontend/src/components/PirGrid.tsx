@@ -19,8 +19,10 @@ const RH = 22;
 const NAME_W = 170;
 /** altezza della traccia della struttura secondaria sotto ogni riga */
 const TH = 12;
-/** colonne disegnate oltre i bordi visibili (scorrimento orizzontale senza vuoti) */
-const OVERSCAN = 24;
+/** colonne per blocco: la riga standard dei file PIR scritti da MODELLER */
+export const BLOCK = 75;
+/** spazio fra un blocco e il successivo */
+const BG = 14;
 
 /** altezza dell'istogramma della conservazione sotto il righello */
 const HH = 14;
@@ -136,9 +138,18 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
   const width = widthOf(rows);
   // passo verticale fra le righe: con la struttura secondaria ogni riga ha la sua traccia sotto
   const stride = secondary ? RH + TH : RH;
+  // blocchi da BLOCK colonne, uno sotto l'altro: righello, istogramma, voci (con le tracce), spazio
+  const blockH = RH + HH + rows.length * stride + BG;
+  const nBlocks = Math.max(1, Math.ceil(width / BLOCK));
+  const blockW = NAME_W + Math.min(BLOCK, Math.max(1, width)) * CW;
+  /** alto della cella (riga r, colonna c) dentro la griglia */
+  const cellTop = (r: number, c: number) => Math.floor(c / BLOCK) * blockH + RH + HH + r * stride;
+  /** sinistra della cella (colonna c) */
+  const cellLeft = (c: number) => NAME_W + (c % BLOCK) * CW;
   const [anchor, setAnchor] = useState({ r: 0, c: 0 });
   const [cursor, setCursor] = useState({ r: 0, c: 0 });
-  const [view, setView] = useState({ left: 0, width: 1200 });
+  // parte visibile della griglia (in verticale): si disegnano solo i blocchi visibili
+  const [view, setView] = useState({ top: 0, height: 600 });
   // messaggio di rifiuto: `n` cambia a ogni messaggio, così lo stesso rifiuto ripetuto viene riletto
   const [message, setMessage] = useState<{ text: string; n: number } | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -167,7 +178,7 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
   useEffect(() => {
     const box = boxRef.current;
     if (!box) return;
-    const measure = () => setView({ left: box.scrollLeft, width: box.clientWidth });
+    const measure = () => setView({ top: box.scrollTop, height: box.clientHeight });
     measure();
     const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
     ro?.observe(box);
@@ -178,12 +189,13 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
   const reveal = (c: number, r: number) => {
     const box = boxRef.current;
     if (!box) return;
-    const x = c * CW;
+    const x = (c % BLOCK) * CW;
     const visible = box.clientWidth - NAME_W;
     if (x < box.scrollLeft) box.scrollLeft = Math.max(0, x - CW * 4);
     else if (x + CW > box.scrollLeft + visible) box.scrollLeft = x + CW * 5 - visible;
-    const y = RH + HH + r * stride; // righello e istogramma stanno sopra le righe
-    if (y < box.scrollTop + RH + HH) box.scrollTop = Math.max(0, y - RH - HH - stride);
+    const y = cellTop(r, c);
+    // in alto si lascia vedere anche il righello del blocco
+    if (y < box.scrollTop) box.scrollTop = Math.max(0, y - RH - HH - 4);
     else if (y + stride > box.scrollTop + box.clientHeight) box.scrollTop = y + stride * 2 - box.clientHeight;
   };
 
@@ -330,10 +342,13 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
     const rect = bodyRef.current?.getBoundingClientRect();
     const box = boxRef.current;
     if (!rect || !box) return null;
-    const r = clampR(Math.floor((e.clientY - rect.top) / stride));
+    const y = e.clientY - rect.top;
+    const b = Math.min(nBlocks - 1, Math.max(0, Math.floor(y / blockH)));
+    const r = clampR(Math.floor((y - b * blockH - RH - HH) / stride));
     const xName = e.clientX - box.getBoundingClientRect().left;
     if (xName < NAME_W) return { r, c: -1 };
-    return { r, c: clampC(Math.floor((e.clientX - rect.left - NAME_W) / CW)) };
+    const local = Math.min(BLOCK - 1, Math.max(0, Math.floor((e.clientX - rect.left - NAME_W) / CW)));
+    return { r, c: clampC(b * BLOCK + local) };
   };
 
   const onMouseDown = (e: RMouseEvent<HTMLDivElement>) => {
@@ -369,19 +384,14 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
     };
   });
 
-  const c0 = Math.max(0, Math.floor(view.left / CW) - OVERSCAN);
-  const c1 = Math.min(width, Math.ceil((view.left + view.width) / CW) + OVERSCAN);
-  const ruler = useMemo(() => {
-    const marks: { c: number; label: string }[] = [];
-    for (let c = Math.ceil((c0 + 1) / 10) * 10; c <= c1; c += 10) marks.push({ c: c - 1, label: String(c) });
-    return marks;
-  }, [c0, c1]);
+  // blocchi disegnati: quelli visibili, più uno sopra e uno sotto
+  const b0 = Math.max(0, Math.floor(view.top / blockH) - 1);
+  const b1 = Math.min(nBlocks, Math.ceil((view.top + view.height) / blockH) + 1);
 
   const cursorRow = rows[cursor.r] ?? "";
   // numerazione di ogni riga (riga di stato e numero del primo residuo visibile accanto al nome)
   const numbering = useMemo(() => rows.map((s, i) => residuePositions(s, headers[i] ?? "")), [rows, headers]);
   const positions = numbering[cursor.r] ?? [];
-  const firstVisible = Math.floor(view.left / CW);
   const conservation = useMemo(() => columnConservation(rows), [rows]);
   const targetRow = kinds.indexOf("sequence");
   /** Tinta di fondo di una cella secondo la colorazione scelta. */
@@ -396,9 +406,10 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
     const h = hydroClass(x);
     return h ? HYDRO[h] : undefined;
   };
-  const firstNumber = (r: number) => {
+  /** numero del primo residuo della riga nel blocco che comincia alla colonna `from` (come a inizio riga in un PIR) */
+  const firstNumber = (r: number, from: number) => {
     const list = numbering[r] ?? [];
-    for (let c = firstVisible; c < list.length; c++) {
+    for (let c = from; c < Math.min(list.length, from + BLOCK); c++) {
       const p = list[c];
       if (p) return p.multichain ? `${p.chain}:${p.number}` : String(p.number);
     }
@@ -419,9 +430,9 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
   const palettePos = (): CSSProperties => {
     const box = boxRef.current;
     if (!box) return {};
-    const top = RH + HH + (cursor.r + 1) * stride - box.scrollTop + 4;
-    const left = NAME_W + cursor.c * CW - box.scrollLeft;
-    return { top: Math.min(Math.max(RH + HH, top), box.clientHeight - 8), left: Math.max(0, Math.min(left, box.clientWidth - 440)) };
+    const top = cellTop(cursor.r, cursor.c) + stride - box.scrollTop + 4;
+    const left = cellLeft(cursor.c) - box.scrollLeft;
+    return { top: Math.min(Math.max(0, top), box.clientHeight - 8), left: Math.max(0, Math.min(left, box.clientWidth - 440)) };
   };
 
   /** voce del menu "Altro": esegue e chiude il menu */
@@ -491,57 +502,67 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
         aria-label="Allineamento modificabile: frecce per muoversi, Spazio inserisce un gap, Canc lo toglie, Alt+frecce sposta il blocco, una lettera sostituisce il residuo"
         aria-describedby={statusId}
         onKeyDown={onKeyDown}
-        onScroll={(e) => setView({ left: e.currentTarget.scrollLeft, width: e.currentTarget.clientWidth })}
+        onScroll={(e) => setView({ top: e.currentTarget.scrollTop, height: e.currentTarget.clientHeight })}
         style={{ "--cw": `${CW}px`, "--rh": `${RH}px`, "--name-w": `${NAME_W}px` } as CSSProperties}
       >
-        <div className="pirg-ruler" style={{ width: NAME_W + width * CW }} aria-hidden="true">
-          <div className="pirg-name">colonna</div>
-          {ruler.map((m) => (
-            <span key={m.c} style={{ left: NAME_W + m.c * CW }}>{m.label}</span>
-          ))}
-          {issues.filter((x) => x.to >= c0 && x.from < c1).map((x, k) => (
-            <i key={`i${k}`} className={`pirg-issue pirg-issue-${x.severity}`} style={{ left: NAME_W + x.from * CW, width: (x.to - x.from + 1) * CW }} />
-          ))}
-        </div>
-        <div className="pirg-hist" style={{ width: NAME_W + width * CW }} aria-hidden="true">
-          <div className="pirg-name">conservazione</div>
-          {conservation.slice(c0, c1).map((v, i) => (v > 0 ? (
-            <i key={c0 + i} style={{ left: NAME_W + (c0 + i) * CW, height: Math.max(1, Math.round(v * (HH - 2))) }}
-              className={v >= 0.999 ? "pirg-hist-full" : undefined} />
-          ) : null))}
-        </div>
-        <div ref={bodyRef} className="pirg-body" style={{ width: NAME_W + width * CW, height: rows.length * stride }} onMouseDown={onMouseDown} aria-hidden="true"
+        <div ref={bodyRef} className="pirg-body" style={{ width: blockW, height: nBlocks * blockH - BG }} onMouseDown={onMouseDown} aria-hidden="true"
           onDoubleClick={(e) => {
             const cell = cellAt(e);
             if (cell && cell.c < 0) onEditHeader?.(cell.r);
             else if (cell) setPaletteOpen(true);
           }}>
-          {bands.filter((b) => b.to >= c0 && b.from < c1).map((b, k) => (
-            <div key={`b${k}`} className="pirg-band" style={{ left: NAME_W + b.from * CW, width: (b.to - b.from + 1) * CW, background: `${b.color}26`, borderColor: b.color }} />
-          ))}
-          {secondary && rows.map((_s, r) => (
-            <Track key={`t${r}`} top={r * stride + RH} c0={c0} c1={c1} states={secondary.states[r]} source={secondary.sources[r]}
-              conflicts={secondary.conflicts.filter((x) => x.row === r)} />
-          ))}
-          {rows.map((s, r) => (
-            <div key={r} className={`pirg-row${kinds[r] === "sequence" ? " pirg-target" : ""}`} style={{ top: r * stride }}>
-              <div className="pirg-name" title={`${ids[r]} · ${kinds[r]}`}>
-                <span className="pirg-kind">{rowLabels?.[r] ?? (kinds[r] === "sequence" ? "bersaglio" : "template")}</span>{ids[r]}
-                <span className="pirg-num" title="Numero del primo residuo visibile">{firstNumber(r)}</span>
-              </div>
-              <div className="pirg-seq" style={{ left: NAME_W + c0 * CW }}>
-                {s.slice(c0, c1).split("").map((x, i) => (
-                  <span key={c0 + i} style={cellStyle(x, r, c0 + i)}
-                    className={[
-                      x === "-" ? "pirg-gap" : x === "/" || x === "." ? "pirg-mark" : mutated?.has(`${r}:${c0 + i}`) ? "pirg-mut" : "",
-                      changed?.has(`${r}:${c0 + i}`) ? "pirg-changed" : "",
-                    ].join(" ").trim() || undefined}>{x}</span>
+          {Array.from({ length: b1 - b0 }, (_, k) => b0 + k).map((b) => {
+            const from = b * BLOCK;
+            const to = Math.min(width, from + BLOCK);
+            const local = (c: number) => NAME_W + (c - from) * CW;
+            const clip = <T extends { from: number; to: number }>(x: T) => x.to >= from && x.from < to;
+            const span = (a: number, z: number) => ({ left: local(Math.max(a, from)), width: (Math.min(z, to - 1) - Math.max(a, from) + 1) * CW });
+            const marks: number[] = [];
+            for (let c = Math.ceil((from + 1) / 10) * 10; c <= to; c += 10) marks.push(c);
+            const top = RH + HH;
+            const selHere = sel.c1 >= from && sel.c0 < to;
+            return (
+              <div key={b} className="pirg-block" style={{ top: b * blockH, height: blockH - BG }}>
+                <div className="pirg-ruler">
+                  <div className="pirg-name">{b === 0 ? "colonna" : ""}</div>
+                  {marks.map((c) => <span key={c} style={{ left: local(c - 1) }}>{c}</span>)}
+                  {issues.filter(clip).map((x, i) => <i key={`i${i}`} className={`pirg-issue pirg-issue-${x.severity}`} style={span(x.from, x.to)} />)}
+                </div>
+                <div className="pirg-hist">
+                  <div className="pirg-name">{b === 0 ? "conservazione" : ""}</div>
+                  {conservation.slice(from, to).map((v, i) => (v > 0 ? (
+                    <i key={i} style={{ left: local(from + i), height: Math.max(1, Math.round(v * (HH - 2))) }} className={v >= 0.999 ? "pirg-hist-full" : undefined} />
+                  ) : null))}
+                </div>
+                {bands.filter(clip).map((x, i) => (
+                  <div key={`b${i}`} className="pirg-band" style={{ ...span(x.from, x.to), top, height: rows.length * stride, background: `${x.color}26`, borderColor: x.color }} />
                 ))}
+                {secondary && rows.map((_s, r) => (
+                  <Track key={`t${r}`} top={top + r * stride + RH} from={from} to={to} states={secondary.states[r]} source={secondary.sources[r]}
+                    conflicts={secondary.conflicts.filter((x) => x.row === r)} />
+                ))}
+                {rows.map((s, r) => (
+                  <div key={r} className={`pirg-row${kinds[r] === "sequence" ? " pirg-target" : ""}`} style={{ top: top + r * stride }}>
+                    <div className="pirg-name" title={`${ids[r]} · ${kinds[r]}`}>
+                      <span className="pirg-kind">{rowLabels?.[r] ?? (kinds[r] === "sequence" ? "bersaglio" : "template")}</span>{ids[r]}
+                      <span className="pirg-num" title="Numero del primo residuo della riga">{firstNumber(r, from)}</span>
+                    </div>
+                    <div className="pirg-seq" style={{ left: NAME_W }}>
+                      {s.slice(from, to).split("").map((x, i) => (
+                        <span key={i} style={cellStyle(x, r, from + i)}
+                          className={[
+                            x === "-" ? "pirg-gap" : x === "/" || x === "." ? "pirg-mark" : mutated?.has(`${r}:${from + i}`) ? "pirg-mut" : "",
+                            changed?.has(`${r}:${from + i}`) ? "pirg-changed" : "",
+                          ].join(" ").trim() || undefined}>{x}</span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {selHere && <div className="pirg-sel" style={{ ...span(sel.c0, sel.c1), top: top + sel.r0 * stride, height: (selRows - 1) * stride + RH }} />}
+                {Math.floor(cursor.c / BLOCK) === b && <div className="pirg-cursor" style={{ top: top + cursor.r * stride, left: local(cursor.c) }} />}
               </div>
-            </div>
-          ))}
-          <div className="pirg-sel" style={{ top: sel.r0 * stride, left: NAME_W + sel.c0 * CW, width: selCols * CW, height: (selRows - 1) * stride + RH }} />
-          <div className="pirg-cursor" style={{ top: cursor.r * stride, left: NAME_W + cursor.c * CW }} />
+            );
+          })}
         </div>
       </div>
       {paletteOpen && (
@@ -645,16 +666,18 @@ function runs<T>(values: T[], c0: number, c1: number, skip: (v: T) => boolean): 
 const SS_CLASS: Record<string, string> = { H: "pirg-ss-h", E: "pirg-ss-e", C: "pirg-ss-c", "?": "pirg-ss-u" };
 
 /** Traccia della struttura secondaria sotto una riga: eliche, filamenti, coil, e i gap che spezzano un elemento. */
-function Track({ top, c0, c1, states, source, conflicts }: { top: number; c0: number; c1: number; states: SS3[] | null; source: string | null; conflicts: GapConflict[] }) {
+function Track({ top, from, to, states, source, conflicts }: { top: number; from: number; to: number; states: SS3[] | null; source: string | null; conflicts: GapConflict[] }) {
   return (
     <div className={`pirg-track${source === "gor" ? " pirg-track-pred" : ""}`} style={{ top }}>
       <div className="pirg-track-name">{source === "dssp" ? "DSSP" : source === "gor" ? "predetta (GOR)" : "—"}</div>
-      {states && runs(states, c0, c1, (v) => v === " ").map((x) => (
-        <i key={x.from} className={SS_CLASS[x.value]} style={{ left: NAME_W + x.from * CW, width: (x.to - x.from + 1) * CW }} />
+      {states && runs(states, from, to, (v) => v === " ").map((x) => (
+        <i key={x.from} className={SS_CLASS[x.value]} style={{ left: NAME_W + (x.from - from) * CW, width: (x.to - x.from + 1) * CW }} />
       ))}
-      {conflicts.filter((x) => x.to >= c0 && x.from < c1).map((x) => (
-        <b key={`k${x.from}`} className="pirg-ss-conflict" title={conflictText(x)} style={{ left: NAME_W + x.from * CW, width: (x.to - x.from + 1) * CW }} />
-      ))}
+      {conflicts.filter((x) => x.to >= from && x.from < to).map((x) => {
+        const a = Math.max(x.from, from);
+        const z = Math.min(x.to, to - 1);
+        return <b key={`k${x.from}`} className="pirg-ss-conflict" title={conflictText(x)} style={{ left: NAME_W + (a - from) * CW, width: (z - a + 1) * CW }} />;
+      })}
     </div>
   );
 }
