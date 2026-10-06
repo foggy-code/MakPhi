@@ -1233,7 +1233,8 @@ def _grade(letter: Any, big: bool = False) -> str:
 
 def _table(head: list[tuple[str, bool]], rows: list[str], dense: bool = False) -> str:
     cols = "".join(('<th class="num">' if num else "<th>") + f"{_e(label)}</th>" for label, num in head)
-    return (f"<table{' class=\"dense\"' if dense else ''}><thead><tr>{cols}</tr></thead>"
+    cls = ' class="dense"' if dense else ""
+    return (f"<table{cls}><thead><tr>{cols}</tr></thead>"
             f"<tbody>{''.join(rows)}</tbody></table>")
 
 
