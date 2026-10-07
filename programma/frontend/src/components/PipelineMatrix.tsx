@@ -11,6 +11,10 @@ import { availableMetrics, BAD, cellColor, cellStatusText, cellValue, GOOD, MATR
 import { plural } from "../lib/shellView";
 
 const ROWS_PER_PAGE = 50;
+// Oltre queste sequenze la matrice (decine di migliaia di celle) si rilegge al più una volta al minuto mentre la pipeline
+// gira: costruirla a ogni elemento concluso toglierebbe tempo al calcolo
+const LIVE_SEQUENCES = 2000;
+const BIG_REFRESH_MS = 60_000;
 
 export function PipelineMatrix({ jobId, running, onOpen }: {
   jobId: string;
@@ -19,11 +23,12 @@ export function PipelineMatrix({ jobId, running, onOpen }: {
   onOpen: (cell: PipelineMatrixCell, sequence: string, template: string) => void;
 }) {
   const { data, reload } = useAsync<Matrix>(() => api.pipelineMatrix(jobId), [jobId]);
-  const refresh = useThrottled(reload, 1500);
+  const big = (data?.sequences.length ?? 0) > LIVE_SEQUENCES;
+  const refresh = useThrottled(reload, big ? BIG_REFRESH_MS : 1500);
   const live = useJobsFeed((type, event) => {
     if (type === "items" ? (event as JobItemsEvent | null)?.job_id === jobId : type === "ready" || type === "resync") refresh();
   });
-  useInterval(reload, running && !live ? 3000 : null);
+  useInterval(reload, running && !live ? (big ? BIG_REFRESH_MS : 3000) : null);
   const wasRunning = useRef(running);
   useEffect(() => {
     if (wasRunning.current !== running) reload();
@@ -49,6 +54,7 @@ export function PipelineMatrix({ jobId, running, onOpen }: {
           </select>
         </label>
         <span className="text-2">{def.note}.</span>
+        {big && running && <span className="text-2">Matrice grande: si aggiorna una volta al minuto.</span>}
       </div>
       <div className="legend">
         <span><i style={{ background: GOOD }} />{def.perRow ? "migliore della sequenza" : "buono"}</span>

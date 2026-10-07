@@ -6,6 +6,9 @@ a loro. Tutti i processi passano da `JobContext.run` (budget di CPU del JobManag
 con il proprio contesto figlio: le righe di log di un passo hanno il prefisso del passo (`[DOPE] …`). Il rapporto non
 dipende dall'ordine in cui i passi finiscono: i risultati si leggono e gli avvisi si aggiungono nell'ordine della
 versione seriale, che `analyze(parallel=False)` riproduce.
+
+Nei job con molti calcoli in parallelo (pipeline su un server) i passi Python girano in un processo di appoggio
+(core/offload.py, domain/qa_steps.py), fuori dal GIL del processo principale; gli esiti non cambiano.
 """
 
 from __future__ import annotations
@@ -19,15 +22,18 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from ..core import offload
 from ..core.errors import AppError, ToolUnavailable
 from ..core.jobs import JobCancelled, JobContext
 from ..core.parallel import Steps
-from ..domain import clashes, consensus, grading, ligands, perresidue, plddt, ramachandran, secondary, structure
+from ..domain import (clashes, consensus, grading, ligands, perresidue, plddt, qa_steps, ramachandran, secondary,
+                      structure)
 from . import modeller, procheck, prosa, tools
 
 # ASA massima teorica per residuo (Tien et al. 2013), per la SASA relativa.
-MAX_ASA = {"A": 129, "R": 274, "N": 195, "D": 193, "C": 167, "Q": 225, "E": 223, "G": 104, "H": 224, "I": 197,
-           "L": 201, "K": 236, "M": 224, "F": 240, "P": 159, "S": 155, "T": 172, "W": 285, "Y": 263, "V": 174}
+MAX_ASA = qa_steps.MAX_ASA
+# Attesa massima dei passi Python in un processo di appoggio, poi si calcolano in casa
+OFFLOAD_TIMEOUT = 600
 # Thread dell'analisi: uno per passo indipendente (mkdssp o DSSP integrato, DOPE, PROCHECK, ProSA, Ramachandran,
 # clash, SASA), così nessun passo aspetta un thread libero. Non è un limite di CPU: i processi pesanti li governa il
 # budget del JobManager.
@@ -131,26 +137,8 @@ def _dssp_external(model, structure_obj, ctx: Optional[JobContext] = None) -> Op
         shutil.rmtree(folder, ignore_errors=True)
 
 
-def _sasa(model) -> dict[tuple[str, str], float]:
-    from Bio.PDB.SASA import ShrakeRupley
-
-    # Le acque cristallografiche coprirebbero la superficie: si calcola su una copia senza solvente.
-    model = model.copy()
-    for chain in model:
-        for res in list(chain):
-            if res.id[0] == "W" or res.get_resname().strip() in structure.WATER_NAMES:
-                chain.detach_child(res.id)
-    sr = ShrakeRupley()
-    sr.compute(model, level="R")
-    out = {}
-    for chain in model:
-        for res in chain:
-            if structure.is_amino_residue(res):
-                aa = structure.three_to_one(res.get_resname())
-                max_asa = MAX_ASA.get(aa)
-                if max_asa:
-                    out[(chain.id, structure._resid(res))] = round(min(1.5, res.sasa / max_asa), 3)
-    return out
+# SASA relativa (anche nei processi di appoggio, domain/qa_steps.py)
+_sasa = qa_steps.relative_sasa
 
 
 def _timings_line(seconds: dict[str, float], total: float, parallel: bool) -> str:
@@ -229,9 +217,26 @@ def analyze(path: Path, ctx: Optional[JobContext] = None, *, with_dope: bool = T
                                                           ctx.sub("mkdssp", scratch) if ctx is not None else None))
             else:
                 steps.start("DSSP integrato", lambda: secondary.assign(model))
-            steps.start("Ramachandran", lambda: ramachandran.analyze(model))
-            steps.start("clash", lambda: clashes.analyze(model))
-            steps.start("SASA", lambda: _sasa(model))
+            # nei job, con molti calcoli in parallelo, i passi Python girano in un processo di appoggio (fuori dal
+            # GIL, core/offload.py); stessi risultati, e un passo non riuscito là si rifà qui
+            remote = (offload.submit(qa_steps.python_steps, str(path), path.stem)
+                      if parallel and ctx is not None else None)
+
+            def pooled(key: str, local):
+                def run():
+                    if remote is not None:
+                        try:
+                            done = remote.result(timeout=OFFLOAD_TIMEOUT)
+                        except Exception:
+                            done = {}
+                        if key in done:
+                            return done[key]
+                    return local()
+                return run
+
+            steps.start("Ramachandran", pooled("Ramachandran", lambda: ramachandran.analyze(model)))
+            steps.start("clash", pooled("clash", lambda: clashes.analyze(model)))
+            steps.start("SASA", pooled("SASA", lambda: _sasa(model)))
 
             # esiti nell'ordine della versione seriale: stesso rapporto, stessi avvisi nello stesso ordine
             step(0.15, "Angoli diedri e Ramachandran")

@@ -141,7 +141,7 @@ class PipelineIn(BaseModel):
     options: dict = {"models": 3, "refinement": "fast"}
     quality: bool = True
     extended_quality: bool = False
-    parallel: int = Field(2, ge=1, le=8)
+    parallel: int = Field(2, ge=1, le=256)
     use_cache: bool = Field(True, description="Ricerca dei template: False = ricalcola ignorando la cache "
                                                "dei calcoli (e la aggiorna)")
 

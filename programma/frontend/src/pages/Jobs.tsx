@@ -88,10 +88,10 @@ const JobPeek = memo(function JobPeek({ job: s, onOpen }: { job: JobSummary; onO
         </Disclosure>
       )}
       {files.length > 0 && (
-        <Disclosure title="File prodotti" extra={`${files.length} · ${fmtBytes(bytes)}`}>
+        <Disclosure title="File prodotti" extra={full?.files_truncated ? `più di ${files.length}` : `${files.length} · ${fmtBytes(bytes)}`}>
           <ul className="shell-file-list">
             {files.slice(0, 12).map((f) => <li key={f.path}><span className="mono">{f.path}</span> · {fmtBytes(f.size)}</li>)}
-            {files.length > 12 && <li>e altri {files.length - 12}: elenco completo nei dettagli.</li>}
+            {files.length > 12 && <li>e altri {files.length - 12}: {full?.files_truncated ? "elenco dei primi file nei dettagli" : "elenco completo nei dettagli"}.</li>}
           </ul>
         </Disclosure>
       )}
@@ -182,7 +182,8 @@ function Detail({ id, labels, onDeleted, onChanged, onLabels }: { id: string; la
             </Disclosure>
           )}
           {files.length > 0 && (
-            <Disclosure title="File prodotti" extra={`${files.length} · ${fmtBytes(files.reduce((sum, f) => sum + f.size, 0))}`} defaultOpen>
+            <Disclosure title="File prodotti" extra={job?.files_truncated ? `primi ${files.length}` : `${files.length} · ${fmtBytes(files.reduce((sum, f) => sum + f.size, 0))}`} defaultOpen>
+              {job?.files_truncated && <p className="small text-2">Il job ha più di {files.length} file: qui ci sono i primi; tutti i file sono nell'archivio.</p>}
               <div className="table-wrap" style={{ maxHeight: 300, overflowY: "auto" }}>
                 <table className="table">
                   <tbody>

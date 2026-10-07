@@ -59,6 +59,14 @@ RESUME_WHERE = {
     "incomplete": "status NOT IN ('completed','filtered')",
     "failed": "status='failed'",
 }
+# Sequenze per pipeline: abbastanza per un lavoro da server (es. 20.000 sequenze × 6 template), con margine
+MAX_SEQUENCES = 50_000
+# Elementi elaborati insieme da una pipeline: il tetto vero sono i job di calcolo in parallelo delle Impostazioni
+MAX_PARALLEL = 256
+# Output dei programmi esterni di un elemento, nella sua cartella (JobContext.sub, output_log)
+ITEM_OUTPUT_LOG = "programmi.log"
+# Pipeline di cui si tengono in memoria i parametri (`_params`)
+PARAMS_CACHE_SIZE = 32
 RESUME_LABEL = {"incomplete": "elementi non conclusi", "failed": "solo i falliti"}
 # Stati da cui si riprende una pipeline: anche completata, se ha elementi falliti da riprovare (un errore
 # temporaneo di rete o di RCSB non obbliga a rilanciare tutte le sequenze).
@@ -83,6 +91,8 @@ class PipelineService:
         self.db = db
         self.jobs = jobs
         self.compute = compute
+        self._params_cache: dict[str, dict] = {}
+        self._params_lock = threading.Lock()
         jobs.register("pipeline", self.handle, eta=self.eta)
 
     # ------------------------------------------------------------------------------ sottomissione
@@ -242,9 +252,7 @@ class PipelineService:
                 remaining += 1
                 if row["status"] != "pending":
                     running.append(eta_estimate.seconds_between(row["started_at"], now))
-        stored = self.db.query_one("SELECT params FROM jobs WHERE id=?", (job["id"],)) or {}
-        params = stored.get("params") if isinstance(stored.get("params"), dict) else {}
-        parallel = effective_parallel(params, self.jobs.settings_provider().effective_workers())
+        parallel = effective_parallel(self._params(job["id"]), self.jobs.settings_provider().effective_workers())
         return eta_estimate.pipeline_eta(durations, remaining, parallel, running)
 
     @staticmethod
@@ -254,8 +262,8 @@ class PipelineService:
             SeqRecord(s.get("name", f"seq{i + 1}"), s.get("sequence", "")) for i, s in enumerate(params.get("records") or [])]
         if not records:
             raise AppError("Nessuna sequenza fornita alla pipeline.")
-        if len(records) > 2000:
-            raise AppError("Massimo 2000 sequenze per pipeline.")
+        if len(records) > MAX_SEQUENCES:
+            raise AppError(f"Massimo {MAX_SEQUENCES:,} sequenze per pipeline (ne sono arrivate {len(records):,}).".replace(",", "."))
         # nomi unici, anche quelli generati: "x", "x", "x_2" → "x", "x_2", "x_2_2" (nell'archivio ZIP i file di un
         # elemento prendono il suo nome)
         used: set[str] = set()
@@ -298,6 +306,7 @@ class PipelineService:
                     "parallelo; migliore di ogni sequenza: zDOPE più basso")
         else:
             ctx.log(f"Pipeline di {_seqs(total)}, {parallel} in parallelo")
+        ctx.log(f"Output dei programmi di ogni elemento: items/<elemento>/{ITEM_OUTPUT_LOG}")
         skipped = total - already - len(items)
         if len(items) < total:
             ctx.log(f"Ripresa: {unit(len(items))} da elaborare, {already} già {done_word}"
@@ -359,9 +368,24 @@ class PipelineService:
                 "templates_prepared": prepared.prepared, "templates_reused": prepared.reused}
 
     def _params(self, job_id: str) -> dict:
-        """Parametri del job (non letti da `jobs.get(include_result=False)`)."""
+        """Parametri del job (non letti da `jobs.get(include_result=False)`), in sola lettura.
+
+        I parametri di un job non cambiano dopo la sottomissione: si leggono dal database una volta e restano in una
+        piccola cache. Con decine di migliaia di sequenze il FASTA nei parametri pesa diversi MB, e il tempo residuo,
+        le pagine degli elementi e la matrice li chiedono di continuo mentre la pipeline gira.
+        """
+        with self._params_lock:
+            cached = self._params_cache.get(job_id)
+        if cached is not None:
+            return cached
         row = self.db.query_one("SELECT params FROM jobs WHERE id=?", (job_id,)) or {}
-        return row["params"] if isinstance(row.get("params"), dict) else {}
+        params = row["params"] if isinstance(row.get("params"), dict) else {}
+        if row:  # un job inesistente non entra nella cache
+            with self._params_lock:
+                self._params_cache[job_id] = params
+                while len(self._params_cache) > PARAMS_CACHE_SIZE:
+                    self._params_cache.pop(next(iter(self._params_cache)))
+        return params
 
     def _update(self, job_id: str, idx: int, **fields) -> None:
         if "metrics" in fields:
@@ -380,7 +404,10 @@ class PipelineService:
             if stage:
                 self._update(job_id, idx, stage=stage[:120])
 
-        sub = ctx.sub(name, ctx.workdir / "items" / f"{idx:04d}_{name}", on_progress=on_progress)
+        item_dir = ctx.workdir / "items" / f"{idx:04d}_{name}"
+        # output dei programmi (MODELLER, DOPE, PROCHECK…) nella cartella dell'elemento: ~1500 righe per modello,
+        # che nel log del job diventerebbero gigabyte con decine di migliaia di elementi
+        sub = ctx.sub(name, item_dir, on_progress=on_progress, output_log=item_dir / ITEM_OUTPUT_LOG)
         final: Optional[dict] = None
         try:
             final = self._run_item(ctx, sub, p, item, prepared)
@@ -931,12 +958,12 @@ def max_templates(params: dict) -> int:
 
 def effective_parallel(params: dict, workers: int) -> int:
     """Elementi elaborati insieme: quelli chiesti (predefinito 2), non oltre i job paralleli delle Impostazioni
-    né oltre 8. Lo usano l'esecuzione e la stima del tempo residuo."""
+    (al massimo `MAX_PARALLEL`). Lo usano l'esecuzione e la stima del tempo residuo."""
     try:
         requested = int(params.get("parallel", 2))
     except (TypeError, ValueError):
         requested = 2
-    return max(1, min(requested, int(workers), 8))
+    return max(1, min(requested, int(workers), MAX_PARALLEL))
 
 
 def _saved(final_dir: Path, rel: Optional[str]) -> bool:

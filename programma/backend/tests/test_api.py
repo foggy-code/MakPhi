@@ -103,10 +103,10 @@ def test_settings_errors_are_short_and_in_italian(client):
     assert r.status_code == 400
     assert r.json()["error"] == {"code": "invalid_settings",
                                  "message": "Impostazioni non valide: Email di contatto: indirizzo email non valido."}
-    r = client.put("/api/settings", json={"max_workers": 100, "qmean_mode": "altrove", "qmean_uniclust": "x" * 301})
+    r = client.put("/api/settings", json={"max_workers": 300, "qmean_mode": "altrove", "qmean_uniclust": "x" * 301})
     message = r.json()["error"]["message"]
     assert r.status_code == 400 and "pydantic" not in message and "Input should" not in message
-    assert "Job di calcolo in parallelo: deve essere al massimo 64" in message
+    assert "Job di calcolo in parallelo: deve essere al massimo 256" in message
     assert "Dove calcolare QMEAN: valore non ammesso (ammessi: 'local' o 'remote')" in message
     assert "Versione di UniClust30/UniRef30: al massimo 300 caratteri" in message
     r = client.put("/api/settings", json={"job_timeout_minutes": 0})

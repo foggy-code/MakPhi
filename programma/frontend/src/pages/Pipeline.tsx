@@ -456,7 +456,7 @@ export default function Pipeline() {
                       <option value="thorough">Accurato</option>
                     </select>
                   </Field>
-                  <Field label="In parallelo"><input className="input" type="number" min={1} max={8} value={parallel} onChange={(e) => setParallel(Number(e.target.value))} /></Field>
+                  <Field label="In parallelo" hint="Non oltre i job di calcolo in parallelo delle Impostazioni."><input className="input" type="number" min={1} max={256} value={parallel} onChange={(e) => setParallel(Number(e.target.value))} /></Field>
                 </div>
                 {predictedPossible && <PlddtOption enabled={plddtTrim} threshold={plddtMin} onEnabled={setPlddtTrim} onThreshold={setPlddtMin} />}
                 <label className="check"><input type="checkbox" checked={quality} onChange={(e) => setQuality(e.target.checked)} /> {cross ? "Analisi di qualità del modello di ogni coppia" : "Analisi di qualità del modello migliore"}</label>

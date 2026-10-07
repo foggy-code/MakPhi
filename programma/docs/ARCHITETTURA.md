@@ -562,7 +562,7 @@ colonna nuova: si calcola dai dati già salvati.
   (Graham, SIAM J. Appl. Math. 17, 1969). Togliere il tempo già speso dagli elementi in corso fa scendere la stima
   con continuità invece che a scatti.
 - **Parallelismo effettivo:** lo stesso dell'esecuzione (`pipeline.effective_parallel`: quello chiesto, non oltre i
-  job paralleli delle Impostazioni né oltre 8).
+  job paralleli delle Impostazioni, al massimo 256).
 - **Arrotondamento:** 5 s sotto il minuto, 10 s sotto i 10 minuti, 1 min sotto l'ora, 5 min oltre; mai negativa.
   L'interfaccia mostra "circa 3 min rimanenti" (`fmtEta`) in `JobPanel` e nell'elenco dei job.
 
@@ -942,8 +942,20 @@ ricerca e poi `select_complementary`; `run_modeling` riceve tutti i template sce
 
 **Pipeline, sequenze × template** (`template_mode: "fixed"`, `fixed_combination: "each"`; predefinito `"combined"`,
 un modello per sequenza con tutti i template, al massimo 10): ogni sequenza si modella su ogni template, uno alla volta.
-M sequenze e N template danno M × N elementi; nessun limite su N (resta quello di 2000 sequenze).
+M sequenze e N template danno M × N elementi; nessun limite su N (resta quello di 50.000 sequenze per pipeline,
+`pipeline.MAX_SEQUENCES`).
 
+- **Pipeline grandi** (decine di migliaia di elementi, su un server):
+  - l'output dei programmi esterni di ogni elemento (MODELLER, DOPE, PROCHECK, ProSA, mkdssp: ~1500 righe, ~100 KB per
+    coppia) va in `items/<elemento>/programmi.log`, un blocco per processo con orario, programma e codice di uscita
+    (`JobContext.sub(output_log=...)`); nel `job.log` restano i messaggi di BioLoom;
+  - i parametri del job (con il FASTA: ~8 MB per 20.000 sequenze) si leggono una volta e restano in una cache di 32
+    pipeline (`PipelineService._params`; non cambiano dopo la sottomissione): tempo residuo, pagine e matrice non li
+    rileggono dal database;
+  - il dettaglio di un job (`GET /api/jobs/{id}`) elenca al massimo 2000 file, fermando la visita delle cartelle
+    (`files_truncated: true`); tutti i file restano nell'archivio e nell'esportazione;
+  - la matrice sequenze × template con oltre 2000 sequenze si rilegge al più una volta al minuto mentre la pipeline
+    gira.
 - **Elementi:** uno per coppia, in ordine di sequenza: `idx` = sequenza × N + template (`pipeline.pair_of`), nome
   `<sequenza>__<template>` (cartella `items/<idx>_<sequenza>__<template>/`), `template` = id del template. L'etichetta
   del template è id e catene sanificati (`1UBQ_A`, `template_labels`, salvate in `params.template_labels`). Nessuna
@@ -1493,6 +1505,15 @@ integrato se mkdssp manca), su un pool di thread del singolo calcolo. QMEAN rest
 - **Log:** a fine analisi una riga con la durata dei passi, per esempio "Analisi di qualità in 1.14 s (passi in
   parallelo: lettura 0.01, Ramachandran 0.20, clash 0.20, mkdssp 0.25, SASA 0.16, DOPE 1.10, PROCHECK 0.36, ProSA
   0.10 s)". Con i passi insieme ognuno dura un po' di più (GIL, core condivisi): conta il totale.
+- **Processi di appoggio** (`core/offload.py`, `domain/qa_steps.py`): con molti job in parallelo i calcoli Python
+  (Ramachandran, clash, SASA: ~1 s di CPU per una proteina di 420 residui) occupano il GIL del processo principale, e su
+  ~30 s di calcolo per coppia di una pipeline M × N lo saturano oltre 15–20 coppie in parallelo (misura del
+  benchmark `scripts/benchmark_mxn.py`: ~1,6 s di CPU del processo di BioLoom per coppia). Da 8 job di calcolo in
+  parallelo nelle Impostazioni (`offload.MIN_WORKERS`) un pool di processi avviati con "spawn" (uno ogni 4 job,
+  60–100 MB ciascuno) esegue `qa_steps.python_steps` sul file della struttura, mentre i sottoprocessi partono come
+  prima; i passi di `Steps` aspettano quell'esito. Un passo non riuscito nel processo di appoggio (o un pool rotto, o
+  più di 10 minuti di attesa) si rifà nel processo principale, con gli stessi errori e avvisi; sotto gli 8 job e senza
+  job (`ctx` assente) tutto resta nel processo principale. Il pool segue le Impostazioni e si chiude all'arresto.
 - **Più modelli** (qualità "Su tutti i modelli"): `run_modeling` ne analizza fino a 3 insieme (non oltre i job
   paralleli delle Impostazioni), ognuno con il proprio contesto; metriche, rapporti e REMARK restano nell'ordine dei
   modelli, e il primo modello fallito in quell'ordine fa fallire il job come prima.

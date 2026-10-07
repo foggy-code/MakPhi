@@ -70,6 +70,15 @@ COMPOSE_PROFILES=qmean BIOLOOM_QMEAN_URL=http://qmean:8080 \
   docker compose -f programma/launcher/compose.yml --env-file server.env up -d   # con QMEAN locale
 ```
 
+### Pipeline grandi
+
+Per modellare molte coppie sequenza × template (per esempio 20.000 sequenze × 6 template) imposta in Impostazioni →
+Esecuzione i **Job di calcolo in parallelo** pari ai core fisici del server (fino a 256) e, nella pagina Pipeline,
+**In parallelo** allo stesso numero. Da 8 job in parallelo BioLoom esegue i calcoli Python dell'analisi di qualità in
+processi di appoggio (uno ogni 4 job, 60–100 MB ciascuno), così i core restano tutti occupati. Una pipeline accetta
+fino a 50.000 sequenze. Per stimare tempi e spazio sul server prima di partire c'è il benchmark
+`programma/scripts/benchmark_mxn.py` (istruzioni nel file).
+
 ### QMEAN locale e fallback
 
 - **Più versioni:** `UNICLUST_PATH` può contenere più database. BioLoom li elenca in Impostazioni → Database,

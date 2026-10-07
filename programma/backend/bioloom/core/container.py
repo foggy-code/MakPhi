@@ -26,7 +26,7 @@ from ..services.reproducibility import ReproducibilityService
 from ..services.selftest import SelfTestService
 from ..services.structure_tools import StructureToolsService
 from ..services.templates import TemplateLibrary
-from . import cache
+from . import cache, offload
 from .db import Database
 from .jobs import JobManager
 
@@ -65,6 +65,7 @@ class Core:
     def close(self) -> None:
         self.housekeeping.stop()
         self.jobs.shutdown()
+        offload.configure(None)  # chiude i processi di appoggio
         self.db.close()
 
 
@@ -85,6 +86,8 @@ def build_core(paths: Paths, *, server: bool = False) -> Core:
               + (f"; copia di sicurezza in {db.backup}" if db.backup else ""))
     # job di calcolo in parallelo e budget di CPU seguono le Impostazioni anche dopo un cambio (workers=None)
     jobs = JobManager(db, paths.jobs, None, settings.get, scratch_dir=paths.scratch)
+    # processi di appoggio per i calcoli Python dell'analisi di qualità, con molti job in parallelo (core/offload.py)
+    offload.configure(jobs.cpu_workers)
     recovered = jobs.recover()
     library = TemplateLibrary(paths.templates)
     # etichette e preferiti, e indice della ricerca globale (F8b) prima di ogni altra scrittura

@@ -38,6 +38,8 @@ router = APIRouter(prefix="/api/jobs", tags=["Job"])
 
 MEDIA = {".pdb": "chemical/x-pdb", ".json": "application/json", ".ali": "text/plain", ".pap": "text/plain",
          ".fasta": "text/plain", ".aln": "text/plain", ".log": "text/plain", ".py": "text/plain", ".csv": "text/csv"}
+# File elencati nel dettaglio di un job: una pipeline grande ne ha centinaia di migliaia (tutti nell'archivio)
+JOB_FILES_SHOWN = 2000
 # niente cache né buffering dei proxy (nginx: X-Accel-Buffering) sugli eventi in tempo reale
 SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 SSE_RESPONSE = {200: {"content": {"text/event-stream": {}}, "description": "Flusso Server-Sent Events"},
@@ -128,7 +130,9 @@ def cleanup_jobs(body: CleanupIn, core: Core = Depends(get_core)) -> dict:
 @router.get("/{job_id}")
 def get_job(job_id: str, core: Core = Depends(get_core)) -> dict:
     job = core.jobs.with_eta(core.jobs.get(job_id))
-    job["files"] = core.jobs.list_files(job_id)
+    files = core.jobs.list_files(job_id, limit=JOB_FILES_SHOWN + 1)
+    job["files"] = files[:JOB_FILES_SHOWN]
+    job["files_truncated"] = len(files) > JOB_FILES_SHOWN  # elenco parziale: tutti i file sono nell'archivio
     job.update(core.pipeline.resume_state(job))  # resumable, resumable_items (solo le pipeline si riprendono)
     return job
 
