@@ -267,3 +267,18 @@
 .pirg-block .pirg-ruler { position: absolute; top: 0; left: 0; right: 0; }
 .pirg-block .pirg-hist { position: absolute; top: var(--rh); left: 0; right: 0; }
 .pirg-block .pirg-band { bottom: auto; }
+
+/* pannelli richiudibili: ridotti a una barra sottile sul bordo, con il pulsante per riaprirli */
+.pirw.pirw-collapsed { grid-template-columns: minmax(0, 1fr) auto; }
+.pire-docs-collapsed { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 16px; align-items: start; }
+.pirw-rail { position: sticky; top: 70px; }
+.pirw-rail > .btn { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 6px; }
+.pirw-rail-label { writing-mode: vertical-rl; transform: rotate(180deg); font-weight: 600; letter-spacing: 0.02em; }
+.pirw-tabs > button.pirw-hide { margin-left: auto; order: 99; }
+@media (max-width: 1280px) {
+  .pirw.pirw-collapsed { grid-template-columns: minmax(0, 1fr); }
+  .pirw-rail { position: static; }
+  .pirw-rail > .btn { flex-direction: row; }
+  .pirw-rail-label { writing-mode: horizontal-tb; transform: none; }
+}
+.pirw-flip { transform: rotate(180deg); }

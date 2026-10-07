@@ -177,15 +177,24 @@ export default function PirEditor() {
         lead="Allineamento bersaglio–template nel formato di MODELLER. Correggi a mano i gap nelle regioni critiche (loop, siti attivi) prima di modellare."
         actions={
           <>
-            <button className="btn" onClick={toggleDocs} aria-pressed={showDocs} title="Mostra o nasconde l'elenco dei documenti del progetto"><Icon name="folder" /> Documenti</button>
             <button className="btn" onClick={() => setGenerate(true)}><Icon name="wand" /> Genera con MODELLER</button>
             <TextFileButton accept=".pir,.ali,.txt,.fasta,.fa,.aln,.sto,.msf" onText={openFile}>Apri file</TextFileButton>
             <button className="btn" onClick={() => { setParams({}); setName(""); open("", {}, false); }}><Icon name="plus" /> Nuovo</button>
           </>
         }
       />
-      <div className={showDocs ? "split" : "stack"}>
-        {showDocs && <Card title="Documenti del progetto" icon="folder" sub={docs?.length ? String(docs.length) : undefined}>
+      <div className={showDocs ? "split" : "pire-docs-collapsed"}>
+        {!showDocs && (
+          <aside className="pirw-rail" aria-label="Documenti del progetto (ridotti)">
+            <button type="button" className="btn btn-sm" onClick={toggleDocs} aria-expanded={false} title="Mostra i documenti del progetto">
+              <Icon name="chevron" size={14} />
+              <span className="pirw-rail-label">Documenti</span>
+              {!!docs?.length && <span className="pirw-count">{docs.length}</span>}
+            </button>
+          </aside>
+        )}
+        {showDocs && <Card title="Documenti del progetto" icon="folder" sub={docs?.length ? String(docs.length) : undefined}
+          right={<button type="button" className="btn btn-sm btn-ghost" onClick={toggleDocs} aria-expanded title="Nasconde i documenti: l'editor prende tutta la larghezza"><Icon name="chevron" size={14} className="pirw-flip" /> Riduci</button>}>
           {!docs?.length ? <Empty icon="file" title="Nessun documento">Genera un allineamento o salvane uno dalla pagina Allineamenti.</Empty> : (
             <div className="table-wrap" style={{ maxHeight: 560, overflowY: "auto" }}>
               <table className="table">
