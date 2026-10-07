@@ -8,6 +8,7 @@ import { PirMutations } from "./PirMutations";
 import { AnnotationDialog, AnnotationsCard } from "./PirAnnotations";
 import { PirStructureView, type StructureFocus } from "./PirStructureView";
 import { PirSecondaryCard } from "./PirSecondaryCard";
+import { Icon } from "./Icon";
 import { Alert, Badge, BarCell, Card, Confirm, Disclosure, Tabs } from "./ui";
 import { InfoChips } from "./WorkflowParts";
 import { pirReference } from "../lib/alignConfidence";
@@ -50,6 +51,16 @@ function savedOriginal(meta: Record<string, unknown> | undefined): Record<string
   const v = meta?.[ORIGINAL_KEY];
   if (!v || typeof v !== "object" || Array.isArray(v)) return null;
   return Object.values(v).every((s) => typeof s === "string") ? (v as Record<string, string>) : null;
+}
+
+/** Preferenza "pannello dei dettagli aperto" (solo in questo browser). */
+const SIDE_PREF = "bioloom.pir.side";
+function readSidePref(): boolean {
+  try {
+    return localStorage.getItem(SIDE_PREF) !== "0";
+  } catch {
+    return true;
+  }
 }
 
 type Panel = "checks" | "subst" | "ss" | "notes" | "3d" | "verify" | "preview";
@@ -98,6 +109,16 @@ export function PirWorkspace({ source, savedKey = 0, onState, title, right, empt
   const toast = useToast();
   // scheda del pannello laterale
   const [panel, setPanel] = useState<Panel>("checks");
+  // pannello dei dettagli aperto o ridotto a una barra sul bordo
+  const [sideOpen, setSideOpen] = useState(readSidePref);
+  const toggleSide = (open: boolean) => {
+    setSideOpen(open);
+    try {
+      localStorage.setItem(SIDE_PREF, open ? "1" : "0");
+    } catch {
+      // preferenza non salvata
+    }
+  };
   const [content, setContent] = useState("");
   const [meta, setMeta] = useState<Record<string, unknown>>({});
   // modifiche dopo l'ultimo caricamento o salvataggio
@@ -388,7 +409,7 @@ export function PirWorkspace({ source, savedKey = 0, onState, title, right, empt
 
   return (
     <>
-      <div className={`pirw${entries.length ? "" : " pirw-empty"}`}>
+      <div className={`pirw${entries.length ? "" : " pirw-empty"}${entries.length && !sideOpen ? " pirw-collapsed" : ""}`}>
         <div className="pirw-main">
       <Card icon="file" title={title} right={<>{dirty && <Badge tone="warn">modifiche non salvate</Badge>}{right}</>}>
             <div className="stack-sm">
@@ -461,9 +482,21 @@ export function PirWorkspace({ source, savedKey = 0, onState, title, right, empt
             </div>
       </Card>
         </div>
-        {entries.length > 0 && (
+        {entries.length > 0 && !sideOpen && (
+          <aside className="pirw-rail" aria-label="Dettagli dell'allineamento (ridotti)">
+            <button type="button" className="btn btn-sm" onClick={() => toggleSide(true)} aria-expanded={false} title="Mostra i dettagli: controlli, sostituzioni, struttura secondaria, annotazioni, 3D, verifica">
+              <Icon name="chevron" size={14} className="pirw-flip" />
+              <span className="pirw-rail-label">Dettagli</span>
+              {issues.length > 0 && <span className="pirw-count">{issues.length}</span>}
+            </button>
+          </aside>
+        )}
+        {entries.length > 0 && sideOpen && (
           <aside className="pirw-side" aria-label="Dettagli dell'allineamento">
             <div className="pirw-tabs" role="tablist">
+              <button type="button" className="pirw-hide" onClick={() => toggleSide(false)} aria-expanded title="Nasconde i dettagli: la griglia prende tutta la larghezza">
+                Riduci <Icon name="chevron" size={12} />
+              </button>
               {PANELS.map((p) => (
                 <button key={p.value} type="button" role="tab" aria-selected={panel === p.value} className={panel === p.value ? "on" : ""} onClick={() => setPanel(p.value)}>
                   {p.label}{panelCount(p.value) ? <span className="pirw-count">{panelCount(p.value)}</span> : null}
