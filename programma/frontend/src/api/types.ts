@@ -51,6 +51,8 @@ export interface Job<R = unknown> extends JobSummary {
   params: Record<string, unknown>;
   result: R | null;
   files: JobFile[];
+  /** elenco dei file parziale (i primi 2000): una pipeline grande ne ha molti di più, tutti nell'archivio */
+  files_truncated?: boolean;
   /** pipeline terminata con elementi non conclusi (anche completata, con elementi falliti): si può riprendere */
   resumable: boolean;
   /** conteggi per i pulsanti di ripresa (solo pipeline terminate, altrimenti null) */

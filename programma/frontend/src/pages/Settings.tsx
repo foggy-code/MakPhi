@@ -118,7 +118,7 @@ export default function SettingsPage() {
                 <div className="stack">
                   <div className="grid grid-2">
                     <Field label="Job di calcolo in parallelo" hint={`0 = automatico (${info?.workers ?? "core − 1"}).`}>
-                      <input className="input" type="number" min={0} max={64} value={form.max_workers} onChange={(e) => set("max_workers", Number(e.target.value))} />
+                      <input className="input" type="number" min={0} max={256} value={form.max_workers} onChange={(e) => set("max_workers", Number(e.target.value))} />
                     </Field>
                     <Field label="Timeout per processo (minuti)" hint="MODELLER e strumenti esterni">
                       <input className="input" type="number" min={1} max={1440} value={form.job_timeout_minutes} onChange={(e) => set("job_timeout_minutes", Number(e.target.value))} />

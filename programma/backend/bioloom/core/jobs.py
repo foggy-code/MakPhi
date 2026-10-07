@@ -203,6 +203,24 @@ def cpu_slots(cpu: Union[bool, int]) -> int:
     return max(1, int(cpu))
 
 
+_output_lock = threading.Lock()
+
+
+def _write_output_block(path: Path, prefix: str, cmd: list[str], lines: list[str], code: Optional[int]) -> None:
+    """Aggiunge a `path` l'output di un processo (intestazione con orario, contesto, programma e codice di uscita).
+    Un errore di scrittura non deve far fallire il calcolo: l'output resta comunque nell'esito del processo."""
+    program = Path(str(cmd[0])).name if cmd else "?"
+    head = f"===== [{datetime.now().strftime('%H:%M:%S')}] {prefix}{program} (uscita {code})\n"
+    try:
+        with _output_lock, open(path, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(head)
+            fh.writelines(lines)
+            if lines and not lines[-1].endswith("\n"):
+                fh.write("\n")
+    except OSError:
+        pass
+
+
 class JobContext:
     """Interfaccia offerta agli handler: log, progresso, sottoprocessi, cancellazione.
 
@@ -217,7 +235,8 @@ class JobContext:
                  cancel_event: threading.Event, prefix: str = "",
                  on_progress: Optional[Callable[[Optional[float], Optional[str]], None]] = None, *,
                  priority: int = DEFAULT_PRIORITY, parent: Optional["JobContext"] = None, lane: bool = False,
-                 stage: Optional[str] = None, release_resource: Optional[Callable[[], None]] = None) -> None:
+                 stage: Optional[str] = None, release_resource: Optional[Callable[[], None]] = None,
+                 output_log: Optional[Path] = None) -> None:
         self._manager = manager
         self.job_id = job_id
         self.workdir = workdir
@@ -238,6 +257,9 @@ class JobContext:
         self._lane_waiting = 0
         self._running = 0  # processi del job in esecuzione (da qualunque contesto)
         self._release = release_resource  # solo nella radice: restituisce la risorsa esclusiva (core/dispatch.py)
+        # file dell'output dei programmi esterni (`run`), al posto del log del job; ereditato dai figli
+        self._output_log = output_log if output_log is not None else (parent._output_log if parent is not None
+                                                                     else None)
 
     @property
     def settings(self):
@@ -323,16 +345,19 @@ class JobContext:
         return self._manager.budget.slots_for(wanted)
 
     def sub(self, name: str, workdir: Path,
-            on_progress: Optional[Callable[[Optional[float], Optional[str]], None]] = None) -> "JobContext":
+            on_progress: Optional[Callable[[Optional[float], Optional[str]], None]] = None,
+            output_log: Optional[Path] = None) -> "JobContext":
         """Contesto figlio (es. un elemento di pipeline): condivide cancellazione e log del job padre.
 
         Con `on_progress` il figlio ha una fase propria (l'elemento di pipeline); senza, il suo progresso non si
         mostra e le sue attese di CPU contano come quelle del padre.
+        Con `output_log` l'output dei programmi esterni del figlio (e dei suoi figli) va in quel file invece che
+        nel log del job, un blocco per processo: le pipeline grandi non riempiono il log con l'output di MODELLER.
         """
         workdir.mkdir(parents=True, exist_ok=True)
         return JobContext(self._manager, self.job_id, workdir, self.params, self._cancel,
                           prefix=f"{self._prefix}[{name}] ", on_progress=on_progress or _silent,
-                          priority=self.priority, parent=self, lane=on_progress is not None)
+                          priority=self.priority, parent=self, lane=on_progress is not None, output_log=output_log)
 
     def path(self, *parts: str) -> Path:
         return safe_join(self.workdir, *parts)
@@ -404,11 +429,15 @@ class JobContext:
             timer.daemon = True
             timer.start()
         tail: collections.deque[str] = collections.deque(maxlen=20000)
+        to_file = log_output and self._output_log is not None
+        lines: list[str] = []  # output per il file `output_log`, scritto in un blocco a fine processo
         try:
             assert proc.stdout is not None
             for line in proc.stdout:
                 tail.append(line)
-                if log_output:
+                if to_file:
+                    lines.append(line)
+                elif log_output:
                     self._manager._append_log(self.job_id, f"{self._prefix}{line.rstrip()}")
                 if on_line is not None:
                     on_line(line)
@@ -417,6 +446,8 @@ class JobContext:
             if timer:
                 timer.cancel()
             self._manager._unregister_process(self.job_id, proc)
+            if to_file:
+                _write_output_block(self._output_log, self._prefix, cmd, lines, proc.returncode)
         if self._cancel.is_set():
             raise JobCancelled()
         if timed_out.is_set():
@@ -773,10 +804,12 @@ class JobManager:
         return {"text": data.decode("utf-8", errors="replace"), "offset": start + len(data), "size": size,
                 "start": start}
 
-    def list_files(self, job_id: str) -> list[dict]:
+    def list_files(self, job_id: str, limit: Optional[int] = None) -> list[dict]:
         """File del job: quelli definitivi più, mentre il job è attivo, quelli ancora nello scratch.
 
         Il job può spostare o cancellare file mentre li si elenca: quelli spariti vengono ignorati.
+        Con `limit` la visita si ferma appena trovati `limit` file (dall'alto: prima quelli della cartella del job,
+        poi le sottocartelle), così una pipeline con centinaia di migliaia di file non si percorre tutta.
         """
         found: dict[str, int] = {}
         roots = [self.workdir(job_id)]
@@ -796,6 +829,8 @@ class JobManager:
                         continue
                     rel = Path(full).relative_to(root).as_posix()
                     found.setdefault(rel, size)
+                    if limit is not None and len(found) >= limit:
+                        return [{"path": p, "size": s} for p, s in sorted(found.items())]
         return [{"path": p, "size": s} for p, s in sorted(found.items())]
 
     def file_path(self, job_id: str, relpath: str) -> Path:

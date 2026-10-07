@@ -238,7 +238,9 @@ per ogni sequenza completata (cartella `report/`, senza vista 3D).
   ricerca del template, modellazione e qualità, con template da ricerca automatica, **Più template complementari** (da 2
   a 5, predefinito 3, scelti con la regola dei consigliati) oppure fissi. Filtro della zona crepuscolare, tabella dei
   risultati, CSV e ZIP; avanzamento, log e tabella si aggiornano in tempo reale con la stima del tempo residuo («circa 3
-  min rimanenti»).
+  min rimanenti»). Fino a 50.000 sequenze per pipeline; **In parallelo** arriva fino ai **Job di calcolo in parallelo**
+  delle Impostazioni (al massimo 256). L'output dei programmi (MODELLER, PROCHECK…) di ogni elemento è nel file
+  `programmi.log` della sua cartella, tra i file del job; il log del job riporta i passi di BioLoom.
 - **Ripresa:** una pipeline annullata, fallita o interrotta da un riavvio si riprende senza rifare le sequenze già
   modellate (**Riprendi**, oppure **Riprova solo i falliti**); una completata con sequenze fallite mostra **Riprova i
   falliti**.

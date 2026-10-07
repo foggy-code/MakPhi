@@ -111,7 +111,7 @@ class UserSettings(BaseModel):
 
     contact_email: str = Field("", description="Email inviata a NCBI e SWISS-MODEL come contatto")
     modeller_python: str = Field("", description="Interprete Python con MODELLER; vuoto = rilevamento automatico")
-    max_workers: int = Field(0, ge=0, le=64, description="Job di calcolo in parallelo; 0 = core-1")
+    max_workers: int = Field(0, ge=0, le=256, description="Job di calcolo in parallelo; 0 = core-1")
     job_timeout_minutes: int = Field(120, ge=1, le=24 * 60)
     qmean_remote: bool = Field(False, description="Consente l'invio dei modelli a SWISS-MODEL per QMEAN")
     qmean_mode: Literal["local", "remote"] = Field(
