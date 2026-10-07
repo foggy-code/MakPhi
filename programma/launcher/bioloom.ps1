@@ -137,7 +137,7 @@ function Ensure-Image([string]$name, [string]$tarName, [string]$service) {
 function Get-UniclustNames([string]$dir) {
     $names = @()
     foreach ($pattern in @("*_a3m.ffindex", "*_a3m_db.index")) {
-        foreach ($f in Get-ChildItem -Path (Join-Path $dir $pattern) -File -ErrorAction SilentlyContinue) {
+        foreach ($f in Get-ChildItem -LiteralPath $dir -Filter $pattern -File -ErrorAction SilentlyContinue) {
             if ($f.Length -gt 0) { $names += ($f.Name -replace '_a3m(_db)?\.(ffindex|index)$', '') }
         }
     }
@@ -184,20 +184,30 @@ function Get-CommonParent([string[]]$paths) {
 }
 
 function Test-Qmtl([string]$dir) {
-    return $dir -and (Test-Path -LiteralPath (Join-Path $dir "VERSION")) -and (Test-Path -LiteralPath (Join-Path $dir "indexer.dat"))
+    # niente Join-Path: in PowerShell 5.1 fallisce se l'unità (disco scollegato) non esiste
+    if (-not $dir -or -not (Test-Path -LiteralPath $dir -PathType Container)) { return $false }
+    return (Test-Path -LiteralPath ([IO.Path]::Combine($dir, "VERSION"))) -and (Test-Path -LiteralPath ([IO.Path]::Combine($dir, "indexer.dat")))
 }
 
 function Get-CandidateDirs {
-    $skip = @('Windows', 'Program Files', 'Program Files (x86)', 'ProgramData', '$Recycle.Bin', 'System Volume Information', 'Recovery', 'PerfLogs', 'AppData', 'node_modules')
-    foreach ($drive in Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue) {
-        if (-not $drive.Root -or -not (Test-Path $drive.Root)) { continue }
-        $level1 = @(Get-ChildItem -LiteralPath $drive.Root -Directory -Force -ErrorAction SilentlyContinue | Where-Object { $skip -notcontains $_.Name })
-        foreach ($d in $level1) {
-            $d.FullName
-            foreach ($d2 in Get-ChildItem -LiteralPath $d.FullName -Directory -Force -ErrorAction SilentlyContinue | Where-Object { $skip -notcontains $_.Name }) {
-                $d2.FullName
-                foreach ($d3 in Get-ChildItem -LiteralPath $d2.FullName -Directory -ErrorAction SilentlyContinue) { $d3.FullName }
+    # Tutte le unità collegate (qualunque lettera): 4 livelli di cartelle sui dischi dati ed esterni,
+    # 3 sul disco di sistema (più lento da esplorare); i dischi esterni per primi.
+    $skip = @('Windows', 'Program Files', 'Program Files (x86)', 'ProgramData', '$Recycle.Bin', 'System Volume Information', 'Recovery', 'PerfLogs', 'AppData', 'node_modules', '.git')
+    $system = [IO.Path]::GetPathRoot($env:SystemRoot)
+    $drives = @(Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue | Where-Object { $_.Root -and (Test-Path -LiteralPath $_.Root) } | ForEach-Object { $_.Root })
+    $drives = @($drives | Sort-Object { if ($_ -ieq $system) { 1 } else { 0 } }, { $_ })
+    foreach ($root in $drives) {
+        $maxDepth = if ($root -ieq $system) { 3 } else { 4 }
+        $level = @($root)
+        for ($depth = 0; $depth -lt $maxDepth; $depth++) {
+            $next = @()
+            foreach ($p in $level) {
+                $next += @(Get-ChildItem -LiteralPath $p -Directory -Force -ErrorAction SilentlyContinue |
+                    Where-Object { $skip -notcontains $_.Name -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } |
+                    ForEach-Object { $_.FullName })
             }
+            $next
+            $level = $next
         }
     }
 }
@@ -316,7 +326,13 @@ function Start-BioLoom {
     }
     $cfg = @{}
     $cfg["BIOLOOM_VERSION"] = $Version
-    $dbs = Find-Databases $saved
+    try {
+        $dbs = Find-Databases $saved
+    } catch {
+        # UniClust è facoltativo: un problema nella ricerca non deve impedire l'avvio di BioLoom
+        Say "  Ricerca di UniClust30 non riuscita ($($_.Exception.Message)): QMEAN locale resta spento." Yellow
+        $dbs = @{ Uniclust = ""; Qmtl = ""; Names = @(); Archives = @(); Manual = $false }
+    }
     $mac = Get-ProsaMac
     if ($mac) { $cfg["BIOLOOM_MAC"] = $mac }
     elseif ($saved["BIOLOOM_MAC"] -and -not $saved["BIOLOOM_MAC_FROM_LICENSE"]) { $cfg["BIOLOOM_MAC"] = $saved["BIOLOOM_MAC"] }
@@ -327,6 +343,7 @@ function Start-BioLoom {
     if ($saved["BIOLOOM_PORT"]) { $port = [int]$saved["BIOLOOM_PORT"] }
     $current = $saved.Clone()
     $current["BIOLOOM_VERSION"] = $Version
+    foreach ($k in @("UNICLUST_PATH", "QMTL_PATH", "COMPOSE_PROFILES", "BIOLOOM_QMEAN_URL")) { $current.Remove($k) }  # il disco può non esserci più
     Write-EnvFile $current  # per interrogare lo stato dei container con la configurazione attuale
     $running = Test-Running
     if (-not $running) {
@@ -359,6 +376,14 @@ function Start-BioLoom {
     $url = "http://127.0.0.1:$port"
     Title "BioLoom è pronto: $url"
     Say "  Dati:        $DataDir"
+    if ($dbs.Uniclust -and $cfg["COMPOSE_PROFILES"]) {
+        # Docker Desktop vede solo i dischi collegati quando è partito: se la cartella montata è vuota, va riavviato
+        $seen = Compose @("exec", "-T", "qmean", "sh", "-c", "ls -A /uniclust_src | head -n 1") -Quiet
+        if ($seen.Code -eq 0 -and -not $seen.Output.Trim()) {
+            Say "  Docker non vede ancora il disco con UniClust30 (collegato dopo l'avvio di Docker Desktop)." Yellow
+            Say "  Chiudi Docker Desktop dal suo menu (Quit), poi di nuovo 'Avvia BioLoom'." Yellow
+        }
+    }
     if ($dbs.Uniclust) {
         $versions = if ($dbs.Names.Count) { ($dbs.Names -join ", ") } else { "?" }
         Say "  QMEAN:       locale, $versions in $($dbs.Uniclust)$(if ($dbs.Qmtl) { " + QMTL (QMEANDisCo)" })" Green
