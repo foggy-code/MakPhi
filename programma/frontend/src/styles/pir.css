@@ -1,0 +1,269 @@
+/*
+ * Griglia modificabile dell'Editor PIR (components/PirGrid). Celle a geometria fissa (--cw × --rh): la colonna sotto
+ * il puntatore si calcola dalla posizione. Nomi delle voci e righello restano fermi durante lo scorrimento.
+ */
+.pirg {
+  position: relative;
+  overflow: auto;
+  max-height: 60vh;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  user-select: none;
+  /* colori delle tracce della struttura secondaria: almeno 3:1 su --panel-2 (pirTrackContrast.test.ts) */
+  --trk-helix: var(--helix);
+  --trk-strand: var(--strand);
+  --trk-coil: var(--coil);
+}
+/* tema chiaro: filamento e coil più scuri, quelli comuni scendono sotto 3:1 sul fondo chiaro */
+:root[data-theme="light"] .pirg {
+  --trk-strand: #b45309;
+  --trk-coil: #64748b;
+}
+.pirg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; box-shadow: var(--ring); }
+.pirg-ruler {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  height: var(--rh);
+  background: var(--panel-3);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.pirg-ruler > span {
+  position: absolute;
+  top: 3px;
+  width: var(--cw);
+  display: flex;
+  justify-content: flex-end;
+  white-space: nowrap;
+  font-size: 11px;
+  border-right: 1px solid var(--chart-axis);
+}
+.pirg-ruler .pirg-name { color: var(--muted); font-family: var(--font); font-size: 11px; background: var(--panel-3); }
+/* istogramma della conservazione per colonna, fermo sotto il righello */
+.pirg-hist {
+  position: sticky;
+  top: var(--rh);
+  z-index: var(--z-sticky);
+  height: 14px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+.pirg-hist .pirg-name { height: 14px; line-height: 14px; color: var(--muted); font-family: var(--font); font-size: 9.5px; text-align: right; cursor: default; }
+.pirg-hist > i { position: absolute; bottom: 1px; width: calc(var(--cw) - 2px); margin-left: 1px; background: var(--accent); opacity: 0.55; border-radius: 1px 1px 0 0; }
+.pirg-hist > i.pirg-hist-full { opacity: 1; }
+.pirg-body { position: relative; }
+.pirg-row { position: absolute; left: 0; right: 0; height: var(--rh); line-height: var(--rh); }
+.pirg-name {
+  position: sticky;
+  left: 0;
+  z-index: var(--z-raised);
+  width: var(--name-w);
+  height: var(--rh);
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--panel-2);
+  border-right: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+}
+.pirg-kind { display: inline-block; min-width: 58px; margin-right: 6px; color: var(--muted); font-family: var(--font); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.03em; }
+.pirg-target .pirg-name { font-weight: 700; box-shadow: inset 3px 0 0 var(--accent); }
+.pirg-seq { position: absolute; top: 0; display: flex; color: var(--text); cursor: cell; }
+.pirg-seq > span { flex: none; width: var(--cw); text-align: center; }
+.pirg-seq > span.pirg-gap { color: var(--muted); }
+.pirg-seq > span.pirg-mark { color: var(--accent); font-weight: 700; }
+.pirg-sel {
+  position: absolute;
+  pointer-events: none;
+  background: var(--accent-soft);
+  outline: 1px solid var(--accent);
+}
+.pirg-cursor {
+  position: absolute;
+  width: var(--cw);
+  height: var(--rh);
+  pointer-events: none;
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-radius: 2px;
+}
+/* barra unica, ferma sotto la barra superiore quando la pagina scorre */
+.pirg-tools {
+  position: sticky;
+  top: 58px;
+  z-index: calc(var(--z-sticky) + 1);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  background: var(--panel);
+  font-size: 13px;
+}
+.pirg-tools .check select { margin-left: 6px; width: auto; }
+/* menu "Altro" */
+.pirg-more { position: relative; }
+.pirg-more > summary { list-style: none; cursor: pointer; }
+.pirg-more > summary::-webkit-details-marker { display: none; }
+.pirg-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: var(--z-overlay);
+  display: grid;
+  min-width: 300px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+.pirg-menu > button { padding: 7px 10px; border: 0; border-radius: 6px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.pirg-menu > button:hover, .pirg-menu > button:focus-visible { background: var(--accent-soft); }
+.pirg-menu > .check { padding: 7px 10px; border-top: 1px solid var(--border); margin-top: 4px; }
+/* tavolozza a comparsa sotto la cella del cursore */
+.pirg-wrap { position: relative; }
+.pirg-popover { position: absolute; z-index: var(--z-overlay); width: min(440px, 100%); box-shadow: var(--shadow); border-radius: var(--radius-sm); }
+.pirg-popover .pirg-palette { background: var(--panel); }
+/* griglia a schermo intero */
+.pirg-root.pirg-full {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  padding: 12px 20px;
+  overflow: auto;
+  background: var(--bg);
+}
+.pirg-full .pirg-tools { top: 0; background: var(--bg); }
+.pirg-full .pirg { max-height: calc(100vh - 150px); }
+.pirg-sep { width: 1px; align-self: stretch; background: var(--border); margin: 0 2px; }
+
+/*
+ * traccia della struttura secondaria sotto ogni riga: elica e filamento pieni, coil come linea sottile, sconosciuto
+ * tratteggiato; la predizione del bersaglio (GOR) più tenue; i gap che spezzano un elemento contornati in rosso
+ */
+.pirg-track { position: absolute; left: 0; right: 0; height: 12px; }
+.pirg-track-name {
+  position: sticky;
+  left: 0;
+  z-index: var(--z-raised);
+  width: var(--name-w);
+  height: 12px;
+  padding: 0 8px;
+  background: var(--panel-2);
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 9.5px;
+  line-height: 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+.pirg-track > i, .pirg-track > b { position: absolute; top: 2px; height: 7px; }
+.pirg-ss-h { background: var(--trk-helix); border-radius: 3px; }
+.pirg-ss-e { background: var(--trk-strand); clip-path: polygon(0 0, calc(100% - 5px) 0, 100% 50%, calc(100% - 5px) 100%, 0 100%); }
+.pirg-track > i.pirg-ss-c { top: 5px; height: 1.5px; background: var(--trk-coil); }
+.pirg-track > i.pirg-ss-u { top: 5px; height: 0; border-top: 1.5px dotted var(--muted); }
+/* predizione del bersaglio: più sottile, a colori pieni (la trasparenza scendeva sotto 3:1) */
+.pirg-track-pred > i.pirg-ss-h, .pirg-track-pred > i.pirg-ss-e { top: 3.5px; height: 4px; }
+.pirg-track > b.pirg-ss-conflict { top: 0; height: 11px; outline: 2px solid var(--err); outline-offset: -1px; border-radius: 2px; background: var(--err-soft); }
+/* controlli: segni sul righello, testo nella riga di stato, riepilogo sopra la griglia */
+.pirg-ruler > i.pirg-issue { position: absolute; bottom: 0; height: 4px; border-radius: 2px 2px 0 0; }
+.pirg-issue-err { background: var(--err); }
+.pirg-issue-warn { background: var(--warn); }
+.pirg-issue-info { background: var(--info); }
+.pirg-issue-text { font-weight: 600; }
+.pirg-issue-text-err { color: var(--err); }
+.pirg-issue-text-warn { color: var(--warn); }
+.pirg-issue-text-info { color: var(--info); }
+.pirg-issues { color: var(--text-2); }
+
+/* numero del primo residuo visibile, accanto al nome della voce */
+.pirg-num {
+  position: absolute;
+  top: 0;
+  right: 6px;
+  padding-left: 4px;
+  background: inherit;
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 10px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+/* residuo diverso dall'originale (sostituzione) */
+.pirg-seq > span.pirg-mut { font-weight: 800; box-shadow: inset 0 -3px 0 var(--warn); }
+
+/* tavolozza delle sostituzioni */
+.pirg-palette { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel-2); }
+.pirg-palette-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.pirg-palette-groups { display: flex; flex-wrap: wrap; gap: 10px 16px; }
+.pirg-palette-group { display: grid; gap: 4px; }
+.pirg-palette-group i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+.pirg-aa {
+  display: inline-grid;
+  justify-items: center;
+  min-width: 36px;
+  padding: 3px 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.15;
+  cursor: pointer;
+}
+.pirg-aa b { font-family: var(--mono); font-size: 13px; }
+.pirg-aa span { font-size: 10.5px; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: pre; }
+.pirg-aa:hover:not(:disabled) { border-color: var(--accent); }
+.pirg-aa:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; box-shadow: var(--ring); }
+.pirg-aa:disabled { cursor: default; opacity: 0.55; }
+.pirg-aa-same:disabled { opacity: 1; border-color: var(--accent); background: var(--accent-soft); }
+.pirg-aa-conservative { background: var(--ok-soft); }
+.pirg-aa-radical { background: var(--err-soft); }
+
+/* confronto con la versione caricata o salvata: residui allineati diversamente */
+.pirg-seq > span.pirg-changed { outline: 2px dotted var(--accent-2); outline-offset: -2px; }
+.pirg-diff-line { flex-wrap: wrap; gap: 8px; padding: 6px 10px; border-radius: var(--radius-sm); background: var(--info-soft); color: var(--text); }
+
+/* annotazioni: fascia verticale sui residui annotati, dietro alle lettere */
+.pirg-band { position: absolute; top: 0; bottom: 0; border-left: 1px solid; border-right: 1px solid; pointer-events: none; }
+.pirg-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; }
+
+/* banco di lavoro: griglia a sinistra, pannello a schede a destra (sotto sugli schermi stretti) */
+.pirw { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 400px); gap: 16px; align-items: start; }
+.pirw.pirw-empty { grid-template-columns: minmax(0, 1fr); }
+.pirw-main, .pirw-side { display: grid; gap: 16px; min-width: 0; }
+.pirw-side { position: sticky; top: 70px; max-height: calc(100vh - 86px); overflow-y: auto; align-content: start; }
+.pirw-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.pirw-tabs > button {
+  padding: 5px 9px; border: 1px solid var(--border); border-radius: 999px; background: var(--panel);
+  color: var(--text-2); font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.pirw-tabs > button.on { border-color: var(--accent); background: var(--accent-soft); color: var(--text); font-weight: 600; }
+.pirw-tabs > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pirw-count { margin-left: 5px; padding: 0 6px; border-radius: 999px; background: var(--panel-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+.pirw-list { max-height: 60vh; overflow-y: auto; }
+@media (max-width: 1280px) {
+  .pirw { grid-template-columns: minmax(0, 1fr); }
+  .pirw-side { position: static; max-height: none; }
+}
+/* la griglia resta nella sua colonna: i contenitori non si allargano quanto il contenuto */
+.pirg-root, .pirg-wrap, .pirw-main > .card, .pirw-main .card-body { min-width: 0; }
+.pirg-root { max-width: 100%; }
+.pirg { max-width: 100%; }
+
+/* blocchi da 75 colonne, uno sotto l'altro come le righe di un file PIR */
+.pirg-block { position: absolute; left: 0; right: 0; }
+.pirg-block + .pirg-block { border-top: 0; }
+.pirg-block .pirg-ruler { position: absolute; top: 0; left: 0; right: 0; }
+.pirg-block .pirg-hist { position: absolute; top: var(--rh); left: 0; right: 0; }
+.pirg-block .pirg-band { bottom: auto; }

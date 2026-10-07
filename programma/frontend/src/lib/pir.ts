@@ -5,31 +5,66 @@ export interface PirEntry {
   sequence: string;
 }
 
-/** Parser PIR minimale per l'anteprima (la validazione autorevole è lato server). */
-export function parsePir(text: string): PirEntry[] {
-  const out: PirEntry[] = [];
+/**
+ * Posizione di una voce nel testo PIR, per riga (da 0): riga del codice `>P1;`, seconda riga (−1 se manca), righe della
+ * sequenza [seqStart, seqEnd) fino alla voce successiva, riga con l'`*` finale (−1 se manca). L'Editor PIR la usa per
+ * sostituire solo le righe della sequenza (lib/pirEdit rewritePir) e lasciare il resto del testo com'è.
+ */
+export interface PirEntryLayout {
+  codeLine: number;
+  headerLine: number;
+  seqStart: number;
+  seqEnd: number;
+  starLine: number;
+}
+
+const isCodeLine = (line: string | undefined) => !!line && line.trim().startsWith(">P1;");
+
+/** Righe del testo e posizione di ogni voce (stessa lettura di parsePir). */
+export function pirLayout(text: string): { lines: string[]; layout: PirEntryLayout[] } {
   const lines = text.split(/\r?\n/);
+  const layout: PirEntryLayout[] = [];
   let i = 0;
   while (i < lines.length) {
-    const line = lines[i].trim();
-    if (!line.startsWith(">P1;")) {
+    if (!isCodeLine(lines[i])) {
       i++;
       continue;
     }
-    const code = line.slice(4).trim();
+    const codeLine = i;
     i++;
     while (i < lines.length && !lines[i].trim()) i++;
-    const header = (lines[i] ?? "").trim();
-    i++;
-    const parts: string[] = [];
-    while (i < lines.length && !lines[i].trim().startsWith(">P1;")) {
-      parts.push(lines[i].trim());
+    // seconda riga: la prima non vuota dopo il codice, se non è già la voce successiva
+    const headerLine = i < lines.length && !isCodeLine(lines[i]) ? i : -1;
+    if (headerLine >= 0) i++;
+    const seqStart = i;
+    let starLine = -1;
+    while (i < lines.length && !isCodeLine(lines[i])) {
+      if (starLine < 0 && lines[i].includes("*")) starLine = i;
       i++;
     }
-    const seq = parts.join("").replace(/\s/g, "").split("*")[0].toUpperCase();
-    out.push({ code, kind: header.split(":")[0] || "sequence", header, sequence: seq });
+    layout.push({ codeLine, headerLine, seqStart, seqEnd: i, starLine });
   }
-  return out;
+  return { lines, layout };
+}
+
+/** Sequenza grezza della voce (maiuscole e minuscole come nel testo, senza spazi), fino all'`*`. */
+export function rawSequence(lines: string[], e: PirEntryLayout): string {
+  const end = e.starLine >= 0 ? e.starLine + 1 : e.seqEnd;
+  return lines.slice(e.seqStart, end).join("").replace(/\s/g, "").split("*")[0];
+}
+
+/** Parser PIR minimale per l'anteprima e l'editor (la validazione autorevole è lato server). */
+export function parsePir(text: string): PirEntry[] {
+  const { lines, layout } = pirLayout(text);
+  return layout.map((e) => {
+    const header = e.headerLine >= 0 ? lines[e.headerLine].trim() : "";
+    return {
+      code: lines[e.codeLine].trim().slice(4).trim(),
+      kind: header.split(":")[0] || "sequence",
+      header,
+      sequence: rawSequence(lines, e).toUpperCase(),
+    };
+  });
 }
 
 /** Identità tra bersaglio e ciascun template (sulle colonne senza gap). */

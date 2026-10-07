@@ -110,3 +110,21 @@ export function shortcutFor(e: KeyLike, state: ShortcutState): ShortcutAction {
   if (e.key === "g" || e.key === "G") return e.shiftKey ? null : { type: "pending" };
   return null;
 }
+
+/** Tasti della griglia degli allineamenti (Editor PIR e Allineamenti), per il pannello "?". */
+export function gridHelp(mac: boolean): { keys: string[]; label: string }[] {
+  const mod = mac ? "⌘" : "Ctrl";
+  return [
+    { keys: ["← → ↑ ↓", `${mod} ← →`], label: "Muovi il cursore (di 10 colonne con il modificatore); Inizio / Fine: capo della riga" },
+    { keys: ["Maiusc + frecce"], label: "Seleziona un blocco (anche trascinando; clic sul nome: tutta la riga)" },
+    { keys: ["Spazio", "-"], label: "Inserisce un gap prima della selezione, nelle righe selezionate" },
+    { keys: ["Canc", "Backspace"], label: "Toglie il gap nella colonna / prima della colonna" },
+    { keys: ["Alt ←", "Alt →"], label: "Sposta il blocco selezionato; un blocco di soli gap scavalca i residui" },
+    { keys: ["A…Y"], label: "Sostituisce il residuo sotto il cursore (template bloccati)" },
+    { keys: ["Invio"], label: "Tavolozza delle sostituzioni con BLOSUM62 (anche doppio clic)" },
+    { keys: ["F8", "Maiusc F8"], label: "Controllo successivo / precedente" },
+    { keys: [`${mod} Z`, `${mod} Y`], label: "Annulla / ripristina" },
+    { keys: [`${mod} A`], label: "Seleziona tutto" },
+    { keys: ["Esc"], label: "Chiude la tavolozza, riduce la selezione, esce dallo schermo intero" },
+  ];
+}

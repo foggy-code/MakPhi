@@ -16,6 +16,7 @@ export default defineConfig({
       },
     },
   },
-  // il foglio di stile si legge nei test (`?raw`: regole per gli schermi stretti); vitest altrimenti lo dà vuoto
-  test: { environment: "node", css: { include: [/styles\.css/] } },
+  // i fogli di stile si leggono nei test (`?raw`: regole per gli schermi stretti, contrasto delle tracce dell'Editor
+  // PIR); vitest altrimenti li dà vuoti
+  test: { environment: "node", css: { include: [/styles\.css/, /styles[\\/]pir\.css/] } },
 });

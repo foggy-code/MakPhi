@@ -876,6 +876,31 @@ export interface PirReport {
   entries: { code: string; kind: string; length: number; residues: number; chains: number }[];
 }
 
+/** Struttura secondaria per residuo di una voce del PIR (POST /api/pir/secondary). */
+export interface PirSecondaryEntry {
+  code: string;
+  kind: string;
+  residues: number;
+  /** un carattere per lettera della voce: DSSP a 8 stati per i template, H/E/C per la predizione; "?" sconosciuto */
+  ss: string | null;
+  source: "dssp" | "gor" | null;
+  method: string | null;
+  template: { id: string; chains: string[]; format?: "pdb" | "cif" } | null;
+  /** residuo del file per ogni lettera della voce ("A:27"; null se non c'è), solo per i template */
+  residue_ids?: (string | null)[];
+  /** abbinamento al template della libreria: per codice, per posizione, dal solo codice */
+  matched_by: "code" | "position" | "code_guess" | null;
+  message: string | null;
+  /** lettere del PIR diverse dal residuo del file (le prime 20) */
+  mismatches: { index: number; letter: string; residue: string }[];
+  mismatch_count: number;
+  problems: string[];
+}
+
+export interface PirSecondary {
+  entries: PirSecondaryEntry[];
+}
+
 export interface QualitySummary {
   grade: string;
   grade_score: number;

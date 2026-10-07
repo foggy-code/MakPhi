@@ -1,21 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { Align2dResult, DocumentItem, PirReport, TemplateRef } from "../api/types";
-import { AlignmentView } from "../components/AlignmentView";
+import type { Align2dResult, DocumentItem, TemplateRef } from "../api/types";
 import { TextFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { SequencePicker, TemplatePicker } from "../components/Pickers";
-import { Alert, Badge, BarCell, Card, Confirm, Disclosure, Empty, Modal, PageHead } from "../components/ui";
-import { FormSection, InfoChips } from "../components/WorkflowParts";
-import { pirReference } from "../lib/alignConfidence";
+import { PirWorkspace, type PirSource, type PirWorkspaceState } from "../components/PirWorkspace";
+import { Card, Confirm, Empty, Modal, PageHead } from "../components/ui";
+import { FormSection } from "../components/WorkflowParts";
 import { useProject, useToast } from "../lib/context";
 import { fileStem } from "../lib/files";
 import { downloadText, fmtBytes, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
-import { parsePir, pirIdentities } from "../lib/pir";
-import { templateLabel } from "../lib/workflowView";
 
 function GenerateDialog({ onClose, onDone }: { onClose: () => void; onDone: (pir: string, templates: TemplateRef[], name: string) => void }) {
   const { projectId } = useProject();
@@ -64,6 +61,15 @@ function GenerateDialog({ onClose, onDone }: { onClose: () => void; onDone: (pir
   );
 }
 
+const DOCS_PREF = "bioloom.pir.docs";
+function readDocsPref(): boolean {
+  try {
+    return localStorage.getItem(DOCS_PREF) !== "0";
+  } catch {
+    return true;
+  }
+}
+
 export default function PirEditor() {
   const { projectId } = useProject();
   const toast = useToast();
@@ -72,20 +78,42 @@ export default function PirEditor() {
   const docId = params.get("doc");
   const { data: docs, reload } = useAsync<DocumentItem[]>(() => (projectId ? api.documents(projectId) : Promise.resolve([])), [projectId]);
   const [name, setName] = useState("");
-  const [content, setContent] = useState("");
-  const [meta, setMeta] = useState<Record<string, unknown>>({});
-  const [dirty, setDirty] = useState(false);
-  const [report, setReport] = useState<PirReport | null>(null);
+  const [nameDirty, setNameDirty] = useState(false);
   const [generate, setGenerate] = useState(false);
   const [toDelete, setToDelete] = useState(false);
+  // elenco dei documenti a sinistra (nascosto: la griglia prende tutta la larghezza)
+  const [showDocs, setShowDocs] = useState(readDocsPref);
+  const toggleDocs = () => {
+    setShowDocs((v) => {
+      try {
+        localStorage.setItem(DOCS_PREF, v ? "0" : "1");
+      } catch {
+        // preferenza non salvata
+      }
+      return !v;
+    });
+  };
+  // allineamento aperto nel banco di lavoro e suo stato (testo e metadati da salvare)
+  const [source, setSource] = useState<PirSource>({ key: 0, text: "", meta: {} });
+  const [ws, setWs] = useState<PirWorkspaceState>({ content: "", meta: {}, dirty: false, valid: false });
+  const [savedKey, setSavedKey] = useState(0);
+  // documento appena salvato: il cambio di indirizzo che segue non lo ricarica (cronologia e sblocco restano)
+  const justSaved = useRef<string | null>(null);
+
+  const open = (text: string, meta: Record<string, unknown>, dirty: boolean) => {
+    setSource({ key: Date.now(), text, meta, dirty });
+    setNameDirty(false);
+  };
 
   useEffect(() => {
     if (!docId || !projectId) return;
+    if (docId === justSaved.current) {
+      justSaved.current = null;
+      return;
+    }
     api.document(projectId, docId).then((d) => {
       setName(d.name);
-      setContent(d.content ?? "");
-      setMeta(d.meta ?? {});
-      setDirty(false);
+      open(d.content ?? "", d.meta ?? {}, false);
     }).catch(toast.error);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docId, projectId]);
@@ -97,22 +125,10 @@ export default function PirEditor() {
       if (!j.result) return;
       for (const w of j.result.warnings ?? []) toast.push(w, "warn");
       setName(`Allineamento MODELLER (job ${from.slice(0, 6)})`);
-      setContent(j.result.pir);
-      setMeta({ templates: j.result.templates.map((t) => ({ id: t.id, chains: t.chains })) });
-      setDirty(true);
+      open(j.result.pir, { templates: j.result.templates.map((t) => ({ id: t.id, chains: t.chains })) }, true);
     }).catch(toast.error);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.get("fromjob")]);
-
-  useEffect(() => {
-    if (!content.trim()) return setReport(null);
-    const t = setTimeout(() => api.validatePir(content).then(setReport).catch(() => undefined), 400);
-    return () => clearTimeout(t);
-  }, [content]);
-
-  const entries = useMemo(() => parsePir(content), [content]);
-  const identities = useMemo(() => pirIdentities(entries), [entries]);
-  const templatesMeta = (meta.templates as TemplateRef[] | undefined) ?? [];
 
   /** Apre un file PIR così com'è; un allineamento in altro formato (FASTA, Clustal...) viene convertito in PIR. */
   const openFile = async (text: string, file: File) => {
@@ -133,17 +149,17 @@ export default function PirEditor() {
     }
     setParams({});
     setName(fileStem(file.name));
-    setContent(pir);
-    setMeta({});
-    setDirty(true);
+    open(pir, {}, true);
   };
 
   const save = async (asNew = false) => {
     if (!projectId) return;
     try {
-      const d = await api.saveDocument(projectId, { name: name || "Allineamento PIR", kind: "pir", content, meta }, asNew ? undefined : docId ?? undefined);
-      setDirty(false);
+      const d = await api.saveDocument(projectId, { name: name || "Allineamento PIR", kind: "pir", content: ws.content, meta: ws.meta }, asNew ? undefined : docId ?? undefined);
+      setSavedKey((k) => k + 1);
+      setNameDirty(false);
       reload();
+      if (d.id !== docId) justSaved.current = d.id;
       setParams({ doc: d.id });
       toast.push("Documento salvato");
       return d;
@@ -152,6 +168,8 @@ export default function PirEditor() {
     }
   };
 
+  const content = ws.content;
+  const dirty = ws.dirty || nameDirty;
   return (
     <div className="page">
       <PageHead
@@ -159,14 +177,15 @@ export default function PirEditor() {
         lead="Allineamento bersaglio–template nel formato di MODELLER. Correggi a mano i gap nelle regioni critiche (loop, siti attivi) prima di modellare."
         actions={
           <>
+            <button className="btn" onClick={toggleDocs} aria-pressed={showDocs} title="Mostra o nasconde l'elenco dei documenti del progetto"><Icon name="folder" /> Documenti</button>
             <button className="btn" onClick={() => setGenerate(true)}><Icon name="wand" /> Genera con MODELLER</button>
             <TextFileButton accept=".pir,.ali,.txt,.fasta,.fa,.aln,.sto,.msf" onText={openFile}>Apri file</TextFileButton>
-            <button className="btn" onClick={() => { setParams({}); setName(""); setContent(""); setMeta({}); }}><Icon name="plus" /> Nuovo</button>
+            <button className="btn" onClick={() => { setParams({}); setName(""); open("", {}, false); }}><Icon name="plus" /> Nuovo</button>
           </>
         }
       />
-      <div className="split">
-        <Card title="Documenti del progetto" icon="folder" sub={docs?.length ? String(docs.length) : undefined}>
+      <div className={showDocs ? "split" : "stack"}>
+        {showDocs && <Card title="Documenti del progetto" icon="folder" sub={docs?.length ? String(docs.length) : undefined}>
           {!docs?.length ? <Empty icon="file" title="Nessun documento">Genera un allineamento o salvane uno dalla pagina Allineamenti.</Empty> : (
             <div className="table-wrap" style={{ maxHeight: 560, overflowY: "auto" }}>
               <table className="table">
@@ -183,20 +202,22 @@ export default function PirEditor() {
               </table>
             </div>
           )}
-        </Card>
+        </Card>}
         <div className="stack">
-          <Card
-            icon="file"
-            title={<input className="input" style={{ minWidth: 280, fontWeight: 600 }} placeholder="Nome del documento" aria-label="Nome del documento" value={name} onChange={(e) => { setName(e.target.value); setDirty(true); }} />}
+          <PirWorkspace
+            source={source}
+            savedKey={savedKey}
+            onState={setWs}
+            title={<input className="input" style={{ minWidth: 280, fontWeight: 600 }} placeholder="Nome del documento" aria-label="Nome del documento" value={name} onChange={(e) => { setName(e.target.value); setNameDirty(true); }} />}
             right={
               <>
-                {dirty && <Badge tone="warn">modifiche non salvate</Badge>}
+                {nameDirty && !ws.dirty && <span className="tiny text-2">nome cambiato</span>}
                 <button className="btn btn-sm" disabled={!content} onClick={() => downloadText(`${name || "alignment"}.ali`, content)}><Icon name="download" size={14} /> .ali</button>
                 <button className="btn btn-sm" disabled={!content || !projectId} onClick={() => save(false)}><Icon name="save" size={14} /> Salva</button>
                 {docId && <button className="btn btn-sm btn-danger" onClick={() => setToDelete(true)} title="Elimina il documento" aria-label="Elimina il documento"><Icon name="trash" size={14} /></button>}
                 <button
                   className="btn btn-sm btn-primary"
-                  disabled={!report?.valid}
+                  disabled={!ws.valid}
                   onClick={async () => {
                     const d = dirty || !docId ? await save(false) : { id: docId };
                     if (d) navigate(`/modeling?doc=${d.id}`);
@@ -206,79 +227,12 @@ export default function PirEditor() {
                 </button>
               </>
             }
-          >
-            <div className="stack-sm">
-              <textarea
-                className="input"
-                rows={16}
-                spellCheck={false}
-                aria-label="Allineamento in formato PIR"
-                value={content}
-                onChange={(e) => { setContent(e.target.value); setDirty(true); }}
-                placeholder={">P1;target\nsequence:target:::::::0.00: 0.00\nMKTAYIAKQR-QISFVKSHF*\n\n>P1;1ABC_A\nstructureX:1ABC_A:1:A:120:A::::\nMKSAYIAKQRAQISFVKSHF*"}
-                style={{ whiteSpace: "pre", overflowX: "auto" }}
-              />
-              <InfoChips items={[
-                { label: "Voci", value: entries.length || null },
-                { label: "Bersaglio", value: entries.find((e) => e.kind === "sequence")?.code },
-                { label: "Strutture", value: entries.filter((e) => e.kind.startsWith("structure")).length || null },
-                { label: "Colonne", value: entries.length ? entries[0].sequence.length : null },
-                { label: "Template associati", value: templatesMeta.length ? templatesMeta.map(templateLabel).join(", ") : null },
-              ]} />
-            </div>
-          </Card>
-          {report && (
-            <Card title="Verifica" icon="shield" sub={`${report.errors.length} errori · ${report.warnings.length} avvisi`}
-              right={report.valid ? <Badge tone="ok">valido per MODELLER</Badge> : <Badge tone="err">da correggere</Badge>}>
-              <div className="stack">
-                {report.errors.map((e, i) => <Alert key={i} tone="err">{e}</Alert>)}
-                {report.warnings.map((w, i) => <Alert key={`w${i}`} tone="warn">{w}</Alert>)}
-                {identities.length > 0 && (
-                  <div className="table-wrap">
-                    <table className="table">
-                      <thead><tr><th>Template</th><th>Identità</th><th>Copertura del bersaglio</th></tr></thead>
-                      <tbody>
-                        {identities.map((x, i) => (
-                          <tr key={`${i}-${x.code}`}><td><b>{x.code}</b></td><td><BarCell value={x.identity} /></td><td><BarCell value={x.coverage} /></td></tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-                {report.entries.length > 0 && (
-                  <Disclosure title="Voci dell'allineamento" extra={`${report.entries.length} voci`}>
-                    <div className="table-wrap">
-                      <table className="table">
-                        <thead><tr><th>Codice</th><th>Tipo</th><th className="num">Colonne</th><th className="num">Residui</th><th className="num">Catene</th></tr></thead>
-                        <tbody>
-                          {report.entries.map((e, i) => (
-                            <tr key={`${i}-${e.code}`}>
-                              <td><b className="mono">{e.code}</b></td>
-                              <td>{e.kind}</td>
-                              <td className="num">{e.length}</td>
-                              <td className="num">{e.residues}</td>
-                              <td className="num">{e.chains}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                    <p style={{ marginTop: 8 }}>Identità e copertura sono calcolate sulle colonne in cui bersaglio e template hanno entrambi un residuo; la validazione autorevole è quella del server.</p>
-                  </Disclosure>
-                )}
-              </div>
-            </Card>
-          )}
-          {entries.length > 1 && entries.every((e) => e.sequence.length === entries[0].sequence.length) && (
-            <Card title="Anteprima" icon="align" sub={`${entries.length} sequenze · ${entries[0].sequence.length} colonne`}>
-              <AlignmentView ids={entries.map((e) => e.code)} aligned={entries.map((e) => e.sequence)} reference={pirReference(entries.map((e) => e.kind))} />
-            </Card>
-          )}
-          {!content.trim() && (
-            <Card>
-              <Empty icon="align" title="Nessun allineamento aperto">Genera un allineamento con MODELLER, apri un file (PIR, FASTA allineato, Clustal…) o scegli un documento del progetto.</Empty>
-            </Card>
-          )}
+            empty={
+              <Card>
+                <Empty icon="align" title="Nessun allineamento aperto">Genera un allineamento con MODELLER, apri un file (PIR, FASTA allineato, Clustal…) o scegli un documento del progetto.</Empty>
+              </Card>
+            }
+          />
         </div>
       </div>
       {generate && (
@@ -288,15 +242,13 @@ export default function PirEditor() {
             setGenerate(false);
             setParams({});
             setName(`Allineamento ${target} · ${templates.map((t) => t.id).join(", ")}`);
-            setContent(pir);
-            setMeta({ templates });
-            setDirty(true);
+            open(pir, { templates }, true);
             toast.push("Allineamento generato: controllalo e salvalo");
           }}
         />
       )}
       {toDelete && docId && projectId && (
-        <Confirm text="Eliminare questo documento?" confirmLabel="Elimina" onCancel={() => setToDelete(false)} onConfirm={() => api.deleteDocument(projectId, docId).then(() => { setToDelete(false); setParams({}); setContent(""); setName(""); reload(); }).catch(toast.error)} />
+        <Confirm text="Eliminare questo documento?" confirmLabel="Elimina" onCancel={() => setToDelete(false)} onConfirm={() => api.deleteDocument(projectId, docId).then(() => { setToDelete(false); setParams({}); open("", {}, false); setName(""); reload(); }).catch(toast.error)} />
       )}
     </div>
   );
