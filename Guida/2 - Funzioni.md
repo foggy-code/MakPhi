@@ -244,9 +244,10 @@ per ogni sequenza completata (cartella `report/`, senza vista 3D).
 - **Avviso per email:** con **Avvisami per email alla fine** (pagina Pipeline, sotto l'analisi di qualità) arriva un
   messaggio quando la pipeline finisce, completata, fallita o annullata: titolo, esito, durata e numero di elementi per
   stato, senza risultati né sequenze. L'indirizzo predefinito è l'email di contatto delle Impostazioni. Serve un server
-  di posta, da configurare una volta in Impostazioni → Generale → **Notifiche email** (server SMTP, sicurezza, porta,
-  mittente, utente e password), con **Invia email di prova** per controllarlo; una ripresa della pipeline avvisa di
-  nuovo alla sua fine. L'esito dell'invio è nel log del job.
+  di posta, che non si imposta dall'interfaccia: lo configura chi gestisce BioLoom nel file `licenses/posta.env` della
+  cartella dati ([Dati e privacy](4%20-%20Dati%20e%20privacy.md#avviso-per-email)) o, sul server, in `server.env`.
+  Impostazioni → Generale → **Notifiche email** ne mostra lo stato (mai la password) e ha **Invia email di prova**;
+  una ripresa della pipeline avvisa di nuovo alla sua fine. L'esito dell'invio è nel log del job.
 - **Ripresa:** una pipeline annullata, fallita o interrotta da un riavvio si riprende senza rifare le sequenze già
   modellate (**Riprendi**, oppure **Riprova solo i falliti**); una completata con sequenze fallite mostra **Riprova i
   falliti**.

@@ -4,12 +4,13 @@ Chi lancia una pipeline può chiedere un'email alla fine (`notify_email` nei par
 finale (completato, fallito o annullato) BioLoom invia un messaggio di solo testo con titolo, esito, durata e numero di
 elementi per stato. Non contiene risultati, sequenze, nomi delle sequenze né file: i risultati restano su BioLoom.
 
-Server di posta (SMTP): host, porta, sicurezza (STARTTLS, SSL/TLS o nessuna), utente, mittente e indirizzo pubblico di
-BioLoom (per il link nel messaggio, facoltativo) in `data/notify.json`; la password a parte, in
-`data/licenses/smtp_password` (solo per il proprietario, come le chiavi di licenza), mai restituita dall'API.
-In modalità server (accesso con chiave) la configurazione è solo quella dell'amministratore, dalle variabili
-`BIOLOOM_SMTP_*` di server.env: chi ha la chiave d'accesso non deve poter indicare dall'interfaccia un host qualunque
-della rete del server (come per l'indirizzo di ESMFold).
+Server di posta (SMTP): host, porta, sicurezza (STARTTLS, SSL/TLS o nessuna), utente, password, mittente e indirizzo
+pubblico di BioLoom (per il link nel messaggio, facoltativo). Non si configura mai dall'interfaccia, in nessuna modalità:
+chi usa BioLoom sceglie solo se ricevere l'avviso e a quale indirizzo. La configurazione viene, in quest'ordine:
+- dalle variabili d'ambiente `BIOLOOM_SMTP_*` e `BIOLOOM_PUBLIC_URL` (server.env), se c'è `BIOLOOM_SMTP_HOST`;
+- altrimenti dal file `licenses/posta.env` della cartella dati (stesse righe NOME=valore; modello in
+  programma/launcher/posta.env.example), accanto alle chiavi di licenza.
+Il file si rilegge a ogni uso: una modifica vale subito, senza riavviare. La password non esce mai dall'API.
 
 L'invio avviene in un thread, con due nuovi tentativi per gli errori temporanei; l'esito finisce nel log del job.
 """
@@ -32,8 +33,6 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from ..core.errors import AppError
-from ..core.storage import atomic_write_json, read_json
-from .licenses import _write_private
 
 SMTP_TIMEOUT = 30
 # Attese prima dei nuovi tentativi (errori temporanei: connessione, risposte 4xx)
@@ -45,8 +44,6 @@ STATUS_WORD = {"completed": "completata", "failed": "fallita", "cancelled": "ann
 ITEM_WORD = {"completed": "completati", "failed": "falliti", "filtered": "filtrati", "cancelled": "annullati",
              "pending": "non elaborati", "running": "in corso", "searching": "in corso", "modeling": "in corso"}
 KIND_WORD = {"pipeline": "La pipeline"}
-SERVER_LOCKED = ("In modalità server il server di posta lo configura l'amministratore (variabili BIOLOOM_SMTP_* in "
-                 "server.env), non l'interfaccia.")
 
 
 def valid_email(value: str, label: str = "Indirizzo email") -> str:
@@ -118,45 +115,65 @@ def _config_error(exc: ValidationError) -> AppError:
     return AppError("Configurazione della posta non valida: " + "; ".join(parts) + ".", code="invalid_notify")
 
 
-def _server_config() -> tuple[SmtpConfig, str]:
-    env = os.environ
+# Variabili della configurazione (ambiente o file licenses/posta.env)
+ENV_KEYS = {"host": "BIOLOOM_SMTP_HOST", "port": "BIOLOOM_SMTP_PORT", "security": "BIOLOOM_SMTP_SECURITY",
+            "user": "BIOLOOM_SMTP_USER", "sender": "BIOLOOM_SMTP_FROM", "public_url": "BIOLOOM_PUBLIC_URL"}
+PASSWORD_KEY = "BIOLOOM_SMTP_PASSWORD"
+CONFIG_FILE = "posta.env"
+
+
+def read_env_file(path: Path) -> dict[str, str]:
+    """Righe NOME=valore (commenti con #, righe vuote ignorate, virgolette esterne tolte); {} se il file manca."""
     try:
-        cfg = SmtpConfig(host=env.get("BIOLOOM_SMTP_HOST", ""), port=int(env.get("BIOLOOM_SMTP_PORT") or 587),
-                         security=env.get("BIOLOOM_SMTP_SECURITY", "starttls") or "starttls",
-                         user=env.get("BIOLOOM_SMTP_USER", ""), sender=env.get("BIOLOOM_SMTP_FROM", ""),
-                         public_url=env.get("BIOLOOM_PUBLIC_URL", ""))
-    except (ValidationError, ValueError):
-        cfg = SmtpConfig()  # configurazione dell'amministratore non valida: avviso spento (lo stato lo dice)
-    return cfg, env.get("BIOLOOM_SMTP_PASSWORD", "")
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError:
+        return {}
+    out = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        out[key.strip()] = value
+    return out
+
+
+def _from_values(values: dict[str, str]) -> tuple[SmtpConfig, str, Optional[str]]:
+    """(configurazione, password, errore): con valori non validi configurazione vuota e il motivo in italiano."""
+    raw = {field: values.get(key, "") for field, key in ENV_KEYS.items()}
+    raw["port"] = raw["port"] or "587"
+    raw["security"] = raw["security"] or "starttls"
+    try:
+        return SmtpConfig(**raw), values.get(PASSWORD_KEY, ""), None
+    except ValidationError as exc:
+        return SmtpConfig(), "", _config_error(exc).message
 
 
 class NotifyService:
     def __init__(self, data_dir: Path, licenses_dir: Path, jobs, *, server: bool = False,
                  sender_factory: Optional[Callable] = None) -> None:
-        self._file = data_dir / "notify.json"
-        self._password_file = licenses_dir / "smtp_password"
+        self.file = licenses_dir / CONFIG_FILE
         self.jobs = jobs
         self.server = server
-        self._lock = threading.Lock()
         self._connect = sender_factory or _connect  # sostituibile nei test
         self.retry_delays = RETRY_DELAYS
         self.idle_wait = IDLE_WAIT
         jobs.on_finish(self.on_finish)
 
     # ------------------------------------------------------------------ configurazione
+    def _source(self) -> tuple[str, dict[str, str]]:
+        """("env", variabili) se l'ambiente indica il server SMTP, ("file", righe) se c'è il file, ("none", {})."""
+        if os.environ.get(ENV_KEYS["host"], "").strip():
+            return "env", {k: os.environ.get(k, "") for k in (*ENV_KEYS.values(), PASSWORD_KEY)}
+        values = read_env_file(self.file)
+        return ("file", values) if values else ("none", {})
+
     def config(self) -> tuple[SmtpConfig, str]:
-        """(configurazione, password): dell'amministratore in modalità server, altrimenti quella salvata."""
-        if self.server:
-            return _server_config()
-        raw = read_json(self._file, default={}) or {}
-        try:
-            cfg = SmtpConfig(**raw)
-        except (ValidationError, TypeError):
-            cfg = SmtpConfig()
-        try:
-            password = self._password_file.read_text(encoding="utf-8").strip()
-        except OSError:
-            password = ""
+        """(configurazione, password) dall'ambiente o dal file; vuota se manca o non è valida."""
+        cfg, password, _error = _from_values(self._source()[1])
         return cfg, password
 
     @staticmethod
@@ -164,44 +181,23 @@ class NotifyService:
         return bool(cfg.host and cfg.sender)
 
     def status(self) -> dict:
-        cfg, password = self.config()
+        """Configurazione in sola lettura per l'interfaccia: mai la password, solo se è impostata."""
+        source, values = self._source()
+        cfg, password, error = _from_values(values)
         return {**cfg.model_dump(), "password_set": bool(password), "configured": self.ready(cfg),
-                "source": "server" if self.server else "local"}
-
-    def save(self, changes: dict, password: Optional[str] = None, clear_password: bool = False) -> dict:
-        if self.server:
-            raise AppError(SERVER_LOCKED, code="notify_locked")
-        with self._lock:
-            current, _ = self.config()
-            try:
-                cfg = SmtpConfig(**{**current.model_dump(), **{k: v for k, v in changes.items() if v is not None}})
-            except ValidationError as exc:
-                raise _config_error(exc) from None
-            atomic_write_json(self._file, cfg.model_dump())
-            if clear_password:
-                self._password_file.unlink(missing_ok=True)
-            elif password:
-                if any(c in password for c in "\r\n") or len(password) > 500:
-                    raise AppError("Password della posta non valida.", code="invalid_notify")
-                self._password_file.parent.mkdir(parents=True, exist_ok=True)
-                _write_private(self._password_file, password.encode("utf-8"))
-        return self.status()
+                "source": source, "error": error, "file": f"licenses/{CONFIG_FILE}"}
 
     def secrets(self) -> list[str]:
-        """Password della posta (salvata e dell'amministratore): da non esportare mai."""
-        out = [os.environ.get("BIOLOOM_SMTP_PASSWORD", "")]
-        try:
-            out.append(self._password_file.read_text(encoding="utf-8").strip())
-        except OSError:
-            pass
+        """Password della posta (ambiente e file): da non esportare mai."""
+        out = [os.environ.get(PASSWORD_KEY, ""), read_env_file(self.file).get(PASSWORD_KEY, "")]
         return [s for s in out if s]
 
     def check_recipient(self, address: str) -> str:
         """Destinatario dell'avviso alla sottomissione: indirizzo valido e server di posta configurato."""
         address = valid_email(address, "Indirizzo per l'avviso")
         if not self.ready(self.config()[0]):
-            where = "l'amministratore (server.env)" if self.server else "Impostazioni → Notifiche email"
-            raise AppError(f"Per l'avviso via email serve un server di posta: lo configura {where}.",
+            raise AppError(f"Per l'avviso via email serve un server di posta: lo configura chi gestisce BioLoom, nel "
+                           f"file licenses/{CONFIG_FILE} della cartella dati (o in server.env sul server).",
                            code="notify_not_configured")
         return address
 

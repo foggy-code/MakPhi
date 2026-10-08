@@ -510,11 +510,14 @@ stato finale; `NotifyService.on_finish` legge i parametri del job e, se c'è l'i
   utente o password rifiutati e destinatario rifiutato non si riprovano. L'esito («Email di avviso inviata a …» o «non
   inviata: motivo») va nel log del job appena l'esecuzione si chiude (`busy`, al più 2 minuti). Ogni esecuzione
   (anche una ripresa) avvisa una volta, alla sua fine.
-- **Configurazione** (`GET`/`PUT /api/notify`, `POST /api/notify/test`): host, porta, sicurezza, utente, mittente e
-  indirizzo pubblico in `data/notify.json`; la password in `data/licenses/smtp_password` (0600), mai restituita
-  (`password_set`), fra i segreti oscurati nei pacchetti di riproducibilità (`LicenseService.extra_secrets`). In modalità
-  server solo le variabili `BIOLOOM_SMTP_*` e `BIOLOOM_PUBLIC_URL` dell'amministratore (`PUT` → `notify_locked`), come
-  l'indirizzo di ESMFold: dall'interfaccia non si può far contattare al server un host della sua rete.
+- **Configurazione, mai dall'interfaccia** (`GET /api/notify` in sola lettura, `POST /api/notify/test`; nessun `PUT`):
+  in qualunque modalità le variabili `BIOLOOM_SMTP_*` e `BIOLOOM_PUBLIC_URL` dell'ambiente (server.env), se c'è
+  `BIOLOOM_SMTP_HOST`, altrimenti le stesse righe `NOME=valore` nel file `licenses/posta.env` della cartella dati
+  (`read_env_file`: commenti `#`, virgolette esterne tolte; modello in `programma/launcher/posta.env.example`), riletto a
+  ogni uso. Lo stato dice la fonte (`env`, `file`, `none`) e, per valori non validi, il motivo in italiano (`error`:
+  l'avviso resta spento). La password non torna mai (`password_set`) ed è fra i segreti oscurati nei pacchetti di
+  riproducibilità (`LicenseService.extra_secrets`). Chi usa BioLoom non può né cambiare il server di posta né far
+  contattare al server un host della sua rete; sceglie solo se ricevere l'avviso e a quale indirizzo.
 - **Intestazioni:** nessun a capo in utente, mittente e destinatario (validatori); l'oggetto si ricompone su una riga
   e si tronca a 150 caratteri.
 

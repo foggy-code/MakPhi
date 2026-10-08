@@ -1,6 +1,5 @@
 // Pagina Pipeline: «Avvisami per email alla fine», con l'indirizzo (predefinito: l'email di contatto delle Impostazioni).
-// Senza server di posta la casella è spenta e la nota dice dove configurarlo.
-import { Link } from "react-router-dom";
+// Senza server di posta la casella è spenta e la nota dice chi lo configura (file o server.env, mai l'interfaccia).
 import type { NotifyStatus } from "../api/types";
 import { isEmail, notifySummary } from "../lib/notify";
 
@@ -26,7 +25,7 @@ export function NotifyOption({ status, enabled, email, onEnabled, onEmail }: {
       {bad && <span className="small text-err">Indirizzo email non valido.</span>}
       {!ready && (
         <span className="small text-2">
-          {notifySummary(status)}{status?.source !== "server" && <> <Link to="/settings">Apri le Impostazioni</Link>.</>}
+          {notifySummary(status)}
         </span>
       )}
     </div>
