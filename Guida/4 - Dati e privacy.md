@@ -55,6 +55,7 @@ il calcolo indicato:
 | SWISS-MODEL (QMEAN) | le **coordinate** del modello e la tua **email** | QMEAN su SWISS-MODEL, scelto o come fallback: solo con il consenso all'invio |
 | ESMFold (ESM Atlas `api.esmatlas.com`, o l'indirizzo impostato) | la **sequenza** di una catena, mai le coordinate | confronto con una predizione ESMFold: solo con il consenso, chiesto dal pulsante la prima volta e revocabile in Impostazioni → Generale |
 | NCBI FTP | nulla (solo download) | aggiornamento di pdbaa da Impostazioni → Database |
+| Il tuo server di posta (SMTP, Impostazioni → Notifiche email) | un messaggio per l'indirizzo indicato: titolo della pipeline, esito, orari, durata, numero di elementi per stato, eventuale motivo dell'errore e link al job; **mai** risultati, sequenze, nomi delle sequenze o file | fine di una pipeline lanciata con «Avvisami per email alla fine»; email di prova |
 
 Le risposte di UniProt, InterPro e AlphaFold DB restano in `data/cache` per 7 giorni, i metadati RCSB e le predizioni di
 ESMFold per 30. Sul server l'indirizzo di ESMFold lo sceglie l'amministratore ([Chiavetta e server](5%20-%20Chiavetta%20e%20server.md#server)).

@@ -29,6 +29,14 @@ services:
       MODELLER_KEY: "${MODELLER_KEY:-}"
       BIOLOOM_QMEAN_URL: "${BIOLOOM_QMEAN_URL:-}"   # http://qmean:8080 quando il profilo qmean è attivo
       BIOLOOM_ESMFOLD_URL: "${BIOLOOM_ESMFOLD_URL:-}"   # solo con BIOLOOM_AUTH=on: servizio ESMFold; vuoto = pubblico
+      # solo con BIOLOOM_AUTH=on: server di posta per l'avviso alla fine delle pipeline (in locale si imposta dall'interfaccia)
+      BIOLOOM_SMTP_HOST: "${BIOLOOM_SMTP_HOST:-}"
+      BIOLOOM_SMTP_PORT: "${BIOLOOM_SMTP_PORT:-587}"
+      BIOLOOM_SMTP_SECURITY: "${BIOLOOM_SMTP_SECURITY:-starttls}"
+      BIOLOOM_SMTP_USER: "${BIOLOOM_SMTP_USER:-}"
+      BIOLOOM_SMTP_PASSWORD: "${BIOLOOM_SMTP_PASSWORD:-}"
+      BIOLOOM_SMTP_FROM: "${BIOLOOM_SMTP_FROM:-}"
+      BIOLOOM_PUBLIC_URL: "${BIOLOOM_PUBLIC_URL:-}"
     volumes:
       - "${BIOLOOM_DATA_PATH:-../../data}:/data"   # progetti e risultati: viaggiano con la cartella
       - scratch:/scratch                         # lavoro temporaneo dei calcoli, svuotato a ogni avvio

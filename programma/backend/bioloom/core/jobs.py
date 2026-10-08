@@ -483,6 +483,8 @@ class JobManager:
         # nomi delle cartelle `.deleting-<id>` che un'eliminazione o la pulizia sta rimuovendo (sotto `_lock`)
         self._removing: set[str] = set()
         self._log_handles: dict[str, object] = {}
+        # chiamati con (job_id, stato) appena un job arriva a uno stato finale (es. l'avviso per email)
+        self._finish_listeners: list[Callable[[str, str], None]] = []
         self._log_dirty: dict[str, float] = {}
         self._log_lock = threading.Lock()
         self._stop = threading.Event()
@@ -1163,6 +1165,11 @@ class JobManager:
         if source != live_root:
             remove_tree(source)
 
+    def on_finish(self, listener: Callable[[str, str], None]) -> None:
+        """Registra `listener(job_id, stato)`, chiamato dopo la scrittura di uno stato finale (completato, fallito,
+        annullato). Deve tornare subito (un lavoro lungo va in un thread suo); un suo errore non tocca il job."""
+        self._finish_listeners.append(listener)
+
     def _finish(self, job_id: str, status: str, *, result: Optional[dict] = None, error: Optional[str] = None,
                 only_from: Optional[tuple[str, ...]] = None) -> bool:
         """Scrive lo stato finale; con `only_from` solo se lo stato attuale è fra quelli indicati."""
@@ -1178,6 +1185,11 @@ class JobManager:
             (status, encode_json(result), error, stage, status, now, now, job_id, *extra)) == 1
         if changed:
             self.events.publish(job_id, JOB)
+            for listener in list(self._finish_listeners):
+                try:
+                    listener(job_id, status)
+                except Exception:
+                    pass
         return changed
 
     def _set_progress(self, job_id: str, fraction: Optional[float], stage: Optional[str]) -> None:

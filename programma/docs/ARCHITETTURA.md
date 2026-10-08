@@ -494,6 +494,30 @@ il processo e li restituisce quando termina: `True` (predefinito) = 1, un numero
   parallelo) sono governati allo stesso modo, senza codice apposito.
 - **Diagnostica:** `/api/system/stats` → `cpu_slots` (totali, usati, processi in attesa), nella Panoramica.
 
+### Avviso per email alla fine delle pipeline
+
+`notify_email` nei parametri di `POST /api/pipeline` (vuoto = nessun avviso): alla sottomissione l'indirizzo si
+controlla (`notify.EMAIL_RE`, nessun a capo né separatore) e serve un server di posta configurato
+(`notify_not_configured`, `invalid_email`, 400). `JobManager.on_finish` chiama gli ascoltatori dopo la scrittura di uno
+stato finale; `NotifyService.on_finish` legge i parametri del job e, se c'è l'indirizzo, invia in un thread suo:
+
+- **Messaggio** (testo semplice, `Auto-Submitted: auto-generated`): oggetto «BioLoom: pipeline «titolo» completata |
+  fallita | annullata»; titolo, esito, elementi per stato (`pipeline_items`), avvio, fine e durata (UTC), motivo
+  dell'errore (300 caratteri) per fallite e annullate, link `<public_url>/pipeline?job=<id>` se c'è l'indirizzo di
+  BioLoom, identificativo del job. Nessun risultato, sequenza, nome di sequenza o file.
+- **Invio:** `smtplib`, timeout 30 s, STARTTLS o SSL/TLS con il contesto predefinito (certificato verificato) oppure
+  nessuna sicurezza; accesso solo con un utente. Errori temporanei (connessione, risposte 4xx) riprovati dopo 10 e 60 s;
+  utente o password rifiutati e destinatario rifiutato non si riprovano. L'esito («Email di avviso inviata a …» o «non
+  inviata: motivo») va nel log del job appena l'esecuzione si chiude (`busy`, al più 2 minuti). Ogni esecuzione
+  (anche una ripresa) avvisa una volta, alla sua fine.
+- **Configurazione** (`GET`/`PUT /api/notify`, `POST /api/notify/test`): host, porta, sicurezza, utente, mittente e
+  indirizzo pubblico in `data/notify.json`; la password in `data/licenses/smtp_password` (0600), mai restituita
+  (`password_set`), fra i segreti oscurati nei pacchetti di riproducibilità (`LicenseService.extra_secrets`). In modalità
+  server solo le variabili `BIOLOOM_SMTP_*` e `BIOLOOM_PUBLIC_URL` dell'amministratore (`PUT` → `notify_locked`), come
+  l'indirizzo di ESMFold: dall'interfaccia non si può far contattare al server un host della sua rete.
+- **Intestazioni:** nessun a capo in utente, mittente e destinatario (validatori); l'oggetto si ricompone su una riga
+  e si tronca a 150 caratteri.
+
 ### Ripresa delle pipeline
 
 `POST /api/jobs/{id}/resume` con corpo facoltativo `{"scope": "incomplete" | "failed"}`, per i job `pipeline` in

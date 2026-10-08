@@ -18,6 +18,7 @@ from ..services.labels import LabelService
 from ..services.licenses import LicenseService
 from ..services.live import LiveService
 from ..services.mutations import MutationService
+from ..services.notify import NotifyService
 from ..services.pipeline import PipelineService
 from ..services.predict import PredictService
 from ..services.projects import ProjectService
@@ -51,6 +52,7 @@ class Core:
     search: GlobalSearch | None = None  # ricerca globale (F8b), creato in build_core
     repro: ReproducibilityService | None = None  # pacchetti di riproducibilità e riesecuzione (F9.4)
     cleanup: JobCleanup | None = None  # pulizia di massa dei job ed eliminazione dei progetti, creato in build_core
+    notify: NotifyService | None = None  # avviso per email alla fine delle pipeline, creato in build_core
 
     def shutting_down(self) -> bool:
         """Arresto in corso: segnale ricevuto da uvicorn (`should_exit`) o JobManager chiuso. I flussi SSE si
@@ -120,6 +122,8 @@ def build_core(paths: Paths, *, server: bool = False) -> Core:
     core.repro = repro
     core.cleanup = JobCleanup(db, jobs, projects)
     core.cleanup.stopping = core.shutting_down
+    core.notify = NotifyService(paths.data, paths.licenses, jobs, server=server)
+    licenses.extra_secrets = core.notify.secrets  # password della posta, come le chiavi di licenza
     if recovered:
         print(f"[BioLoom] {recovered} job interrotti dal precedente arresto sono stati marcati come falliti "
               "(le pipeline si possono riprendere).")

@@ -281,6 +281,27 @@ export interface Settings {
   esmfold_url: string;
 }
 
+/** Server di posta per l'avviso alla fine delle pipeline (la password non torna mai: solo `password_set`). */
+export interface NotifyStatus {
+  host: string;
+  port: number;
+  security: "starttls" | "ssl" | "none";
+  user: string;
+  sender: string;
+  /** indirizzo di BioLoom per il link nel messaggio; vuoto = nessun link */
+  public_url: string;
+  password_set: boolean;
+  /** server e mittente impostati: l'avviso si può chiedere */
+  configured: boolean;
+  /** "server" = configurazione dell'amministratore (server.env), non modificabile dall'interfaccia */
+  source: "local" | "server";
+}
+
+export type NotifyUpdate = Partial<Pick<NotifyStatus, "host" | "port" | "security" | "user" | "sender" | "public_url">> & {
+  password?: string;
+  clear_password?: boolean;
+};
+
 export interface Example {
   name: string;
   title: string;
@@ -1331,6 +1352,8 @@ export interface PipelineRequest {
   quality?: boolean;
   extended_quality?: boolean;
   parallel?: number;
+  /** indirizzo per l'avviso via email alla fine (senza risultati); vuoto = nessun avviso */
+  notify_email?: string;
   use_cache?: boolean;
 }
 

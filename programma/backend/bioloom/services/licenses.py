@@ -78,6 +78,7 @@ class LicenseService:
     def __init__(self, directory: Path, settings_provider: Callable) -> None:
         self.dir = directory
         self.settings_provider = settings_provider
+        self.extra_secrets: Optional[Callable[[], list[str]]] = None
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------ MODELLER
@@ -176,6 +177,8 @@ class LicenseService:
         except OSError:
             text = ""
         out += [fields[3] for fields in (line.split() for line in text.splitlines()) if len(fields) >= 4]
+        if self.extra_secrets is not None:  # password della posta (services/notify.py)
+            out += self.extra_secrets()
         return [s for s in dict.fromkeys(out) if s]
 
     # ------------------------------------------------------------------ riepilogo
