@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from . import __version__
 from .api import analysis, labels
 from .api import auth as auth_api
-from .api import bio, compute, databases, files, jobs, licenses, projects, system, templates
+from .api import bio, compute, databases, files, jobs, licenses, notify, projects, system, templates
 from .api import reproducibility, structure_tools
 from .api import mutations as mutations_api
 from .api import predict as predict_api
@@ -72,7 +72,7 @@ def create_app(paths: Optional[Paths] = None, frontend_dist: Optional[Path] = FR
         return JSONResponse(status_code=500, content={"error": {"code": "internal_error",
                                                                 "message": f"Errore interno: {exc}"}})
 
-    for module in (auth_api, system, licenses, databases, files, projects, bio, templates, jobs, compute):
+    for module in (auth_api, system, licenses, notify, databases, files, projects, bio, templates, jobs, compute):
         app.include_router(module.router)
     app.include_router(analysis.router)  # analisi strutturale (F7)
     app.include_router(structure_tools.router)  # tasche, elettrostatica, rifinitura (F7b, F9.1)

@@ -116,6 +116,10 @@ fino a 50.000 sequenze. Per stimare tempi e spazio sul server prima di partire c
 - **ESMFold:** chi ha la chiave può consentire l'invio delle sequenze (Impostazioni → Generale), ma non scegliere
   l'indirizzo del servizio: lo imposti tu con `BIOLOOM_ESMFOLD_URL` in `server.env` (vuoto = API pubblica di ESM
   Atlas), così nessuno può far chiamare al server indirizzi della sua rete interna.
+- **Avviso per email:** anche il server di posta lo imposti solo tu, con `BIOLOOM_SMTP_HOST`, `BIOLOOM_SMTP_PORT`,
+  `BIOLOOM_SMTP_SECURITY` (starttls, ssl o none), `BIOLOOM_SMTP_USER`, `BIOLOOM_SMTP_PASSWORD`, `BIOLOOM_SMTP_FROM` e,
+  per il link al job nel messaggio, `BIOLOOM_PUBLIC_URL` in `server.env`; chi ha la chiave d'accesso sceglie solo se
+  ricevere l'avviso di una pipeline e a quale indirizzo, e può inviare l'email di prova.
 - **Script:** possono usare l'header `Authorization: Bearer <chiave>`.
 - **Tentativi sbagliati:** vengono rallentati progressivamente.
 - **Arresto:** dall'interfaccia è disabilitato (`BIOLOOM_ALLOW_SHUTDOWN=0`). Si arresta con

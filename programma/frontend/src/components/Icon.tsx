@@ -56,6 +56,8 @@ const PATHS: Record<string, string> = {
   // annulla / ripristina (Editor PIR)
   undo: "M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11",
   redo: "M15 14l5-5-5-5M20 9H9.5a5.5 5.5 0 0 0 0 11H13",
+  mail: "M3 6h18v12H3zM3 7l9 6 9-6",
+  send: "M21 3 10 14M21 3l-7 18-4-7-7-4z",
 };
 
 const FILLED = new Set(["play", "stop", "starFill"]);

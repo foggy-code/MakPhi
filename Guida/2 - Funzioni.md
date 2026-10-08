@@ -241,6 +241,12 @@ per ogni sequenza completata (cartella `report/`, senza vista 3D).
   min rimanenti»). Fino a 50.000 sequenze per pipeline; **In parallelo** arriva fino ai **Job di calcolo in parallelo**
   delle Impostazioni (al massimo 256). L'output dei programmi (MODELLER, PROCHECK…) di ogni elemento è nel file
   `programmi.log` della sua cartella, tra i file del job; il log del job riporta i passi di BioLoom.
+- **Avviso per email:** con **Avvisami per email alla fine** (pagina Pipeline, sotto l'analisi di qualità) arriva un
+  messaggio quando la pipeline finisce, completata, fallita o annullata: titolo, esito, durata e numero di elementi per
+  stato, senza risultati né sequenze. L'indirizzo predefinito è l'email di contatto delle Impostazioni. Serve un server
+  di posta, da configurare una volta in Impostazioni → Generale → **Notifiche email** (server SMTP, sicurezza, porta,
+  mittente, utente e password), con **Invia email di prova** per controllarlo; una ripresa della pipeline avvisa di
+  nuovo alla sua fine. L'esito dell'invio è nel log del job.
 - **Ripresa:** una pipeline annullata, fallita o interrotta da un riavvio si riprende senza rifare le sequenze già
   modellate (**Riprendi**, oppure **Riprova solo i falliti**); una completata con sequenze fallite mostra **Riprova i
   falliti**.

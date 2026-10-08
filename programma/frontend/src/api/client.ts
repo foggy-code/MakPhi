@@ -15,6 +15,8 @@ import type {
   DisorderPrediction,
   DocumentItem,
   LicenseStatus,
+  NotifyStatus,
+  NotifyUpdate,
   ParsedFile,
   UploadedStructure,
   Example,
@@ -200,6 +202,11 @@ export const api = {
     return request<LicenseStatus>("POST", "/api/licenses/prosa", form, true);
   },
   removeProsaLicense: () => del<LicenseStatus>("/api/licenses/prosa"),
+
+  // avviso per email alla fine delle pipeline
+  notify: () => get<NotifyStatus>("/api/notify"),
+  saveNotify: (body: NotifyUpdate) => put<NotifyStatus>("/api/notify", body),
+  testNotify: (to: string) => post<{ sent: boolean; to: string }>("/api/notify/test", { to }),
 
   // database locali
   databases: () => get<DatabaseStatus>("/api/databases"),

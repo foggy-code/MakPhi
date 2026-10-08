@@ -8,6 +8,7 @@ import { RecomputeOption } from "../components/CacheOption";
 import { SequenceFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
+import { NotifyOption } from "../components/NotifyOption";
 import { PipelineItemActions, PipelineModelView } from "../components/PipelineItemActions";
 import { PipelineMatrix } from "../components/PipelineMatrix";
 import { TemplatePicker } from "../components/Pickers";
@@ -19,6 +20,7 @@ import { hasPredictedTemplate, pipelineFastaName, PLDDT_DEFAULT } from "../lib/a
 import { useProject, useToast } from "../lib/context";
 import { fmtDate, fmtDuration, fmtEvalue, fmtNum, isActive, relTime, searchCacheHitsLabel, STATUS_LABEL } from "../lib/format";
 import { recordsToFasta } from "../lib/files";
+import { isEmail } from "../lib/notify";
 import { useAsync, useInterval, useJob, useJobsFeed, useLiveJobList, useThrottled } from "../lib/hooks";
 import { pipelineStatusParts, plural } from "../lib/shellView";
 import { ENGINE_LABEL } from "../lib/workflowView";
@@ -282,6 +284,13 @@ export default function Pipeline() {
   const [refinement, setRefinement] = useState("fast");
   const [quality, setQuality] = useState(true);
   const [extended, setExtended] = useState(false);
+  // avviso per email alla fine (server di posta in Impostazioni → Notifiche email)
+  const { data: notifyStatus } = useAsync(() => api.notify(), []);
+  const { data: settings } = useAsync(() => api.settings(), []);
+  const [notify, setNotify] = useState(false);
+  const [notifyEmail, setNotifyEmail] = useState("");
+  useEffect(() => { if (settings?.contact_email) setNotifyEmail((e) => e || settings.contact_email); }, [settings?.contact_email]);
+  const notifyOn = notify && !!notifyStatus?.configured;
   const [parallel, setParallel] = useState(2);
   const [recompute, setRecompute] = useState(false);
   const [plddtTrim, setPlddtTrim] = useState(true);
@@ -332,8 +341,9 @@ export default function Pipeline() {
     quality,
     extended_quality: quality && extended,
     parallel,
+    notify_email: notifyOn ? notifyEmail.trim() : "",
     use_cache: !recompute,
-  }), [projectId, name, fasta, mode, maxTemplates, templates, combination, engine, evalue, twFilter, twIdentity, twCoverage, models, refinement, plddtTrim, plddtMin, quality, extended, parallel, recompute]);
+  }), [projectId, name, fasta, mode, maxTemplates, templates, combination, engine, evalue, twFilter, twIdentity, twCoverage, models, refinement, plddtTrim, plddtMin, quality, extended, parallel, notifyOn, notifyEmail, recompute]);
   const preflight = usePreflight(useMemo(() => pipelinePreflight(body, count), [body, count]), 800);
 
   const submit = async () => {
@@ -461,10 +471,11 @@ export default function Pipeline() {
                 {predictedPossible && <PlddtOption enabled={plddtTrim} threshold={plddtMin} onEnabled={setPlddtTrim} onThreshold={setPlddtMin} />}
                 <label className="check"><input type="checkbox" checked={quality} onChange={(e) => setQuality(e.target.checked)} /> {cross ? "Analisi di qualità del modello di ogni coppia" : "Analisi di qualità del modello migliore"}</label>
                 {quality && <label className="check"><input type="checkbox" checked={extended} onChange={(e) => setExtended(e.target.checked)} /> Includi PROCHECK e ProSA II (qualche secondo in più per sequenza)</label>}
+                <NotifyOption status={notifyStatus ?? null} enabled={notify} email={notifyEmail} onEnabled={setNotify} onEmail={setNotifyEmail} />
               </FormSection>
               {/* controlli preventivi: licenza, motore e database, tempi e limiti dei servizi, spazio */}
               <PreflightPanel state={preflight} />
-              <LaunchButton preflight={preflight} disabled={count < 1 || (mode === "fixed" && !templates.length) || tooManyCombined} onLaunch={submit}>Avvia pipeline</LaunchButton>
+              <LaunchButton preflight={preflight} disabled={count < 1 || (mode === "fixed" && !templates.length) || tooManyCombined || (notifyOn && !isEmail(notifyEmail))} onLaunch={submit}>Avvia pipeline</LaunchButton>
             </div>
           </Card>
           <Card icon="activity" title="Pipeline recenti">

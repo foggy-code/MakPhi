@@ -142,6 +142,8 @@ class PipelineIn(BaseModel):
     quality: bool = True
     extended_quality: bool = False
     parallel: int = Field(2, ge=1, le=256)
+    notify_email: str = Field("", max_length=254, description="Indirizzo a cui inviare un avviso alla fine (senza "
+                                                               "risultati); vuoto = nessun avviso")
     use_cache: bool = Field(True, description="Ricerca dei template: False = ricalcola ignorando la cache "
                                                "dei calcoli (e la aggiorna)")
 
@@ -251,7 +253,10 @@ def submit_qmean(body: QmeanIn, core: Core = Depends(get_core)) -> dict:
 
 @router.post("/pipeline")
 def submit_pipeline(body: PipelineIn, core: Core = Depends(get_core)) -> dict:
-    return core.pipeline.submit(body.model_dump(), _project(core, body.project_id))
+    params = body.model_dump()
+    if params["notify_email"].strip():  # server di posta configurato e indirizzo valido, prima della coda
+        params["notify_email"] = core.notify.check_recipient(params["notify_email"])
+    return core.pipeline.submit(params, _project(core, body.project_id))
 
 
 @router.get("/pipeline/{job_id}/items")

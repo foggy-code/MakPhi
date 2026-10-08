@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { Settings, SystemInfo } from "../api/types";
 import { Icon } from "../components/Icon";
+import { NotifyCard } from "../components/NotifyCard";
 import { DatabasesPanel, LicensesPanel, StoragePanel, ToolsPanel } from "../components/SettingsPanels";
 import { Alert, Badge, Card, Disclosure, Field, PageHead, Spinner, Tabs } from "../components/ui";
 import { useToast } from "../lib/context";
@@ -147,6 +148,7 @@ export default function SettingsPage() {
                   </Disclosure>
                 </div>
               </Card>
+              <NotifyCard contactEmail={saved?.contact_email ?? form.contact_email} />
             </div>
             <div className="stack">
               <Card icon="shield" title="QMEAN e servizi remoti" collapsible storageKey="settings.qmean"
