@@ -9,22 +9,23 @@ export function isEmail(value: string): boolean {
 }
 
 export const SECURITY_LABEL: Record<NotifyStatus["security"], string> = {
-  starttls: "STARTTLS (porta 587)",
-  ssl: "SSL/TLS (porta 465)",
-  none: "Nessuna (solo reti fidate)",
+  starttls: "STARTTLS",
+  ssl: "SSL/TLS",
+  none: "nessuna",
 };
 
-/** Porta tipica per la sicurezza scelta: si propone al cambio, se la porta era quella tipica dell'altra scelta. */
-export const DEFAULT_PORT: Record<NotifyStatus["security"], number> = { starttls: 587, ssl: 465, none: 25 };
+export const SOURCE_LABEL: Record<NotifyStatus["source"], string> = {
+  env: "variabili BIOLOOM_SMTP_* (server.env)",
+  file: "file licenses/posta.env della cartella dati",
+  none: "nessuna configurazione",
+};
 
 /** Riga di stato del server di posta (scheda Impostazioni e nota della pagina Pipeline). */
 export function notifySummary(s: NotifyStatus | null | undefined): string {
   if (!s) return "Configurazione della posta non letta.";
+  if (s.error) return `Avviso via email non disponibile: ${s.error}`;
   if (!s.configured) {
-    return s.source === "server"
-      ? "Avviso via email non disponibile: l'amministratore non ha configurato il server di posta (BIOLOOM_SMTP_* in server.env)."
-      : "Avviso via email non disponibile: configura il server di posta in Impostazioni → Notifiche email.";
+    return `Avviso via email non disponibile: il server di posta lo configura chi gestisce BioLoom, nel file ${s.file} della cartella dati (o in server.env sul server).`;
   }
-  const who = s.source === "server" ? " (configurato dall'amministratore)" : "";
-  return `Server di posta ${s.host}:${s.port}, mittente ${s.sender}${who}.`;
+  return `Server di posta ${s.host}:${s.port}, mittente ${s.sender}.`;
 }

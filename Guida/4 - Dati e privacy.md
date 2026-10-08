@@ -38,6 +38,24 @@ Guida di BioLoom: [1. Primo avvio](1%20-%20Primo%20avvio.md) · [2. Funzioni](2%
   funziona: BioLoom non lo fa da solo, e Impostazioni → Spazio e file temporanei mostra quanto occupano). Se
   l'aggiornamento non riesce, il database resta com'era e BioLoom lo dice all'avvio.
 
+## Avviso per email
+
+L'avviso alla fine delle pipeline usa un server di posta (SMTP) che si configura solo da file, mai dall'interfaccia:
+chi usa BioLoom sceglie soltanto se ricevere l'avviso e a quale indirizzo.
+
+1. Copia `programma/launcher/posta.env.example` nella cartella dati come `licenses/posta.env` (per esempio
+   `D:\BIOLum_v4\data\licenses\posta.env`).
+2. Compila le righe: `BIOLOOM_SMTP_HOST` (server), `BIOLOOM_SMTP_PORT` e `BIOLOOM_SMTP_SECURITY` (587 con
+   `starttls`, 465 con `ssl`), `BIOLOOM_SMTP_USER` e `BIOLOOM_SMTP_PASSWORD` (account di posta), `BIOLOOM_SMTP_FROM`
+   (mittente) e, se BioLoom è raggiungibile da altri computer, `BIOLOOM_PUBLIC_URL` per il link al job.
+3. In Impostazioni → Generale → **Notifiche email** premi **Rileggi**, poi **Invia email di prova**. Non serve
+   riavviare.
+
+Conviene un account dedicato agli avvisi, per esempio un indirizzo Gmail creato apposta con una «password per le app»
+(Account Google → Sicurezza: verifica in due passaggi, poi Password per le app), oppure il server di posta dell'università.
+Il file sta con le chiavi di licenza: non finisce nei pacchetti di riproducibilità né su Git, e la password non viene mai
+mostrata dall'interfaccia. Sul server le stesse variabili in `server.env` hanno la precedenza sul file.
+
 ## Che cosa lascia il computer
 
 Ricerche locali (BLAST+, MMseqs2), QMEAN locale, analisi di qualità, analisi strutturali, rifinitura e mutagenesi non
@@ -55,7 +73,7 @@ il calcolo indicato:
 | SWISS-MODEL (QMEAN) | le **coordinate** del modello e la tua **email** | QMEAN su SWISS-MODEL, scelto o come fallback: solo con il consenso all'invio |
 | ESMFold (ESM Atlas `api.esmatlas.com`, o l'indirizzo impostato) | la **sequenza** di una catena, mai le coordinate | confronto con una predizione ESMFold: solo con il consenso, chiesto dal pulsante la prima volta e revocabile in Impostazioni → Generale |
 | NCBI FTP | nulla (solo download) | aggiornamento di pdbaa da Impostazioni → Database |
-| Il tuo server di posta (SMTP, Impostazioni → Notifiche email) | un messaggio per l'indirizzo indicato: titolo della pipeline, esito, orari, durata, numero di elementi per stato, eventuale motivo dell'errore e link al job; **mai** risultati, sequenze, nomi delle sequenze o file | fine di una pipeline lanciata con «Avvisami per email alla fine»; email di prova |
+| Il server di posta configurato (SMTP, file `licenses/posta.env` o `server.env`) | un messaggio per l'indirizzo indicato: titolo della pipeline, esito, orari, durata, numero di elementi per stato, eventuale motivo dell'errore e link al job; **mai** risultati, sequenze, nomi delle sequenze o file | fine di una pipeline lanciata con «Avvisami per email alla fine»; email di prova |
 
 Le risposte di UniProt, InterPro e AlphaFold DB restano in `data/cache` per 7 giorni, i metadati RCSB e le predizioni di
 ESMFold per 30. Sul server l'indirizzo di ESMFold lo sceglie l'amministratore ([Chiavetta e server](5%20-%20Chiavetta%20e%20server.md#server)).

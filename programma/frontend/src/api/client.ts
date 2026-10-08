@@ -16,7 +16,6 @@ import type {
   DocumentItem,
   LicenseStatus,
   NotifyStatus,
-  NotifyUpdate,
   ParsedFile,
   UploadedStructure,
   Example,
@@ -205,7 +204,6 @@ export const api = {
 
   // avviso per email alla fine delle pipeline
   notify: () => get<NotifyStatus>("/api/notify"),
-  saveNotify: (body: NotifyUpdate) => put<NotifyStatus>("/api/notify", body),
   testNotify: (to: string) => post<{ sent: boolean; to: string }>("/api/notify/test", { to }),
 
   // database locali

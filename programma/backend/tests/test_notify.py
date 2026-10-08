@@ -1,7 +1,8 @@
 """Avviso per email alla fine delle pipeline (services/notify.py), con un server SMTP finto in locale: nessun messaggio
 esce dal computer.
 
-- configurazione salvata senza mai restituire la password; password fra i segreti da non esportare;
+- configurazione solo da file (licenses/posta.env) o da variabili d'ambiente, mai dall'interfaccia; password mai
+  restituita e fra i segreti da non esportare;
 - email di prova, autenticazione rifiutata, nuovi tentativi per gli errori temporanei;
 - sottomissione rifiutata senza server di posta o con un indirizzo non valido;
 - pipeline con l'avviso: un messaggio alla fine, con esito ed elementi ma senza sequenze né nomi, ed esito nel log;
@@ -95,12 +96,27 @@ def smtp():
     server.server_close()
 
 
+FIELDS = {"host": "BIOLOOM_SMTP_HOST", "port": "BIOLOOM_SMTP_PORT", "security": "BIOLOOM_SMTP_SECURITY",
+          "user": "BIOLOOM_SMTP_USER", "password": "BIOLOOM_SMTP_PASSWORD", "sender": "BIOLOOM_SMTP_FROM",
+          "public_url": "BIOLOOM_PUBLIC_URL"}
+
+
+def write_config(client, **values):
+    """Scrive licenses/posta.env come lo scriverebbe chi gestisce BioLoom (righe NOME=valore, con un commento)."""
+    path = client.app.state.core.notify.file
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["# posta di prova", ""] + [f"{FIELDS[k]}={v}" for k, v in values.items()]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
 def configure(client, smtp, **extra):
-    body = {"host": "127.0.0.1", "port": smtp.server_address[1], "security": "none", "user": USER,
-            "sender": "bioloom@example.org", "password": PASSWORD, **extra}
-    r = client.put("/api/notify", json=body)
-    assert r.status_code == 200, r.text
-    return r.json()
+    values = {"host": "127.0.0.1", "port": smtp.server_address[1], "security": "none", "user": USER,
+              "sender": "bioloom@example.org", "password": PASSWORD, **extra}
+    write_config(client, **values)
+    status = client.get("/api/notify").json()
+    assert status["configured"] and status["error"] is None, status
+    return status
 
 
 def until(condition, timeout: float = 30.0):
@@ -114,25 +130,25 @@ def until(condition, timeout: float = 30.0):
 
 
 # ------------------------------------------------------------------------------------------ configurazione
-def test_configuration_is_saved_without_returning_the_password(client, smtp):
+def test_configuration_comes_only_from_the_file_and_never_returns_the_password(client, smtp):
     status = client.get("/api/notify").json()
-    assert status["configured"] is False and status["password_set"] is False and status["source"] == "local"
-    saved = configure(client, smtp, public_url="https://bioloom.example.org/")
-    assert saved["configured"] and saved["password_set"] and saved["public_url"] == "https://bioloom.example.org"
+    assert status["configured"] is False and status["source"] == "none" and status["file"] == "licenses/posta.env"
+    saved = configure(client, smtp, public_url='"https://bioloom.example.org/"')  # virgolette tolte, "/" finale anche
+    assert saved["source"] == "file" and saved["password_set"] and saved["public_url"] == "https://bioloom.example.org"
     assert PASSWORD not in client.get("/api/notify").text
-    core = client.app.state.core
-    assert PASSWORD in core.licenses.secrets()  # mai in un pacchetto di riproducibilità
-    # cambiare solo la porta lascia la password; clear_password la toglie
-    assert client.put("/api/notify", json={"port": 2525}).json()["password_set"] is True
-    assert client.put("/api/notify", json={"clear_password": True}).json()["password_set"] is False
+    assert PASSWORD in client.app.state.core.licenses.secrets()  # mai in un pacchetto di riproducibilità
+    # dall'interfaccia non si cambia nulla
+    assert client.put("/api/notify", json={"host": "10.0.0.1"}).status_code == 405
+    assert client.get("/api/notify").json()["host"] == "127.0.0.1"
 
 
-@pytest.mark.parametrize("body,field", [({"host": "a b"}, "Server SMTP"), ({"port": 0}, "Porta"),
-                                        ({"security": "tls"}, "Sicurezza"), ({"sender": "non-email"}, "Mittente"),
-                                        ({"public_url": "ftp://x"}, "Indirizzo di BioLoom")])
-def test_invalid_configuration_is_refused_in_italian(client, body, field):
-    r = client.put("/api/notify", json=body)
-    assert r.status_code == 400 and field in r.json()["error"]["message"]
+@pytest.mark.parametrize("values,field", [({"host": "a b"}, "Server SMTP"), ({"port": "0"}, "Porta"),
+                                          ({"security": "tls"}, "Sicurezza"), ({"sender": "non-email"}, "Mittente"),
+                                          ({"public_url": "ftp://x"}, "Indirizzo di BioLoom")])
+def test_invalid_file_is_explained_in_italian(client, values, field):
+    write_config(client, **{"host": "smtp.example.org", "sender": "bioloom@example.org", **values})
+    status = client.get("/api/notify").json()
+    assert status["configured"] is False and field in status["error"] and status["error"].startswith("Configurazione")
 
 
 # ------------------------------------------------------------------------------------------ invio
@@ -228,24 +244,25 @@ def test_failed_delivery_is_written_in_the_job_log(client, smtp):
 
 
 # ------------------------------------------------------------------------------------------ modalità server
-def test_server_mode_uses_only_the_administrator_settings(tmp_path, monkeypatch):
-    monkeypatch.setenv("BIOLOOM_SMTP_HOST", "smtp.universita.example")
-    monkeypatch.setenv("BIOLOOM_SMTP_PORT", "465")
-    monkeypatch.setenv("BIOLOOM_SMTP_SECURITY", "ssl")
-    monkeypatch.setenv("BIOLOOM_SMTP_FROM", "bioloom@universita.example")
-    monkeypatch.setenv("BIOLOOM_SMTP_PASSWORD", "dell-amministratore")
-
+def test_environment_variables_take_precedence_over_the_file(tmp_path, monkeypatch):
     class Jobs:
         def on_finish(self, _fn):
             pass
 
     service = NotifyService(tmp_path, tmp_path / "licenses", Jobs(), server=True)
+    service.file.parent.mkdir(parents=True)
+    service.file.write_text("BIOLOOM_SMTP_HOST=smtp.dal-file.example\nBIOLOOM_SMTP_FROM=a@dal-file.example\n"
+                            "BIOLOOM_SMTP_PASSWORD=del-file\n", encoding="utf-8")
+    assert service.status()["source"] == "file" and service.status()["host"] == "smtp.dal-file.example"
+    monkeypatch.setenv("BIOLOOM_SMTP_HOST", "smtp.universita.example")
+    monkeypatch.setenv("BIOLOOM_SMTP_PORT", "465")
+    monkeypatch.setenv("BIOLOOM_SMTP_SECURITY", "ssl")
+    monkeypatch.setenv("BIOLOOM_SMTP_FROM", "bioloom@universita.example")
+    monkeypatch.setenv("BIOLOOM_SMTP_PASSWORD", "dell-amministratore")
     status = service.status()
-    assert status["source"] == "server" and status["configured"] and status["host"] == "smtp.universita.example"
+    assert status["source"] == "env" and status["configured"] and status["host"] == "smtp.universita.example"
     assert status["security"] == "ssl" and status["port"] == 465 and "dell-amministratore" not in str(status)
-    assert service.secrets() == ["dell-amministratore"]
-    with pytest.raises(AppError, match="amministratore"):
-        service.save({"host": "10.0.0.1"})
+    assert set(service.secrets()) == {"dell-amministratore", "del-file"}
 
 
 def test_header_injection_is_impossible():

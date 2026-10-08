@@ -281,7 +281,8 @@ export interface Settings {
   esmfold_url: string;
 }
 
-/** Server di posta per l'avviso alla fine delle pipeline (la password non torna mai: solo `password_set`). */
+/** Server di posta per l'avviso alla fine delle pipeline, in sola lettura: si configura nel file licenses/posta.env
+ * della cartella dati o con le variabili BIOLOOM_SMTP_* (server.env), mai dall'interfaccia. La password non torna mai. */
 export interface NotifyStatus {
   host: string;
   port: number;
@@ -293,14 +294,13 @@ export interface NotifyStatus {
   password_set: boolean;
   /** server e mittente impostati: l'avviso si può chiedere */
   configured: boolean;
-  /** "server" = configurazione dell'amministratore (server.env), non modificabile dall'interfaccia */
-  source: "local" | "server";
+  /** da dove viene: variabili d'ambiente (server.env), file licenses/posta.env, nessuna configurazione */
+  source: "env" | "file" | "none";
+  /** valori presenti ma non validi: il motivo (l'avviso resta spento) */
+  error: string | null;
+  /** percorso del file di configurazione nella cartella dati */
+  file: string;
 }
-
-export type NotifyUpdate = Partial<Pick<NotifyStatus, "host" | "port" | "security" | "user" | "sender" | "public_url">> & {
-  password?: string;
-  clear_password?: boolean;
-};
 
 export interface Example {
   name: string;
