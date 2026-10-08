@@ -129,6 +129,7 @@ class SettingsUpdate(BaseModel):
     qmean_timeout_minutes: int | None = None
     default_search_engine: str | None = None
     keep_intermediates: bool | None = None
+    procheck_plots: str | None = None
     uploads_retention_days: int | None = None
     compute_cache: bool | None = None
     esmfold_remote: bool | None = None  # F9.3: consenso all'invio delle sequenze a ESMFold
@@ -143,6 +144,7 @@ SETTING_LABELS = {
     "qmean_timeout_minutes": "Tempo massimo per un calcolo QMEAN locale (minuti)",
     "default_search_engine": "Motore di ricerca predefinito",
     "uploads_retention_days": "Conservazione dei file caricati (giorni)",
+    "procheck_plots": "Grafici PostScript di PROCHECK",
     "esmfold_url": "Indirizzo del servizio ESMFold",
 }
 ESMFOLD_URL_LOCKED = ("In modalità server l'indirizzo del servizio ESMFold lo imposta l'amministratore sul server "

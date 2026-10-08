@@ -270,6 +270,8 @@ export interface Settings {
   qmean_timeout_minutes: number;
   default_search_engine: SearchEngine;
   keep_intermediates: boolean;
+  /** grafici PostScript di PROCHECK conservati: tutti, solo il Ramachandran complessivo, nessuno */
+  procheck_plots: "all" | "ramachandran" | "none";
   uploads_retention_days: number;
   /** riusa i risultati di ricerche e allineamenti già calcolati (cache dei calcoli) */
   compute_cache: boolean;

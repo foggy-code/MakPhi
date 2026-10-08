@@ -124,6 +124,9 @@ class UserSettings(BaseModel):
     qmean_timeout_minutes: int = Field(60, ge=5, le=24 * 60)
     default_search_engine: Literal["rcsb", "ncbi", "local", "mmseqs"] = "rcsb"
     keep_intermediates: bool = Field(False, description="Conserva i file intermedi di MODELLER nei risultati")
+    procheck_plots: Literal["all", "ramachandran", "none"] = Field(
+        "all", description="Grafici PostScript di PROCHECK conservati: tutti (~3,7 MB per modello di 420 residui), "
+                           "solo il Ramachandran complessivo, nessuno; le metriche vengono comunque dal riepilogo")
     uploads_retention_days: int = Field(30, ge=0, le=3650, description="Giorni di conservazione degli upload; 0 = sempre")
     compute_cache: bool = Field(True, description="Riusa i risultati già calcolati di ricerche di template e "
                                                   "allineamenti multipli e strutturali (cache dei calcoli)")

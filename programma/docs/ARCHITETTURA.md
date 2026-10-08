@@ -1480,7 +1480,7 @@ QMEAN in `engines/qmean_local.py` (sezione seguente).
 | SASA relativa | `mkdssp` oppure Shrake-Rupley di Biopython normalizzato con le ASA massime di Tien et al. 2013 |
 | DOPE | MODELLER: totale, z-score normalizzato, profilo per residuo (finestra 15) |
 | Voto A–D | 100 − penalità outlier Ramachandran − penalità clashscore − penalità zDOPE (> −1) |
-| PROCHECK | `procheck.scr` (csh + Fortran compilato nell'immagine): Ramachandran a 4 regioni, G-factor, parametri di legame; grafici PostScript tra i file del job |
+| PROCHECK | `procheck.scr` (csh + Fortran compilato nell'immagine): Ramachandran a 4 regioni, G-factor, parametri di legame dal riepilogo `model.sum`; grafici PostScript tra i file del job secondo l'impostazione `procheck_plots`: tutti (10 file, ~3,7 MB per 420 residui, i due grafici per residuo da soli 2,4 MB), solo il Ramachandran complessivo (`%%Title: Ramachandran plot`, ~0,1 MB) o nessuno; le metriche non cambiano. Nel risultato `plots` dice la scelta usata |
 | ProSA II | z-score combinato, di coppia e di superficie; profilo di energia per residuo (finestra 1 e 10) |
 | QMEAN | su richiesta. **Locale**: worker nel container `qmean` (HHblits su UniClust30/UniRef30 di qualunque versione; QMEANDisCo se c'è la QMTL), un calcolo alla volta, annullabile. **Remoto**: SWISS-MODEL, con email e consenso esplicito. Modalità `local` / `remote`, più **fallback facoltativo** dal locale a SWISS-MODEL (impostazione o scelta del singolo calcolo) |
 | Ligandi e metalli | campo `ligands` solo se la struttura ha gruppi eteroatomici non d'acqua: contatti, scontri, coordinazione dei metalli (`domain/ligands.py`, vedi [Ligandi, cofattori e metalli](#ligandi-cofattori-e-metalli)); nessun effetto sul voto |
@@ -2824,7 +2824,7 @@ yeast_ub su 1UBQ con 5 modelli e la qualità estesa 36 file, 3,3 MB e 0,5 MB, es
   loop e allineamenti); per la mutagenesi e la scansione i semi dei modelli di ogni variante (`mutations.seeds`) e, con
   l'energia, `openmm_seed`; per la rifinitura `openmm_seed` (`refinement.MD_SEED`) e i thread usati; gli altri calcoli
   sono deterministici.
-- **Impostazioni** (`RELEVANT_SETTINGS`): `compute_cache`, `keep_intermediates`, `job_timeout_minutes` (e per QMEAN
+- **Impostazioni** (`RELEVANT_SETTINGS`): `compute_cache`, `keep_intermediates`, `procheck_plots`, `job_timeout_minutes` (e per QMEAN
   modalità, fallback, consenso, nome del database). Non l'email, l'interprete di MODELLER, i processori o la
   conservazione degli upload: non cambiano il risultato e alcune sono dati personali o percorsi.
 - **Input remoti:** template scaricati da RCSB o AlphaFold DB (data di `added_at` nei metadati), ricerche RCSB, NCBI e

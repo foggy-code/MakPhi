@@ -131,10 +131,19 @@ export default function SettingsPage() {
                         <option value="mmseqs">MMseqs2 locale (pdbaa)</option>
                       </select>
                     </Field>
+                    <Field label="Grafici PostScript di PROCHECK" hint="Le metriche di PROCHECK restano tutte: vengono dal riepilogo.">
+                      <select className="input" value={form.procheck_plots} onChange={(e) => set("procheck_plots", e.target.value as Settings["procheck_plots"])}>
+                        <option value="all">Tutti (circa 3,7 MB per modello)</option>
+                        <option value="ramachandran">Solo il Ramachandran (circa 0,1 MB)</option>
+                        <option value="none">Nessuno</option>
+                      </select>
+                    </Field>
                   </div>
                   <Disclosure title="Come si dividono i calcoli">
                     Il numero di job in parallelo limita anche i programmi di calcolo contemporanei di tutti i job (MODELLER, PROCHECK, BLAST…) e vale
                     subito, senza riavviare. Il timeout interrompe un processo esterno che dura di più: il calcolo fallisce e il log riporta i passaggi fino a quel punto.
+                    I grafici PostScript di PROCHECK sono quasi tutto lo spazio dei risultati di un'analisi estesa: per una pipeline con migliaia di modelli conviene
+                    conservare solo il Ramachandran o nessun grafico (vale per le analisi successive).
                   </Disclosure>
                 </div>
               </Card>

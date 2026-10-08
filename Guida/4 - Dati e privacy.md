@@ -16,6 +16,10 @@ Guida di BioLoom: [1. Primo avvio](1%20-%20Primo%20avvio.md) · [2. Funzioni](2%
 - **Risultati:** a fine calcolo in `data/` vengono salvati solo i risultati; i file intermedi di MODELLER restano fuori,
   salvo l'impostazione che li conserva (Impostazioni → Spazio e file temporanei). Non staccare la chiavetta mentre BioLoom
   è in funzione.
+- **Grafici di PROCHECK:** l'analisi estesa salva i grafici PostScript di PROCHECK (circa 3,7 MB per modello di 420
+  residui, quasi tutto lo spazio dei risultati). In Impostazioni → Esecuzione, **Grafici PostScript di PROCHECK** sceglie
+  se conservarli tutti, solo il Ramachandran complessivo (circa 0,1 MB) o nessuno; le metriche di PROCHECK restano le
+  stesse, perché vengono dal riepilogo. Vale per le analisi fatte dopo il cambio.
 - **Pulizia automatica** (all'avvio, ogni 24 ore e con **Pulisci file temporanei** in Impostazioni → Spazio e file
   temporanei, che mostra anche lo spazio occupato): file caricati più vecchi dei giorni impostati (predefinito 30), voci
   di cache oltre i 30 giorni, file temporanei rimasti, resti di job che hai già eliminato (file che erano in uso).

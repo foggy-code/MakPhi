@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ConsensusMethod, QualityReport } from "../api/types";
 import {
   andList, BAND_TONE, buriedCount, clashTone, dsspBreakdown, dsspLabel, favoredTone, fmtPenalty, gFactorTone, gradeSteps, methodContribution,
-  missingAnalyses, nearestPoint, outlierTone, parseAtom, positiveRuns, prosaData, prosaPoints, prosaResidues, prosaTone, qmeanTone, residueClashes,
+  missingAnalyses, nearestPoint, outlierTone, procheckPlotsNote, parseAtom, positiveRuns, prosaData, prosaPoints, prosaResidues, prosaTone, qmeanTone, residueClashes,
   scaleText, zdopeTone,
 } from "./qualityView";
 
@@ -152,5 +152,13 @@ describe("nuova analisi e fasce del consenso", () => {
     expect(andList(["PROCHECK", "ProSA"])).toBe("PROCHECK e ProSA");
     expect(andList(["DOPE", "PROCHECK", "ProSA"])).toBe("DOPE, PROCHECK e ProSA");
     expect(BAND_TONE).toEqual({ buona: "ok", intermedia: "warn", scarsa: "err" });
+  });
+});
+
+describe("procheckPlotsNote", () => {
+  it("conta solo i grafici PostScript e dice quando non sono conservati", () => {
+    expect(procheckPlotsNote(["model.sum", ...Array.from({ length: 10 }, (_, i) => `model_${String(i + 1).padStart(2, "0")}.ps`)])).toBe("I grafici PostScript di PROCHECK sono tra i file del job (10).");
+    expect(procheckPlotsNote(["model.sum", "model_01.ps"])).toBe("Il grafico PostScript di PROCHECK (Ramachandran) è tra i file del job.");
+    expect(procheckPlotsNote(["model.sum"])).toMatch(/^Grafici PostScript di PROCHECK non conservati/);
   });
 });
