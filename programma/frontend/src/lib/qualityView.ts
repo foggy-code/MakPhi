@@ -279,3 +279,10 @@ export function prosaData(profile: ProsaResult["profile"], residues: Pick<Residu
     }),
   };
 }
+
+/** Nota sui grafici PostScript di PROCHECK conservati fra i file del job (Impostazioni → Esecuzione). */
+export function procheckPlotsNote(files: string[]): string {
+  const plots = files.filter((f) => f.toLowerCase().endsWith(".ps")).length;
+  if (!plots) return "Grafici PostScript di PROCHECK non conservati (Impostazioni → Esecuzione): le metriche qui sopra vengono dal riepilogo.";
+  return plots === 1 ? "Il grafico PostScript di PROCHECK (Ramachandran) è tra i file del job." : `I grafici PostScript di PROCHECK sono tra i file del job (${plots}).`;
+}

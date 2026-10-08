@@ -101,7 +101,9 @@ class Sampler(threading.Thread):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--parallel", type=int, required=True)
-    ap.add_argument("--sequences", type=int, required=True)
+    ap.add_argument("--sequences", type=int, default=0, help="varianti della sequenza intera (senza --lengths)")
+    ap.add_argument("--lengths", default="", help="lunghezze delle sequenze, separate da virgole: ogni sequenza è la "
+                                                  "parte C-terminale della sequenza di riferimento, lunga quanto chiesto")
     ap.add_argument("--templates", type=int, default=6)
     ap.add_argument("--template-file", action="append", required=True)
     ap.add_argument("--sequence", required=True, help="sequenza di riferimento")
@@ -132,7 +134,12 @@ def main() -> None:
                                 data={"template_id": tid})
             assert r.status_code == 200, r.text
             templates.append({"id": r.json().get("id", tid), "chains": ["A"], "hetatm": False})
-        seqs = variants(a.sequence, a.sequences)
+        if a.lengths:  # una sequenza per lunghezza, frammento C-terminale (non oltre la sequenza intera)
+            lengths = [min(int(x), len(a.sequence)) for x in a.lengths.split(",") if x.strip()]
+            seqs = [variants(a.sequence[-n:], 1, seed=7 + i)[0] for i, n in enumerate(lengths)]
+            a.sequences = len(seqs)
+        else:
+            seqs = variants(a.sequence, a.sequences)
         fasta = "".join(f">s{i + 1}\n{s}\n" for i, s in enumerate(seqs))
         body = {"fasta": fasta, "template_mode": "fixed", "fixed_combination": "each", "templates": templates,
                 "options": {"models": a.models, "refinement": a.refinement}, "quality": not a.no_quality,
@@ -153,13 +160,19 @@ def main() -> None:
         own = time.process_time() - own0  # CPU del processo di BioLoom (Python, GIL), senza i sottoprocessi
         sampler.stop.set()
         items = client.get(f"/api/pipeline/{job_id}/items?size=500").json()["items"]
-        durations = []
-        for it in items:
-            if it.get("started_at") and it.get("finished_at"):
-                from datetime import datetime
-                durations.append((datetime.fromisoformat(it["finished_at"]) -
-                                  datetime.fromisoformat(it["started_at"])).total_seconds())
+        from datetime import datetime
+
         jobdir = data / "jobs" / job_id
+        durations, per_item = [], []
+        for it in items:
+            seconds = None
+            if it.get("started_at") and it.get("finished_at"):
+                seconds = (datetime.fromisoformat(it["finished_at"]) -
+                           datetime.fromisoformat(it["started_at"])).total_seconds()
+                durations.append(seconds)
+            folder = jobdir / "items" / f"{it['idx']:04d}_{it['name']}"
+            per_item.append({"name": it["name"], "length": it.get("length"), "status": it["status"],
+                             "seconds": seconds, "bytes": du(folder)})
         zip_size = 0
         z = client.get(f"/api/pipeline/{job_id}/export.zip")
         if z.status_code == 200:
@@ -167,7 +180,7 @@ def main() -> None:
         n = len(items)
         result = {
             "parallel": a.parallel, "sequences": a.sequences, "templates": a.templates, "pairs": n,
-            "length": len(a.sequence), "models": a.models, "refinement": a.refinement, "extended": a.extended,
+            "length": len(a.sequence), "lengths": [len(x) for x in seqs], "models": a.models, "refinement": a.refinement, "extended": a.extended,
             "quality": not a.no_quality, "status": job["status"],
             "completed": sum(1 for it in items if it["status"] == "completed"),
             "wall_s": round(wall, 1), "cpu_s": round(cpu, 1), "cpu_per_pair_s": round(cpu / max(n, 1), 1),
@@ -185,6 +198,7 @@ def main() -> None:
             "results_by_ext_kb": by_ext(jobdir),
             "scratch_bytes_after": du(root / "scratch"),
             "nproc": os.cpu_count(),
+            "items": per_item,
         }
         print(json.dumps(result, indent=1))
         Path(a.out).write_text(json.dumps(result, indent=1))

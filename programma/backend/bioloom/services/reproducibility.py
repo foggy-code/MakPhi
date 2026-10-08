@@ -89,6 +89,7 @@ CHUNK = 1024 ** 2
 RELEVANT_SETTINGS = {
     "compute_cache": "cache dei calcoli: ricerche e allineamenti possono venire da un calcolo precedente",
     "keep_intermediates": "file intermedi di MODELLER conservati fra i risultati",
+    "procheck_plots": "grafici PostScript di PROCHECK conservati fra i risultati (tutti, solo Ramachandran, nessuno)",
     "job_timeout_minutes": "timeout dei processi: un calcolo più lungo fallisce",
 }
 QMEAN_SETTINGS = ("qmean_mode", "qmean_fallback_remote", "qmean_remote", "qmean_uniclust")

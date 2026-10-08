@@ -1,7 +1,7 @@
 import type { ConsensusResult, QualityReport, ResidueRow } from "../../api/types";
 import { fmtNum } from "../../lib/format";
 import {
-  BAND_TONE, buriedCount, clashTone, dsspBreakdown, fmtPenalty, gFactorTone, GRADE_RULE, gradeSteps, outlierTone, prosaTone, zdopeTone,
+  BAND_TONE, buriedCount, clashTone, dsspBreakdown, fmtPenalty, gFactorTone, GRADE_RULE, gradeSteps, outlierTone, procheckPlotsNote, prosaTone, zdopeTone,
 } from "../../lib/qualityView";
 import { isPlddt, type ResidueRef } from "../../lib/residueColoring";
 import { StackBar } from "../charts";
@@ -192,7 +192,7 @@ export function ExternalValidation({ report, selected, onSelect }: { report: Qua
                   { label: "Deviazione massima (Max.deviation)", value: fmtNum(pc.max_deviation, 1) },
                   { label: "Bond len/angle", value: fmtNum(pc.bond_len_angle, 1) },
                 ]} />
-                <p className="small text-2">I grafici PostScript completi sono tra i file del job{pc.files.length ? ` (${pc.files.length})` : ""}.</p>
+                <p className="small text-2">{procheckPlotsNote(pc.files)}</p>
               </div>
             </Disclosure>
             {pc.summary && (
