@@ -234,6 +234,8 @@ def test_coverage_assessment_for_alpha_synuclein():
     # copertura completa: la regione è coperta, solo un'informazione
     full = disorder.coverage_assessment(140, p["regions"], [], range(1, 141))
     assert [w["kind"] for w in full["warnings"]] == ["disorder_covered"] and full["suggestion"] is None
+    # il testo non dà per certo il disordine: anche la predizione può essere sbagliata (falsi positivi come 3IU0)
+    assert "la predizione è sbagliata" in full["warnings"][0]["text"]
     # metà della regione scoperta (43 residui, 22 fuori) basta per l'avviso
     half = disorder.coverage_assessment(140, p["regions"], [], range(1, 119))
     assert half["warnings"][0]["kind"] == "disorder_uncovered" and "119–140" in half["warnings"][0]["text"]

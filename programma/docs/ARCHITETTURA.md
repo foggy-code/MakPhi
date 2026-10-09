@@ -801,7 +801,8 @@ segnali separati.
     template e PIR si valutano anche insieme (`combined`), come li usa MODELLER.
 - **Avvisi:** `disorder_uncovered` (warn) se almeno metà di una regione disordinata lunga è scoperta: MODELLER la
   costruisce senza vincoli, come un tratto esteso senza significato strutturale; `disorder_covered` (info) altrimenti:
-  nel template può essere ordinata da un partner o dal cristallo. Domini: coperti dal 90% (i confini delle firme InterPro
+  nel template può essere ordinata da un partner o dal cristallo, oppure la predizione è sbagliata (FoldIndex segna
+  come disordinate anche proteine ripiegate molto idrofile: 3IU0, GRAVY −1,07, 89% della catena). Domini: coperti dal 90% (i confini delle firme InterPro
   sono approssimati di qualche residuo), `domain_uncovered` sotto il 10%, `domain_partial` in mezzo.
 - **Suggerimento:** con almeno due domini e uno non coperto del tutto, "modella per domini" (template per dominio, oppure
   più template insieme); con un dominio solo, cercare un template che lo copra (NCBI BLAST, AlphaFold DB); con le sole

@@ -473,9 +473,13 @@ def coverage_assessment(length: int, disorder_regions: list[dict], domains: list
         else:
             warnings.append({
                 "kind": "disorder_covered", "tone": "info", "start": span.start, "end": span.stop - 1,
-                "text": f"La regione {text_span} è predetta disordinata ma il template la copre: nel template può "
-                        "essere ordinata per un partner, un ligando o l'impaccamento del cristallo, e il modello ne "
-                        "seguirà la conformazione."})
+                # Due spiegazioni, nessuna da escludere a priori: FoldIndex vede solo carica e idropatia medie e
+                # sbaglia anche su proteine ripiegate molto idrofile (3IU0: GRAVY −1,07, 89% della catena in una
+                # regione "disordinata" in una struttura cristallina a 1,9 Å).
+                "text": f"La regione {text_span} è predetta disordinata ma il template la copre e il modello ne "
+                        "seguirà la conformazione. Nel template può essere ordinata per un partner, un ligando o "
+                        "l'impaccamento del cristallo, oppure la predizione è sbagliata: FoldIndex usa solo carica e "
+                        "idropatia medie e segna come disordinate anche proteine ripiegate molto idrofile."})
     assessed = []
     for d in domains:
         span = range(int(d["start"]), int(d["end"]) + 1)
