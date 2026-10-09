@@ -49,8 +49,22 @@ async def login(body: LoginIn, request: Request):
     _failures.pop(client, None)
     resp = JSONResponse({"enabled": True, "authenticated": True})
     resp.set_cookie(auth.COOKIE, cfg.issue(), max_age=auth.SESSION_DAYS * 86400, httponly=True,
-                    samesite="strict", secure=request.url.scheme == "https", path="/")
+                    samesite="strict", secure=_https(request), path="/")
     return resp
+
+
+def _https(request: Request) -> bool:
+    """La richiesta è arrivata in HTTPS, anche attraverso un reverse proxy.
+
+    Dietro un proxy (Caddy, nginx) uvicorn vede HTTP: si fida degli header inoltrati solo da 127.0.0.1, e il proxy
+    raggiunge il container dalla rete di Docker. Qui conta anche `X-Forwarded-Proto`, ma solo per il flag `Secure` del
+    cookie: un header falso può solo renderlo più restrittivo. Gli header inoltrati non diventano fidati in generale,
+    perché `X-Forwarded-For` aggirerebbe il rallentamento dei tentativi, che usa l'indirizzo del client.
+    """
+    if request.url.scheme == "https":
+        return True
+    proto = request.headers.get("x-forwarded-proto", "")
+    return proto.split(",")[0].strip().lower() == "https"
 
 
 @router.post("/logout")
