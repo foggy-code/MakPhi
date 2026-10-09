@@ -1,6 +1,6 @@
 // Ligandi, cofattori e metalli (F5.4): scelta dei gruppi da trasferire nella modellazione e presentazione della
 // verifica (domain/ligands.py). Logica pura, testata in ligands.test.ts.
-import type { HeteroGroup, LigandClass, LigandGroupCheck, LigandRef, LigandStatus, MetalSite, TemplateAnalysis, TemplateRef } from "../api/types";
+import type { HeteroGroup, LigandClass, LigandGroupCheck, LigandRef, LigandStatus, MetalSite, TemplateAnalysis, TemplateRef, WaterSite } from "../api/types";
 import { fmtNum } from "./format";
 
 export const CLASS_LABEL: Record<LigandClass, string> = {
@@ -9,6 +9,7 @@ export const CLASS_LABEL: Record<LigandClass, string> = {
   additive: "additivo",
   ligand: "altro ligando",
   modified: "residuo modificato",
+  water: "acqua",
 };
 
 export const CLASS_TONE: Record<LigandClass, "accent" | "info" | "warn" | undefined> = {
@@ -17,6 +18,7 @@ export const CLASS_TONE: Record<LigandClass, "accent" | "info" | "warn" | undefi
   additive: "warn",
   ligand: undefined,
   modified: undefined,
+  water: "info",
 };
 
 export const STATUS_TONE: Record<LigandStatus, "ok" | "warn" | "err"> = { buono: "ok", "da controllare": "warn", problematico: "err" };
@@ -55,6 +57,32 @@ export function candidateGroups(ref: TemplateRef, analysis: TemplateAnalysis | n
   if (!analysis) return [];
   const chains = new Set(ref.chains);
   return analysis.ligands.filter((g) => chains.has(g.chain)).map((g) => ({ key: ligandKey(ref.id, g), template: ref.id, group: g }));
+}
+
+/** Acque candidate di un template (catene scelte), nell'ordine del backend (metallo, ponte, strutturali, altre) con
+ *  le suggerite prima. Mai scelte per default (`default` false): un'acqua catalitica si sceglie sapendo perché. */
+export function waterCandidates(ref: TemplateRef, analysis: TemplateAnalysis | null | undefined): LigandCandidate[] {
+  const list = analysis?.waters?.waters ?? [];
+  const chains = new Set(ref.chains);
+  return list
+    .filter((w) => chains.has(w.chain))
+    .map((w, i) => ({ w, i }))
+    .sort((a, b) => Number(b.w.suggested) - Number(a.w.suggested) || a.i - b.i)
+    .map(({ w }) => ({ key: ligandKey(ref.id, w), template: ref.id, group: w }));
+}
+
+export function isWater(c: LigandCandidate): c is LigandCandidate & { group: WaterSite } {
+  return c.group.class === "water";
+}
+
+/** "coordina ZN A262 · Thr A199 OG1 2,71 Å, Glu A106 OE2 2,62 Å · B 6,1" */
+export function waterText(w: WaterSite): string {
+  const parts: string[] = [];
+  if (w.metals.length) parts.push(`coordina ${w.metals.join(", ")}`);
+  if (w.partners.length) parts.push(w.partners.slice(0, 4).join(", ") + (w.partners.length > 4 ? ` e altri ${w.partners.length - 4}` : ""));
+  if (w.groups.length) parts.push(`con ${w.groups.join(", ")}`);
+  if (w.bfactor != null) parts.push(`B ${fmtNum(w.bfactor, 1)}`);
+  return parts.join(" · ");
 }
 
 /** Selezione aggiornata ai candidati: i nuovi con la scelta predefinita, quelli già visti come li ha lasciati
@@ -121,13 +149,15 @@ export function lookupState(templates: TemplateRef[], own: Record<string, Ligand
   };
 }
 
-/** Riepilogo della scelta: "2 di 4 gruppi scelti (additivi esclusi)". */
+/** Riepilogo della scelta: "2 di 4 gruppi scelti (additivi esclusi); 1 acqua scelta". */
 export function selectionSummary(candidates: LigandCandidate[], selection: Record<string, boolean>): string {
-  const usable = candidates.filter((c) => isTransferable(c.group));
+  const usable = candidates.filter((c) => isTransferable(c.group) && !isWater(c));
   const chosen = usable.filter((c) => selection[c.key]).length;
-  if (!usable.length) return "Nessun ligando, cofattore o metallo nelle catene scelte.";
+  const waters = candidates.filter((c) => isWater(c) && selection[c.key]).length;
+  const watersText = waters ? `; ${waters} ${waters === 1 ? "acqua scelta" : "acque scelte"}` : "";
+  if (!usable.length) return `Nessun ligando, cofattore o metallo nelle catene scelte${watersText}.`;
   const left = usable.filter((c) => !selection[c.key] && !isDefault(c.group)).length;
-  return `${chosen} di ${usable.length} ${usable.length === 1 ? "gruppo scelto" : "gruppi scelti"}${left ? " (additivi e ioni del tampone esclusi per default)" : ""}.`;
+  return `${chosen} di ${usable.length} ${usable.length === 1 ? "gruppo scelto" : "gruppi scelti"}${left ? " (additivi e ioni del tampone esclusi per default)" : ""}${watersText}.`;
 }
 
 // ---------------------------------------------------------------------------------- verifica

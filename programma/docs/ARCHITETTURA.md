@@ -1203,7 +1203,8 @@ Il trasferimento dei gruppi eteroatomici dal template al modello è selettivo e 
   gruppi e il modello non ne aveva (verificato con MODELLER 10.8 su `ubq_zn.pdb`). La casella «Ligandi» del singolo
   template non attivava nemmeno `env.io.hetatm`.
 - **Classificazione** (`classify`, `candidates`), nel dettaglio del template (`GET /api/templates/{id}` → `ligands`,
-  `ANALYSIS_VERSION` 3: le analisi in cache si ricalcolano) e nella scelta della Modellazione. Le acque non compaiono.
+  `ANALYSIS_VERSION` 3: le analisi in cache si ricalcolano) e nella scelta della Modellazione. Le acque non compaiono
+  fra i gruppi: hanno il loro elenco (`waters`, vedi **Acque** sotto).
 
   | Classe | Criterio | Per default |
   |---|---|---|
@@ -1256,6 +1257,32 @@ Il trasferimento dei gruppi eteroatomici dal template al modello è selettivo e 
   Errore chiaro se i `/` del template e del bersaglio non sono nelle stesse colonne o se la voce del template non
   comprende tutti i residui di una catena con ligandi (i gruppi stanno dopo l'ultimo residuo). Lo script dei modelli
   imposta `env.io.hetatm = True` solo se almeno un gruppo è trasferito.
+- **Acque** (acque catalitiche e strutturali): mai trasferite per default, scelte una per una nell'opzione `ligands`
+  con il loro nome (`{template, chain, resnum, resname: "HOH"}`), quindi con la stessa validazione, la stessa cache
+  delle copie preparate e lo stesso controllo del template.
+  - **Candidate** (`water_candidates`, nell'analisi del template come `waters`, `ANALYSIS_VERSION` 4): solo le acque
+    con un legame H (N/O entro 3,5 Å) con la proteina o con un gruppo, oppure nella sfera di coordinazione di un
+    metallo (anche il ferro di un eme); le altre sono contate (`others`). Ruolo: `metal`, `bridge` (ponte con un
+    ligando o cofattore, non con un additivo), `structural` (legami H con 3 o più residui); suggerite le prime due.
+    Su 3KS3 (anidrasi carbonica II, 0,9 Å): 481 acque, 355 legate, 32 strutturali, 2 suggerite (HOH 402 e 707 sullo
+    zinco). Su 1A6K (aquomet-mioglobina): 185 acque, 3 suggerite (HOH 1001 sul ferro, due a ponte con l'eme).
+  - **Copia preparata:** le acque scelte dopo i gruppi eteroatomici della loro catena, rinominate HOH (MODELLER non
+    riconosce WAT, DOD…); `_Selector` accetta l'insieme delle acque da tenere. `ligand_groups` le descrive (classe
+    `water`, `hbonds`, `coordinates`), `waters` le conta.
+  - **PIR:** dentro BioLoom un'acqua è una colonna «.» come un ligando (si unisce solo a un'acqua di un altro
+    template: nome HOH e sito dai residui dei legami H). Una «w» minuscola non sopravvive a `sequences.parse_pir`
+    (maiuscolo: diventerebbe W, triptofano), quindi solo il file letto da MODELLER, `alignment_modeller.ali`
+    (`ligands.modeller_pir`), ha «w» nelle colonne delle acque, e lo script imposta `env.io.water = True` e
+    `alnfile='alignment_modeller.ali'`. Verificato con MODELLER 10.8 su `ubq_zn.pdb`: con `.w` l'acqua esce
+    HETATM HOH dopo lo Zn, a 2,1 Å come nel template. Il file entra nel pacchetto di riproducibilità.
+  - **Verifica** (`evaluate(…, waters=True)`, solo nella modellazione: il modello ha solo le acque trasferite):
+    scontri (sotto 2,2 Å, mai «legami covalenti»), legami H e metalli nel modello; nessuno dei due → da controllare;
+    meno della metà dei residui legati nel template ancora legati → da controllare; metallo coordinato nel template e
+    non nel modello → da controllare. Il numero di coordinazione di un metallo aggiunge solo le acque del template
+    *non* trasferite (quelle trasferite sono già fra i donatori). L'analisi di qualità di una struttura qualunque non
+    verifica le acque.
+  - **Limite:** MODELLER tiene l'acqua dove sta nel template rispetto ai residui vicini (come i gruppi BLK), non
+    ottimizza la rete di legami idrogeno.
 - **Verifica** (`evaluate`), per ogni gruppo eteroatomico non d'acqua (i residui modificati no):
 
   | Controllo | Regola | Esito |

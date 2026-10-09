@@ -308,6 +308,8 @@ export interface Example {
   accession?: string;
   sequence?: string;
   note: string;
+  /** template del PDB proposto (esempi con HETATM e acque): scaricato e preselezionato nella Modellazione */
+  template?: { id: string; chains: string[]; note: string };
 }
 
 export interface SequenceAnalysis {
@@ -564,13 +566,15 @@ export interface TemplateAnalysis {
   chains: ChainSummary[];
   /** gruppi eteroatomici non d'acqua con la classificazione (domain/ligands.candidates) */
   ligands: HeteroGroup[];
+  /** acque legate alla struttura (domain/ligands.water_candidates); assenti nelle analisi in cache precedenti */
+  waters?: WaterCandidates;
   stats: { chains: number; residues: number; heavy_atoms: number };
   models: number;
   meta: TemplateItem;
 }
 
 // ---------------------------------------------------------------------------------- ligandi (domain/ligands.py)
-export type LigandClass = "metal" | "cofactor" | "additive" | "ligand" | "modified";
+export type LigandClass = "metal" | "cofactor" | "additive" | "ligand" | "modified" | "water";
 export type LigandStatus = "buono" | "da controllare" | "problematico";
 
 /** Gruppo eteroatomico di un template, candidato al trasferimento nel modello. */
@@ -594,7 +598,32 @@ export interface HeteroGroup {
   description?: string;
 }
 
-/** Gruppo da trasferire (opzione `ligands` della modellazione). */
+/** Acqua di un template candidata al trasferimento: legata alla proteina, a un gruppo o a un metallo. */
+export interface WaterSite extends HeteroGroup {
+  class: "water";
+  /** legami H con la proteina ("Thr A199 OG1 2,71 Å") */
+  partners: string[];
+  /** legami H con ligandi e cofattori */
+  groups: string[];
+  /** metalli coordinati ("ZN A262 (Zn, 1,90 Å)") */
+  metals: string[];
+  bfactor: number | null;
+  occupancy: number | null;
+  /** ruolo: coordina un metallo, ponte con un ligando o cofattore, strutturale (legami H con 3+ residui) */
+  role: "metal" | "bridge" | "structural" | "";
+  /** suggerita: acqua di coordinazione o a ponte, cioè di un sito (motivo in `why`) */
+  suggested: boolean;
+  why: string;
+}
+
+export interface WaterCandidates {
+  waters: WaterSite[];
+  /** acque senza legami con la struttura (solvatazione), non elencate */
+  others: number;
+  criteria: { hbond: number; structural: number };
+}
+
+/** Gruppo da trasferire (opzione `ligands` della modellazione; le acque con il loro nome, di solito HOH). */
 export interface LigandRef {
   template?: string;
   chain: string;
@@ -626,6 +655,9 @@ export interface TransferredGroup {
   links: { atom: string; partner: { chain: string; resnum: string; resname: string; atom: string }; distance: number }[];
   /** residui della proteina entro 4 Å nel template */
   contacts?: { chain: string; resnum: string; resname: string }[];
+  /** acque: legami H e metalli coordinati nel template */
+  hbonds?: { chain: string; resnum: string; resname: string; atom: string; protein: boolean; distance: number }[];
+  coordinates?: { chain: string; resnum: string; resname: string; atom: string; element: string; distance: number }[];
 }
 
 export interface LigandDonor {
@@ -682,8 +714,19 @@ export interface LigandGroupCheck {
   clashes: { atom: string; partner: string; distance: number }[];
   links: { atom: string; partner: string; distance: number; confirmed: boolean }[];
   metals: MetalSite[];
+  /** acqua trasferita: legami H e metalli nel modello, conservazione del sito del template */
+  water?: WaterCheck;
   /** gruppo del template da cui viene (modelli) */
   template?: { code: string; group: string };
+}
+
+export interface WaterCheck {
+  hbonds: { label: string; distance: number; protein: boolean }[];
+  metals: { label: string; distance: number }[];
+  /** residui legati nel template e ancora legati nel modello (null senza confronto con il template) */
+  template_partners: number | null;
+  kept_partners: number | null;
+  lost_partners: string[];
 }
 
 /** Verifica di ligandi, cofattori e metalli (campo `ligands` del rapporto di qualità). */
@@ -884,6 +927,8 @@ export interface PreparedTemplate {
   last: string;
   sequence: string;
   ligands: number;
+  /** acque scelte e trasferite (assente se nessuna) */
+  waters?: number;
   /** template predetto (AlphaFold, ESMFold) */
   predicted?: boolean;
   predictor?: PredictorName | null;

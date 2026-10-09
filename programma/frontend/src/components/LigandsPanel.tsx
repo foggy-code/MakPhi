@@ -42,7 +42,11 @@ export function LigandTable({ report, selected, onSelect }: { report: LigandRepo
                   </td>
                   <td><Badge tone={CLASS_TONE[g.class]}>{g.label ?? CLASS_LABEL[g.class]}</Badge></td>
                   <td><Badge tone={STATUS_TONE[g.status]}>{g.status}</Badge></td>
-                  <td className="small">{g.metals.length ? g.metals.map((m) => <div key={m.atom}>{coordinationText(m)}</div>) : <span className="text-2">—</span>}</td>
+                  <td className="small">
+                    {g.metals.length ? g.metals.map((m) => <div key={m.atom}>{coordinationText(m)}</div>)
+                      : g.water?.metals.length ? `coordina ${g.water.metals.map((m) => m.label).join(", ")}`
+                      : <span className="text-2">—</span>}
+                  </td>
                   <td className="num" title={g.contacts.map((c) => `${c.resname} ${c.chain}${c.resnum}`).join(", ")}>{g.contacts.length}</td>
                   <td className="small">{g.summary}</td>
                 </tr>
@@ -112,7 +116,26 @@ function MetalDetail({ metal: m }: { metal: MetalSite }) {
   );
 }
 
-/** Dettaglio del gruppo: motivazioni, metalli, scontri, legami covalenti e residui vicini con la distanza. */
+/** Acqua trasferita: legami H e metalli nel modello, residui del sito del template ancora legati. */
+function WaterDetail({ water: w }: { water: NonNullable<LigandGroupCheck["water"]> }) {
+  return (
+    <div className="small stack-sm">
+      <div>
+        <span className="text-2">Legami H (entro 3,5 Å): </span>
+        {w.hbonds.length ? w.hbonds.map((h) => `${h.label} ${fmtNum(h.distance, 2)} Å`).join(", ") : "nessuno"}
+      </div>
+      {w.metals.length > 0 && <div><span className="text-2">Metalli coordinati: </span>{w.metals.map((m) => `${m.label} ${fmtNum(m.distance, 2)} Å`).join(", ")}</div>}
+      {w.template_partners != null && w.template_partners > 0 && (
+        <div>
+          Sito del template: legata a {w.kept_partners} dei {w.template_partners} residui del template
+          {w.lost_partners.length > 0 && ` (persi: ${w.lost_partners.join(", ")})`}.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Dettaglio del gruppo: motivazioni, metalli, acqua, scontri, legami covalenti e residui vicini con la distanza. */
 function LigandDetail({ group }: { group: LigandGroupCheck }) {
   return (
     <div className="stack">
@@ -130,6 +153,7 @@ function LigandDetail({ group }: { group: LigandGroupCheck }) {
         </ul>
       )}
       {group.metals.map((m) => <MetalDetail key={m.atom} metal={m} />)}
+      {group.water && <WaterDetail water={group.water} />}
       {group.clashes.length > 0 && (
         <div className="small"><b style={{ color: "var(--err)" }}>Scontri:</b> {group.clashes.map((c) => `${c.atom}–${c.partner} ${fmtNum(c.distance, 2)} Å`).join("; ")}</div>
       )}

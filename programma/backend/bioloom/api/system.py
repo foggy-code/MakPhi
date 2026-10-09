@@ -22,12 +22,21 @@ router = APIRouter(prefix="/api", tags=["Sistema"])
 
 IN_CONTAINER = os.environ.get("BIOLOOM_CONTAINER") == "1"
 
+# Esempi della panoramica. `template` (facoltativo): struttura del PDB proposta come template, scaricata nella libreria
+# e preselezionata nella Modellazione con il trasferimento dei ligandi attivo (esempi con HETATM e acque).
 EXAMPLES = [
     {"name": "yeast_ubiquitin", "title": "Ubiquitina di lievito",
      "sequence": "MQIFVKTLTGKTITLEVESSDTIDNVKSKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG",
      "note": "76 aa, 96% di identità con 1UBQ (umana): il primo modello si calcola in pochi secondi."},
     {"name": "myoglobin", "title": "Mioglobina umana", "accession": "P02144",
-     "note": "Proteina tutta α con gruppo eme: esempio per i ligandi HETATM."},
+     "template": {"id": "1A6K", "chains": ["A"],
+                  "note": "aquomet-mioglobina di capodoglio a 1,1 Å: eme (HEM A154) con l'acqua sul ferro (HOH A1001)"},
+     "note": "Proteina tutta α con gruppo eme: esempio per i ligandi HETATM e per un'acqua legata a un metallo."},
+    {"name": "carbonic_anhydrase", "title": "Anidrasi carbonica II bovina", "accession": "P00921",
+     "template": {"id": "3KS3", "chains": ["A"],
+                  "note": "anidrasi carbonica II umana a 0,9 Å: zinco (ZN A262) legato a His94, His96, His119 e "
+                          "all'acqua catalitica (HOH A402)"},
+     "note": "Enzima con zinco e acqua catalitica: esempio per trasferire un metallo e la sua acqua (Ligandi → Acque)."},
     {"name": "lysozyme", "title": "Lisozima di pollo", "accession": "P00698",
      "note": "Enzima compatto con quattro ponti disolfuro."},
     {"name": "insulin", "title": "Insulina umana", "accession": "P01308",

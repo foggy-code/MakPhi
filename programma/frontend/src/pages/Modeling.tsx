@@ -338,7 +338,7 @@ function Results({ jobId, result, kind }: { jobId: string; result: ModelResult |
           right={<button type="button" className="btn btn-sm" onClick={savePir}><Icon name="save" size={14} /> Salva PIR nel progetto</button>}>
           <div className="stack-sm">
             <div className="small text-2">
-              Template: {full.templates.map((t) => `${t.code} (${t.first}–${t.last}${t.ligands ? `, ${t.ligands} ligandi` : ""})`).join(", ")}
+              Template: {full.templates.map((t) => `${t.code} (${t.first}–${t.last}${t.ligands ? `, ${t.ligands} ligandi` : ""}${t.waters ? `, ${t.waters} ${t.waters === 1 ? "acqua" : "acque"}` : ""})`).join(", ")}
             </div>
             {full.templates.filter((t) => t.predicted).map((t) => (
               <div key={t.code} className="small row" style={{ gap: 6 }}>
@@ -474,6 +474,7 @@ export default function Modeling() {
     if (seqText) setTarget({ name: params.get("name") || "target", sequence: seqText });
     if (seqId && projectId) api.sequences(projectId).then((l: Sequence[]) => { const s = l.find((x) => x.id === seqId); if (s) setTarget({ name: s.name, sequence: s.sequence }); });
     if (t.length) setTemplates(t.map((x) => { const [id, ch] = x.split(":"); return { id, chains: ch ? ch.split("") : [] }; }));
+    if (params.get("lig") === "1") setLigandsOn(true); // esempi con HETATM e acque: riquadro dei ligandi aperto
     if (doc) {
       setMode("pir");
       setDocId(doc);

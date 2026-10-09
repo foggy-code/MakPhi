@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
-import type { LigandRef, TemplateAnalysis, TemplateRef } from "../api/types";
+import type { LigandRef, TemplateAnalysis, TemplateRef, WaterSite } from "../api/types";
 import { isAlphaFoldId } from "../lib/alphafold";
 import {
-  candidateGroups, CLASS_LABEL, CLASS_TONE, groupClass, groupTitle, isDefault, isLookupError, isTransferable, ligandOptions, lookupState, selectionSummary,
-  syncSelection, type LigandLookup,
+  candidateGroups, CLASS_LABEL, CLASS_TONE, groupClass, groupTitle, isDefault, isLookupError, isTransferable, isWater, ligandOptions, lookupState,
+  selectionSummary, syncSelection, waterCandidates, waterText, type LigandCandidate, type LigandLookup,
 } from "../lib/ligands";
 import { Badge, Disclosure } from "./ui";
 
@@ -16,6 +16,9 @@ const fetchable = (id: string) => /^[0-9][A-Za-z0-9]{3}$/.test(id) || isAlphaFol
 
 /** Scelta dei gruppi eteroatomici da trasferire (opzione `ligands` della modellazione): per ogni template i gruppi
  *  delle catene scelte, con la classificazione del backend; additivi e ioni del tampone deselezionati per default.
+ *  Sotto, le acque legate alla struttura (acque catalitiche e strutturali): nessuna scelta per default, le suggerite
+ *  (metallo coordinato, ponte con un ligando) in evidenza e scelte tutte insieme con un pulsante; le altre, strutturali
+ *  comprese, in un riquadro chiuso.
  *  `known`: analisi già lette dal selettore dei template (anche dopo un download), usate al posto di una nuova
  *  lettura; una lettura non riuscita resta visibile con «Riprova», non «in corso» per sempre. */
 export function LigandPicker({ templates, known = {}, enabled, onEnabled, selection, onSelection }: {
@@ -65,7 +68,11 @@ export function LigandPicker({ templates, known = {}, enabled, onEnabled, select
   const state = lookupState(templates, own, known);
   const analyses = state.analyses;
   const candidates = useMemo(
-    () => templates.flatMap((t) => { const a = analyses[t.id]; return candidateGroups(t, a && a !== "loading" && !isLookupError(a) ? a : null); }),
+    () => templates.flatMap((t) => {
+      const a = analyses[t.id];
+      const ok = a && a !== "loading" && !isLookupError(a) ? a : null;
+      return [...candidateGroups(t, ok), ...waterCandidates(t, ok)];
+    }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [shape, own, knownKey],
   );
@@ -75,8 +82,10 @@ export function LigandPicker({ templates, known = {}, enabled, onEnabled, select
     onSelection(next, ligandOptions(candidates, next), state.ready, state.failed);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candidates, state.ready, failedKey]);
-  const toggle = (key: string, on: boolean) => {
-    const next = { ...selection, [key]: on };
+  const toggle = (key: string, on: boolean) => setMany([key], on);
+  const setMany = (keys: string[], on: boolean) => {
+    const next = { ...selection };
+    for (const k of keys) next[k] = on;
     onSelection(next, ligandOptions(candidates, next), state.ready, state.failed);
   };
   const retry = (id: string) => {
@@ -86,13 +95,15 @@ export function LigandPicker({ templates, known = {}, enabled, onEnabled, select
   return (
     <div className="stack-sm">
       <label className="check" title="MODELLER copia nel modello i gruppi HETATM scelti, come corpi rigidi dal template">
-        <input type="checkbox" checked={enabled} onChange={(e) => onEnabled(e.target.checked)} /> Trasferisci ligandi, cofattori e metalli dai template
+        <input type="checkbox" checked={enabled} onChange={(e) => onEnabled(e.target.checked)} /> Trasferisci ligandi, cofattori, metalli e acque dai template
       </label>
       {enabled && (
         <div className="stack-sm card flat" style={{ padding: "8px 10px" }}>
           {!templates.length && <span className="small text-2">Scegli prima i template.</span>}
           {templates.map((t) => {
-            const list = candidates.filter((c) => c.template === t.id);
+            const all = candidates.filter((c) => c.template === t.id);
+            const list = all.filter((c) => !isWater(c));
+            const waters = all.filter(isWater);
             const usable = list.filter((c) => isTransferable(c.group));
             const chosen = usable.filter((c) => selection[c.key]).length;
             const a = analyses[t.id];
@@ -111,7 +122,7 @@ export function LigandPicker({ templates, known = {}, enabled, onEnabled, select
                       </span>
                     )
                   )
-                  : !list.length ? <span className="small text-2">Nessun gruppo eteroatomico (acque escluse) nelle catene scelte.</span>
+                  : !list.length ? <span className="small text-2">Nessun gruppo eteroatomico nelle catene scelte.</span>
                   : list.map((c) => {
                     const cls = groupClass(c.group);
                     return (
@@ -124,17 +135,70 @@ export function LigandPicker({ templates, known = {}, enabled, onEnabled, select
                       </label>
                     );
                   })}
+                {a && a !== "loading" && !isLookupError(a) && (
+                  <WaterChoice waters={waters} others={a.waters?.others ?? 0} selection={selection} onChange={setMany} />
+                )}
               </div>
             );
           })}
           <span className="small text-2">{selectionSummary(candidates, selection)}</span>
           <Disclosure title="Come funziona il trasferimento">
-            I gruppi scelti entrano nell'allineamento come colonne «.» e MODELLER li copia dal template; le acque non si trasferiscono.
+            I gruppi scelti entrano nell'allineamento come colonne «.» e MODELLER li copia dal template. Le acque si trasferiscono solo se
+            scelte una per una (colonne «w» nel PIR letto da MODELLER): restano nella posizione del template rispetto ai residui vicini, senza
+            ottimizzare la rete di legami idrogeno.
             {templates.length > 1 && " Lo stesso gruppo nello stesso sito di più template diventa un solo gruppo del modello, con i vincoli di tutti."} Dopo
             la modellazione BioLoom verifica contatti, scontri e coordinazione dei metalli (pagina Qualità).
           </Disclosure>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Acque di un template: le suggerite e quelle scelte in vista, le altre legate alla struttura in un riquadro chiuso. */
+function WaterChoice({ waters, others, selection, onChange }: {
+  waters: (LigandCandidate & { group: WaterSite })[];
+  others: number;
+  selection: Record<string, boolean>;
+  onChange: (keys: string[], on: boolean) => void;
+}) {
+  if (!waters.length) {
+    return <span className="small text-2">Nessuna acqua legata alla struttura nelle catene scelte{others ? ` (${others} di solvatazione, non elencate)` : ""}.</span>;
+  }
+  const suggested = waters.filter((c) => c.group.suggested);
+  const chosen = waters.filter((c) => selection[c.key]);
+  const shown = waters.filter((c) => c.group.suggested || selection[c.key]);
+  const hidden = waters.filter((c) => !c.group.suggested && !selection[c.key]);
+  const row = (c: LigandCandidate & { group: WaterSite }) => (
+    <label key={c.key} className="check small" title={c.group.why || undefined}>
+      <input type="checkbox" checked={!!selection[c.key]} onChange={(e) => onChange([c.key], e.target.checked)} />
+      <span className="mono">{groupTitle(c.group)}</span>
+      {c.group.why && <Badge tone={c.group.suggested ? "accent" : undefined}>{c.group.why}</Badge>}
+      <span className="text-2">{waterText(c.group)}</span>
+    </label>
+  );
+  return (
+    <div className="stack-sm">
+      <div className="row small">
+        <b>Acque</b>
+        <Badge tone={chosen.length ? "accent" : undefined}>{chosen.length} di {waters.length} scelte</Badge>
+        {suggested.some((c) => !selection[c.key]) && (
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => onChange(suggested.map((c) => c.key), true)}>
+            Scegli le suggerite ({suggested.length})
+          </button>
+        )}
+        {chosen.length > 0 && (
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => onChange(chosen.map((c) => c.key), false)}>Nessuna</button>
+        )}
+      </div>
+      {shown.map(row)}
+      {!suggested.length && <span className="small text-2">Nessuna acqua suggerita (che coordini un metallo o faccia da ponte con un ligando).</span>}
+      {hidden.length > 0 && (
+        <Disclosure title={`Altre ${hidden.length} ${hidden.length === 1 ? "acqua legata" : "acque legate"} alla struttura`} lazy>
+          <div className="stack-sm">{hidden.map(row)}</div>
+        </Disclosure>
+      )}
+      {others > 0 && <span className="small text-2">{others} {others === 1 ? "acqua" : "acque"} di solvatazione senza legami con la struttura non {others === 1 ? "è elencata" : "sono elencate"}.</span>}
     </div>
   );
 }

@@ -139,7 +139,11 @@ def prepare_template(source: Path, spec: TemplateSpec, dest_dir: Path) -> dict:
     nel file originale (donatori dei metalli, acque comprese, e legami covalenti) per il confronto dopo la
     modellazione; `ligands_excluded` elenca i gruppi delle catene scelte lasciati fuori, con il motivo. Le chiavi
     interne `_chain_residues` (residui ATOM per catena nella copia), `_chain_ids` (i loro numeri, nell'ordine: il
-    sito di un gruppo sulle colonne del PIR) e `_hetero` (eteroatomi delle catene) servono al PIR.
+    sito di un gruppo sulle colonne del PIR) e `_hetero` (eteroatomi e acque delle catene) servono al PIR.
+
+    Acque (`spec.ligands` con un'acqua): nessuna per default; quelle scelte entrano in `ligand_groups` (classe "water",
+    con i legami H del sito) e si scrivono dopo i gruppi eteroatomici della loro catena, con il nome HOH; `waters` le
+    conta. MODELLER le legge con `env.io.water = True` e le colonne 'w' di `ligands.modeller_pir`.
     """
     st = structure.load_structure(source, spec.id)
     model = structure.first_model(st)
@@ -172,17 +176,24 @@ def prepare_template(source: Path, spec: TemplateSpec, dest_dir: Path) -> dict:
                 "affidabile in questa regione. Abbassa la soglia pLDDT o disattiva il ritaglio nelle opzioni di "
                 "modellazione, oppure cerca un altro template.", code="plddt_too_few")
     selected = ligands_mod.select(model, chains, spec.ligands) if spec.hetatm else []
-    selected_ids = {(r.get_parent().id, r.id) for r in selected}
+    waters = [r for r in selected if ligands_mod.is_water(r)]
+    water_ids = {(r.get_parent().id, r.id) for r in waters}
+    selected_ids = {(r.get_parent().id, r.id) for r in selected} - water_ids
     keep = set(selected_ids)
     if spec.hetatm:  # come prima: con i ligandi attivi le selenometionine restano (convertite in MET)
         keep |= {(c.id, r.id) for c in model if c.id in chains for r in c if r.get_resname().strip() == "MSE"}
-    # siti nel file originale (con le acque, che la copia non ha), prima di riordinare le catene
+    # siti nel file originale (con le acque non scelte, che la copia non ha), prima di riordinare le catene
     groups = ligands_mod.describe_groups(model, selected) if selected else []
     candidates = ligands_mod.candidates(model, chains)
-    for chain in model:  # gruppi scelti in fondo alla loro catena: MODELLER li legge dopo l'ultimo residuo
+    all_waters = [(c.id, structure._resid(r)) for c in model if c.id in chains for r in c if ligands_mod.is_water(r)]
+    # gruppi scelti in fondo alla loro catena, poi le acque scelte: MODELLER li legge dopo l'ultimo residuo, nell'ordine
+    # delle colonne '.' (e 'w') del PIR
+    for chain in model:
         if chain.id in chains:
-            chain.child_list.sort(key=lambda r, c=chain.id: (c, r.id) in selected_ids)
-    structure.write_pdb(st, dest, chains=chains, keep_hetero=keep or False, keep_water=False,
+            chain.child_list.sort(key=lambda r, c=chain.id: 2 if (c, r.id) in water_ids else int((c, r.id) in selected_ids))
+    for res in waters:  # MODELLER riconosce l'acqua come HOH (WAT, DOD... no)
+        res.resname = ligands_mod.WATER_NAME
+    structure.write_pdb(st, dest, chains=chains, keep_hetero=keep or False, keep_water=water_ids or False,
                         exclude=removed or None)
     _convert_selenomethionine(dest)
     header, predicted = _provenance_header(source, model, spec.id)
@@ -203,8 +214,10 @@ def prepare_template(source: Path, spec: TemplateSpec, dest_dir: Path) -> dict:
     info = {
         "id": spec.id, "code": code, "file": dest.name, "chains": chains,
         "first": summaries[chains[0]]["first"], "last": summaries[chains[-1]]["last"],
-        "sequence": "/".join(summaries[c]["sequence"] for c in chains), "ligands": len(selected),
+        "sequence": "/".join(summaries[c]["sequence"] for c in chains), "ligands": len(selected) - len(waters),
     }
+    if waters:
+        info["waters"] = len(waters)
     if spec.hetatm:
         info["ligand_groups"] = groups
         chosen = {(g["chain"], g["resnum"], g["resname"]) for g in groups}
@@ -213,7 +226,7 @@ def prepare_template(source: Path, spec: TemplateSpec, dest_dir: Path) -> dict:
             if (g["chain"], g["resnum"], g["resname"]) not in chosen]
     info["_chain_residues"] = {c.id: sum(1 for r in c if r.id[0] == " ") for c in prepared}
     info["_chain_ids"] = {c.id: [structure._resid(r) for r in c if r.id[0] == " "] for c in prepared}
-    info["_hetero"] = [(g["chain"], g["resnum"]) for g in candidates]
+    info["_hetero"] = [(g["chain"], g["resnum"]) for g in candidates] + all_waters
     if trim is not None:
         values = [row[4] for row in trim["rows"]]
         kept_values = [row[4] for row in trim["rows"] if row[5]]
@@ -339,6 +352,8 @@ def build_alignment_script(templates: list[dict], target_code: str) -> str:
 
 # Più template: allineamento di salign e allineamenti a coppie del bersaglio su ogni template (align2d)
 SALIGN_FILE = "alignment_salign.ali"
+# Acque trasferite: PIR letto da MODELLER con le colonne 'w' (alignment.ali resta il PIR di BioLoom, con '.')
+WATER_ALIGNMENT_FILE = "alignment_modeller.ali"
 
 
 def pair_file(index: int) -> str:
@@ -376,9 +391,11 @@ def build_complex_alignment_script(template: dict, target_code: str) -> str:
 
 def build_model_script(knowns: list[str], target_code: str, opts: ModelOptions,
                        hetatm: Optional[bool] = None, symmetry: Optional[list[list[int]]] = None,
-                       chain_names: Optional[list[str]] = None) -> str:
+                       chain_names: Optional[list[str]] = None, water: bool = False,
+                       alnfile: str = "alignment.ali") -> str:
     """Script di AutoModel/DOPELoopModel. `hetatm`: MODELLER legge i gruppi HETATM dei template (quelli scritti nelle
-    copie preparate, con le colonne '.' nel PIR); None = come l'opzione `hetatm`.
+    copie preparate, con le colonne '.' nel PIR); None = come l'opzione `hetatm`. `water`: legge anche le acque delle
+    copie preparate (solo quelle scelte), con le colonne 'w' del PIR `alnfile` (`ligands.modeller_pir`).
 
     Bersaglio a più catene (F5.3): `symmetry` = gruppi di indici di catene con la stessa sequenza (ogni catena vincolata
     alla prima del gruppo: `restraints.symmetry` sui C-alfa dei residui standard, peso `opts.symmetry_weight`, come
@@ -431,8 +448,10 @@ def build_model_script(knowns: list[str], target_code: str, opts: ModelOptions,
              "env.io.atom_files_directory = ['.']"]
     if (opts.hetatm if hetatm is None else hetatm):
         lines.append("env.io.hetatm = True")
+    if water:
+        lines.append("env.io.water = True")
     lines += [
-        f"a = BioLoomModel(env, alnfile='alignment.ali', knowns={knowns_tuple}, sequence={target_code!r},",
+        f"a = BioLoomModel(env, alnfile={alnfile!r}, knowns={knowns_tuple}, sequence={target_code!r},",
         "                 assess_methods=(assess.DOPE, assess.GA341, assess.normalized_dope))",
         "a.starting_model = 1",
         f"a.ending_model = {int(opts.models)}",
