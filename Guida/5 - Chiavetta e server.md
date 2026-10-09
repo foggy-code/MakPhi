@@ -139,7 +139,8 @@ bioloom.example.org {
 }
 ```
 
-Con HTTPS il cookie di sessione viene marcato `Secure`.
+Con HTTPS il cookie di sessione viene marcato `Secure`. BioLoom lo riconosce dall'header `X-Forwarded-Proto` del
+proxy: Caddy lo invia da solo, con nginx aggiungi `proxy_set_header X-Forwarded-Proto $scheme;`.
 
 Gli aggiornamenti in tempo reale dei job usano Server-Sent Events (`/api/jobs/events`, `/api/jobs/<id>/events`):
 connessioni lunghe su cui il server scrive man mano. Caddy le inoltra senza configurazione; nginx rispetta

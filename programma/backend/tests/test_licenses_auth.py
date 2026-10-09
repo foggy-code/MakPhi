@@ -157,6 +157,19 @@ def test_server_mode_requires_access_key(server_client):
     assert c.get("/api/projects").status_code == 401
 
 
+def test_session_cookie_is_secure_behind_an_https_proxy(server_client):
+    c = server_client
+    plain = c.post("/api/auth/login", json={"key": "segreto-12345"})
+    assert "secure" not in plain.headers["set-cookie"].lower()
+    # il proxy TLS raggiunge il container in HTTP e dichiara lo schema originale
+    proxied = c.post("/api/auth/login", json={"key": "segreto-12345"},
+                     headers={"X-Forwarded-Proto": "https"})
+    assert "secure" in proxied.headers["set-cookie"].lower()
+    chained = c.post("/api/auth/login", json={"key": "segreto-12345"},
+                     headers={"X-Forwarded-Proto": "HTTPS, http"})
+    assert "secure" in chained.headers["set-cookie"].lower()
+
+
 def test_shutdown_allowed_by_launcher_flag(monkeypatch):
     monkeypatch.setenv("BIOLOOM_ALLOW_SHUTDOWN", "1")
     assert auth.shutdown_allowed()

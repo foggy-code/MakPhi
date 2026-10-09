@@ -186,6 +186,11 @@ pagine liberate per i dati nuovi.
 | `services/` | servizi applicativi e handler dei job: combinano dominio, motori e persistenza |
 | `api/` | rotte FastAPI sottili con modelli Pydantic |
 
+Le dipendenze vanno dall'alto verso il basso (`api` → `services` → `engines`/`domain` → `core`), con una sola eccezione
+voluta. `services/reproducibility.py` (`_start_models`) importa i modelli Pydantic delle rotte di avvio da `api/`, così
+una riesecuzione valida i parametri del manifest con lo stesso contratto della richiesta originale. L'import è
+ritardato dentro la funzione, perché le rotte importano a loro volta i servizi.
+
 Fuori dal backend: `frontend/` (vedi [Frontend](#frontend)); `docker/` con il `Dockerfile` dell'immagine, `entrypoint.sh`,
 il worker QMEAN (`docker/qmean/`: `qmean_worker.py`, `uniclust.py`, `run_qmean_wrapper.py`), l'immagine dei test
 (`docker/test/`) e i pacchetti con licenza (`docker/vendor/`); `launcher/` con gli avviatori, `compose.yml` e
@@ -1588,7 +1593,11 @@ test non li ripetono:
 Worker HTTP nel container `qmean` (`docker/qmean/qmean_worker.py`, database in `docker/qmean/uniclust.py`, avvio di
 QMEAN in `run_qmean_wrapper.py`); client in `engines/qmean_local.py`, job `qmean` in `services/compute.py`.
 
-- **Ricerca:** il worker esplora la cartella montata su `/uniclust_src` fino a 4 livelli e riconosce ogni
+- **Ricerca:** l'avviatore accetta un database fino a 3 livelli sotto `UNICLUST_PATH` (`uniclust_below` in
+  `bioloom.sh`, `Get-UniclustBelow` in `bioloom.ps1`): è il limite indicato all'utente nella Guida. Il worker
+  esplora la cartella montata su `/uniclust_src` fino a 4 livelli, uno in più, quindi trova sempre ciò che l'avviatore
+  ha accettato. La ricerca automatica sui dischi è un'altra cosa: scorre 4 livelli di cartelle per trovare la radice
+  (3 sul disco di sistema). Il worker riconosce ogni
   database HH-suite dal file `<nome>_a3m.ffindex` (HH-suite 3) o `<nome>_a3m_db.index` (HH-suite 2). Per
   ciascuno ricava versione (`AAAA_MM` nel nome), famiglia (UniRef30 / uniclust30), formato, presenza degli
   HMM e dimensione.
@@ -3579,6 +3588,11 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 - **Server:** con `BIOLOOM_AUTH=on` tutte le API (e `/docs`) richiedono la chiave d'accesso, tramite
   cookie HttpOnly firmato o header Bearer, con ritardo sui tentativi falliti; il middleware controlla anche le rotte di
   streaming prima che il flusso parta.
+- **Cookie dietro un reverse proxy:** il cookie di sessione è `Secure` se la richiesta arriva in HTTPS. Vale anche
+  quando un proxy TLS lo dichiara con `X-Forwarded-Proto: https` (`api/auth._https`). uvicorn si fida degli header
+  inoltrati solo da 127.0.0.1, e il proxy raggiunge il container dalla rete di Docker. L'header conta solo per
+  questo flag: se falso, rende il cookie più restrittivo. Gli header inoltrati non sono fidati in generale, perché
+  `X-Forwarded-For` aggirerebbe il ritardo sui tentativi, legato all'indirizzo del client.
 - **Arresto dall'interfaccia:** solo con `BIOLOOM_ALLOW_SHUTDOWN=1` (preset locale).
 - **Container:** gira senza root (`setpriv` all'utente proprietario di `/data`). QMEAN non ha accesso al
   socket di Docker e usa i database in sola lettura.
@@ -3630,13 +3644,13 @@ analisi strutturali, la rifinitura e la mutagenesi non usano la rete; l'interfac
 
 ## Test
 
-**Conteggi** (contati il 6 ottobre 2026 con `scripts/test.sh backend --collect-only -q` nell'immagine `bioloom:4.1.0` e con
-`npx vitest run`):
+**Conteggi** (contati il 9 ottobre 2026 con `pytest --collect-only -q` in `backend/` e con `npx vitest list` in
+`frontend/`):
 
 | Suite | File | Test |
 |---|---|---|
-| backend, `backend/tests` (pytest) | 43 | 1215 nella suite predefinita (42 file), più i 4 di `test_remote.py` (marcatore `network`, esclusi da `addopts`: `pytest -m network`) |
-| frontend, `frontend/src/**/*.test.ts(x)` (vitest) | 75 | 656 |
+| backend, `backend/tests` (pytest) | 49 | 1292 nella suite predefinita (48 file), più i 4 di `test_remote.py` (marcatore `network`, esclusi da `addopts`: `pytest -m network`) |
+| frontend, `frontend/src/**/*.test.ts(x)` (vitest) | 86 | 737 |
 
 I test che richiedono MODELLER, PROCHECK, ProSA o gli strumenti dell'immagine di sviluppo (fpocket, PDB2PQR, APBS,
 OpenMM, PDBFixer) si saltano da soli, con il motivo, dove mancano (`requires_modeller` e le condizioni degli strumenti):
@@ -3711,8 +3725,8 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
     chiamate, un job per chiamata con l'orologio che salta 10 s a ogni lettura, job in uso saltato senza attesa e che
     non tiene vivo il ciclo, job sparito, errore contato senza interrompere, eventi, etichette e ricerca globale, byte
     senza i resti, rotte (400, non 404 o 405) e chiave d'accesso (401).
-- **Licenze e accesso** (`test_licenses_auth.py`, 10): chiave MODELLER (fonti, formato, prova prima del salvataggio),
-  LicenseDB di ProSA, chiave d'accesso, modalità server, arresto consentito dal solo avviatore.
+- **Licenze e accesso** (`test_licenses_auth.py`, 11): chiave MODELLER (fonti, formato, prova prima del salvataggio),
+  LicenseDB di ProSA, chiave d'accesso, modalità server, cookie `Secure` dietro un proxy HTTPS, arresto consentito dal solo avviatore.
 - **Strumenti esterni** (`test_engines_extra.py`, 10): parser di PROCHECK e ProSA tarati su output reali di 1UBQ,
   MMseqs2, QMEAN locale con worker simulato, strumenti mancanti come avvisi, verifica dell'installazione (anche fpocket,
   PDB2PQR + APBS e OpenMM: "ok" se ci sono, "non disponibile" altrimenti).
@@ -3788,7 +3802,7 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
   Biopython; prefissi dei passi nel log; qualità "all" con 3 modelli insieme uguale a quella seriale; cache dei
   template (copia per elemento, chiave con template, catene, ligandi e soglia pLDDT, file sostituito, errori non
   conservati, elementi concorrenti, attesa annullabile) e pipeline di 4 sequenze con una sola preparazione.
-- **Report del modello** (`test_report.py`, 53; MODELLER simulato con le coordinate e il profilo DOPE reali di 1UBQ, più
+- **Report del modello** (`test_report.py`, 57; MODELLER simulato con le coordinate e il profilo DOPE reali di 1UBQ, più
   un test con MODELLER reale): tutte le sezioni; identità 96,1% dell'ubiquitina di lievito su 1UBQ, voto 98,9,
   consenso 99,6; SVG ben formati con 74 punti di Ramachandran e il picco DOPE 73–76; escape di `<script>`, `"` e `&`
   in titoli, nomi, metadati, residui e atomi; PNG valido incorporato, PNG malformati (firma, CRC, troncati, dati
@@ -3916,7 +3930,7 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
   errore inatteso dell'analisi che non fa fallire il job), sezione del report bilanciata con l'escape; rotte con
   complessi non validi (nessun job accodato); con MODELLER l'anteprima per catena e l'omodimero dell'ubiquitina di
   lievito con e senza simmetria (catene, numerazione, RMSD fra le catene, DockQ, REMARK, report) e dallo stesso PIR.
-- **Controlli preventivi** (`test_preflight.py`, 63; licenze, strumenti, spazio e worker QMEAN simulati): ogni codice con
+- **Controlli preventivi** (`test_preflight.py`, 64; licenze, strumenti, spazio e worker QMEAN simulati): ogni codice con
   un caso che lo produce e uno che non lo produce; curva di Rost (33,2% a 76 residui, 20,0% a 300) e soglia di Baker &
   Šali; stime contro le misure (job model 13,89 s, elemento di pipeline 9,13 s, i quattro livelli di raffinamento
   distinti e in ordine, 304 residui, byte dei risultati e degli intermedi); modelli identici con «rapidissimo»;
@@ -3976,6 +3990,29 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
   riesecuzione di K48R e della scansione di una tasca (tasche dal pacchetto dopo l'eliminazione del job); con OpenMM
   rifinitura identica con un thread; pacchetto del confronto con ESMFold rifiutato come non riproducibile, con la
   predizione come input remoto datato.
+- **Pipeline M × N** (`test_pipeline_cross.py`, 7; MODELLER simulato come in `test_pipeline_resume.py`): ogni sequenza
+  modellata su ogni template fisso, ogni coppia analizzata e il migliore scelto per zDOPE, migliore segnato ma non
+  analizzato senza qualità, ZIP con una cartella per template, coppia fallita e ripresa che rifà la scelta, validazione,
+  matrice solo per le pipeline incrociate.
+- **Pipeline grandi** (`test_large_pipeline.py`, 14): fino a 50.000 sequenze, parallelismo dalle Impostazioni oltre 8
+  (fino a 256), processi di appoggio dell'analisi (`core/offload` e `domain/qa_steps`: stesso rapporto della versione nel
+  processo principale, ripiego sul processo principale se il pool fallisce, risultati parziali completati), output dei
+  programmi in `programmi.log` dell'elemento e non nel log del job, parametri letti una volta, elenco dei file limitato.
+- **Avviso per email** (`test_notify.py`, 15; server SMTP finto in locale): configurazione solo da file o variabili
+  d'ambiente e password mai restituita, file non valido spiegato, email di prova, autenticazione e destinatario
+  rifiutati, nuovi tentativi, un solo avviso a fine pipeline senza risultati, nessun avviso se non chiesto, invio fallito
+  scritto nel log del job, intestazioni non iniettabili.
+- **Editor PIR, struttura secondaria per residuo** (`test_pir_secondary.py`, 15): DSSP dei template e GOR del bersaglio,
+  gap che non cambiano il risultato, residuo iniziale dall'intestazione, due catene dopo '/', selenometionine secondo
+  l'opzione dei ligandi, lettere diverse dal file segnalate, abbinamento come in modellazione, predizione che non
+  scavalca le catene, limiti della richiesta, cache delle strutture.
+- **Grafici di PROCHECK** (`test_procheck_plots.py`, 5): grafici PostScript conservati secondo `procheck_plots` (tutti, solo
+  il Ramachandran complessivo, nessuno) con le stesse metriche; impostazione salvata e validata dall'API.
+- **Acque catalitiche e strutturali** (`test_waters.py`, 15; `tests/data/ubq_zn.pdb`): acque suggerite sullo zinco e a
+  ponte con un ligando vero, solvente lontano escluso, trasferite solo se scelte, copia preparata con le acque dopo i
+  ligandi (WAT scritta come HOH), colonne '.' in BioLoom e 'w' per MODELLER (stessa colonna per la stessa acqua di due
+  template), verifica dell'acqua nel modello e dell'acqua che ha perso il metallo, acque nell'analisi del template,
+  esempi con template HETATM; con MODELLER, ubiquitina di lievito su `ubq_zn.pdb` con lo Zn e la sua acqua catalitica.
 - **Servizi reali** (`test_remote.py`, 4, solo con `-m network`): ricerca RCSB dell'ubiquitina, voce e domini UniProt,
   metadati RCSB con R-free e stato oligomerico.
 
@@ -4013,7 +4050,7 @@ parentesi):
   frammenti isolati). `templateRank.test.ts` (8): fasce come nel backend, righe e ordine delle motivazioni, tooltip, ruoli
   dei consigliati (anche per i risultati precedenti, dal solo `best`), collegamento alla Modellazione con un template per
   `t`, numero di template della modalità multi, template e suggerimento di un elemento di pipeline. `ligands.test.ts`
-  (10): candidati delle catene scelte, additivi e ioni monovalenti deselezionati per default, residui modificati non
+  (12): candidati delle catene scelte, additivi e ioni monovalenti deselezionati per default, residui modificati non
   selezionabili, scelte dell'utente conservate, analisi in cache precedenti, testi della coordinazione, linee metallo →
   donatore colorate per esito (con sfera per le acque) e residui evidenziati.
 - **Disordine e domini** (`disorder.test.ts` 10, `CoverageAlerts.test.tsx` 3): tracce della mappa (disordine, bassa
@@ -4083,6 +4120,35 @@ parentesi):
   l'apertura, avviso dei completati, barra accessibile e regione annunciata, interruzione, riepilogo come stato o come
   alert) e della conferma dell'eliminazione (job attivi, progetto vuoto con il focus su «Annulla», nome da scrivere,
   byte parziali, ultimo progetto, in corso, errori, nome accessibile del cestino, mai la parola «cestino» nel testo).
+- **Editor PIR e allineamenti:** `pirEdit.test.ts` (19: gap inseriti e tolti senza mai togliere residui, blocchi
+  spostati, pareggio delle righe), `pirMutations.test.ts` (16: matrice e toni del punteggio, sostituzioni numerate per
+  catena dalla seconda riga PIR, posizioni per colonna), `pirIssues.test.ts` (9: separatori non allineati, colonne di
+  soli gap, residui senza template, lettere diverse dal file, F8 e Maiusc+F8), `pirSecondary.test.ts` (9: DSSP a 3
+  stati, inserzioni dentro un'elica e delezioni di fronte a un filamento), `pirColors.test.ts` (6: idropatia,
+  conservazione per colonna, code del bersaglio senza template), `pirDiff.test.ts` (5), `pirAnnotations.test.ts` (3),
+  `pirHeader.test.ts` (3: i dieci campi dell'intestazione), `pirTrackContrast.test.ts` (2), `alignmentView.test.ts` (8:
+  righello, colonne identiche, contrasto ≥ 4,5:1 nei due temi), `alignmentFasta.test.ts` (3), `AlignmentView.test.tsx`
+  (5).
+- **Grafici e cornici:** `linear.test.tsx` (14: profili per residuo con cornice, PNG, CSV, zoom, struttura secondaria,
+  regioni attese tratteggiate, heatmap), `linearHelpers.test.ts` (10: tacche, intervalli visibili, testo nero o bianco
+  ≥ 4,5:1), `Ramachandran.test.tsx` (7: regioni, glicina a triangolo, outlier etichettati, residuo selezionato, zoom),
+  `ramachandran.test.ts` (10: classi, regioni, conteggi, ricerca per residuo), `ChartFrame.test.tsx` (6),
+  `ValueBars.test.tsx` (4), `ModelScores.test.tsx` (4: il migliore distinto per forma e non solo per colore),
+  `Viewer3D.test.tsx` (2), `zoom.test.ts` (5) e `zoomInput.test.ts` (5: dominio, rotella e touchpad),
+  `exportImage.test.ts` (2: nome sicuro del file, CSV), `viewerImage.test.ts` (5: nome e data URI della vista 3D).
+- **Viste delle pagine:** `quality.test.tsx` (19: consenso e voto riga per riga, Ramachandran, struttura secondaria,
+  dettaglio del residuo, tabella dei residui, contatti sterici), `qualityView.test.ts` (17: penalità del voto con la
+  regola, soglie di clashscore, zDOPE, QMEAN, ProSA e G-factor, contributi del consenso), `StructuralComparison.test.tsx`
+  (5) e `compareMetrics.test.ts` (12: letture di TM-score, RMSD, GDT, lDDT con soglie e fonti), `ToolPanels.test.tsx` (9:
+  barre, avanzamento e log dei job, descrittori delle tasche, ΔSASA), `toolsView.test.ts` (12: assi, ordine dei residui,
+  tasche, potenziale, accordo con la predizione), `WorkflowParts.test.tsx` (7) e `workflowView.test.ts` (11: punteggio
+  dei template con le componenti, copertura, controlli, sequenza a blocchi), `shellView.test.ts` (13: Panoramica, passi
+  del flusso, stati e log), `pipelineMatrix.test.ts` (4: pipeline M × N), `notify.test.ts` (2: indirizzi e stato del
+  server di posta), `residueTerms.test.ts` (3).
+- **Componenti di base e accessibilità:** `foundation.test.tsx` (14: card e sezioni richiudibili montate alla prima
+  apertura, gruppi di comandi con un nome, esito scritto oltre al colore), `contrast.test.ts` (11: testi ≥ 4,5:1 su ogni
+  superficie nei due temi), `chartTokens.test.ts` (6) e `sequenceTokens.test.ts` (4: colori dei grafici e delle classi di
+  residui ≥ 3:1, anello del focus), `aminoAcids.test.ts` (3: una sola tabella delle classi), `formatHelpers.test.ts` (4).
 - **Navigazione, tema, ricerca ed etichette:** `virtual.test.ts` (5: soglia, posizioni con altezza fissa e per indice,
   righe visibili con margine e spaziatori, fondo e scorrimento oltre il fondo, blocchi dell'allineamento, riga
   selezionata portata in vista sotto l'intestazione fissa e nei limiti), `theme.test.ts` (5: valori salvati vecchi e
