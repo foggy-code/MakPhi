@@ -1671,6 +1671,9 @@ QMEAN in `run_qmean_wrapper.py`); client in `engines/qmean_local.py`, job `qmean
     - Con memoria al limite ne usa 1: a parità di tempo, 4 thread avevano letto 190 GB contro 35.
     - `QMEAN_HHBLITS_CPU` fissa il numero.
     - Il risultato non cambia.
+  - **Risorse nell'uscita:** il worker riporta processori, giudizio sulla memoria (`ok` | `swap`) e secondi dell'intero
+    calcolo (`bioloom_hhblits`). `engines/qmean_local.score` li porta nel risultato del job come `hhblits` e li scrive nel
+    log («QMEAN locale concluso in … s nel worker»). Il campo è `null` con SWISS-MODEL e con un worker che non li riporta.
   - **Codifica:** l'immagine QMEAN (CentOS 7) non ha `C.UTF-8`. Senza `LANG=en_US.UTF-8` Python 3.6 usa ASCII
     e un messaggio con lettere accentate fermava il worker all'avvio.
 - **Verifiche:**
@@ -3649,7 +3652,7 @@ analisi strutturali, la rifinitura e la mutagenesi non usano la rete; l'interfac
 
 | Suite | File | Test |
 |---|---|---|
-| backend, `backend/tests` (pytest) | 49 | 1292 nella suite predefinita (48 file), più i 4 di `test_remote.py` (marcatore `network`, esclusi da `addopts`: `pytest -m network`) |
+| backend, `backend/tests` (pytest) | 49 | 1293 nella suite predefinita (48 file), più i 4 di `test_remote.py` (marcatore `network`, esclusi da `addopts`: `pytest -m network`) |
 | frontend, `frontend/src/**/*.test.ts(x)` (vitest) | 86 | 737 |
 
 I test che richiedono MODELLER, PROCHECK, ProSA o gli strumenti dell'immagine di sviluppo (fpocket, PDB2PQR, APBS,
@@ -3733,7 +3736,7 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
 - **UniClust30 e QMEAN:** `test_uniclust_discovery.py` (11): riconoscimento di tutti i formati, scelta della versione,
   copie interrotte, archivi e formato MMseqs2, cs219 convertiti e copia locale validi finché il disco non cambia, limite
   di profondità, filesystem dei mount, stima della memoria, un thread con la memoria al limite.
-  `test_qmean_fallback.py` (19): scelta della versione e fallback su SWISS-MODEL, migrazione della modalità "auto",
+  `test_qmean_fallback.py` (20): scelta della versione e fallback su SWISS-MODEL, risorse di HHblits nell'uscita e nel log, migrazione della modalità "auto",
   memoria richiesta dal database (12 GB misurati per UniRef30_2020_06, stima per le altre versioni, giudizio del worker,
   tolleranza del 95%): job fallito subito o fallback con 8 GB, partenza con 11,7 GB; due QMEAN locali eseguiti uno alla
   volta, il secondo in coda con posizione e fase, senza bloccare il pool "io"; QMEAN su SWISS-MODEL senza esclusione, e

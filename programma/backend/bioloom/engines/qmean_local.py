@@ -227,9 +227,28 @@ def score(pdb_text: str, ctx: JobContext, *, method: str = "auto", seqres: str =
                       running_stage="QMEAN locale: profilo HHblits su UniClust30 e punteggi")
     result = job.get("result") or {}
     used = result.get("bioloom_database") or {}
+    hhblits = _hhblits(result.get("bioloom_hhblits"))
+    if hhblits and hhblits["seconds"] is not None:
+        ctx.log(f"QMEAN locale concluso in {hhblits['seconds']} s nel worker (HHblits su "
+                f"{hhblits['cpu'] or '?'} processori, memoria {hhblits['memory'] or 'non nota'})")
     return {**normalize_qmean(result), "source": "local",
             "uniclust": used.get("name") or chosen.get("prefix"), "uniclust_version": used.get("version"),
-            "qmtl": (info.get("qmtl") or {}).get("version")}
+            "qmtl": (info.get("qmtl") or {}).get("version"), "hhblits": hhblits}
+
+
+def _hhblits(raw) -> Optional[dict]:
+    """Risorse del calcolo dal worker (`bioloom_hhblits`): processori dati a HHblits, giudizio sulla memoria del
+    database (ok | swap) e secondi dell'intero calcolo nel worker (profilo HHblits e punteggi QMEAN). None se il worker
+    non le riporta (versioni precedenti); valori di tipo inatteso diventano None."""
+    if not isinstance(raw, dict):
+        return None
+
+    def count(value) -> Optional[int]:
+        return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0 else None
+
+    memory = raw.get("memory")
+    return {"cpu": count(raw.get("cpu")), "memory": memory if memory in ("ok", "swap") else None,
+            "seconds": count(raw.get("seconds"))}
 
 
 def convert(database: str, ctx: JobContext, *, sleep: Callable[[float], None] = time.sleep) -> dict:

@@ -1284,6 +1284,8 @@ export interface QmeanResult {
   method?: string | null;
   uniclust?: string | null;
   uniclust_version?: string | null;
+  /** risorse del calcolo nel worker locale (assenti con SWISS-MODEL e con worker precedenti) */
+  hhblits?: { cpu: number | null; memory: "ok" | "swap" | null; seconds: number | null } | null;
   fallback?: { from: "local"; reason: string };
 }
 
