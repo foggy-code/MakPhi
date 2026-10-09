@@ -628,6 +628,13 @@ class ComputeService:
             pir = sequences.format_pir(entries)
             atomic_write_text(workdir / "alignment.ali", pir)
             warnings = [*warnings, *ligand_notes]
+        # acque scelte: MODELLER legge un PIR con le colonne 'w' (alignment.ali resta quello di BioLoom, con '.')
+        water_pir = ligands.modeller_pir(entries, templates) if transfer else None
+        alnfile = "alignment.ali"
+        if water_pir is not None:
+            alnfile = modeller.WATER_ALIGNMENT_FILE
+            atomic_write_text(workdir / alnfile, water_pir)
+            ctx.log(f"Acque trasferite: {len(ligands.water_columns(entries, templates))} (colonne 'w' in {alnfile})")
         warnings = [*warnings, *self._predicted_notes(templates)]
         # template di strutture diverse senza residui comuni a sufficienza: orientamento relativo arbitrario
         anchor = multitemplate.unanchored(entries, templates) if len(templates) > 1 else None
@@ -648,7 +655,8 @@ class ComputeService:
                        f"peso {opts.symmetry_weight:g}" if multi["symmetry"]["applied"] else ""))
         ctx.progress(0.15, "Costruzione dei modelli")
         script = modeller.build_model_script([t["code"] for t in templates], target_code, opts, hetatm=transfer,
-                                             symmetry=multi["groups"], chain_names=multi["names"])
+                                             symmetry=multi["groups"], chain_names=multi["names"],
+                                             water=water_pir is not None, alnfile=alnfile)
         modeller.run_script(ctx, script, "model.py", workdir=workdir, progress_range=(0.15, 0.8))
         summary = modeller.read_models(workdir)
         models = []
@@ -712,13 +720,18 @@ class ComputeService:
                     best["ligands"] = ligands.summary(checked)
             # gruppi scritti da MODELLER, contati sul file (anche se la verifica non fosse riuscita)
             lines = (workdir / best["file"]).read_text(encoding="utf-8", errors="replace").splitlines()
-            written = len({(ln[21], ln[22:27]) for ln in lines
-                           if ln.startswith("HETATM") and ln[17:20].strip() not in structure.WATER_NAMES})
-            if written < len(transferred):
-                text = (f"Il modello migliore contiene {written} dei {len(transferred)} gruppi eteroatomici "
-                        f"trasferiti ({', '.join(transferred)}): controlla le colonne '.' dell'allineamento.")
-                warnings.append(text)
-                ctx.log(f"Avviso: {text}")
+            hetatm = [ln for ln in lines if ln.startswith("HETATM")]
+            for water, what, column in ((False, "gruppi eteroatomici", "'.'"), (True, "acque", "'w'")):
+                expected = [label for label, members in zip(transferred, model_groups)
+                            if (members[0][1].get("class") == "water") == water]
+                written = len({(ln[21], ln[22:27]) for ln in hetatm
+                               if (ln[17:20].strip() in structure.WATER_NAMES) == water})
+                if written < len(expected):
+                    text = (f"Il modello migliore contiene {written} {'delle' if water else 'dei'} {len(expected)} "
+                            f"{what} {'trasferite' if water else 'trasferiti'} ({', '.join(expected)}): controlla le "
+                            f"colonne {column} dell'allineamento.")
+                    warnings.append(text)
+                    ctx.log(f"Avviso: {text}")
             result["ligands"] = {"transferred": [
                 {"template": ", ".join(code for code, _g in members),
                  **{k: members[0][1][k] for k in ("resname", "chain", "resnum", "class", "label")},
@@ -892,7 +905,8 @@ class ComputeService:
             try:
                 model = structure.first_model(structure.load_structure(workdir / model_file, Path(model_file).stem))
                 contexts, notes = ligands.template_contexts(entries, templates, template_models, model)
-                checked = ligands.evaluate(model, contexts=contexts, notes=notes)
+                # il modello contiene solo le acque trasferite: si verificano tutte
+                checked = ligands.evaluate(model, contexts=contexts, notes=notes, waters=True)
             except (AppError, ValueError, KeyError, IndexError) as exc:
                 log(f"Verifica dei ligandi di {model_file} non riuscita: {exc}")
                 return None

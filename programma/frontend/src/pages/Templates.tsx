@@ -15,7 +15,7 @@ import {
 import { useToast } from "../lib/context";
 import { fmtBytes, fmtDate, fmtInt, fmtNum, relTime } from "../lib/format";
 import { useAsync } from "../lib/hooks";
-import { CLASS_LABEL, CLASS_TONE, groupClass, groupTitle, isDefault, isTransferable, ligandKey } from "../lib/ligands";
+import { CLASS_LABEL, CLASS_TONE, groupClass, groupTitle, isDefault, isTransferable, ligandKey, waterText } from "../lib/ligands";
 import { favoritesFirst, filterParams, filterValue, itemLabels, matchesFilter, parseFilterValue, type ItemLabels, type LabelFilter } from "../lib/tags";
 import { numberedSequence, residueRanges, resolutionNote, resolutionTone, ssParts, templateMatches } from "../lib/workflowView";
 
@@ -85,6 +85,8 @@ function TemplateDetail({ id, labels, onDeleted, onAdded, onLabels }: { id: stri
   if (error) return <Alert tone="err">{error.message}</Alert>;
   if (!a) return null;
   const groups = [...a.ligands.filter((l) => !l.additive), ...a.ligands.filter((l) => l.additive)];
+  const waters = a.waters?.waters ?? [];
+  const suggestedWaters = waters.filter((w) => w.suggested);
   const predicted = !!a.meta.predicted;
   const missing = a.header.missing_residues;
   const resolution = a.header.resolution;
@@ -183,7 +185,7 @@ function TemplateDetail({ id, labels, onDeleted, onAdded, onLabels }: { id: stri
       </Card>
       {!predicted && <AssembliesCard meta={a.meta} onImported={onAdded} />}
       {groups.length > 0 && (
-        <Card title="Ligandi ed eteroatomi" icon="flask" sub="Trasferibili nel modello (Modellazione → Trasferisci ligandi, cofattori e metalli)">
+        <Card title="Ligandi ed eteroatomi" icon="flask" sub="Trasferibili nel modello (Modellazione → Trasferisci ligandi, cofattori, metalli e acque)">
           <div className="table-wrap">
             <table className="table">
               <thead><tr><th>Gruppo</th><th>Classe</th><th className="num">Atomi</th><th>Nel modello</th><th>Note</th></tr></thead>
@@ -203,6 +205,31 @@ function TemplateDetail({ id, labels, onDeleted, onAdded, onLabels }: { id: stri
               </tbody>
             </table>
           </div>
+        </Card>
+      )}
+      {waters.length > 0 && (
+        <Card title="Acque legate alla struttura" icon="flask" sub="Si trasferiscono solo se scelte una per una (Modellazione → Trasferisci ligandi… → Acque)">
+          <p className="small text-2" style={{ marginTop: 0 }}>
+            {waters.length} {waters.length === 1 ? "acqua" : "acque"} con legami H con la proteina, con un gruppo eteroatomico o con un metallo
+            {a.waters?.others ? `; altre ${a.waters.others} di solvatazione` : ""}.
+            {suggestedWaters.length ? ` Suggerite: ${suggestedWaters.length}.` : " Nessuna suggerita."}
+          </p>
+          {suggestedWaters.length > 0 && (
+            <div className="table-wrap">
+              <table className="table">
+                <thead><tr><th>Acqua</th><th>Perché</th><th>Intorno</th></tr></thead>
+                <tbody>
+                  {suggestedWaters.map((w) => (
+                    <tr key={ligandKey(a.id, w)}>
+                      <td className="mono nowrap"><b>{groupTitle(w)}</b></td>
+                      <td className="small">{w.why}</td>
+                      <td className="small">{waterText(w)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </Card>
       )}
       {confirm && (

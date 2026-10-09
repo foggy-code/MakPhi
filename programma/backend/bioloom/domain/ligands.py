@@ -32,6 +32,17 @@ nel modello c'è un solo gruppo, con i vincoli di tutti quei template, e non una
   bersaglio attraverso l'allineamento, lo coordinano anche nel modello?
 Esito: *buono*, *da controllare* o *problematico*, con le motivazioni in italiano. Nessun effetto sul voto A–D.
 
+**Acque** (acque catalitiche e strutturali): non si trasferiscono mai per default, ma si possono scegliere una per una
+come gli altri gruppi (opzione `ligands` con il nome dell'acqua, di solito HOH). `water_candidates` elenca le acque
+legate alla struttura (legami H con la proteina o con un gruppo, metalli coordinati) e suggerisce quelle che coordinano
+un metallo, fanno da ponte con un ligando o sono strutturali. Nella copia preparata le acque scelte stanno in fondo alla
+catena dopo i gruppi eteroatomici, con il nome HOH; nel PIR di BioLoom occupano colonne '.' come i ligandi (un'acqua si
+unisce solo a un'acqua di un altro template), e solo nel file letto da MODELLER quelle colonne diventano 'w'
+(`modeller_pir`, con `env.io.water = True`): MODELLER copia l'acqua dal template come i gruppi BLK. La verifica
+(`evaluate` con `waters`) controlla scontri, legami H nel modello e la conservazione del sito del template (residui
+legati e metallo coordinato). Limite: MODELLER mantiene l'acqua nella posizione del template rispetto ai residui
+vicini, non ottimizza la rete di legami idrogeno.
+
 Fonti:
 - Harding M.M. (2006) Small revisions to predicted distances around metal sites in proteins. Acta Cryst. D62:678–682
   (distanze attese metallo–donatore dal CSD e da strutture proteiche a ≤ 1,25 Å, `REFERENCE_DISTANCES`: valori
@@ -56,14 +67,16 @@ from typing import Iterable, Optional
 import numpy as np
 
 from ..core.errors import AppError
-from .sequences import PirEntry
+from .sequences import PirEntry, format_pir
 from .structure import COMMON_ADDITIVES, WATER_NAMES, _resid, three_to_one
 
 VERSION = 1
 
 # ---------------------------------------------------------------------------------------------- classificazione
 CLASS_LABEL = {"metal": "metallo", "cofactor": "cofattore noto", "additive": "additivo", "ligand": "altro ligando",
-               "modified": "residuo modificato"}
+               "modified": "residuo modificato", "water": "acqua"}
+# Nome delle acque trasferite nella copia preparata: MODELLER (`env.io.water`) riconosce l'acqua come HOH
+WATER_NAME = "HOH"
 
 # Elementi metallici riconosciuti negli ioni di un solo atomo (colonna "element" del PDB, altrimenti il nome del
 # residuo: ZN, MG, FE2, CU1, 3CO...).
@@ -110,6 +123,8 @@ GRMSD_BORDERLINE = 13.5  # CheckMyMetal: gRMSD oltre 13,5° al limite, oltre 21,
 GRMSD_OUTLIER = 21.5
 VACANCY_LIMIT = 0.25     # CheckMyMetal: oltre il 25% di posizioni vacanti anomalo
 GEOMETRY_TIE = 1.0       # geometrie entro 1° di gRMSD: si preferisce quella con meno posizioni vacanti
+HBOND_DISTANCE = 3.5     # legame idrogeno di un'acqua: O dell'acqua – N/O entro 3,5 Å (atomi pesanti)
+STRUCTURAL_PARTNERS = 3  # acqua "strutturale": legami H con almeno 3 residui della proteina
 
 # Distanze attese metallo–donatore (Å). Categorie: O dell'acqua, O carbossilico di Asp/Glu monodentato, O carbonilico
 # dello scheletro, N imidazolico dell'His, S della Cys. Una categoria assente = donatore insolito per quel metallo.
@@ -260,7 +275,10 @@ def _heavy(residue) -> list:
 
 
 def classify(residue) -> dict:
-    """Classe di un gruppo eteroatomico non d'acqua, se è scelto per default nella modellazione e perché no."""
+    """Classe di un gruppo eteroatomico (o di un'acqua), se è scelto per default nella modellazione e perché no."""
+    if is_water(residue):
+        return {"class": "water", "default": False, "transferable": True,
+                "reason": "acqua: si trasferisce solo se scelta una per una"}
     name = residue.get_resname().strip().upper()
     atoms = _heavy(residue)
     if is_modified_residue(residue):
@@ -305,19 +323,114 @@ def candidates(model, chains: Optional[Iterable[str]] = None) -> list[dict]:
     return out
 
 
+def _water_oxygen(residue):
+    """Atomo dell'acqua usato per le distanze: l'ossigeno, altrimenti il primo atomo pesante (None se non ce n'è)."""
+    heavy = _heavy(residue)
+    return next((a for a in heavy if element_of(a) == "O"), heavy[0] if heavy else None)
+
+
+def water_partners(residue, neighbors: "_Neighbors") -> dict:
+    """Intorno di un'acqua: legami H (N/O della proteina o di altri gruppi, acque escluse, entro `HBOND_DISTANCE`) e
+    metalli che coordina (O dell'acqua nella sfera di coordinazione del metallo, `shell_cutoff`).
+
+    {"protein": [(atomo, distanza)], "groups": [(atomo, distanza)], "metals": [(atomo, distanza)]}, dal più vicino."""
+    out: dict[str, list] = {"protein": [], "groups": [], "metals": []}
+    oxygen = _water_oxygen(residue)
+    if oxygen is None:
+        return out
+    for other in neighbors.near(oxygen, max(HBOND_DISTANCE, FALLBACK_SHELL, 3.4)):
+        ores = other.get_parent()
+        if ores is residue or is_water(ores):
+            continue
+        distance = float(np.linalg.norm(other.coord - oxygen.coord))
+        element = element_of(other)
+        if element in METAL_ELEMENTS:
+            if distance <= shell_cutoff(element, "O_water"):
+                out["metals"].append((other, distance))
+        elif element in ("N", "O") and distance <= HBOND_DISTANCE:
+            out["protein" if _is_protein(ores) else "groups"].append((other, distance))
+    for items in out.values():
+        items.sort(key=lambda item: item[1])
+    return out
+
+
+def _partner_text(atom, distance: float) -> str:
+    return f"{_atom_label(atom)} {_num(distance)} Å"
+
+
+def water_candidates(model, chains: Optional[Iterable[str]] = None) -> dict:
+    """Acque del modello (delle catene indicate) candidate al trasferimento, con l'intorno e un suggerimento.
+
+    Una struttura cristallografica ha centinaia di acque, quasi tutte di solvatazione: l'elenco tiene solo quelle
+    legate alla struttura (almeno un legame H con la proteina o con un gruppo eteroatomico, oppure un metallo
+    coordinato) e conta le altre in `others`. Ruolo (`role`, con il motivo in `why`), nell'ordine dell'elenco:
+    - "metal", acqua di coordinazione: nella sfera di coordinazione di un metallo, anche di un cofattore (l'acqua del
+      sito dello zinco nelle anidrasi carboniche, quella sul ferro di un eme in forma aquomet);
+    - "bridge", acqua a ponte: legami H sia con la proteina sia con un ligando o cofattore (non con un additivo);
+    - "structural": legami H con almeno `STRUCTURAL_PARTNERS` residui della proteina (in un cristallo ad alta
+      risoluzione sono decine: indicate, non suggerite).
+    Suggerite (`suggested`) le acque di coordinazione e a ponte, quelle di un sito. Nessuna è scelta per default
+    (`default` False): un'acqua catalitica si sceglie sapendo perché. Ogni voce ha i campi dei gruppi di `candidates`
+    (class "water") più partners, metals, groups (testi), bfactor, occupancy, role, suggested, why."""
+    wanted = set(chains) if chains else None
+    neighbors = _Neighbors(model)
+    waters, others = [], 0
+    for chain in model:
+        if wanted is not None and chain.id not in wanted:
+            continue
+        for res in chain:
+            if not is_water(res):
+                continue
+            near = water_partners(res, neighbors)
+            if not (near["protein"] or near["groups"] or near["metals"]):
+                others += 1
+                continue
+            metals = [f"{a.get_parent().get_resname().strip()} {a.get_parent().get_parent().id}"
+                      f"{_resid(a.get_parent())} ({ELEMENT_LABEL.get(element_of(a), element_of(a).capitalize())}, "
+                      f"{_num(d)} Å)" for a, d in near["metals"]]
+            groups = [_partner_text(a, d) for a, d in near["groups"]]
+            # ponte solo con ligandi e cofattori veri: un'acqua fra la proteina e un glicole o un solfato del cristallo
+            # non è un'acqua del sito
+            bridged = list(dict.fromkeys(a.get_parent().get_resname().strip() for a, _d in near["groups"]
+                                         if classify(a.get_parent())["class"] in ("ligand", "cofactor")))
+            residues = {(a.get_parent().get_parent().id, _resid(a.get_parent())) for a, _d in near["protein"]}
+            role, why = "", ""
+            if near["metals"]:
+                role, why = "metal", "coordina " + ", ".join(m.split(" (")[0] for m in metals)
+            elif near["protein"] and bridged:
+                role, why = "bridge", f"a ponte fra la proteina e {', '.join(bridged)}"
+            elif len(residues) >= STRUCTURAL_PARTNERS:
+                role, why = "structural", f"strutturale: legami H con {len(residues)} residui"
+            oxygen = _water_oxygen(res)
+            info = classify(res)
+            waters.append({
+                "resname": res.get_resname().strip(), "chain": chain.id, "resnum": _resid(res), "atoms": len(res),
+                "additive": False, **info, "label": CLASS_LABEL["water"],
+                "partners": [_partner_text(a, d) for a, d in near["protein"]], "groups": groups, "metals": metals,
+                "bfactor": None if oxygen is None else round(float(oxygen.get_bfactor()), 1),
+                "occupancy": None if oxygen is None else round(float(oxygen.get_occupancy()), 2),
+                "role": role, "suggested": role in ("metal", "bridge"), "why": why,
+            })
+    order = {"metal": 0, "bridge": 1, "structural": 2, "": 3}
+    waters.sort(key=lambda w: order[w["role"]])  # stabile: a parità di ruolo, l'ordine del file
+    return {"waters": waters, "others": others,
+            "criteria": {"hbond": HBOND_DISTANCE, "structural": STRUCTURAL_PARTNERS}}
+
+
 def select(model, chains: list[str], requested: Optional[list]) -> list:
-    """Residui eteroatomici da trasferire dalle catene del template.
+    """Residui eteroatomici (e acque) da trasferire dalle catene del template.
 
     `requested` None: scelta predefinita (metalli non monovalenti, cofattori e altri ligandi; niente additivi, ioni
-    monovalenti e residui modificati). Altrimenti esattamente i gruppi (catena, numero, nome) indicati: un gruppo che
-    non c'è o un residuo modificato sono un errore chiaro. I residui sono sempre nell'ordine del file.
+    monovalenti, residui modificati e acque). Altrimenti esattamente i gruppi (catena, numero, nome) indicati, acque
+    comprese: un gruppo che non c'è o un residuo modificato sono un errore chiaro. I residui sono sempre nell'ordine
+    del file.
     """
     groups = {}
     for chain in model:
         if chain.id not in chains:
             continue
         for res in chain:
-            if is_hetero(res):
+            if is_hetero(res) or is_water(res):
                 groups[group_key(res)] = res
     if requested is None:
         return [res for res in groups.values() if classify(res)["default"]]
@@ -326,9 +439,12 @@ def select(model, chains: list[str], requested: Optional[list]) -> list:
         key = tuple(str(x).strip() for x in item)
         res = groups.get(key)
         if res is None:
-            available = ", ".join(group_label(*k) for k in list(groups)[:12]) or "nessuno"
-            raise AppError(f"Il gruppo {group_label(*key)} non è tra gli eteroatomi delle catene {', '.join(chains)} "
-                           f"del template (disponibili: {available}).", code="ligand_not_found")
+            # le acque possono essere centinaia: l'elenco mostra i soli gruppi eteroatomici
+            ligands_only = [k for k, r in groups.items() if not is_water(r)]
+            available = ", ".join(group_label(*k) for k in ligands_only[:12]) or "nessuno"
+            what = "le acque" if key[2].upper() in WATER_NAMES else "gli eteroatomi"
+            raise AppError(f"Il gruppo {group_label(*key)} non è tra {what} delle catene {', '.join(chains)} "
+                           f"del template (gruppi eteroatomici disponibili: {available}).", code="ligand_not_found")
         info = classify(res)
         if not info["transferable"]:
             raise AppError(f"{group_label(*key)}: {info['reason']}.", code="ligand_not_transferable")
@@ -504,6 +620,9 @@ def describe_groups(model, residues: list) -> list[dict]:
     for res in residues:
         chain, resnum, resname = group_key(res)
         info = classify(res)
+        if info["class"] == "water":
+            out.append(_describe_water(res, neighbors))
+            continue
         metals = []
         links = []
         contacts: dict[tuple[str, str], dict] = {}
@@ -532,6 +651,26 @@ def describe_groups(model, residues: list) -> list[dict]:
     return out
 
 
+def _describe_water(res, neighbors: _Neighbors) -> dict:
+    """Sito di un'acqua del template: legami H (`hbonds`, atomi della proteina e di altri gruppi), metalli coordinati
+    (`coordinates`) e residui della proteina entro 4 Å. Il nome è sempre HOH, come nella copia preparata."""
+    chain, resnum, _name = group_key(res)
+    near = water_partners(res, neighbors)
+    contacts: dict[tuple[str, str], dict] = {}
+    oxygen = _water_oxygen(res)
+    for other in (neighbors.near(oxygen, CONTACT_DISTANCE) if oxygen is not None else []):
+        ores = other.get_parent()
+        if ores is not res and _is_protein(ores):
+            key = (ores.get_parent().id, _resid(ores))
+            contacts.setdefault(key, {"chain": key[0], "resnum": key[1], "resname": ores.get_resname().strip()})
+    return {"resname": WATER_NAME, "chain": chain, "resnum": resnum, "atoms": len(res), "class": "water",
+            "label": CLASS_LABEL["water"], "metals": [], "links": [],
+            "hbonds": [{**_atom_ref(a), "distance": round(d, 2)} for a, d in near["protein"] + near["groups"]],
+            "coordinates": [{**_atom_ref(a), "element": element_of(a), "distance": round(d, 2)}
+                            for a, d in near["metals"]],
+            "contacts": list(contacts.values())}
+
+
 # ---------------------------------------------------------------------------------------------- allineamento PIR
 def _segments(seq: str) -> list[int]:
     """Indici di fine dei tratti di catena (posizione di ogni '/' e lunghezza della riga)."""
@@ -540,9 +679,10 @@ def _segments(seq: str) -> list[int]:
 
 def _site(group: dict) -> set[tuple[str, str]]:
     """Residui della proteina (catena, numero) che definiscono il sito di un gruppo del template: donatori dei metalli
-    e partner dei legami covalenti, altrimenti i residui entro 4 Å."""
+    e partner dei legami covalenti (per un'acqua: i residui con cui fa legami H), altrimenti i residui entro 4 Å."""
     keys = {(d["chain"], d["resnum"]) for m in group.get("metals") or [] for d in m.get("donors") or []
             if d.get("protein")}
+    keys |= {(h["chain"], h["resnum"]) for h in group.get("hbonds") or [] if h.get("protein")}
     keys |= {(lk["partner"]["chain"], lk["partner"]["resnum"]) for lk in group.get("links") or []
              if (lk.get("partner") or {}).get("protein")}
     return keys or {(c["chain"], c["resnum"]) for c in group.get("contacts") or []}
@@ -755,6 +895,33 @@ def model_groups(entries: list[PirEntry], templates: list[dict]) -> list[list[tu
     return out
 
 
+def water_columns(entries: list[PirEntry], templates: list[dict]) -> list[int]:
+    """Colonne '.' del PIR che sono acque: quelle dei gruppi di classe "water" (`model_groups`). Un'acqua si unisce
+    solo a un'acqua (stesso nome HOH in `_match_slots`), quindi una colonna è tutta d'acqua o tutta di ligandi."""
+    target = next((e for e in entries if e.kind == "sequence"), None)
+    if target is None:
+        return []
+    dots = [i for i, c in enumerate(target.sequence) if c == "."]
+    return [col for col, members in zip(dots, model_groups(entries, templates))
+            if members and all(g.get("class") == "water" for _code, g in members)]
+
+
+def modeller_pir(entries: list[PirEntry], templates: list[dict]) -> Optional[str]:
+    """PIR per MODELLER con le acque scelte: nelle loro colonne 'w' al posto di '.' in tutte le righe (bersaglio e
+    template). MODELLER, con `env.io.water = True`, legge le acque HOH delle copie preparate come residui 'w' e le
+    copia nel modello solo se il bersaglio ha 'w' nella stessa colonna. Dentro BioLoom il PIR resta con '.' (la 'w'
+    minuscola diventerebbe W, triptofano, in `sequences.parse_pir`): questo testo si scrive solo nel file letto da
+    MODELLER. None se non ci sono acque."""
+    columns = set(water_columns(entries, templates))
+    if not columns:
+        return None
+    out = []
+    for e in entries:
+        seq = "".join("w" if i in columns and c == "." else c for i, c in enumerate(e.sequence))
+        out.append(PirEntry(e.code, e.kind, list(e.fields), seq))
+    return format_pir(out)
+
+
 # ---------------------------------------------------------------------------------------------- template → modello
 def _walk(seq: str, protein: list, hetero: list) -> dict[int, object]:
     """Colonna → residuo: le lettere consumano i residui della proteina, i '.' i gruppi eteroatomici, in ordine."""
@@ -779,7 +946,9 @@ def _walk(seq: str, protein: list, hetero: list) -> dict[int, object]:
 
 
 def _residues(model, start: Optional[tuple[str, str]] = None) -> tuple[list, list]:
-    """Residui della proteina (ATOM) e gruppi eteroatomici non d'acqua, nell'ordine del file, dal residuo `start`."""
+    """Residui della proteina (ATOM) e gruppi trasferiti (eteroatomi e acque), nell'ordine del file, dal residuo
+    `start`. Si usa sulle copie preparate dei template e sui modelli, che contengono solo i gruppi e le acque scelti:
+    ognuno ha la sua colonna '.' nel PIR."""
     protein, hetero = [], []
     started = start is None
     for chain in model:
@@ -790,7 +959,7 @@ def _residues(model, start: Optional[tuple[str, str]] = None) -> tuple[list, lis
                 continue
             if res.id[0] == " ":
                 protein.append(res)
-            elif is_hetero(res):
+            elif is_hetero(res) or is_water(res):
                 hetero.append(res)
     return protein, hetero
 
@@ -838,7 +1007,7 @@ def template_contexts(entries: list[PirEntry], templates: list[dict], template_m
             if tres.id[0] == " ":
                 key = (tres.get_parent().id, _resid(tres))
                 residue_map[key] = None if mres is None or mres.id[0] != " " else group_key(mres)
-            elif mres is not None and is_hetero(mres):
+            elif mres is not None and (is_hetero(mres) or is_water(mres)):
                 pairs.append((group_key(tres), group_key(mres)))
         by_key = {(g["chain"], g["resnum"], g["resname"]): g for g in groups}
         for tkey, mkey in pairs:
@@ -964,7 +1133,9 @@ def _compare_site(template_metal: dict, donors: list[dict], residue_map: dict, s
     model_protein = {(d["chain"], d["resnum"]) for d in donors if d.get("protein")}
     rows = []
     reasons: list[str] = []
-    waters = sum(1 for d in template_metal.get("donors") or [] if d.get("water"))
+    # acque del sito del template non trasferite: quelle scelte sono già fra i donatori del modello
+    waters = max(0, sum(1 for d in template_metal.get("donors") or [] if d.get("water"))
+                 - sum(1 for d in donors if d.get("water")))
     seen = set()
     for d in template_metal.get("donors") or []:
         key = (d["chain"], d["resnum"])
@@ -1018,13 +1189,73 @@ def _compare_site(template_metal: dict, donors: list[dict], residue_map: dict, s
     return report, reasons, status, waters
 
 
-def evaluate(model, *, contexts: Optional[dict] = None, notes: Iterable[str] = ()) -> Optional[dict]:
-    """Verifica dei gruppi eteroatomici (non acqua, non residui modificati) di una struttura; None se non ce ne sono.
+def _water_report(res, neighbors: _Neighbors, template_group: Optional[dict], residue_map: Optional[dict]) \
+        -> tuple[dict, list[str], list[str], str]:
+    """Intorno di un'acqua trasferita: (rapporto, motivazioni, note positive, esito).
+
+    - legami H nel modello (N/O della proteina o di altri gruppi entro `HBOND_DISTANCE`) e metalli coordinati;
+    - nessun legame H e nessun metallo: da controllare (l'acqua è rimasta senza il suo sito);
+    - con il template: i residui della proteina con cui l'acqua faceva legami H nel template, riportati sul modello
+      attraverso l'allineamento; meno della metà ancora legati, da controllare. Un metallo coordinato nel template e
+      non più nel modello, da controllare (per un'acqua catalitica sul metallo è il punto da guardare)."""
+    near = water_partners(res, neighbors)
+    reasons: list[str] = []
+    good: list[str] = []
+    status = STATUS_GOOD
+    hbonds = [{"label": _atom_label(a), "distance": round(d, 2), "protein": _is_protein(a.get_parent())}
+              for a, d in near["protein"] + near["groups"]]
+    metals = [{"label": f"{ELEMENT_LABEL.get(element_of(a), element_of(a).capitalize())} "
+                        f"{a.get_parent().get_parent().id}{_resid(a.get_parent())}", "distance": round(d, 2)}
+              for a, d in near["metals"]]
+    report: dict = {"hbonds": hbonds, "metals": metals, "template_partners": None, "kept_partners": None,
+                    "lost_partners": []}
+    if metals:
+        good.append("coordina " + ", ".join(f"{m['label']} ({_num(m['distance'])} Å)" for m in metals))
+    if hbonds:
+        good.append(f"{len(hbonds)} {'legame' if len(hbonds) == 1 else 'legami'} H entro {_num(HBOND_DISTANCE, 1)} Å")
+    elif not metals:
+        reasons.append(f"Nessun legame H entro {_num(HBOND_DISTANCE, 1)} Å e nessun metallo coordinato: l'acqua non "
+                       "ha più il suo sito nel modello.")
+        status = STATUS_CHECK
+    if template_group is None:
+        return report, reasons, good, status
+    mapping = residue_map or {}
+    partners = dict.fromkeys((h["chain"], h["resnum"]) for h in template_group.get("hbonds") or [] if h.get("protein"))
+    mapped = {key: mapping.get(key) for key in partners}
+    present = {(a.get_parent().get_parent().id, _resid(a.get_parent())) for a, _d in near["protein"]}
+    kept = [key for key, m in mapped.items() if m and tuple(m[:2]) in present]
+    lost = [f"{m[2].capitalize()} {m[0]}{m[1]}" if m else f"{key[0]}{key[1]} del template (non allineato)"
+            for key, m in mapped.items() if not (m and tuple(m[:2]) in present)]
+    report.update({"template_partners": len(partners), "kept_partners": len(kept), "lost_partners": lost})
+    if partners:
+        text = (f"legami H con {len(kept)} dei {len(partners)} residui con cui l'acqua era legata nel template")
+        if len(kept) * 2 < len(partners):
+            reasons.append(f"Sito dell'acqua poco conservato: {text}" + (f" (persi: {', '.join(lost)})" if lost else "")
+                           + ".")
+            status = _worst(status, STATUS_CHECK)
+        else:
+            good.append(text)
+    template_metals = template_group.get("coordinates") or []
+    if template_metals and not metals:
+        names = ", ".join(f"{ELEMENT_LABEL.get(m['element'], m['element'].capitalize())} {m['chain']}{m['resnum']}"
+                          for m in template_metals)
+        reasons.append(f"Nel template l'acqua coordinava {names}; nel modello non coordina nessun metallo.")
+        status = _worst(status, STATUS_CHECK)
+    return report, reasons, good, status
+
+
+def evaluate(model, *, contexts: Optional[dict] = None, notes: Iterable[str] = (),
+             waters: bool = False) -> Optional[dict]:
+    """Verifica dei gruppi eteroatomici (non residui modificati) di una struttura; None se non ce ne sono.
 
     `contexts` (modellazione, da `template_contexts`): per gruppo del modello, sito del template e corrispondenza dei
-    residui; senza, la verifica riguarda solo la struttura (analisi di qualità).
+    residui; senza, la verifica riguarda solo la struttura (analisi di qualità). `waters`: verifica anche le acque
+    (modellazione: il modello contiene solo quelle trasferite; una struttura cristallografica ne ha centinaia, che
+    l'analisi di qualità non verifica). Per un'acqua: scontri, legami H nel modello e, con il template, i legami H
+    con i residui allineati a quelli del sito del template e i metalli che coordinava (`_water_report`).
     """
-    groups = [r for r in model.get_residues() if is_hetero(r) and not is_modified_residue(r)]
+    groups = [r for r in model.get_residues()
+              if (is_hetero(r) and not is_modified_residue(r)) or (waters and is_water(r))]
     if not groups:
         return None
     contexts = contexts or {}
@@ -1066,7 +1297,7 @@ def evaluate(model, *, contexts: Optional[dict] = None, notes: Iterable[str] = (
                 if distance >= CLASH_DISTANCE or (id(atom), id(other)) in coordination:
                     continue
                 pair = {"atom": atom.get_id().strip(), "partner": _atom_label(other), "distance": round(distance, 2)}
-                if _covalent_range(atom, other, distance):
+                if info["class"] != "water" and _covalent_range(atom, other, distance):
                     # distanza di legame: senza template è un possibile legame covalente (glicani, eme c...); nel
                     # modello è un legame solo se il template ha lo stesso legame con il residuo allineato
                     if ctx is None:
@@ -1100,6 +1331,13 @@ def evaluate(model, *, contexts: Optional[dict] = None, notes: Iterable[str] = (
             reasons.extend(metal_reasons)
             good.extend(metal_good)
             status = _worst(status, metal_status)
+        water = None
+        if info["class"] == "water":
+            water, water_reasons, water_good, water_status = _water_report(
+                res, neighbors, template_group if ctx else None, residue_map)
+            reasons.extend(water_reasons)
+            good.extend(water_good)
+            status = _worst(status, water_status)
         protein_contacts = sorted(contacts.values(), key=lambda c: c["distance"])
         if not protein_contacts:
             reasons.append(f"Nessun residuo della proteina entro {_num(CONTACT_DISTANCE, 0)} Å: il gruppo non "
@@ -1118,6 +1356,8 @@ def evaluate(model, *, contexts: Optional[dict] = None, notes: Iterable[str] = (
                  "contacts": protein_contacts, "clashes": clashes, "links": links, "metals": metals}
         if info.get("description"):
             entry["description"] = info["description"]
+        if water is not None:
+            entry["water"] = water
         if ctx is not None:
             entry["template"] = {"code": ctx["template"], "group": group_label(template_group["chain"],
                                                                                template_group["resnum"],

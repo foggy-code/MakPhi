@@ -737,6 +737,9 @@ class ReproducibilityService:
                     b.add_file(f"inputs/templates/{rel}", path, "template_prepared", job_path=rel)
             if (folder / "alignment.ali").is_file():
                 b.add_file("inputs/alignment.ali", folder / "alignment.ali", "alignment", job_path="alignment.ali")
+            water_aln = folder / modeller.WATER_ALIGNMENT_FILE
+            if water_aln.is_file():  # acque trasferite: il PIR letto da MODELLER, con le colonne 'w'
+                b.add_file(f"inputs/{water_aln.name}", water_aln, "alignment", job_path=water_aln.name)
             target = params.get("target") if isinstance(params.get("target"), dict) else {}
             if target.get("sequence"):
                 records.append((str(target.get("name") or "TARGET"), str(target["sequence"])))

@@ -22,7 +22,8 @@ from ..engines import remote
 
 EXTENSIONS = {".pdb": "pdb", ".ent": "pdb", ".cif": "cif", ".mmcif": "cif"}
 # 3: ligandi con la classificazione di domain/ligands (le analisi in cache delle versioni precedenti si ricalcolano)
-ANALYSIS_VERSION = 3
+# 4: acque candidate al trasferimento (domain/ligands.water_candidates)
+ANALYSIS_VERSION = 4
 SOURCE_ALPHAFOLD = "alphafold"
 PREDICTED_NOTE = "modello predetto, non struttura sperimentale"
 PREDICTED_METHOD = "Modello predetto (AlphaFold)"
@@ -327,7 +328,7 @@ class TemplateLibrary:
 
     def analyze(self, template_id: str) -> dict:
         """Catene, sequenze, residui mancanti, ligandi (classificati: metallo, cofattore, additivo, residuo
-        modificato, altro ligando) e struttura secondaria (in cache per file)."""
+        modificato, altro ligando), acque legate alla struttura e struttura secondaria (in cache per file)."""
         tid = normalize_id(template_id)
         path = self.path(tid)
         cache_path = self._analysis_path(tid)
@@ -353,6 +354,8 @@ class TemplateLibrary:
             "id": tid, "format": path.suffix.lstrip(".").lower(), "header": header, "chains": chains,
             # gruppi eteroatomici candidati al trasferimento nella modellazione, con classe e scelta predefinita
             "ligands": ligands.candidates(model), "stats": structure.structure_stats(model),
+            # acque legate alla struttura (acque catalitiche e strutturali), da scegliere una per una
+            "waters": ligands.water_candidates(model),
             "models": len(st),
         }
         atomic_write_json(cache_path, {"mtime": mtime, "version": ANALYSIS_VERSION, "data": data})

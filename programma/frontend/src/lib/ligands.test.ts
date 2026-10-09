@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { HeteroGroup, LigandGroupCheck, MetalSite, TemplateAnalysis } from "../api/types";
+import type { HeteroGroup, LigandGroupCheck, MetalSite, TemplateAnalysis, WaterSite } from "../api/types";
 import {
-  candidateGroups, coordinationLines, coordinationText, defaultTransfer, DONOR_COLOR, donorText, groupClass, isDefault, ligandFocus, ligandKey, ligandOptions,
-  lookupState, sameSelection, selectionSummary, syncSelection,
+  candidateGroups, coordinationLines, coordinationText, defaultTransfer, DONOR_COLOR, donorText, groupClass, isDefault, isWater, ligandFocus, ligandKey, ligandOptions,
+  lookupState, sameSelection, selectionSummary, syncSelection, waterCandidates, waterText,
 } from "./ligands";
 
 function group(resname: string, chain: string, resnum: string, extra: Partial<HeteroGroup> = {}): HeteroGroup {
@@ -140,5 +140,49 @@ describe("verifica nel 3D e nelle tabelle", () => {
 
   it("residui evidenziati: il gruppo, i donatori della proteina e i residui in scontro, senza acque né doppioni", () => {
     expect(ligandFocus(zincCheck())).toEqual([{ chain: "A", resi: 101 }, { chain: "A", resi: 68 }, { chain: "A", resi: 43 }]);
+  });
+});
+
+// acque come le restituisce il backend (test_waters.py e 3KS3: l'acqua dello zinco suggerita, una strutturale no)
+function water(resnum: string, extra: Partial<WaterSite> = {}): WaterSite {
+  return {
+    resname: "HOH", chain: "A", resnum, atoms: 1, additive: false, class: "water", label: "acqua", default: false, transferable: true,
+    reason: "acqua: si trasferisce solo se scelta una per una", partners: [], groups: [], metals: [], bfactor: 10, occupancy: 1,
+    role: "", suggested: false, why: "", ...extra,
+  };
+}
+
+const WATERS: WaterSite[] = [
+  water("402", { role: "metal", suggested: true, why: "coordina ZN A262", metals: ["ZN A262 (Zn, 1,90 Å)"], partners: ["Thr A199 OG1 2,71 Å"], bfactor: 6.1 }),
+  water("280", { role: "structural", why: "strutturale: legami H con 3 residui", partners: ["Asn A244 ND2 2,52 Å", "His A96 ND1 2,81 Å", "Phe A95 O 2,89 Å", "Leu A60 O 3,01 Å", "Ser A65 OG 3,2 Å"] }),
+  water("501", { chain: "B" }),
+];
+
+describe("acque", () => {
+  const withWaters = { id: "3KS3", ligands: LIGANDS.slice(0, 1), waters: { waters: WATERS, others: 126, criteria: { hbond: 3.5, structural: 3 } } } as unknown as TemplateAnalysis;
+
+  it("candidate delle catene scelte, mai scelte per default; nell'opzione con il loro nome", () => {
+    const c = [...candidateGroups({ id: "3KS3", chains: ["A"] }, withWaters), ...waterCandidates({ id: "3KS3", chains: ["A"] }, withWaters)];
+    expect(c.map((x) => x.key)).toEqual(["3KS3|A|101|ZN", "3KS3|A|402|HOH", "3KS3|A|280|HOH"]);
+    expect(c.filter(isWater).length).toBe(2);
+    const sel = syncSelection({}, c);
+    expect(sel).toEqual({ "3KS3|A|101|ZN": true, "3KS3|A|402|HOH": false, "3KS3|A|280|HOH": false });
+    expect(selectionSummary(c, sel)).toBe("1 di 1 gruppo scelto.");
+    const chosen = { ...sel, "3KS3|A|402|HOH": true };
+    expect(ligandOptions(c, chosen)).toEqual([
+      { template: "3KS3", chain: "A", resnum: "101", resname: "ZN" },
+      { template: "3KS3", chain: "A", resnum: "402", resname: "HOH" },
+    ]);
+    expect(selectionSummary(c, chosen)).toBe("1 di 1 gruppo scelto; 1 acqua scelta.");
+    expect(selectionSummary(c.filter(isWater), { "3KS3|A|402|HOH": true, "3KS3|A|280|HOH": true }))
+      .toBe("Nessun ligando, cofattore o metallo nelle catene scelte; 2 acque scelte.");
+    // analisi in cache precedenti (senza acque) e la casella della Pipeline: nessuna acqua
+    expect(waterCandidates({ id: "3KS3", chains: ["A"] }, analysis())).toEqual([]);
+    expect(defaultTransfer({ id: "3KS3", chains: ["A"] }, withWaters).names).toEqual(["ZN"]);
+  });
+
+  it("intorno di un'acqua in una riga", () => {
+    expect(waterText(WATERS[0])).toBe("coordina ZN A262 (Zn, 1,90 Å) · Thr A199 OG1 2,71 Å · B 6,1");
+    expect(waterText(WATERS[1])).toBe("Asn A244 ND2 2,52 Å, His A96 ND1 2,81 Å, Phe A95 O 2,89 Å, Leu A60 O 3,01 Å e altri 1 · B 10,0");
   });
 });

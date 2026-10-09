@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { Example, JobSummary, SystemInfo, SystemStats } from "../api/types";
+import type { Example, JobSummary, Sequence, SystemInfo, SystemStats } from "../api/types";
 import { Icon } from "../components/Icon";
 import { LabelEditor } from "../components/Labels";
 import { Badge, Card, Disclosure, Empty, Progress, Stat, StatusBadge } from "../components/ui";
@@ -70,14 +70,22 @@ export default function Dashboard() {
     if (!projectId) return;
     setBusy(ex.name);
     try {
+      let added: Sequence | null = null;
       if (ex.sequence) {
-        await api.addSequence(projectId, ex.name, ex.sequence, "esempio");
+        added = await api.addSequence(projectId, ex.name, ex.sequence, "esempio");
       } else if (ex.accession) {
         const entry = await api.uniprot(ex.accession);
-        await api.addSequence(projectId, entry.entry_name || ex.name, entry.sequence, "uniprot", { accession: entry.accession, reviewed: entry.reviewed, protein: entry.protein_name });
+        added = await api.addSequence(projectId, entry.entry_name || ex.name, entry.sequence, "uniprot", { accession: entry.accession, reviewed: entry.reviewed, protein: entry.protein_name });
+      }
+      reloadProjects();
+      if (ex.template && added) {
+        // esempio con template: scaricato nella libreria e preselezionato, con il trasferimento dei ligandi attivo
+        await api.fetchTemplate(ex.template.id);
+        toast.push(`${ex.title} aggiunta al progetto, template ${ex.template.id} nella libreria`);
+        navigate(`/modeling?seq=${encodeURIComponent(added.id)}&t=${encodeURIComponent(`${ex.template.id}:${ex.template.chains.join("")}`)}&lig=1`);
+        return;
       }
       toast.push(`${ex.title} aggiunta al progetto`);
-      reloadProjects();
       navigate("/sequences");
     } catch (e) {
       toast.error(e);
@@ -183,8 +191,9 @@ export default function Dashboard() {
             {examples?.map((ex) => (
               <div key={ex.name} className="row card flat" style={{ padding: "10px 12px" }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <b>{ex.title}</b> {ex.accession && <Badge>{ex.accession}</Badge>}
+                  <b>{ex.title}</b> {ex.accession && <Badge>{ex.accession}</Badge>} {ex.template && <Badge tone="info" title={ex.template.note}>template {ex.template.id}</Badge>}
                   <div className="small text-2">{ex.note}</div>
+                  {ex.template && <div className="small text-2">Template: {ex.template.note}.</div>}
                 </div>
                 <button type="button" className="btn btn-sm" disabled={busy !== null} onClick={() => addExample(ex)} aria-label={`Usa l'esempio ${ex.title}`}>
                   {busy === ex.name ? "…" : "Usa"}

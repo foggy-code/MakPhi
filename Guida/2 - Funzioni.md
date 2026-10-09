@@ -81,13 +81,25 @@ locale rispetto al bersaglio e segnala la zona crepuscolare (sotto il 25%) e i r
 - **Più template:** MODELLER allinea i template fra loro; se così un template finisce spostato rispetto al bersaglio,
   BioLoom usa l'allineamento di ciascun template sul bersaglio e lo scrive nel log. Quando non può (template a più
   catene o con ligandi) lo segnala fra gli avvisi del risultato e del report: l'allineamento si corregge nell'Editor PIR.
-- **Ligandi, cofattori e metalli:** **Trasferisci ligandi, cofattori e metalli dai template** elenca i gruppi delle catene
-  scelte con la classe (metallo, cofattore noto come eme, FAD, NAD, ATP, SAM, PLP, CoA…, additivo, altro ligando).
+- **Ligandi, cofattori e metalli:** **Trasferisci ligandi, cofattori, metalli e acque dai template** elenca i gruppi delle
+  catene scelte con la classe (metallo, cofattore noto come eme, FAD, NAD, ATP, SAM, PLP, CoA…, additivo, altro ligando).
   Additivi di cristallizzazione (SO₄, glicerolo, PEG, tamponi…) e ioni Na⁺/K⁺ del tampone sono deselezionati per default,
-  con il motivo; le acque non si trasferiscono. Con più template lo stesso gruppo nello stesso sito (l'eme di due globine)
-  diventa un solo gruppo del modello, vincolato da tutti. Dopo la modellazione BioLoom verifica ogni gruppo (residui entro
-  4 Å, scontri sotto 2,2 Å, coordinazione dei metalli con le distanze attese e la geometria, sito del template conservato)
-  con l'esito **buono**, **da controllare** o **problematico**; il voto A–D non cambia.
+  con il motivo. Con più template lo stesso gruppo nello stesso sito (l'eme di due globine) diventa un solo gruppo del
+  modello, vincolato da tutti. Dopo la modellazione BioLoom verifica ogni gruppo (residui entro 4 Å, scontri sotto 2,2 Å,
+  coordinazione dei metalli con le distanze attese e la geometria, sito del template conservato) con l'esito **buono**,
+  **da controllare** o **problematico**; il voto A–D non cambia.
+- **Acque catalitiche e strutturali:** sotto i ligandi di ogni template, **Acque** elenca le acque legate alla struttura
+  (legami idrogeno entro 3,5 Å con la proteina o con un ligando, oppure un metallo coordinato); quelle di solvatazione
+  sono solo contate. Nessuna acqua è scelta per default. Sono **suggerite** quelle che coordinano un metallo (l'acqua
+  dello zinco di un'anidrasi carbonica, quella sul ferro di un eme) o fanno da ponte fra la proteina e un ligando o
+  cofattore; **Scegli le suggerite** le spunta tutte, le altre (anche le **strutturali**, legate a 3 o più residui) si
+  aprono sotto. MODELLER copia ogni acqua scelta nella posizione del template rispetto ai residui vicini, senza
+  ottimizzare la rete di legami idrogeno; la verifica dice se nel modello l'acqua ha ancora i suoi legami H e il suo
+  metallo. Nell'allineamento del risultato le acque sono colonne «.» come i ligandi; il file letto da MODELLER
+  (`alignment_modeller.ali`, fra i file del job) le ha come «w». Il dettaglio di un template in Libreria mostra le acque
+  suggerite. Per provare: in Panoramica **Anidrasi carbonica II bovina** (template 3KS3, zinco e acqua catalitica) o
+  **Mioglobina umana** (template 1A6K, eme con l'acqua sul ferro) aggiungono la sequenza, scaricano il template e aprono
+  la Modellazione con il riquadro dei ligandi attivo.
 - **Complessi e omo-oligomeri** (modalità **Complesso**, anche dal pulsante **Complesso** della Libreria o da **Modella il
   complesso** di un assemblaggio): per ogni catena del template una sequenza del bersaglio, dal progetto, incollata o
   **stessa della catena …**. Le catene del modello hanno i nomi del template, con i residui numerati da 1; con catene
