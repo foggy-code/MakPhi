@@ -6,13 +6,14 @@
 // nel PDB sovrapposto la catena A è la struttura A e la catena B la struttura B, qualunque fosse la catena originale.
 
 import type { AlignResult, ModelEntry, PreparedTemplate, StructuralPair, StructureSource } from "../api/types";
-import { fmtScaleValue, NO_VALUE_COLOR, type ContinuousScale } from "./colorscale";
+import { fmtScaleValue, NO_VALUE_COLOR, REFERENCE_COLOR, type ContinuousScale } from "./colorscale";
 import { resiNumber, type ResidueColoring, type ResidueRef, type ResidueValue } from "./residueColoring";
 
 /** Distanza oltre la quale una coppia non è più "vicina": la soglia dei ":" di TM-align e dell'RMSD entro 5 Å. */
 export const DISTANCE_MAX = 5;
 
-/** Blu (coincidenti) → giallo → rosso (≥ 5 Å, saturato): nessun colore chiaro, che si confonderebbe con A. */
+/** Blu (coincidenti) → giallo → rosso (≥ 5 Å, saturato): nessun colore chiaro, che si confonderebbe con A (nel tema
+ *  chiaro A è un'ardesia scura, più scura e meno satura degli estremi). */
 export const DISTANCE_SCALE: ContinuousScale = {
   kind: "continuous",
   stops: [
@@ -37,8 +38,9 @@ export const LDDT_SCALE: ContinuousScale = {
   digits: 2,
 };
 
-/** Struttura A (riferimento) nel viewer. */
-export const REFERENCE_COLOR = "#cbd5e1";
+/** Struttura A (riferimento) nel viewer: grigio chiaro, ardesia scura nel tema chiaro (`REFERENCE_COLOR_LIGHT` di
+ *  colorscale.ts, dove sta con gli altri colori per tema). */
+export { REFERENCE_COLOR };
 /** Catene del PDB sovrapposto. */
 export const CHAIN_A = "A";
 export const CHAIN_B = "B";
@@ -137,7 +139,8 @@ export function compareTargets(jobId: string, model: string, models: ModelEntry[
 
 // ---------------------------------------------------------------------------------- colorazione del viewer
 /**
- * B colorata per distanza (o lDDT) della coppia, A in grigio chiaro, residui di B senza coppia in grigio scuro.
+ * B colorata per distanza (o lDDT) della coppia, A in grigio chiaro (ardesia scura nel tema chiaro), residui di B senza
+ * coppia in grigio medio.
  * I residui di A delle coppie hanno lo stesso valore (per il passaggio del mouse) ma il colore del riferimento.
  */
 export function comparisonColoring(pairs: StructuralPair[], by: CompareColorBy = "distance"): ResidueColoring {

@@ -177,7 +177,8 @@ def local_blast(client, monkeypatch, tmp_path):
 
     def fake_run(self, cmd, **kwargs):
         runs.append(cmd)
-        return ProcessResult(0, BLAST_XML)
+        Path(cmd[cmd.index("-out") + 1]).write_text(BLAST_XML, encoding="utf-8")  # blastp scrive l'XML con -out
+        return ProcessResult(0, "")
 
     monkeypatch.setattr(JobContext, "run", fake_run)
     meta = {"calls": 0, "fail": False}
@@ -692,13 +693,13 @@ def test_cache_errors_never_fail_the_computation(tmp_path, monkeypatch):
 
 def test_file_stamp_and_content_hash(tmp_path):
     f = tmp_path / "a.pdb"
-    f.write_text("ATOM\n")
+    f.write_bytes(b"ATOM\n")  # byte esatti: write_text su Windows scriverebbe \r\n (6 byte)
     stamp = cache.file_stamp(f)
-    assert stamp["size"] == 5 and isinstance(stamp["mtime"], int)
+    assert stamp["size"] == 5 and isinstance(stamp["mtime"], int) and stamp["mtime"] == int(f.stat().st_mtime)
     assert cache.file_stamp(tmp_path / "manca") == {"path": str(tmp_path / "manca"), "missing": True}
     assert cache.file_stamp(None) is None
     g = tmp_path / "b.pdb"
-    g.write_text("ATOM\n")
+    g.write_bytes(b"ATOM\n")
     assert cache.content_hash(f) == cache.content_hash(g)
-    g.write_text("ATOM \n")
+    g.write_bytes(b"ATOM \n")
     assert cache.content_hash(f) != cache.content_hash(g)

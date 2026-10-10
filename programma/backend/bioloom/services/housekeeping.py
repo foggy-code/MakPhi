@@ -5,6 +5,8 @@ Cosa viene eliminato (all'avvio, una volta al giorno e su richiesta):
   - voci della cache più vecchie di CACHE_MAX_AGE_DAYS (oltre il TTL più lungo): risposte dei servizi remoti
     e risultati di ricerche e allineamenti (`cache/compute`, core/cache.py), più i file temporanei di
     scritture atomiche interrotte (es. chiavetta scollegata durante la scrittura);
+  - voci della cache dei calcoli usate meno di recente, se la cache supera il tetto delle Impostazioni
+    (`compute_cache_max_mb`, core/cache.prune), contate con le altre voci della cache;
   - file temporanei e cartelle di lavoro nello scratch che non appartengono a job attivi;
   - resti di job già eliminati dall'utente (cartelle `jobs/.deleting-<id>`, file che erano in uso: core/jobs.py).
 I risultati dei job, la libreria template, i database e le licenze non vengono mai toccati; si eliminano solo i resti
@@ -21,6 +23,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..config import Paths
+from ..core import cache as compute_cache
 from ..core.db import BACKUP_DIR
 from ..core.jobs import ACTIVE, JobManager
 from ..core.storage import dir_size, remove_tree
@@ -76,6 +79,11 @@ class Housekeeping:
                     elif path.name.startswith(".") and path.suffix == ".tmp" \
                             and _older_than(path, SCRATCH_TMP_MAX_AGE_HOURS * 3600, now):
                         drop(path, "cache")  # scrittura atomica interrotta
+            if self.paths.compute_cache.exists():  # tetto della cache dei calcoli, dopo la pulizia per età
+                removed, freed = compute_cache.prune(compute_cache.max_bytes(self.settings_provider()),
+                                                     self.paths.compute_cache)
+                report["cache"] += removed
+                report["freed_bytes"] += freed
             # tutti i job attivi (nessun limite sul numero), più quelli con l'esecuzione o una ripresa ancora in
             # corso (`busy`: anche partiti dopo questa lettura, o già terminati ma con i file ancora da spostare)
             marks = ",".join("?" * len(ACTIVE))

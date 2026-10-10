@@ -10,6 +10,7 @@ import re
 import time
 from pathlib import Path
 from typing import Callable, Optional
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -955,6 +956,24 @@ def normalize_qmean(data: dict) -> dict:
     }
 
 
+def https_url(value: object, max_length: int = 500) -> Optional[str]:
+    """`value` se è un indirizzo https:// ben formato (host presente, niente spazi né caratteri di controllo, niente
+    credenziali), altrimenti None. Per gli indirizzi ricevuti da un servizio remoto che l'interfaccia mostra come link
+    (pagina dei risultati di SWISS-MODEL): mai javascript:, data: o http in chiaro."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > max_length or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in text):
+        return None
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return None
+    if parts.scheme.lower() != "https" or not parts.hostname or "@" in parts.netloc:
+        return None
+    return text
+
+
 def swissmodel_qmean(pdb_text: str, email: str, check: Optional[Callable[[], None]] = None,
                      log: Callable[[str], None] = print, sleep: Callable[[float], None] = time.sleep) -> dict:
     """Invia il modello al server QMEAN di SWISS-MODEL e attende i punteggi (richiede un'email reale)."""
@@ -974,7 +993,7 @@ def swissmodel_qmean(pdb_text: str, email: str, check: Optional[Callable[[], Non
         data = _request("GET", url, "SWISS-MODEL QMEAN").json()
         status = data.get("status")
         if status == "COMPLETED":
-            return {**normalize_qmean(data), "url": data.get("results_page"), "source": "swissmodel"}
+            return {**normalize_qmean(data), "url": https_url(data.get("results_page")), "source": "swissmodel"}
         if status == "FAILED":
             raise RemoteServiceError("Il server QMEAN ha segnalato un errore di analisi.")
     raise RemoteServiceError("Il server QMEAN non ha completato l'analisi entro 10 minuti.")

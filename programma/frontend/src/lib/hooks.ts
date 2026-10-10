@@ -68,6 +68,29 @@ export function usePageVisible(): boolean {
   return visible;
 }
 
+/**
+ * Come useInterval, ma fermo mentre la scheda è nascosta (niente richieste per una pagina che nessuno guarda): al ritorno
+ * `fn` parte subito, poi riprende ogni `ms`. `ms` null lo ferma anche con la scheda visibile.
+ */
+export function useVisibleInterval(fn: () => void, ms: number | null) {
+  const visible = usePageVisible();
+  const saved = useRef(fn);
+  saved.current = fn;
+  const missed = useRef(false); // la scheda è stata nascosta con il polling attivo: al ritorno si recupera subito
+  useEffect(() => {
+    if (ms === null) return;
+    if (!visible) {
+      missed.current = true;
+      return;
+    }
+    if (missed.current) {
+      missed.current = false;
+      saved.current();
+    }
+  }, [visible, ms]);
+  useInterval(fn, visible ? ms : null);
+}
+
 /** `fn` al massimo una volta ogni `ms` (l'ultima richiesta non si perde): ricariche guidate dagli eventi. */
 export function useThrottled(fn: () => void, ms: number): () => void {
   const saved = useRef(fn);

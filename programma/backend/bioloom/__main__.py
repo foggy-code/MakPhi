@@ -54,6 +54,8 @@ def main() -> None:
 
     threading.Thread(target=announce, daemon=True).start()
     server.run()
+    if not server.started:  # avvio non riuscito (es. chiave d'accesso troppo corta): esce con errore come uvicorn.run
+        sys.exit(3)
 
 
 if __name__ == "__main__":

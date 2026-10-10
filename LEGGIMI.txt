@@ -1,15 +1,21 @@
 BioLoom v4 - copia portatile
 =============================
 
-Serve solo Docker (Docker Desktop su Windows e macOS, Docker Engine su Linux).
+Serve solo Docker (Docker Desktop su Windows e macOS, Docker Engine su Linux). Docker Desktop
+e' gratuito per uso personale, didattico e nelle aziende con meno di 250 dipendenti e meno di
+10 milioni di dollari di fatturato annuo; negli enti pubblici, anche piccoli, e nelle altre
+organizzazioni, se l'uso non e' didattico, verifica la licenza (https://www.docker.com/pricing/).
+Alternative con i comandi docker e docker compose, non provate con BioLoom: Rancher Desktop,
+Podman Desktop (con la compatibilita' Docker), Colima su macOS.
 
 AVVIO
   Windows   doppio clic su "Avvia BioLoom.bat"
   macOS     doppio clic su "Avvia BioLoom.command"
   Linux     ./avvia-bioloom.sh
 
-Si apre il browser su http://127.0.0.1:8765. Per chiudere: "Arresta BioLoom" oppure il tasto S
-nella finestra dell'avviatore.
+Si apre il browser su http://127.0.0.1:8765 (se la porta e' occupata, un'altra fino alla 8800;
+per sceglierla tu: Guida, "Primo avvio", Porta occupata). Per chiudere: "Arresta BioLoom" oppure
+il tasto S nella finestra dell'avviatore.
 
 Su un computer gira un BioLoom alla volta: se e' gia' acceso quello di un'altra cartella (per
 esempio la copia installata), l'avviatore chiede se arrestarlo prima di partire.

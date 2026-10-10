@@ -18,7 +18,8 @@ riceve BioLoom costruisce le immagini e ottiene le licenze per conto proprio.
 ## MODELLER, ProSA II e PROCHECK
 
 - **MODELLER:** si inserisce da Impostazioni → Licenze e viene provata con MODELLER prima di essere salvata. Su un server
-  si può indicare anche `MODELLER_KEY` in `server.env`.
+  si può indicare anche `MODELLER_KEY` in `server.env`. Compare sempre mascherata (`MOD••••••A9`), anche nella verifica
+  dell'installazione e nei log dei job.
 - **ProSA II:** si carica il file `LicenseDB` da Impostazioni → Licenze; l'avviatore assegna al container il MAC indicato
   nella licenza, su un computer alla volta ([sotto](#prosa-un-computer-alla-volta)).
 - **PROCHECK:** licenza accademica, senza chiave.

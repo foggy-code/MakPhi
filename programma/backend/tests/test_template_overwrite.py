@@ -2,7 +2,6 @@
 file rovinati che non toccano il template esistente; i download (RCSB, AlphaFold DB) non sostituiscono mai."""
 
 import threading
-import time
 
 import pytest
 from Bio.PDB import MMCIFIO, PDBParser
@@ -11,7 +10,7 @@ from bioloom.core.errors import RemoteServiceError
 from bioloom.engines import remote
 from bioloom.services.templates import STAGING_PREFIX, TemplateLibrary
 
-from .conftest import DATA, ubq_variant
+from .conftest import DATA, WatchedLock, ubq_variant
 
 BROKEN_PDB = b"questo non e' un file PDB\n"
 BROKEN_CIF = b"data_rotto\nloop_\n_atom_site.id\n_atom_site.Cartn_x\n1\n"
@@ -173,12 +172,13 @@ def test_concurrent_overwrites_with_different_formats_register_in_order(tmp_path
     library.save_upload("1UBQ.pdb", (DATA / "1UBQ.pdb").read_bytes())
     cif = _ubq_cif(tmp_path)
     installed, gate, calls = _pause_after_install(library, monkeypatch, "pdb")
+    write_lock = library._writing["1UBQ"] = WatchedLock()  # lock per id della scrittura: chi lo aspetta si vede
     results: dict = {}
     first = _run(results, "pdb", library.save_upload, "1UBQ.pdb", (DATA / "ubq_zn.pdb").read_bytes(), overwrite=True)
     try:
         assert installed.wait(5)
         second = _run(results, "cif", library.save_upload, "1UBQ.cif", cif, overwrite=True)
-        time.sleep(0.3)
+        assert write_lock.waiting.wait(5)  # il .cif ha trovato il lock occupato dal .pdb e aspetta
         assert calls == ["pdb"] and second.is_alive()  # il .cif non entra finché il .pdb non è registrato
     finally:
         gate.set()
@@ -199,12 +199,13 @@ def test_upload_overwrite_waits_for_the_download_being_registered(tmp_path, monk
     monkeypatch.setattr(remote, "rcsb_download", lambda pid, fmt: (DATA / "1UBQ.pdb").read_text())
     cif = _ubq_cif(tmp_path)
     installed, gate, calls = _pause_after_install(library, monkeypatch, "pdb")
+    write_lock = library._writing["1UBQ"] = WatchedLock()
     results: dict = {}
     download = _run(results, "rcsb", library.fetch, "1UBQ")
     try:
         assert installed.wait(5)
         upload = _run(results, "upload", library.save_upload, "1UBQ.cif", cif, overwrite=True)
-        time.sleep(0.3)
+        assert write_lock.waiting.wait(5)  # il caricamento aspetta il lock tenuto dal download
         assert calls == ["pdb"] and upload.is_alive()
     finally:
         gate.set()

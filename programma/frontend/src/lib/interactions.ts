@@ -9,7 +9,7 @@
 import type {
   AnalysisRequest, AnalysisResult, ConservationResult, InteractionEnd, InterfacePair, InterfacesResult, ParsedFile, PlausibilityLevel, ResidueRow,
 } from "../api/types";
-import { fmtScaleValue, type BinnedScale, type ContinuousScale } from "./colorscale";
+import { CONTEXT_COLOR, fmtScaleValue, type BinnedScale, type ContinuousScale } from "./colorscale";
 import { plural } from "./format";
 import { resiNumber, type ResidueColoring, type ResidueRef } from "./residueColoring";
 
@@ -202,7 +202,7 @@ export const INTERFACE_SCALE: BinnedScale = {
     { gt: 40, color: "#b91c1c", label: "ΔSASA > 40 Å²" },
     { gt: 10, color: "#f97316", label: "10–40 Å²" },
     { gt: 1, color: "#facc15", label: "1–10 Å²" },
-    { color: "#cbd5e1", label: "≤ 1 Å² (fuori dall'interfaccia)" },
+    { color: CONTEXT_COLOR, label: "≤ 1 Å² (fuori dall'interfaccia)" },
   ],
   digits: 1,
   unit: "Å²",

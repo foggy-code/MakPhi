@@ -105,9 +105,15 @@ export default function SettingsPage() {
                     <Icon name="shield" size={13} /> Gestisci le licenze
                   </button>
                   {!container && (
-                    <Field label="Interprete Python con MODELLER (esecuzione nativa)" hint="Lascia vuoto per usare quello del server.">
+                    // in modalità server come l'indirizzo di ESMFold: lo sceglie l'amministratore sul server, il server rifiuta una
+                    // modifica. Il campo c'è solo in esecuzione nativa, dove server.env non conta (lo leggono gli avviatori dei
+                    // container): la nota nomina la variabile d'ambiente, come il messaggio del backend (MODELLER_PYTHON_LOCKED)
+                    <Field label="Interprete Python con MODELLER (esecuzione nativa)" hint={info?.runtime?.auth
+                      ? "In modalità server lo imposta l'amministratore sul server (variabile d'ambiente BIOLOOM_MODELLER_PYTHON); vuoto = rilevamento automatico."
+                      : "Lascia vuoto per usare quello del server."}>
                       <div className="row">
-                        <input className="input mono" style={{ flex: 1 }} value={form.modeller_python} onChange={(e) => set("modeller_python", e.target.value)} placeholder="(automatico)" />
+                        <input className="input mono" style={{ flex: 1 }} value={form.modeller_python} onChange={(e) => set("modeller_python", e.target.value)} placeholder="(automatico)"
+                          readOnly={!!info?.runtime?.auth} />
                         <button type="button" className="btn" onClick={verify} disabled={checking}>{checking ? <Spinner /> : <Icon name="refresh" size={14} />} Verifica</button>
                       </div>
                     </Field>

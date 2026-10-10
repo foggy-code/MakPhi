@@ -358,6 +358,45 @@ check_storage() {  # avviso, una volta sola, se Podman archivia le immagini con 
 
 loopback() { case "$1" in 127.*|localhost|::1|"[::1]") return 0 ;; *) return 1 ;; esac; }   # BIOLOOM_BIND locale
 
+port_free() {  # $1 porta, $2 indirizzo: libera se lì nessun programma accetta connessioni (come in bioloom.sh)
+  local rc=0
+  case "$2" in
+    # anche in locale un programma bloccato (coda delle connessioni piena) terrebbe ferma la connessione per minuti,
+    # perché Linux scarta le richieste in più invece di rifiutarle: con timeout, dopo 3 s senza risposta, la porta è
+    # occupata (una porta chiusa in locale rifiuta subito); senza timeout si prova senza limite
+    127.*|::1)
+      if command -v timeout >/dev/null 2>&1; then
+        # shellcheck disable=SC2016 # $0 e $1 sono quelli della shell figlia
+        { timeout 3 bash -c 'exec 3<>"/dev/tcp/$0/$1"' "$2" "$1"; } 2>/dev/null || rc=$?
+        # 0: un programma accetta; 124, o 128 e oltre (timeout di busybox, ucciso da un segnale): nessuna risposta
+        [ "$rc" != 0 ] && [ "$rc" != 124 ] && [ "$rc" -lt 128 ]
+      else
+        ! (exec 3<>"/dev/tcp/$2/$1") 2>/dev/null
+      fi ;;
+    # un indirizzo di rete che non risponde terrebbe ferma la connessione per minuti: senza timeout decide podman run
+    *) command -v timeout >/dev/null 2>&1 || return 0
+       # shellcheck disable=SC2016 # $0 e $1 sono quelli della shell figlia
+       ! timeout 3 bash -c 'exec 3<>"/dev/tcp/$0/$1"' "$2" "$1" 2>/dev/null ;;
+  esac
+}
+
+check_port() {  # $1 porta  $2 indirizzo di BIOLOOM_BIND: porta valida e non usata da un altro programma, prima di caricare
+  # o costruire le immagini (podman run fallirebbe dopo, con "address already in use")
+  local own="" host="$2"
+  case "$1" in ""|*[!0-9]*) fail "BIOLOOM_PORT in server.env non è una porta valida (un numero da 1 a 65535): $1" ;; esac
+  [ "${#1}" -le 5 ] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ] \
+    || fail "BIOLOOM_PORT in server.env non è una porta valida (un numero da 1 a 65535): $1"
+  case "$host" in ""|0.0.0.0|localhost|::|"[::]") host=127.0.0.1 ;; "[::1]") host=::1 ;; esac
+  if container_running bioloom; then
+    # la porta del BioLoom in esecuzione è libera per lui: start() rimuove il container prima di ricrearlo. Se Podman
+    # non la dice si suppone la stessa (decide podman run)
+    own="$("$PODMAN" port bioloom 8765 2>/dev/null | head -n1 | tr -d '\r')"; own="${own##*:}"
+    case "$own" in ""|*[!0-9]*) own="$1" ;; esac
+  fi
+  [ "$own" = "$1" ] || port_free "$1" "$host" \
+    || fail "La porta $1 (BIOLOOM_PORT in server.env) è già usata da un altro programma${2:+ su $2}: chiudilo (per vedere quale: ss -ltnp) oppure cambia BIOLOOM_PORT in $ENV_FILE e rilancia '$0 avvia'."
+}
+
 # Unità systemd di "servizio": "podman generate systemd" senza --new le lega all'ID del container (PIDFile), quindi
 # vanno rigenerate ogni volta che start() ricrea i container.
 UNIT_DIR="${HOME:-}/.config/systemd/user"
@@ -383,7 +422,8 @@ write_units() {  # unità dei container attuali, abilitate; quella di un contain
 wait_healthy() {  # $1 indirizzo  $2 porta
   for _ in $(seq 1 120); do
     if command -v curl >/dev/null 2>&1; then
-      curl -fsS "http://$1:$2/api/health" >/dev/null 2>&1 && return 0
+      # --noproxy: senza, curl passerebbe dal proxy di http_proxy anche per 127.0.0.1
+      curl -fsS --noproxy '*' --max-time 5 "http://$1:$2/api/health" >/dev/null 2>&1 && return 0
     elif (exec 3<>"/dev/tcp/$1/$2") 2>/dev/null; then
       return 0
     fi
@@ -412,6 +452,7 @@ start() {
   fi
   single_instance "Avvio annullato"
   check_storage
+  check_port "$port" "$bind"
 
   ensure_image "bioloom:$VERSION" "bioloom-$VERSION.tar" "$ROOT/docker/Dockerfile" "$ROOT" \
     || fail "Immagine BioLoom non disponibile: copia la cartella 'immagini' della copia portatile."
@@ -449,8 +490,9 @@ start() {
     app+=(--mac-address "$mac")
   fi
   local name
-  for name in BIOLOOM_ACCESS_KEY BIOLOOM_ALLOWED_HOSTS MODELLER_KEY BIOLOOM_ESMFOLD_URL BIOLOOM_SMTP_HOST \
-              BIOLOOM_SMTP_USER BIOLOOM_SMTP_PASSWORD BIOLOOM_SMTP_FROM BIOLOOM_PUBLIC_URL; do
+  for name in BIOLOOM_ACCESS_KEY BIOLOOM_ALLOWED_HOSTS BIOLOOM_TRUSTED_PROXIES MODELLER_KEY BIOLOOM_MODELLER_PYTHON \
+              BIOLOOM_ESMFOLD_URL BIOLOOM_SMTP_HOST BIOLOOM_SMTP_USER BIOLOOM_SMTP_PASSWORD BIOLOOM_SMTP_FROM \
+              BIOLOOM_PUBLIC_URL; do
     app+=(-e "$name=$(val "$name")")
   done
   app+=(-e "BIOLOOM_AUTH=$(val BIOLOOM_AUTH on)" -e "BIOLOOM_ALLOW_SHUTDOWN=$(val BIOLOOM_ALLOW_SHUTDOWN 0)"

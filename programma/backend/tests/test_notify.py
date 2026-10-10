@@ -16,7 +16,7 @@ import email
 import email.policy
 import socketserver
 import threading
-import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,7 +24,7 @@ from bioloom.core.errors import AppError
 from bioloom.services import notify as notify_module
 from bioloom.services.notify import NotifyService, SmtpConfig
 
-from .conftest import HUMAN_UB, wait_job
+from .conftest import HUMAN_UB, until, wait_job
 
 USER, PASSWORD = "bioloom", "pa55-segreta"
 
@@ -119,14 +119,30 @@ def configure(client, smtp, **extra):
     return status
 
 
-def until(condition, timeout: float = 30.0):
-    start = time.time()
-    while time.time() - start < timeout:
-        value = condition()
-        if value:
-            return value
-        time.sleep(0.05)
-    raise AssertionError("condizione non raggiunta in tempo")
+def without_test_limit(client):
+    """Toglie il limite delle email di prova (una ogni 30 s): per i test che ne inviano più d'una di seguito."""
+    service = client.app.state.core.notify
+    service.test_min_interval, service.test_per_hour = 0, 1000
+    return service
+
+
+@pytest.fixture
+def notices(client, monkeypatch):
+    """Segnali dell'avviso alla fine dei job, al posto delle pause: `threads` raccoglie i thread d'invio creati da
+    NotifyService.on_finish, `finished` gli id dei job di cui gli ascoltatori di fine job hanno finito. Questo
+    ascoltatore è registrato dopo quello dell'avviso (build_core) e il JobManager li chiama in ordine: quando un id
+    compare, la decisione di inviare o no è già presa e l'eventuale thread è già creato."""
+    threads: list[threading.Thread] = []
+
+    class Recorded(threading.Thread):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            threads.append(self)
+
+    monkeypatch.setattr(notify_module, "threading", SimpleNamespace(Thread=Recorded, Lock=threading.Lock))
+    finished: set[str] = set()
+    client.app.state.core.jobs.on_finish(lambda job_id, _status: finished.add(job_id))
+    return SimpleNamespace(threads=threads, finished=finished)
 
 
 # ------------------------------------------------------------------------------------------ configurazione
@@ -163,6 +179,7 @@ def test_test_email_is_delivered(client, smtp):
 
 
 def test_wrong_password_and_refused_recipient_are_explained(client, smtp):
+    without_test_limit(client)
     configure(client, smtp, password="sbagliata")
     r = client.post("/api/notify/test", json={"to": "utente@example.org"})
     assert r.status_code == 400 and "rifiutato utente o password" in r.json()["error"]["message"]
@@ -174,7 +191,7 @@ def test_wrong_password_and_refused_recipient_are_explained(client, smtp):
 
 def test_temporary_errors_are_retried(client, smtp):
     configure(client, smtp)
-    service = client.app.state.core.notify
+    service = without_test_limit(client)
     service.retry_delays = (0.0, 0.0)
     calls = []
 
@@ -206,7 +223,7 @@ def test_pipeline_with_notice_needs_a_mail_server_and_a_valid_address(client, sm
     assert r.status_code == 400 and r.json()["error"]["code"] == "invalid_email"
 
 
-def test_pipeline_end_sends_one_notice_without_results(client, smtp):
+def test_pipeline_end_sends_one_notice_without_results(client, smtp, notices):
     configure(client, smtp, public_url="https://bioloom.example.org")
     r = client.post("/api/pipeline", json={**PIPELINE, "notify_email": "utente@example.org"})
     assert r.status_code == 200, r.text
@@ -221,16 +238,19 @@ def test_pipeline_end_sends_one_notice_without_results(client, smtp):
     assert "proteina_riservata" not in msg["data"] and HUMAN_UB[:20] not in msg["data"]  # niente sequenze né nomi
     log = until(lambda: "Email di avviso" in (t := client.get(f"/api/jobs/{job_id}/log").json()["text"]) and t)
     assert "Email di avviso inviata a utente@example.org" in log
-    time.sleep(0.5)
-    assert len(smtp.messages) == 1  # un solo avviso per esecuzione
+    until(lambda: job_id in notices.finished)
+    for thread in notices.threads:
+        thread.join(30)
+    # un solo avviso per esecuzione: un solo thread d'invio, per questo job, e un solo messaggio
+    assert [t.name for t in notices.threads] == [f"notify-{job_id[:6]}"] and len(smtp.messages) == 1
 
 
-def test_pipeline_without_notice_sends_nothing(client, smtp):
+def test_pipeline_without_notice_sends_nothing(client, smtp, notices):
     configure(client, smtp)
     job_id = client.post("/api/pipeline", json=PIPELINE).json()["id"]
     wait_job(client, job_id)
-    time.sleep(0.5)
-    assert smtp.messages == []
+    until(lambda: job_id in notices.finished)  # decisione dell'avviso presa: nessun thread d'invio
+    assert notices.threads == [] and smtp.messages == []
 
 
 def test_failed_delivery_is_written_in_the_job_log(client, smtp):

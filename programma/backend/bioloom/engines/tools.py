@@ -159,8 +159,12 @@ def detect_modeller(configured: str = "", force: bool = False, license_key: Opti
     """Cerca un interprete Python in cui `import modeller` funzioni. Il risultato resta in cache 5 minuti.
 
     `license_key` permette di provare una chiave prima di salvarla; altrimenti vale quella attiva.
+    Nei messaggi dei tentativi (`attempts[].error`) le chiavi MODELLER (quella provata, quella attiva e MODELLER_KEY)
+    sono mascherate come nelle licenze: MODELLER ripete la chiave rifiutata, e il risultato arriva all'interfaccia
+    (/api/system/info, licenze), alla verifica dell'installazione e ai messaggi d'errore dei job.
     """
-    from ..core.jobs import default_env
+    from ..core.jobs import default_env, output_secrets
+    from ..core.sensitive import redactor
 
     key = configured or ""
     if license_key is None and not force and _modeller_cache["key"] == key \
@@ -169,6 +173,7 @@ def detect_modeller(configured: str = "", force: bool = False, license_key: Opti
     env = default_env()
     if license_key is not None:
         env["BIOLOOM_MODELLER_KEY"] = license_key
+    hide = redactor([license_key, *output_secrets(env)])
     attempts = []
     info = {"available": False, "python": None, "version": None, "attempts": attempts}
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
@@ -193,6 +198,8 @@ def detect_modeller(configured: str = "", force: bool = False, license_key: Opti
         lines = (proc.stderr or proc.stdout).strip().splitlines()
         # es. "ModellerError: check_lice_E> Invalid license key" è più utile dell'ultima riga del traceback
         message = next((ln.strip() for ln in reversed(lines) if "Error" in ln), lines[-1] if lines else "")
+        if hide is not None:
+            message = hide(message)
         attempts.append({"python": python, "error": message or f"exit {proc.returncode}"})
     if license_key is None:  # la prova di una chiave candidata non sostituisce lo stato attivo
         _modeller_cache.update({"at": time.time(), "key": key, "info": info})

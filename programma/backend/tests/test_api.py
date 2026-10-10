@@ -1,4 +1,4 @@
-from tests.conftest import HUMAN_UB, YEAST_UB, wait_job
+from tests.conftest import HUMAN_UB, YEAST_UB, until, wait_job
 
 
 def test_health_and_unknown_endpoint(client):
@@ -125,3 +125,6 @@ def test_pipeline_items_pagination(client):
     assert [i["name"] for i in page["items"]] == ["b", "a_2"]
     csv_text = client.get(f"/api/pipeline/{job['id']}/export.csv").text
     assert csv_text.splitlines()[0].startswith("idx,name,length,status")
+    # il job finisce prima della chiusura dell'app: altrimenti scriverebbe l'esito sul database già chiuso
+    wait_job(client, job["id"])
+    until(lambda: not core.jobs.busy(job["id"]))

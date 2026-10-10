@@ -13,6 +13,9 @@ import { Icon } from "./Icon";
 import { useTemplateUpload } from "./TemplateUpload";
 import { Badge, DetailGrid, DropZone, ExpandButton, Segmented, useExpanded } from "./ui";
 
+/** Attesa prima di scaricare da RCSB o AlphaFold DB un template che la libreria non ha (404). */
+export const AUTO_FETCH_DELAY_MS = 600;
+
 /** Dati del template scelto (pannello espanso del selettore): metodo, qualità, catene, mancanti, gruppi eteroatomici. */
 function TemplateFacts({ a }: { a: TemplateAnalysis }) {
   const groups = a.ligands.map((g) => `${groupTitle(g)} (${g.label ?? CLASS_LABEL[groupClass(g)]})`);
@@ -141,43 +144,65 @@ export function TemplatePicker({ value, onChange, max = 10, ligands = true, onAn
   const open = useExpanded<string>();
   const valueRef = useRef(value);
   valueRef.current = value;
+  // lettura in corso di ogni template: un template tolto (o rimesso) cambia il numero e la lettura vecchia non scrive
+  // più nulla; allo smontaggio nessuna lettura scrive (né scarica)
+  const attempts = useRef(new Map<string, number>());
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   // Analizza i template scelti; i codici PDB assenti dalla libreria vengono scaricati da RCSB, gli id
-  // AF-<ACC>-F<n> (risultati del motore AlphaFold) da AlphaFold DB.
+  // AF-<ACC>-F<n> (risultati del motore AlphaFold) da AlphaFold DB, dopo AUTO_FETCH_DELAY_MS e solo se il template
+  // è ancora scelto: un id provvisorio (scritto a metà, tolto subito) non avvia un download.
   useEffect(() => {
     value.forEach((t) => {
       if (status[t.id]) return;
+      const attempt = (attempts.current.get(t.id) ?? 0) + 1;
+      attempts.current.set(t.id, attempt);
+      const live = () => mounted.current && attempts.current.get(t.id) === attempt;
       setStatus((s) => ({ ...s, [t.id]: "loading" }));
       api
         .template(t.id)
-        .catch((err: ApiError) => {
+        .catch(async (err: ApiError): Promise<TemplateAnalysis | null> => {
           const fetcher = err.status !== 404 ? null
             : /^[0-9][A-Za-z0-9]{3}$/.test(t.id) ? api.fetchTemplate
             : isAlphaFoldId(t.id) ? api.fetchAlphaFold : null;
-          if (fetcher) {
-            setStatus((s) => ({ ...s, [t.id]: "fetching" }));
-            return fetcher(t.id).then(() => {
-              reload();
-              return api.template(t.id);
-            });
+          if (!fetcher) throw err;
+          await new Promise((resolve) => setTimeout(resolve, AUTO_FETCH_DELAY_MS));
+          if (!live()) return null;
+          if (!valueRef.current.some((v) => v.id === t.id)) {
+            // tolto nell'attesa (anche dalla pagina, senza «Rimuovi»): niente download, e se torna si rilegge da capo
+            setStatus(({ [t.id]: _old, ...rest }) => rest);
+            return null;
           }
-          throw err;
+          setStatus((s) => ({ ...s, [t.id]: "fetching" }));
+          await fetcher(t.id);
+          if (live()) reload();
+          return api.template(t.id);
         })
         .then((a) => {
+          if (!a || !live()) return;
           setAnalysis((prev) => ({ ...prev, [t.id]: a }));
           setStatus((s) => ({ ...s, [t.id]: "ok" }));
           onAnalysis?.(t.id, a);
-          const current = valueRef.current.find((v) => v.id === t.id);
-          if (current && !current.chains.length && a.chains.length) {
+          const chosen = valueRef.current.find((v) => v.id === t.id);
+          if (chosen && !chosen.chains.length && a.chains.length) {
             onChange(valueRef.current.map((v) => (v.id === t.id ? { ...v, chains: [a.chains[0].chain] } : v)));
           }
         })
-        .catch(() => setStatus((s) => ({ ...s, [t.id]: "error" })));
+        .catch(() => {
+          if (live()) setStatus((s) => ({ ...s, [t.id]: "error" }));
+        });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- solo per i template aggiunti (ids): value si legge da valueRef, status evita le richieste doppie
   }, [value.map((t) => t.id).join(",")]);
   // template non più scelto: stato e analisi in memoria si dimenticano, così se torna (anche con un file nuovo o
-  // dopo un errore) l'effetto qui sopra lo rilegge da capo
+  // dopo un errore) l'effetto qui sopra lo rilegge da capo; la sua lettura in corso non scrive più
   const forget = (id: string) => {
+    attempts.current.set(id, (attempts.current.get(id) ?? 0) + 1);
     setStatus(({ [id]: _old, ...rest }) => rest);
     setAnalysis(({ [id]: _old, ...rest }) => rest);
   };
@@ -186,6 +211,7 @@ export function TemplatePicker({ value, onChange, max = 10, ligands = true, onAn
     setStatus((s) => ({ ...s, [id]: "loading" }));
     api.template(id)
       .then((a) => {
+        if (!mounted.current) return;
         setAnalysis((prev) => ({ ...prev, [id]: a }));
         setStatus((s) => ({ ...s, [id]: "ok" }));
         onAnalysis?.(id, a);
@@ -196,7 +222,9 @@ export function TemplatePicker({ value, onChange, max = 10, ligands = true, onAn
           return { ...v, chains: chains.length || !a.chains.length ? chains : [a.chains[0].chain] };
         }));
       })
-      .catch(() => setStatus((s) => ({ ...s, [id]: "error" })));
+      .catch(() => {
+        if (mounted.current) setStatus((s) => ({ ...s, [id]: "error" }));
+      });
   };
   // «Da file»: con lo stesso id di un template in libreria si chiede se sostituirlo (useTemplateUpload). Un id già
   // scelto si rilegge subito; uno nuovo, o tolto dalla scelta dopo l'analisi del file di prima, si aggiunge senza

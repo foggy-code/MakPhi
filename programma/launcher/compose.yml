@@ -36,8 +36,11 @@ services:
       BIOLOOM_AUTH: "${BIOLOOM_AUTH:-off}"
       BIOLOOM_ACCESS_KEY: "${BIOLOOM_ACCESS_KEY:-}"
       BIOLOOM_ALLOWED_HOSTS: "${BIOLOOM_ALLOWED_HOSTS:-}"   # header Host ammessi senza BIOLOOM_AUTH (DNS rebinding)
+      # solo con BIOLOOM_AUTH=on: reverse proxy fidati, da cui X-Forwarded-For conta per il freno ai tentativi d'accesso
+      BIOLOOM_TRUSTED_PROXIES: "${BIOLOOM_TRUSTED_PROXIES:-}"
       BIOLOOM_ALLOW_SHUTDOWN: "${BIOLOOM_ALLOW_SHUTDOWN:-1}"
       MODELLER_KEY: "${MODELLER_KEY:-}"
+      BIOLOOM_MODELLER_PYTHON: "${BIOLOOM_MODELLER_PYTHON:-}"   # interprete con MODELLER (server); vuoto = automatico
       BIOLOOM_QMEAN_URL: "${BIOLOOM_QMEAN_URL:-}"   # http://qmean:8080 quando il profilo qmean è attivo
       BIOLOOM_ESMFOLD_URL: "${BIOLOOM_ESMFOLD_URL:-}"   # solo con BIOLOOM_AUTH=on: servizio ESMFold; vuoto = pubblico
       # server di posta per l'avviso alla fine delle pipeline (vuoto = dal file licenses/posta.env della cartella dati)

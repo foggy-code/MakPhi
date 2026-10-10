@@ -12,6 +12,7 @@ I processi lenti sono veri (`python -c "sleep"` lanciati da ctx.run), così l'an
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import threading
@@ -32,7 +33,7 @@ from bioloom.engines import modeller, procheck, prosa, quality, tools
 from bioloom.services import compute as compute_module
 from bioloom.services.compute import PreparedTemplates
 
-from .conftest import DATA, YEAST_UB, requires_modeller, wait_job
+from .conftest import DATA, YEAST_UB, blocked_in, requires_modeller, until, wait_job
 from .test_alphafold import af_pdb
 
 SLEEP = [sys.executable, "-c", "import time; time.sleep(60)"]
@@ -47,15 +48,6 @@ def manager(tmp_path):
     yield mgr
     mgr.shutdown()
     db.close()
-
-
-def until(condition, timeout: float = 30.0) -> None:
-    start = time.time()
-    while time.time() - start < timeout:
-        if condition():
-            return
-        time.sleep(0.02)
-    raise AssertionError("condizione non raggiunta in tempo")
 
 
 def run_job(mgr: JobManager, fn, timeout: float = 300.0) -> dict:
@@ -149,8 +141,8 @@ def test_cancellation_while_waiting_stops_pending_steps_and_waits_for_running_on
     assert time.perf_counter() - t0 < 1.0  # l'attesa controlla l'annullamento
     closer = threading.Thread(target=steps.close)
     closer.start()
-    time.sleep(0.2)
-    assert closer.is_alive()  # close aspetta i passi in corso
+    until(lambda: blocked_in(closer, "shutdown"))  # close aspetta i passi in corso (join dei thread del pool)
+    assert closer.is_alive()
     release.set()
     closer.join(5)
     assert not closer.is_alive() and started == ["in corso", "in corso"]  # il passo in coda non è mai partito
@@ -475,9 +467,12 @@ def test_prepared_templates_key_changes_with_template_chains_and_options(tmp_pat
     assert (info[4]["ligands"], info[5]["ligands"]) == (0, 1)
     assert "plddt" not in info[6] and info[7]["plddt"]["removed"] == 11 and info[7]["plddt"]["threshold"] == 70
     assert info[8]["plddt"]["threshold"] == 50 and info[9] == info[7]
-    # il file del template cambia (nuovo caricamento con lo stesso id): nuova preparazione
-    time.sleep(0.01)
+    # il file del template cambia (nuovo caricamento con lo stesso id): nuova preparazione. La data di modifica si
+    # sposta in avanti di proposito: con la risoluzione dell'orologio del filesystem due scritture vicine possono avere
+    # la stessa data, e la chiave deve cambiare per la data come per la dimensione
+    before = zn.stat().st_mtime_ns
     zn.write_text((DATA / "1UBQ.pdb").read_text(), encoding="utf-8")
+    os.utime(zn, ns=(before + 10 ** 9, before + 10 ** 9))
     again, reused = cache.get(zn, T("ZN", ["A"]), tmp_path / "after", check)
     assert reused is False and again["sequence"] == info[4]["sequence"] and len(counted) == 9
 
@@ -509,7 +504,8 @@ def test_prepared_templates_concurrent_items_prepare_once(tmp_path, ubq_path, mo
     for t in threads:
         t.start()
     until(lambda: len(calls) == 1)
-    time.sleep(0.2)
+    # gli altri due sono fermi sul lock della chiave (acquire con timeout in PreparedTemplates.get)
+    until(lambda: sum(blocked_in(t, "get") for t in threads) == 2)
     assert len(calls) == 1  # gli altri aspettano la prima preparazione
     gate.set()
     for t in threads:

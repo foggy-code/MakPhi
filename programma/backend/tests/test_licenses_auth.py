@@ -110,11 +110,14 @@ def test_auth_config_tokens():
     assert not cfg.verify(token, now=1000.0 + 31 * 86400)  # scaduto
     assert not cfg.verify(token.replace(".", ".0"), now=1001.0)
     assert not auth.AuthConfig(enabled=True, key="altra-chiave").verify(token, now=1001.0)
-    assert cfg.request_allowed("/", None, None)  # l'interfaccia (senza dati) è sempre servita
-    assert cfg.request_allowed("/api/health", None, None)
-    assert not cfg.request_allowed("/api/projects", None, None)
-    assert cfg.request_allowed("/api/projects", None, "Bearer segreto-12345")
-    assert not cfg.request_allowed("/openapi.json", None, None)
+    assert not cfg.requires_auth("/")  # l'interfaccia (senza dati) è sempre servita
+    assert not cfg.requires_auth("/api/health") and not cfg.requires_auth("/api/auth/status")
+    assert cfg.requires_auth("/api/projects") and cfg.requires_auth("/openapi.json")
+    assert not auth.AuthConfig(enabled=False).requires_auth("/api/projects")
+    assert cfg.session_valid(cfg.issue()) and not cfg.session_valid(None) and not cfg.session_valid("")
+    # la chiave come Bearer si confronta solo attraverso il freno ai tentativi (api/auth.authenticate)
+    assert auth.bearer_key("Bearer segreto-12345") == "segreto-12345" and auth.bearer_key("bearer x") == "x"
+    assert auth.bearer_key("Basic abc") is None and auth.bearer_key(None) is None
 
 
 def test_auth_load_generates_and_reuses_key(tmp_path, monkeypatch):
@@ -126,8 +129,8 @@ def test_auth_load_generates_and_reuses_key(tmp_path, monkeypatch):
     assert first.enabled and first.generated and len(first.key) >= 16
     second = auth.load(tmp_path)
     assert second.key == first.key and not second.generated
-    monkeypatch.setenv("BIOLOOM_ACCESS_KEY", "chiave-fissa")
-    assert auth.load(tmp_path).key == "chiave-fissa"
+    monkeypatch.setenv("BIOLOOM_ACCESS_KEY", "chiave-fissa-abbastanza-lunga")  # almeno 16 caratteri
+    assert auth.load(tmp_path).key == "chiave-fissa-abbastanza-lunga"
 
 
 @pytest.fixture

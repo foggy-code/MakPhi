@@ -1,9 +1,10 @@
 import { useId, useMemo, useState, type MouseEvent as RMouseEvent } from "react";
 import type { ConsensusDisorder, ConsensusPredictor, ConsensusRegion, ConsensusResult, ResidueRow } from "../../api/types";
-import { colorFor } from "../../lib/colorscale";
+import { colorFor, themedColor } from "../../lib/colorscale";
 import type { ChartData } from "../../lib/exportImage";
 import { fmtNum } from "../../lib/format";
 import { CONSENSUS_SCALE } from "../../lib/residueColoring";
+import { useDocumentTheme } from "../../lib/theme";
 import { svgPoint, useDomain, useZoomAxis, type DomainState } from "../../lib/zoom";
 import { ChartFrame, ZoomBar } from "../ChartFrame";
 import { useChartWidth, useFollowSelection, useTooltip, ZOOM_HINT } from "./common";
@@ -65,6 +66,7 @@ export function ConsensusTracks({ residues, consensus, selected, onSelect, onReg
   const first = useMemo(() => firstResnum(residues) ?? 1, [residues]);
   const selIndex = selected ? residues.findIndex((r) => r.chain === selected.chain && r.resnum === selected.resnum) : -1;
   useFollowSelection(zoom, selIndex);
+  const theme = useDocumentTheme();
   if (!tracks) return <p className="muted small">Consenso per residuo non disponibile per questa struttura.</p>;
   const { disorder: dis, predictor: pred } = tracks;
   const data = (): ChartData => ({
@@ -88,7 +90,7 @@ export function ConsensusTracks({ residues, consensus, selected, onSelect, onReg
       {per.signals.map((s) => <span key={s.key} title={s.rule}><i style={{ background: SIGNAL_COLOR[s.key] }} />{s.label}: {s.rule}</span>)}
       {dis && <span title={dis.rule}><i style={{ background: DISORDER_COLOR }} />{dis.label}: {dis.rule}</span>}
       {pred && <span title={pred.rule}><i style={{ background: PREDICTOR_COLOR }} />{pred.label}: {pred.rule}</span>}
-      {CONSENSUS_SCALE.bins.filter((b) => b.gt !== undefined).reverse().map((b) => <span key={b.label}><i className="edged" style={{ background: b.color }} />{b.label}</span>)}
+      {CONSENSUS_SCALE.bins.filter((b) => b.gt !== undefined).reverse().map((b) => <span key={b.label}><i className="edged" style={{ background: themedColor(b.color, theme) }} />{b.label}</span>)}
       {consensus.regions.some((r) => !r.expected) && <span><i style={{ background: "var(--err)" }} />Regione problematica (piena)</span>}
       {consensus.regions.some((r) => r.expected) && <span><i style={EXPECTED_SWATCH} />Regione in disordine predetto (attesa, tratteggiata)</span>}
     </div>
@@ -128,6 +130,7 @@ function TracksSvg({ expanded, residues, consensus, tracks, zoom, selIndex, mult
   onRegion?: (region: ConsensusRegion) => void;
 }) {
   const tip = useTooltip();
+  const theme = useDocumentTheme();
   const [hover, setHover] = useState<number | null>(null);
   const clip = `consensus-clip${useId().replace(/[^\w-]/g, "")}`;
   const { ref, width: W } = useChartWidth(900);
@@ -235,9 +238,9 @@ function TracksSvg({ expanded, residues, consensus, tracks, zoom, selIndex, mult
             <rect key={r.start_index} {...cells(r.start_index, r.end_index)} y={disTop + 3} height={rowH - 6} rx={2} fill={DISORDER_COLOR} />
           ))}
           {shown(tracks.predictorSpans).map((r) => <rect key={r.start} {...cells(r.start, r.end)} y={predTop} height={rowH} fill={PREDICTOR_COLOR} />)}
-          {/* colori della scala condivisi con il 3D (e la sua legenda): il bordo tiene visibile "1 metodo" sul bianco */}
+          {/* colori della scala condivisi con il 3D (e la sua legenda), nel tema corrente: il bordo tiene visibile "1 metodo" */}
           {shown(tracks.counts).map((c) => (
-            <rect key={c.start} {...cells(c.start, c.end)} y={barY(c.value)} height={barsTop + barsH - barY(c.value)} fill={colorFor(CONSENSUS_SCALE, c.value)}
+            <rect key={c.start} {...cells(c.start, c.end)} y={barY(c.value)} height={barsTop + barsH - barY(c.value)} fill={themedColor(colorFor(CONSENSUS_SCALE, c.value), theme)}
               stroke="var(--chart-axis)" strokeWidth={0.75} />
           ))}
           {/* regioni problematiche piene, attese (disordine predetto) vuote e tratteggiate: distinte anche senza colori */}

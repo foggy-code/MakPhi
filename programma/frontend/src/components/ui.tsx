@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent as RKeyboardEvent, type ReactNode } from "react";
+import { COPY_FAILED, copyText } from "../lib/clipboard";
+import { useOptionalToast } from "../lib/context";
 import { fmtNum, gradeTone, JOB_STATUS_TONE, STATUS_LABEL } from "../lib/format";
 import { Icon } from "./Icon";
 
@@ -531,13 +533,15 @@ export function Confirm({ text, onConfirm, onCancel, danger = true, confirmLabel
   );
 }
 
+/** Riquadro per trascinare un file o sceglierlo: clic, oppure Tab e Invio/Spazio, apre la scelta del file. */
 export function DropZone({ accept, onFile, label }: { accept: string; onFile: (f: File) => void; label: ReactNode }) {
   const input = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
   return (
     <div
       className={`drop ${over ? "over" : ""}`}
-      onClick={() => input.current?.click()}
+      role="button"
+      {...rowActivate(() => input.current?.click())}
       onDragOver={(e) => {
         e.preventDefault();
         setOver(true);
@@ -580,21 +584,46 @@ export function BarCell({ value, max = 100, tone, label }: { value: number | nul
   );
 }
 
+/**
+ * Copia `text` negli appunti (lib/clipboard: Clipboard API o, senza HTTPS, il ripiego con una textarea). Riuscita:
+ * «Copiato» per un momento; non riuscita: «Non copiato» sul pulsante e, dentro l'app, una notifica d'errore.
+ */
 export function CopyButton({ text, label = "Copia", disabled = false }: { text: string; label?: string; disabled?: boolean }) {
-  const [done, setDone] = useState(false);
+  const [state, setState] = useState<"idle" | "done" | "failed">("idle");
+  const toast = useOptionalToast();
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      clearTimeout(timer.current);
+    };
+  }, []);
+  const show = (next: "done" | "failed") => {
+    if (!mounted.current) return;
+    setState(next);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setState("idle"), next === "done" ? 1500 : 4000);
+  };
   return (
     <button
       type="button"
       className="btn btn-sm"
       disabled={disabled}
+      title={state === "failed" ? COPY_FAILED : undefined}
       onClick={() => {
-        navigator.clipboard?.writeText(text).then(() => {
-          setDone(true);
-          setTimeout(() => setDone(false), 1500);
-        });
+        copyText(text).then(
+          () => show("done"),
+          (e) => {
+            show("failed");
+            toast?.error(e);
+          },
+        );
       }}
     >
-      <Icon name={done ? "check" : "copy"} size={14} /> {done ? "Copiato" : label}
+      <Icon name={state === "done" ? "check" : state === "failed" ? "alert" : "copy"} size={14} />{" "}
+      {state === "done" ? "Copiato" : state === "failed" ? "Non copiato" : label}
     </button>
   );
 }

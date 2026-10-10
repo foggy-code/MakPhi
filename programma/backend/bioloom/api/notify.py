@@ -24,5 +24,6 @@ def notify_status(core: Core = Depends(get_core)) -> dict:
 
 @router.post("/test")
 def send_test(body: TestIn, core: Core = Depends(get_core)) -> dict:
-    """Invia subito un'email di prova al destinatario indicato."""
+    """Invia subito un'email di prova al destinatario indicato: al massimo una ogni 30 s e cinque all'ora per tutto il
+    server, altrimenti 429 `rate_limited` con l'attesa (services/notify.py)."""
     return core.notify.send_test(body.to)

@@ -4,7 +4,9 @@ Guida di BioLoom: **1. Primo avvio** · [2. Funzioni](2%20-%20Funzioni.md) · [3
 
 ## Avvio
 
-1. Installa **Docker Desktop** (Windows, macOS) oppure **Docker Engine** (Linux): <https://www.docker.com/products/docker-desktop/>.
+1. Installa **Docker Desktop** (Windows, macOS; [licenza e alternative](#docker-desktop-licenza-e-alternative)) oppure
+   **Docker Engine** con il plugin compose (Linux): <https://www.docker.com/products/docker-desktop/>,
+   <https://docs.docker.com/engine/install/>.
 2. Fai doppio clic sull'avviatore:
 
    | Sistema | Avvio | Arresto |
@@ -13,7 +15,8 @@ Guida di BioLoom: **1. Primo avvio** · [2. Funzioni](2%20-%20Funzioni.md) · [3
    | macOS | `Avvia BioLoom.command` | `Arresta BioLoom.command` |
    | Linux | `./avvia-bioloom.sh` | `./avvia-bioloom.sh arresta` |
 
-3. Si apre il browser su `http://127.0.0.1:8765` (se la porta è occupata, la prima libera fino alla 8800). Al primo
+3. Si apre il browser su `http://127.0.0.1:8765` (se la porta è occupata, un'altra fino alla 8800: [Porta
+   occupata](#porta-occupata)). Al primo
    avvio inserisci la chiave di licenza di MODELLER in **Impostazioni → Licenze**: è gratuita per uso accademico
    (<https://salilab.org/modeller/>).
 
@@ -25,13 +28,52 @@ L'avviatore fa da solo il resto:
   unità o il punto di montaggio;
 - assegna al container il MAC richiesto dalla licenza **ProSA**, sul computer a cui la licenza è legata
   ([un computer alla volta](6%20-%20Licenze.md#prosa-un-computer-alla-volta));
-- sceglie una porta libera;
+- sceglie una porta libera ([Porta occupata](#porta-occupata));
 - si accorge se l'immagine Docker non corrisponde più al codice in `programma/` e propone di aggiornarla
   ([sotto](#aggiornare-bioloom)).
 
 Dalla sua finestra: **A** riapre il browser, **V** verifica gli strumenti, **L** mostra i log, **R** riavvia rifacendo la
 ricerca dei dischi (dopo aver collegato quello di UniClust30), **U** indica a mano la cartella di UniClust30, **S** arresta
 BioLoom, **C** chiude la finestra lasciando BioLoom attivo.
+
+### Docker Desktop: licenza e alternative
+
+Docker Desktop è gratuito per uso personale, didattico e nelle aziende piccole (meno di 250 dipendenti e meno di 10
+milioni di dollari di fatturato annuo). Negli enti pubblici, anche piccoli, e nelle altre organizzazioni, se l'uso non è
+didattico, verifica la licenza (<https://www.docker.com/pricing/>): può servire un abbonamento a pagamento. Su Linux
+Docker Engine con il plugin compose è gratuito.
+
+In alternativa va bene un programma che dia i comandi `docker` e `docker compose`: Rancher Desktop, Podman Desktop con
+la compatibilità Docker e, su macOS, Colima. Non sono stati provati con BioLoom. Se Docker manca, su Windows e macOS
+l'avviatore ricorda la licenza e queste alternative prima di fermarsi; su Linux indica Docker Engine con il plugin
+compose.
+
+### Porta occupata
+
+BioLoom usa la porta dell'ultimo avvio (la prima volta la 8765). Se un altro programma la occupa, l'avviatore prova le
+successive fino alla 8800 e poi riparte dalla 8765; la porta del BioLoom già acceso conta come libera. Se sono tutte
+occupate si ferma prima di avviare («Nessuna porta libera per BioLoom: le porte da 8765 a 8800 sono tutte usate da altri
+programmi…») e indica il comando per vedere quali programmi le usano:
+
+| Sistema | Comando |
+|---|---|
+| Windows | `netstat -ano \| findstr LISTENING` (il numero in fondo è il processo, in Gestione attività → Dettagli) |
+| macOS | `lsof -nP -iTCP -sTCP:LISTEN` |
+| Linux | `ss -ltnp` |
+
+Chiudi uno di quei programmi, oppure scegli tu la porta con la variabile `BIOLOOM_PORT`, dalla cartella di BioLoom:
+
+| Dove | Comando |
+|---|---|
+| Prompt dei comandi (Windows) | `set BIOLOOM_PORT=9000`, poi `"Avvia BioLoom.bat"` |
+| PowerShell (Windows) | `$env:BIOLOOM_PORT = 9000`, poi `& ".\Avvia BioLoom.bat"` |
+| Terminale (macOS, Linux) | `BIOLOOM_PORT=9000 ./avvia-bioloom.sh` |
+
+Con `BIOLOOM_PORT` la porta è fissa: se è occupata l'avviatore si ferma («La porta 9000 (BIOLOOM_PORT) è già usata da un
+altro programma…»), e un valore che non è un numero da 1 a 65535 non è accettato. La porta scelta diventa quella
+dell'ultimo avvio: le volte successive, anche senza la variabile, BioLoom riparte da lì se è libera. `aggiorna` riavvia
+BioLoom sempre sulla porta dell'ultimo avvio. Sul server la porta è quella di `server.env`
+([Chiavetta e server](5%20-%20Chiavetta%20e%20server.md#installazione)).
 
 ### macOS: doppio clic bloccato
 

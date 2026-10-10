@@ -12,6 +12,7 @@ import json
 import re
 import shutil
 import struct
+import sys
 import threading
 import time
 import xml.etree.ElementTree as ET
@@ -354,14 +355,20 @@ def test_model_report_with_the_3d_image(client_with_ubq):
     assert big.status_code == 413 and big.json()["error"]["code"] == "report_image_too_large"
 
 
-def test_download_name_is_safe_for_any_model_name(client_with_ubq):
+NTFS_FORBIDDEN = pytest.mark.skipif(sys.platform == "win32", reason='" < > non sono ammessi nei nomi di file NTFS')
+
+
+@pytest.mark.parametrize("evil, escaped", [
+    pytest.param('y";a<b>.pdb', "y&quot;;a&lt;b&gt;.pdb", id="virgolette-minore-maggiore", marks=NTFS_FORBIDDEN),
+    pytest.param("y';a&b.pdb", "y&#x27;;a&amp;b.pdb", id="apostrofo-e-commerciale"),  # nome valido anche su Windows
+])
+def test_download_name_is_safe_for_any_model_name(client_with_ubq, evil, escaped):
     c = client_with_ubq
-    evil = 'y";a<b>.pdb'
     job = fake_model_job(c, files=(evil,))
     r = c.get(f"/api/jobs/{job['id']}/report/{evil}")
     assert r.status_code == 200
     assert r.headers["content-disposition"] == 'attachment; filename="report_y_a_b.html"'
-    assert "y&quot;;a&lt;b&gt;.pdb" in r.text and 'y";a<b>' not in r.text
+    assert escaped in r.text and evil.removesuffix(".pdb") not in r.text
 
 
 def test_loop_report(client_with_ubq):

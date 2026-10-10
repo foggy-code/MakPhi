@@ -8,7 +8,6 @@ import hashlib
 import io
 import tarfile
 import threading
-import time
 from types import SimpleNamespace
 
 import httpx
@@ -19,7 +18,7 @@ from bioloom.engines import tools
 from bioloom.services import databases
 from bioloom.services.databases import PDBAA_FILES
 
-from .conftest import wait_job
+from .conftest import dispatcher_settled, until, wait_job
 
 KINDS = ("db_update_pdbaa", "db_build_mmseqs", "db_index_mmseqs")
 
@@ -76,15 +75,6 @@ def ncbi(monkeypatch):
     return fake
 
 
-def until(condition, timeout: float = 20) -> None:
-    start = time.time()
-    while time.time() - start < timeout:
-        if condition():
-            return
-        time.sleep(0.02)
-    raise AssertionError("condizione non raggiunta in tempo")
-
-
 def _job(client, job_id: str) -> dict:
     return client.get(f"/api/jobs/{job_id}").json()
 
@@ -105,7 +95,8 @@ def test_two_pdbaa_updates_never_run_together(client, ncbi):
     until(lambda: len(ncbi.gates) == 1)
     second = client.post("/api/databases/pdbaa/update").json()["id"]
     until(lambda: _job(client, second)["stage"] == RESOURCE_STAGE[PDBAA_FILES])
-    time.sleep(0.3)  # il secondo resta in coda: nessun secondo download
+    # coda riesaminata dopo la segnalazione: il secondo resta in coda, nessun secondo download
+    until(lambda: dispatcher_settled(client.app.state.core.jobs, "io"))
     assert _job(client, second)["status"] == "queued" and len(ncbi.gates) == 1
     ncbi.gates[0].set()
     assert wait_job(client, first, timeout=20)["status"] == "completed"
@@ -128,7 +119,7 @@ def test_mmseqs_build_waits_for_the_pdbaa_update(client, ncbi, monkeypatch):
     index = client.post("/api/databases/mmseqs/index").json()["id"]
     until(lambda: _job(client, build)["stage"] == RESOURCE_STAGE[PDBAA_FILES])
     until(lambda: _job(client, index)["stage"] == RESOURCE_STAGE[PDBAA_FILES])
-    time.sleep(0.3)
+    until(lambda: dispatcher_settled(client.app.state.core.jobs, "io"))
     assert _job(client, build)["status"] == "queued" and _job(client, index)["status"] == "queued"
     ncbi.gates[0].set()
     assert wait_job(client, update, timeout=20)["status"] == "completed"

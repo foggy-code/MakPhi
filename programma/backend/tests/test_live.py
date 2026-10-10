@@ -30,8 +30,8 @@ from bioloom.core.db import Database
 from bioloom.core.events import ChangeFeed
 from bioloom.core.jobs import JobManager
 from bioloom.services import live
-from tests.conftest import HUMAN_UB, YEAST_UB, wait_job
-from tests.test_pipeline_resume import FakeModeller, cancel_at, until
+from tests.conftest import HUMAN_UB, YEAST_UB, until, wait_job
+from tests.test_pipeline_resume import FakeModeller, cancel_at
 
 # ----------------------------------------------------------------------------------------------- utilità
 
@@ -349,10 +349,14 @@ def test_job_stream_sends_status_log_and_end(client):
     core = client.app.state.core
 
     def handler(ctx, params):
+        # Al posto di una pausa fra i passi: si va avanti quando il flusso è di nuovo in attesa di cambiamenti, cioè
+        # dopo aver inviato quelli pubblicati finora (stream_caught_up). Così ogni passo arriva come stato a sé, anche
+        # su un computer lento.
+        until(lambda: core.jobs.events.waiting >= 1)  # flusso aperto, stato iniziale inviato
         for i in range(1, 6):
             ctx.log(f"riga {i}: ciò che è pronto")
             ctx.progress(i / 5, f"passo {i} di 5")
-            time.sleep(0.3)
+            until(lambda: core.jobs.events.waiting >= 1)
         return {"ok": True}
 
     core.jobs.register("demo_sse", handler)
@@ -365,7 +369,7 @@ def test_job_stream_sends_status_log_and_end(client):
     assert names[0] == "status" and names[-1] == "end"
     statuses = of(events, "status")
     progress = [s["progress"] for s in statuses]
-    assert len(statuses) >= 3 and progress == sorted(progress)  # arrivano man mano, in ordine
+    assert {i / 5 for i in range(1, 6)} <= set(progress) and progress == sorted(progress)  # man mano, in ordine
     assert all("eta_seconds" in s for s in statuses)
     # lo stato terminale arriva una volta sola, alla fine, insieme a "end"
     assert [s["status"] for s in statuses].count("completed") == 1 and statuses[-1]["status"] == "completed"

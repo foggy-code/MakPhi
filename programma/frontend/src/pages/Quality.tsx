@@ -26,6 +26,7 @@ import { compareLink } from "../lib/compare";
 import { useProject, useToast } from "../lib/context";
 import { fmtNum } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
+import { httpsUrl } from "../lib/links";
 import type { AnalysisPanelMemory } from "../lib/interactions";
 import type { CoordinationLine } from "../lib/ligands";
 import {
@@ -85,6 +86,8 @@ function QmeanPanel({ source, onDone }: { source: StructureSource; onDone?: (job
     api.qmean({ project_id: projectId ?? undefined, source, fallback: settings.qmean_mode === "local" ? useFallback : undefined })
       .then((j) => setJobId(j.id)).catch(toast.error);
   const components = r ? Object.entries(r.components ?? {}) : [];
+  // rapporto di SWISS-MODEL: link solo per un indirizzo https (il valore arriva dal servizio esterno)
+  const reportUrl = httpsUrl(r?.url);
   return (
     <div className="stack-sm">
       {!jobId && (
@@ -117,7 +120,7 @@ function QmeanPanel({ source, onDone }: { source: StructureSource; onDone?: (job
               </>
             ) : undefined} />
           <Stat label={r.method === "QMEAN" ? "Media locale" : "QMEANDisCo"} value={fmtNum(r.qmeandisco, 3)}
-            note={r.url ? <a href={r.url} target="_blank" rel="noreferrer">rapporto completo</a> : r.uniclust ? `${r.uniclust}${r.uniclust_version ? ` (${r.uniclust_version})` : ""}` : undefined}
+            note={reportUrl ? <a href={reportUrl} target="_blank" rel="noreferrer">rapporto completo</a> : r.uniclust ? `${r.uniclust}${r.uniclust_version ? ` (${r.uniclust_version})` : ""}` : undefined}
             detail={<span>Qualità locale media da 0 a 1; per residuo sotto {fmtNum(QMEAN_LOCAL_THRESHOLD, 1)} qualità bassa attesa (profilo nella scheda «Profili per residuo»).</span>} />
         </div>
       )}

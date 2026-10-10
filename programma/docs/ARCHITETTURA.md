@@ -103,13 +103,14 @@ data/
   templates/          libreria globale (ID.pdb|cif + ID.meta.json + ID.analysis.json in cache; .upload-*/ file in arrivo)
   uploads/            strutture caricate per l'analisi (pulizia automatica)
   cache/              risposte dei servizi remoti (uniprot, uniprot_variants, interpro, rcsb_meta, alphafold, esmfold)
-                      e cache dei calcoli in cache/compute (pulizia automatica)
+                      e cache dei calcoli in cache/compute (pulizia automatica; cache/compute anche sotto un tetto)
   licenses/           modeller.key, prosa/LicenseDB (permessi 0600, mai nelle immagini); prosa/computer, il computer
                       a cui è legata ogni licenza ProSA (scritto dagli avviatori, vedi Licenze dei programmi esterni)
   databases/          pdbaa (BLAST+), pdbaa_mmseqs (database MMseqs2 senza indice); durante un aggiornamento
                       anche le cartelle di lavoro <nome>.new-<job> e <nome>.old-<job>
   tools/              facoltativa: eseguibili aggiunti ai percorsi in cui `engines/tools` cerca gli strumenti
   access_key          chiave d'accesso generata in modalità server, se BIOLOOM_ACCESS_KEY è vuota
+  session_epoch       epoca delle sessioni della modalità server (un intero; «Esci da tutti i dispositivi» la incrementa)
   settings.json       impostazioni utente
 ```
 
@@ -324,8 +325,9 @@ in `THIRD_PARTY_NOTICES.md`.
   l'immagine è solo amd64 (MODELLER per amd64, ProSA a 32 bit).
 - **Aggiornare:** la procedura è nei commenti in testa al Dockerfile: `docker buildx imagetools inspect ubuntu:24.04`
   (o `node:22-slim`) e il «Digest» dell'indice, non quello di una piattaforma; per MODELLER e APBS la versione nell'ARG
-  e lo `sha256sum` del file; per US-align e fpocket il commit del tag (`git ls-remote <repository> refs/tags/<tag>`, per
-  un tag annotato la riga `^{}`) e `curl -fsSL <URL> | gzip -dc | sha256sum`. Poi una costruzione completa e le versioni
+  e lo `sha256sum` del file; per US-align e fpocket il commit del tag (`git ls-remote <repository> 'refs/tags/<tag>'
+  'refs/tags/<tag>^{}'`: con il solo nome del tag esce solo l'oggetto di un tag annotato; se c'è la riga che finisce con
+  `^{}`, il commit è quello) e `curl -fsSL <URL> | gzip -dc | sha256sum`. Poi una costruzione completa e le versioni
   nuove in `THIRD_PARTY_NOTICES.md`.
 - **QMEAN:** l'immagine di base di `bioloom-qmean` sta solo nel registro del gruppo Schwede: se sparisse, `bioloom-qmean`
   non si potrebbe più costruire. La copia di sicurezza è il tar della copia portatile o un `docker save`, che
@@ -375,6 +377,96 @@ valore locale, stampa il comando del tunnel (`ssh -N -L <porta>:127.0.0.1:<porta
 senza fermarsi: HTTP con chiave e cookie in chiaro e, con Docker o con Podman da root, porta pubblicata con regole NAT
 che passano prima di firewalld e ufw. Con Podman senza root la porta è aperta da un processo dell'utente e il firewall
 la filtra: la riga sul firewall manca. I `server.env` esistenti con `0.0.0.0` restano così, con l'avviso.
+
+**Porta.** Dal desktop (`bioloom.sh`, `bioloom.ps1`) la prima libera partendo da quella dell'ultimo avvio
+(`BIOLOOM_PORT` di `.env.locale`), poi le successive fino alla 8800 e da 8765: prima la ricerca partiva dall'ultima
+usata e non tornava più alle porte libere più basse. La porta del BioLoom in esecuzione conta come libera (la dice
+`compose port bioloom 8765`; se compose non la dice si suppone quella salvata). Un valore guasto in `.env.locale` vale
+8765 (prima il cast `[int]` mandava in errore lo script PowerShell).
+
+- **Tutte occupate:** l'avviatore si ferma prima di compose, con «Nessuna porta libera per BioLoom: [la N e ]le porte da
+  8765 a 8800 sono tutte usate da altri programmi…» e il comando per vedere chi ascolta (`netstat -ano | findstr
+  LISTENING`, `lsof -nP -iTCP -sTCP:LISTEN`, `ss -ltnp`). Prima proseguiva comunque e compose falliva con «address
+  already in use» o «ports are not available».
+- **`BIOLOOM_PORT` nell'ambiente:** porta fissa. Occupata → «La porta N (BIOLOOM_PORT) è già usata da un altro
+  programma…»; non un numero da 1 a 65535 → «BIOLOOM_PORT=x non è una porta valida…». Finisce in `.env.locale` come
+  porta dell'ultimo avvio, e l'avviatore la toglie poi dall'ambiente: compose preferirebbe la variabile della shell alla
+  porta scritta in `.env.locale`, e prima BioLoom partiva su una porta mentre l'avviatore lo aspettava su un'altra, e
+  `aggiorna` non lo riavviava com'era.
+- **Server** (`bioloom.sh server`, `bioloom-podman.sh`): la porta fissa di `server.env` (o di `BIOLOOM_PORT`
+  nell'ambiente, che per compose prevale, come prima) si controlla prima di caricare o costruire le immagini, con lo
+  stesso messaggio («… (BIOLOOM_PORT in server.env) è già usata da un altro programma su <bind>…») e il valore
+  validato. Per `BIOLOOM_BIND=0.0.0.0` (o vuoto, `localhost`, `::`) si guarda 127.0.0.1, dove risponde anche chi
+  ascolta su tutte le interfacce. La porta del BioLoom acceso conta come libera anche qui.
+- **Come si controlla in bash:** una connessione a `/dev/tcp/<host>/<porta>`, libera se nessuno accetta. In locale con
+  `timeout 3` quando c'è: una porta chiusa rifiuta subito, mentre un programma bloccato con la coda piena terrebbe ferma
+  la connessione per minuti (Linux scarta le richieste in più invece di rifiutarle). Allo scadere la porta conta come
+  occupata: libera solo con un codice d'uscita diverso da 0 e da 124 e sotto 128 (il timeout di busybox esce con 143), e
+  `{ …; } 2>/dev/null` toglie il «Terminated» di bash 3.2. Su Windows (Git Bash) niente timeout: lì una porta locale
+  chiusa si rifiuta dopo circa 2,1 s, e con 3 s le porte libere rischierebbero di risultare occupate. Senza `timeout`
+  (di solito macOS) la connessione resta senza limite, come prima; per un indirizzo di rete senza `timeout` decide
+  Docker.
+- **In PowerShell** (`Test-PortFree`): prima una connessione a 127.0.0.1 con 300 ms di attesa (su una porta chiusa
+  Windows ritenta per circa 2 s), poi l'apertura con `TcpListener`, che trova anche le porte riservate da Windows
+  (`netsh interface ipv4 show excludedportrange`). La connessione serve perché un programma in ascolto su 0.0.0.0 non
+  impediva a `TcpListener` di aprire 127.0.0.1, e la porta risultava libera.
+- **Limiti noti:** in Git Bash le porte riservate da Hyper-V non si vedono (solo la connessione); l'uscita di
+  `podman port` su Podman 2.2.1 non è verificata (se non si legge, si suppone la porta del container stesso: nessun falso
+  blocco).
+- **Prove** (con docker finto, fuori dalla suite): 22 scenari di `bioloom.sh` nell'immagine `bash:3.2`, con porte occupate
+  da listener veri (desktop, server, Podman, tutte occupate, `BIOLOOM_PORT` libera, occupata o non valida, ritorno da
+  8800 a 8765, listener su 0.0.0.0, BioLoom già in esecuzione); 11 di `bioloom.ps1` con `docker.bat`. Sul codice
+  precedente «tutte occupate», «`BIOLOOM_PORT` occupata», server e Podman arrivavano a compose, e in PowerShell non si
+  vedeva il listener su 0.0.0.0.
+
+**Attesa dell'avvio da server** (`start_server` di `bioloom.sh`, anche da `aggiorna` quando riavvia da server).
+`compose up -d` non aspetta BioLoom: prima l'avviatore stampava subito «BioLoom (server) avviato…» anche con un backend
+che usciva all'avvio (chiave troppo corta, `BIOLOOM_TRUSTED_PROXIES` non valida) e che `BIOLOOM_RESTART=unless-stopped`
+faceva ripartire di continuo. Ora, dopo `compose up`, «Attesa della risposta di BioLoom su http://<host>:<porta> ...» e
+`wait_healthy <porta> <host> 1`: `/api/health` una volta al secondo per 2 minuti su `probe_host "$bind"` (127.0.0.1 per
+`0.0.0.0`, `::`, `[::]`, `localhost` o vuoto; `::1` per `[::1]`; altrimenti l'indirizzo di `BIOLOOM_BIND`, con gli IPv6
+fra `[]` nell'URL, `url_host`) e la porta già validata. Con il terzo argomento a 1 guarda anche il container
+(`compose ps -a -q bioloom`, poi `docker inspect` di stato, `RestartCount` e politica di riavvio):
+
+- uscita 2: container `exited` o `dead` senza politica di riavvio;
+- uscita 3: `restarting`, `exited` o `dead` con una politica attiva (fra un'uscita e il riavvio), oppure `RestartCount`
+  cresciuto dal primo controllo (un container che compose non ha ricreato può avere riavvii vecchi);
+- uscita 1: nessuna risposta in 2 minuti.
+
+In tutti e tre i casi `compose logs --tail 30 bioloom` e `fail` (uscita 1) con «BioLoom non risponde su
+http://<host>:<porta> dopo 2 minuti…» oppure «BioLoom si è fermato durante l'avvio: il motivo è nelle righe qui sopra
+(spesso un valore di server.env, per esempio BIOLOOM_ACCESS_KEY più corta di 16 caratteri)…», e per l'uscita 3 in più
+«intanto Docker continua a riavviarlo (BIOLOOM_RESTART), per fermarlo: … arresta»: l'avviatore non ferma il container da
+sé. Dal desktop (`start_local`, ramo desktop di `aggiorna`) `wait_healthy "$port"` resta com'era: 127.0.0.1, senza
+controllo del container.
+
+- **Con curl** (`health_ok`, e `wait_healthy` di `bioloom-podman.sh`): `curl -fsS --noproxy '*' --max-time 5`. curl
+  usa `http_proxy` anche per 127.0.0.1 (provato con curl 8.19 su Windows), e sui server degli
+  enti la variabile è spesso impostata: prima un proxy che rifiutava la richiesta faceva dire «BioLoom non risponde…»
+  dopo 2 minuti con il container sano, e uno irraggiungibile faceva aspettare a ogni tentativo tutto il timeout di
+  connessione (21 s su Windows, ~130 s su Linux). `--max-time 5` vale come il `read -t 5` del ramo senza curl.
+- **Senza curl** (`health_ok`): una vera `GET /api/health HTTP/1.0` su `/dev/tcp`, con `read -t 5` della riga di stato,
+  che deve essere 200. Prima bastava aprire la connessione, che la porta pubblicata da Docker accetta anche quando
+  BioLoom non ascolta: senza curl l'attesa finiva subito.
+- **Prove** (docker finto, copia di prova, `BIOLOOM_RESTART=unless-stopped`): risposta con bind 127.0.0.1 e 0.0.0.0,
+  anche senza curl (uscita 0); container uscito (log e «si è fermato durante l'avvio…»); container in riavvio (riavvii
+  che crescono, stato `restarting`, `exited` con la politica attiva: messaggio con «Docker continua a riavviarlo…
+  arresta»); nessuna risposta con il ciclo accorciato, bind 127.0.0.1 e `[::1]`. La sonda senza curl dà esito negativo
+  su una porta che accetta e chiude subito, su una che risponde 503, su una muta (dopo 5 s) e su una chiusa.
+- **Limiti noti:** `bioloom-podman.sh` non ha avuto lo stesso intervento: aspetta 2 minuti senza accorgersi che il
+  container è uscito e senza mostrare il log («BioLoom non risponde: controlla con '… log'.»), senza curl gli basta la
+  connessione, e con bind `::` o `[::]` costruisce un URL sbagliato (tratta come caso speciale solo `0.0.0.0`).
+
+**Docker Desktop.** Quando Docker manca, `bioloom.ps1` e `bioloom.sh` (su macOS e Windows, e su macOS anche quando c'è
+solo Podman) aggiungono la licenza e le alternative: gratuito per uso personale, didattico e nelle aziende piccole (meno
+di 250 dipendenti e meno di 10 milioni di dollari di fatturato annuo); negli enti pubblici, anche piccoli, e nelle altre
+organizzazioni, se l'uso non è didattico, «verifica la licenza» con il link ai prezzi (secondo i termini di Docker serve
+un abbonamento per l'uso professionale negli enti pubblici di qualunque dimensione e dove si raggiunge almeno una delle
+due soglie). Poi i programmi che danno i comandi `docker` e `docker compose`, dichiarati non provati con BioLoom: Rancher
+Desktop, Podman Desktop con la compatibilità Docker e, su macOS, Colima. Prima solo `bioloom.ps1` ne parlava, con
+«gratuito per uso personale e accademico». Su Linux l'avviatore indica Docker Engine con il plugin compose, gratuito. La
+copia portatile finisce con «Sul computer di destinazione serve solo Docker (Docker Desktop o un programma con i comandi
+docker e docker compose)».
 
 **Mac con processore Apple.** Il riepilogo dell'avvio dal desktop (`bioloom.sh`) aggiunge due righe (container amd64 in
 emulazione, ProSA x86 a 32 bit che potrebbe non funzionare, l'opzione «Use Rosetta for x86_64/amd64 emulation on Apple
@@ -445,8 +537,8 @@ vedi [Avviatori](#avviatori-un-bioloom-alla-volta-e-controlli-allavvio).
 
 | Modulo | Contenuto |
 |---|---|
-| `__main__` | avvio del server (`python -m bioloom`, `--host`, `--port`, `--no-browser`) e comando `rerun` |
-| `app` | applicazione FastAPI: rotte, middleware (Host e origine, chiave d'accesso, CORS dello sviluppo, limite del corpo), interfaccia compilata (`frontend/dist`) |
+| `__main__` | avvio del server (`python -m bioloom`, `--host`, `--port`, `--no-browser`; uscita 3 se l'avvio non riesce, per esempio con una chiave d'accesso troppo corta) e comando `rerun` |
+| `app` | applicazione FastAPI: rotte, middleware (Host e origine, chiave d'accesso, CORS dello sviluppo, limite del corpo), errori interni con un codice, interfaccia compilata (`frontend/dist`) |
 | `cli` | comandi oltre al server: `python bioloom.py rerun` (vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione)) |
 | `config` | percorsi (`Paths`), impostazioni utente (`UserSettings`, `SettingsStore`), limite degli upload |
 | `selftest` | verifica dell'installazione da riga di comando (`python -m bioloom.selftest`) |
@@ -455,7 +547,7 @@ vedi [Avviatori](#avviatori-un-bioloom-alla-volta-e-controlli-allavvio).
 
 | Modulo | Contenuto |
 |---|---|
-| `auth` | chiave d'accesso della modalità server (`BIOLOOM_AUTH=on`) |
+| `auth` | chiave d'accesso della modalità server (`BIOLOOM_AUTH=on`): lunghezza minima, sessioni revocabili con l'epoca, freno ai tentativi (`LoginLimiter`), indirizzo del client dietro un proxy fidato (vedi [Sicurezza e privacy](#sicurezza-e-privacy)) |
 | `bodylimit` | limite della dimensione del corpo delle richieste, prima che Starlette lo legga (`BodyLimit`, `request_limit`; vedi [Sicurezza e privacy](#sicurezza-e-privacy)) |
 | `budget` | budget di CPU condiviso fra i job (vedi [Coda con priorità e budget di CPU](#coda-con-priorità-e-budget-di-cpu)) |
 | `cache` | cache dei calcoli (vedi [Cache dei calcoli](#cache-dei-calcoli)) |
@@ -468,7 +560,8 @@ vedi [Avviatori](#avviatori-un-bioloom-alla-volta-e-controlli-allavvio).
 | `guard` | protezione dalle richieste di altri siti: header Host (DNS rebinding), origine (CSRF), niente iframe (clickjacking), vedi [Sicurezza e privacy](#sicurezza-e-privacy) |
 | `jobs` | `JobManager`, `JobContext`, scratch e salvataggio definitivo, eliminazione atomica sul disco (`.deleting-<id>`) |
 | `parallel` | passi indipendenti di un calcolo su un pool locale di thread (`Steps`, vedi [Prestazioni](#prestazioni)) |
-| `storage` | scritture atomiche, `safe_join`, identificatori validati, rimozione di cartelle con esito (`remove_tree`), dimensioni con un tempo massimo (`dir_size_until`) |
+| `sensitive` | dati sensibili: mascheratura delle chiavi nei testi (`mask`, `redact`, `redactor`) e ambiente dei programmi esterni senza i segreti del server (`subprocess_env`) |
+| `storage` | scritture atomiche, `safe_join` (regge le cartelle in eliminazione su Windows; rifiuta i percorsi che, risolti, escono dalla radice: `..` che risale, percorsi assoluti esterni, link simbolici e giunzioni verso fuori), identificatori validati, rimozione di cartelle con esito (`remove_tree`), dimensioni con un tempo massimo (`dir_size_until`) |
 
 **`domain/`**
 
@@ -482,7 +575,7 @@ vedi [Avviatori](#avviatori-un-bioloom-alla-volta-e-controlli-allavvio).
 | `conservation` | conservazione per colonna di un allineamento multiplo, mappata sulla struttura |
 | `disorder` | disordine FoldIndex, bassa complessità SEG, domini e copertura del bersaglio |
 | `electrostatics` | PQR, griglia e input di APBS, mappe OpenDX, potenziale di superficie |
-| `exports` | sessione PyMOL |
+| `exports` | sessione PyMOL: la struttura incorporata identica con `ascii()` su una sola riga, script `.pml` tutto ASCII |
 | `fileformats` | lettura di sequenze e allineamenti da file in ogni formato comune |
 | `geometry` | Kabsch, RMSD, TM-score |
 | `grading` | voto A–D |
@@ -558,7 +651,7 @@ vedi [Avviatori](#avviatori-un-bioloom-alla-volta-e-controlli-allavvio).
 | Modulo | Prefisso | Contenuto |
 |---|---|---|
 | `analysis` | `/api/analysis` | analisi strutturale e la più recente per struttura |
-| `auth` | `/api/auth` | stato, login, logout |
+| `auth` | `/api/auth` | stato, login, logout, chiusura di tutte le sessioni (`logout-all`) |
 | `bio` | `/api` | analisi di sequenza, disordine, copertura, FASTA, conversione degli allineamenti, validazione PIR, UniProt, InterPro, metadati RCSB |
 | `compute` | `/api` | avvio di ricerca di template (`POST /api/search`), allineamenti, modellazione, loop, qualità, QMEAN, pipeline (elementi ed esportazioni) e controlli preventivi |
 | `databases` | `/api/databases` | stato e job dei database |
@@ -637,7 +730,22 @@ Tutti i calcoli passano dal `JobManager` (priorità di ogni tipo nella [coda](#c
   `project_id` vuoto (campo vuoto di un form) vale «nessun progetto». Se qualcosa fallisce prima dell'accodamento
   (INSERT o preparazione) la riga `queued` mai accodata si cancella e la cartella si rimuove; quello che non si riesce a
   togliere (file in uso) passa in `.deleting-<id>` e lo toglie la pulizia automatica. L'errore originale arriva sempre
-  al chiamante, anche se questa pulizia non riesce.
+  al chiamante, anche se questa pulizia non riesce;
+- **ambiente dei programmi esterni** (`default_env`): quello del server senza i suoi segreti
+  (`core/sensitive.subprocess_env`: `BIOLOOM_ACCESS_KEY`, `MODELLER_KEY`, `KEY_MODELLER` e tutte le `BIOLOOM_SMTP_*`,
+  con utente e password della posta; i nomi senza distinguere maiuscole, come su Windows), più le variabili di
+  `set_subprocess_env` (`BIOLOOM_MODELLER_KEY`, la chiave attiva, con cui MODELLER continua a funzionare). Nessun
+  programma esterno usa le variabili tolte. Lo usano anche i processi lanciati fuori da un job (sonde delle versioni in
+  `engines/versions.py`, passi di qualità senza `ctx`, prova di MODELLER), che prima ereditavano tutto `os.environ`.
+  Limite: `BIOLOOM_MODELLER_KEY` arriva a tutti i programmi esterni, non solo a MODELLER;
+- **chiavi nell'output dei processi:** `JobContext._popen` maschera riga per riga le chiavi MODELLER (`output_secrets`:
+  quella attiva, quella dell'ambiente del processo e `MODELLER_KEY`) prima del log del job, del file dell'output e
+  dell'esito restituito a chi ha lanciato il processo, che finisce nei messaggi d'errore: MODELLER ripete la chiave
+  rifiutata nel suo messaggio;
+- **righe nel log a esecuzione chiusa** (`JobManager.log_if_present`): per chi scrive nel log da un altro thread dopo la
+  fine (l'esito dell'avviso per email), solo se la riga del job c'è ancora, la cartella è al suo posto e il job non è in
+  eliminazione, sotto lo stesso lock di `delete`. Prima una riga scritta dopo l'eliminazione ricreava `jobs/<id>/job.log`,
+  una cartella senza riga che nessuna pulizia toglie.
 
 ### Coda con priorità e budget di CPU
 
@@ -766,8 +874,9 @@ stato finale; `NotifyService.on_finish` legge i parametri del job e, se c'è l'i
 - **Invio:** `smtplib`, timeout 30 s, STARTTLS o SSL/TLS con il contesto predefinito (certificato verificato) oppure
   nessuna sicurezza; accesso solo con un utente. Errori temporanei (connessione, risposte 4xx) riprovati dopo 10 e 60 s;
   utente o password rifiutati e destinatario rifiutato non si riprovano. L'esito («Email di avviso inviata a …» o «non
-  inviata: motivo») va nel log del job appena l'esecuzione si chiude (`busy`, al più 2 minuti). Ogni esecuzione
-  (anche una ripresa) avvisa una volta, alla sua fine.
+  inviata: motivo») va nel log del job appena l'esecuzione si chiude (`busy`, al più 2 minuti), solo se il job esiste
+  ancora (`JobManager.log_if_present`: un job eliminato durante l'invio non si vede ricreare la cartella). Ogni
+  esecuzione (anche una ripresa) avvisa una volta, alla sua fine.
 - **Configurazione, mai dall'interfaccia** (`GET /api/notify` in sola lettura, `POST /api/notify/test`; nessun `PUT`):
   in qualunque modalità le variabili `BIOLOOM_SMTP_*` e `BIOLOOM_PUBLIC_URL` dell'ambiente (server.env), se c'è
   `BIOLOOM_SMTP_HOST`, altrimenti le stesse righe `NOME=valore` nel file `licenses/posta.env` della cartella dati
@@ -778,6 +887,21 @@ stato finale; `NotifyService.on_finish` legge i parametri del job e, se c'è l'i
   contattare al server un host della sua rete; sceglie solo se ricevere l'avviso e a quale indirizzo.
 - **Intestazioni:** nessun a capo in utente, mittente e destinatario (validatori); l'oggetto si ricompone su una riga
   e si tronca a 150 caratteri.
+- **Limiti di frequenza** (in ogni modalità; ogni tentativo d'invio conta, riuscito o no, perché un server di posta che
+  non risponde tiene occupato un thread fino a tre tentativi, oltre un minuto):
+  - email di prova al più una ogni 30 s (`TEST_MIN_INTERVAL`) e 5 all'ora (`TEST_PER_HOUR`) per tutto il server,
+    altrimenti 429 `rate_limited` con l'attesa: «È appena stata inviata un'email di prova: riprova tra N s.» oppure
+    «Limite di 5 email di prova all'ora raggiunto: riprova tra N min.» (`wait_text`: per eccesso, in minuti da 90 s).
+    Senza un server di posta pronto la prova risponde prima 400 `notify_not_configured` («Server di posta non
+    configurato.»), senza contare;
+  - avvisi di fine job al più 10 all'ora allo stesso indirizzo, senza distinguere maiuscole (`NOTICE_PER_RECIPIENT`), e
+    30 all'ora in tutto (`NOTICE_PER_HOUR`): oltre, l'avviso non parte e il motivo va nel log del job («Email di avviso a
+    … non inviata: limite di 10 avvisi all'ora allo stesso indirizzo raggiunto.»), perché il job ormai è finito e non c'è
+    un errore da restituire. Un avviso costa poco a chi lo chiede (basta una pipeline annullata subito);
+  - le prenotazioni si registrano sotto un lock prima dell'invio, così richieste in parallelo non passano insieme. Gli
+    avvisi delle pipeline annullate in coda partono ancora: con un accesso condiviso l'annullamento può farlo un altro
+    utente, e il limite basta contro l'abuso. Il client del frontend tratta il 429 come ogni errore, con il messaggio del
+    server.
 
 ### Ripresa delle pipeline
 
@@ -919,7 +1043,8 @@ ricerche. Il pairwise è istantaneo e non passa dalla cache.
 
 - **Dove:** un file JSON per voce in `data/cache/compute/<operazione>/<chiave>.json` (`search`,
   `align_multiple`, `align_structural`). Sta nella cartella dati e viaggia con la chiavetta. La pulizia automatica
-  la tratta come le risposte remote (30 giorni). In Impostazioni → Spazio l'occupazione è mostrata a parte.
+  la tratta come le risposte remote (30 giorni) e in più la tiene sotto il tetto (sotto). In Impostazioni → Spazio
+  l'occupazione è mostrata a parte.
 - **Chiave:** SHA-256 del JSON canonico (chiavi ordinate) con operazione, versione del formato della cache e di
   BioLoom, input normalizzati, parametri e timbro delle dipendenze:
 
@@ -953,6 +1078,23 @@ ricerche. Il pairwise è istantaneo e non passa dalla cache.
   sostituita. L'impostazione `compute_cache` (predefinita accesa; le impostazioni precedenti la ricevono accesa)
   disattiva letture e scritture. La verifica dell'installazione ricalcola sempre (`use_cache=False`), perché deve
   eseguire davvero gli strumenti.
+- **Tetto** (impostazione `compute_cache_max_mb`, «Spazio massimo della cache dei calcoli (MB)»: predefinito 2048, da
+  100 a 102400, `config.COMPUTE_CACHE_*`): oltre il tetto `prune` elimina le voci usate meno di recente finché la cache
+  scende al 90% (`PRUNE_TARGET`), così la pulizia successiva non arriva alla scrittura dopo.
+  - **Uso:** «usata» = scritta o letta con successo. `lookup` aggiorna con `_touch` la data di ultimo accesso (atime) e
+    lascia quella di modifica, su cui conta la pulizia per età; l'ordine è dato dalla più recente delle due.
+  - **Costo:** la cartella non si scorre a ogni scrittura. Lo spazio occupato si misura alla prima pulizia per tetto e
+    poi si aggiorna a ogni `store` (anche per una voce sostituita); è una stima: le voci tolte dalla pulizia per età la
+    lasciano più alta del vero, e allora la pulizia arriva prima e la rimisura. `enforce` scorre la cartella solo se la
+    stima manca o supera il tetto.
+  - **Quando:** all'avvio e con la pulizia automatica (`services/housekeeping`, dopo quella per età; le voci tolte si
+    contano in `cache` del rapporto, i byte in `freed_bytes`), dopo le scritture di `run_cached` (riga nel log del job:
+    «Cache dei calcoli oltre il tetto delle Impostazioni: eliminate N voci usate meno di recente (X MB).») e, in un
+    thread, quando `PUT /api/settings` cambia il tetto.
+  - **Casi limite:** i file temporanei di scritture interrotte contano nello spazio ma non si toccano (li toglie la pulizia
+    automatica dopo un giorno); un file che non si elimina (in uso) resta per la volta dopo; una pulizia alla volta.
+  - **Impostazione:** le impostazioni precedenti ricevono il predefinito; un valore che non è un intero fra il minimo e
+    il massimo, scritto a mano in `settings.json`, torna al predefinito senza azzerare le altre (`UserSettings.from_file`).
 - **Provenienza:** un risultato riusato ha `cached: true` e `cached_at` (data ISO del calcolo), e il log del job
   riporta "Risultato dalla cache del …". Nella pipeline la data finisce nelle metriche dell'elemento
   (`search_cached_at`, badge "cache" nella tabella) e il risultato del job conta le ricerche riusate
@@ -1046,11 +1188,18 @@ cancellare a mano. Il log dell'avvio riporta le migrazioni applicate e la copia.
 Servizio `services/licenses.py`.
 
 - **MODELLER:** la chiave viene da `data/licenses/modeller.key` oppure da `MODELLER_KEY`.
-  - Arriva ai soli sottoprocessi tramite `BIOLOOM_MODELLER_KEY`.
+  - Arriva ai soli sottoprocessi tramite `BIOLOOM_MODELLER_KEY`; `MODELLER_KEY` del server non passa ai programmi
+    esterni (`core/sensitive.subprocess_env`).
   - Il preambolo degli script (`engines/tools.LICENSE_PREAMBLE`) esegue il `config.py` dell'installazione e
     registra `modeller.config` con la chiave in `sys.modules` prima di `import modeller`. L'installazione
     non viene modificata.
   - Una chiave nuova viene provata con MODELLER prima di essere salvata; nelle risposte è sempre mascherata.
+  - **Mascheratura** (`core/sensitive.mask`, `redact`; senza distinguere maiuscole, solo segreti di almeno 4 caratteri):
+    `tools.detect_modeller` maschera nei messaggi dei tentativi la chiave provata, quella attiva e `MODELLER_KEY`, così
+    ogni uso del suo risultato la riceve già mascherata (`MOD••••••A9`): `/api/system/info`, licenze, verifica
+    dell'installazione, messaggi d'errore dei job che passano da `modeller_python()`. L'output dei processi dei job lo
+    maschera `JobContext._popen` (vedi [Job](#job)). Prima solo le rotte delle licenze sostituivano la chiave, e solo
+    scritta con le stesse maiuscole.
 - **ProSA II 2003:** `LicenseDB` ha righe `programma scadenza MAC codice`. L'avviatore imposta quel MAC sul
   container (`mac_address`), e l'interfaccia confronta il MAC richiesto con quello effettivo. La licenza vale per un
   solo computer e vieta di cambiarne la configurazione per aggirarla, mentre la cartella dati gira su più computer
@@ -1190,7 +1339,12 @@ rotte del consenso e del report lo ricalcolano.
 - **RCSB** (predefinito): Search API (MMseqs2 lato server) → sequenze di catena via GraphQL → riallineamento
   Smith-Waterman locale per identità, copertura e coordinate. Ritenta automaticamente i timeout 5xx di RCSB.
 - **NCBI QBlast**: conforme alle linee guida (tool/email, polling ogni 60 s, attesa massima 45 min).
-- **BLAST+ locale**: `blastp` contro `data/databases/pdbaa` (scaricabile e aggiornabile da NCBI con un job).
+- **BLAST+ locale**: `blastp` contro `data/databases/pdbaa` (scaricabile e aggiornabile da NCBI con un job). L'XML dei
+  risultati (`-outfmt 5`) va con `-out` in un file a nome unico (gli elementi di una pipeline condividono la cartella)
+  nella cartella temporanea del job (`.tmp` nello scratch), fuori dai risultati e dai file salvati nella cache, e si
+  elimina appena letto (`search._local_blast`): dall'output del processo `JobContext.run` conserva solo le ultime righe,
+  e con molti risultati (decine di migliaia di righe) l'XML arrivava troncato. Risultati invariati, verificati con 800
+  hit e oltre 26.000 righe.
 - **MMseqs2 locale**: `easy-search -s 7.5` sul database creato da pdbaa (`blastdbcmd` → `createdb`), con
   l'indice locale se presente.
 - **AlphaFold DB** (modelli predetti, vedi [sotto](#modelli-alphafold-db)): accessione UniProt indicata, oppure
@@ -1466,7 +1620,13 @@ riferimento. È sempre segnato come **modello predetto, non struttura sperimenta
 
 Il server non importa mai `modeller`: ogni operazione è uno script generato ed eseguito in un
 sottoprocesso. Nel container è MODELLER 10.8 del pacchetto .deb; in esecuzione nativa di sviluppo si può
-indicare un altro interprete (`BIOLOOM_MODELLER_PYTHON`). Flusso di un job `model`:
+indicare un altro interprete (impostazione `modeller_python` o `BIOLOOM_MODELLER_PYTHON`). In modalità server vale solo
+la variabile, come `esmfold_url`: `SettingsStore` con `server` la usa al posto del valore salvato e `PUT /api/settings`
+rifiuta un altro valore (403 `modeller_python_locked`), perché è un programma che il server esegue; anche la verifica da
+riga di comando (`selftest`) usa le impostazioni del server. `compose.yml` e `bioloom-podman.sh` passano al container
+la variabile di `server.env`, un percorso nel container; vuota vale il rilevamento automatico, cioè l'interprete
+dell'immagine, che si usa anche quando a quel percorso non c'è un Python con MODELLER (`modeller_candidates`). Flusso
+di un job `model`:
 
 1. **Template**: conversione in PDB pulito (catene scelte, solo i ligandi scelti, niente acqua, MSE→MET; vedi
    [Ligandi, cofattori e metalli](#ligandi-cofattori-e-metalli)).
@@ -2194,9 +2354,10 @@ sequenza…" che il metodo integrato scriveva già prima; un risultato nuovo sen
 - **Colorazione:** `comparisonColoring` colora i residui di B della catena B del PDB sovrapposto per distanza (scala
   continua blu → giallo → rosso tra 0 e 5 Å, saturata oltre: 5 Å è la soglia delle coppie vicine di TM-align) o per
   lDDT (stessa scala rovesciata su 0–1); i residui di A hanno lo stesso valore nel passaggio del mouse ma il colore fisso
-  del riferimento (grigio chiaro, `ResidueValue.color`). Nessun colore chiaro nella scala, per non confonderlo con A. Per
-  i residui senza coppia vale il colore della catena (`ResidueColoring.chainColors`: A grigio chiaro, B grigio "senza
-  valore"), con i campioni in legenda (`legendExtra`).
+  del riferimento (grigio chiaro, ardesia scura nel tema chiaro, `ResidueValue.color`). Nessun colore chiaro nella
+  scala, per non confonderlo con A. Per i residui senza coppia vale il colore della catena
+  (`ResidueColoring.chainColors`: A come il riferimento, B grigio "senza valore"), con i campioni in legenda
+  (`legendExtra`).
 - **Selezione:** clic su grafico, tabella o tratto che devia (almeno 3 coppie consecutive oltre 1, 2 o 4 Å, le soglie
   del GDT, senza salti della numerazione di A) evidenzia i due residui e centra la vista; clic nel 3D seleziona la
   coppia (`pairIndexOf`, su catena A o B). Il grafico interrompe la linea dove A ha residui senza coppia. La tabella
@@ -2478,7 +2639,7 @@ La mappa si scarica da `/api/jobs/{id}/files/potential.dx?download=true`.
   rilancio, job seguito conservato dalla pagina cambiando scheda. Tasche: tabella ordinata per druggability (barra,
   badge "druggabile", punteggio, volume, sfere, idrofobicità, residui), 3D con i residui delle prime 8 tasche colorati
   con la tavolozza di Okabe-Ito e il resto grigio chiaro, centri delle sfere alfa come sferette e centro della tasca in
-  bianco (`Viewer3D.spheres`); clic su una riga → solo quella tasca, residui evidenziati e vista centrata; clic nel 3D
+  bianco, ardesia scura nel tema chiaro (`CENTER_COLOR`, `Viewer3D.spheres`); clic su una riga → solo quella tasca, residui evidenziati e vista centrata; clic nel 3D
   → la tasca del residuo. Elettrostatica: campo di forza e pH, carica netta con i residui carichi per tipo, 3D e
   striscia per residuo con la scala ±5 kT/e e la legenda, residui più positivi e più negativi (clic → evidenza; solo
   quelli con almeno 10 punti di superficie: Ile13 di 1UBQ, con un solo punto esposto a +3,8 kT/e, resta nel 3D ma non
@@ -3842,7 +4003,8 @@ interfaccia delle singole funzioni sono descritte nelle loro sezioni (paragrafi 
 | `api/` | `client.ts` (tutte le chiamate al backend) e `types.ts` (tipi delle risposte) |
 | `pages/` | una pagina per rotta (tabella sotto), caricata su richiesta |
 | `components/` | componenti condivisi (`ui`, `charts`, `Viewer3D`, `JobPanel`, `Pickers`, `AlignmentView`, `Layout`, `GlobalSearch`, `Labels`, `Preflight`, `ReportButton`, `ReproButton`, `FileLoad`, `ErrorBoundary`, `ProjectsDialog`, `JobCleanupDialog`, `TemplateUpload`…) e riquadri delle funzioni (`StructuralAnalysis`, `StructureTools`, `Refinement`, `Mutagenesis`, `Predictor`, `ComplexInput`, `ComplexResults`, `AssembliesCard`, `LigandPicker`, `LigandsPanel`, `CoverageAlerts`…) |
-| `lib/` | logica pura con i test accanto (`*.test.ts`, per esempio `cleanup.ts` per la pulizia dei job e l'eliminazione dei progetti, `projectSelection.ts` per il progetto attivo, `templateUpload.ts` per la conferma della sostituzione dei template), `safeStorage.ts` (sessionStorage senza eccezioni), più gli hook (`hooks.ts`, `useJob`) e i contesti di progetto e notifiche (`context.tsx`) |
+| `lib/` | logica pura con i test accanto (`*.test.ts`, per esempio `cleanup.ts` per la pulizia dei job e l'eliminazione dei progetti, `projectSelection.ts` per il progetto attivo, `templateUpload.ts` per la conferma della sostituzione dei template), `safeStorage.ts` (sessionStorage senza eccezioni), `clipboard.ts` (copia negli appunti con ripiego), `links.ts` (link esterni solo https), più gli hook (`hooks.ts`: `useJob`, `useVisibleInterval`) e i contesti di progetto e notifiche (`context.tsx`, con `useOptionalToast`) |
+| `test/` | strumenti dei test di interfaccia (`dom.ts`: risposte finte del server al posto di `fetch`, visibilità della scheda); nessun componente lo importa |
 
 **Qualità per residuo nel 3D e confidenza degli allineamenti:**
 
@@ -3878,13 +4040,14 @@ interfaccia delle singole funzioni sono descritte nelle loro sezioni (paragrafi 
 
 **Navigazione, tema, scorciatoie e liste lunghe:**
 
-- **Schermi stretti** (≤ 760 px): la barra laterale (pagine, tema, Tasti, Disconnetti, Esci) si apre come pannello sopra
-  la pagina dal pulsante del menu nella barra in alto (`Layout`, classe `nav-open`) e si chiude scegliendo una pagina,
-  con Esc, con la ✕ o toccando fuori; le griglie (`grid-2`…`grid-5`) passano a una colonna.
+- **Schermi stretti** (≤ 760 px): la barra laterale (pagine, tema, Tasti, Disconnetti, Esci da tutti i dispositivi,
+  Esci) si apre come pannello sopra la pagina dal pulsante del menu nella barra in alto (`Layout`, classe `nav-open`) e
+  si chiude scegliendo una pagina, con Esc, con la ✕ o toccando fuori; le griglie (`grid-2`…`grid-5`) passano a una
+  colonna.
 - **Tema** (`lib/theme.ts`): Scuro, Chiaro o Sistema nella barra laterale. "Sistema" segue `prefers-color-scheme` e
   cambia con il sistema operativo (evento `change` della media query); il tema si applica prima del primo render
   (`initialTheme` in `main.tsx`). La scelta resta in `bioloom.theme` come prima: i valori salvati "dark" e "light" valgono
-  ancora, uno illeggibile vale il predefinito (scuro).
+  ancora, uno illeggibile vale il predefinito (scuro). Anche il visualizzatore 3D segue il tema (sotto).
 - **Scorciatoie** (`lib/shortcuts.ts`, pannello «Tasti» o `?`): Ctrl+K / ⌘K anche dentro un campo; `/`, `?` e `g` più
   una lettera (`g s` Sequenze, `g j` Job, `g q` Qualità… entro 1,5 s) solo fuori dai campi di testo e senza dialoghi
   aperti; Esc chiude dialoghi e ricerca.
@@ -3911,6 +4074,104 @@ della pagina bianca.
 - **Senza sessionStorage** nessuna ricarica automatica, perché non si potrebbe ricordare di averla già fatta: resta il
   pulsante. `lib/safeStorage.ts` (`sessionGet`, `sessionSet`) legge e scrive dentro try/catch (lettura non riuscita =
   null, scrittura non riuscita = false), come `main.tsx` per localStorage.
+
+**Tastiera, copia, aggiornamenti periodici e visualizzatore 3D:**
+
+- **Tastiera:** `rowActivate` (Tab, poi Invio o Spazio; un Invio su un pulsante della riga resta al pulsante) e
+  `aria-current` sulla riga scelta valgono anche per le righe di Editor PIR (documenti), Job, Modellazione (modelli; uno
+  fallito non si sceglie), Sequenze (le due tabelle) e Libreria template; `DropZone` è un `role="button"` con lo stesso
+  comportamento (apre la scelta del file). Le notifiche hanno il pulsante × (`aria-label` «Chiudi la notifica», `title`
+  «Chiudi»), e il clic sulla notifica la chiude ancora. Il riquadro del consenso non cambia: ogni riga ha già «Mostra nel
+  3D», e una riga attivabile avrebbe raddoppiato le fermate del Tab.
+- **Durata delle notifiche** (`lib/context.tsx`): ogni notifica è un componente `Toast` con il proprio timer, che la
+  chiude dopo `TOAST_MS` (4 s, 8 s gli errori) ma resta fermo mentre la notifica ha il puntatore sopra o il focus dentro
+  (per esempio sul ×). Quando li perde riparte con il tempo che restava, mai meno di `TOAST_RESUME_MS` (2 s). Prima si
+  chiudevano dopo 4 o 8 s anche con il focus. Limite: il timer usa `Date.now()` e non si ferma con la scheda nascosta.
+- **Copia** (`lib/clipboard.copyText`, `CopyButton` in `components/ui.tsx`): Clipboard API e, se manca (contesto non
+  sicuro: server in HTTP senza TLS) o viene rifiutata, una textarea temporanea fuori vista con
+  `document.execCommand("copy")`, che i browser accettano durante un clic; focus e selezione tornano com'erano. Se non
+  riesce nemmeno questo il pulsante mostra «Non copiato» per 4 s, con la spiegazione (`COPY_FAILED`) nel suggerimento e,
+  dentro l'app, una notifica d'errore (`useOptionalToast`: fuori dal `ToastProvider` niente notifica e nessuna
+  eccezione). Prima, senza la Clipboard API, il pulsante non faceva nulla.
+- **Aggiornamenti periodici con la scheda nascosta** (`useVisibleInterval` in `lib/hooks.ts`): fermi mentre
+  `document.visibilityState` è `hidden`, una chiamata subito al ritorno e poi di nuovo al loro ritmo; con `ms` null
+  (polling spento, per esempio con il flusso in tempo reale attivo) il ritorno non chiama nulla, e la funzione chiamata è
+  sempre l'ultima passata. Lo usano il contatore dei job di `Layout` (ogni 3 s) e le statistiche della Panoramica.
+- **`Viewer3D`:**
+  - il file della struttura passa da `api.fileText(url, signal)`: testo anche se il server dichiara JSON; cambiando file
+    la richiesta precedente si annulla e la sua risposta non conta; una richiesta annullata non diventa «Server non
+    raggiungibile»; con la sessione scaduta torna la schermata di accesso (evento `auth-required`) con il messaggio del
+    server invece di «HTTP 401»; un file che non arriva dà «Struttura non disponibile: …»;
+  - sfondo e comandi dal tema: variabili `--viewer-*` in `styles.css` (fondo `#0b1120` nel tema scuro, `#f2f4f8` nel
+    chiaro), lette con `useDocumentTheme` e `viewerBackground` (`lib/theme.ts`). La tela cambia sfondo al cambio di tema
+    senza ricaricare la struttura, e il PNG della vista e l'immagine del report prendono lo stesso fondo. Pulsanti,
+    legenda e messaggi usano gli stessi token (testi ≥ 4,5:1, anello del focus ≥ 3:1 nei due temi);
+  - grigio di contesto dei residui (`lib/colorscale.ts`): `CONTEXT_COLOR` `#e2e8f0` e, nel tema chiaro,
+    `CONTEXT_COLOR_LIGHT` `#7c8797` (circa 3,3:1 sul fondo del 3D, 3,6:1 sotto la legenda, almeno 3:1 sui pannelli),
+    scelto solo al momento del disegno con `themedColor` (`coloringMap(coloring, theme)`, colori per catena, legenda,
+    strisce dei residui, `ScaleLegend`): le funzioni che preparano i colori restano indipendenti dal tema. Lo usano le
+    ultime fasce del consenso, clash, interfaccia e, come `OUTSIDE_COLOR`, tasche e scansione di alanina; nel tema scuro
+    cambia solo il grigio di clash e interfaccia (da `#cbd5e1` a `#e2e8f0`). Con `#e2e8f0` sul fondo chiaro il contrasto
+    era circa 1,1:1;
+  - altre varianti per il tema chiaro, nella stessa tabella `LIGHT_THEME_COLORS` (chiave: il colore del tema scuro) e
+    misurate sul fondo del 3D: riferimento A del Confronto, `REFERENCE_COLOR` `#cbd5e1` → `REFERENCE_COLOR_LIGHT`
+    `#1e293b` (grigio ardesia scuro, 13,3:1; ora definito in `colorscale.ts` e riesportato da `lib/compare.ts`); «1
+    metodo» del consenso, `ONE_METHOD_COLOR` `#fde047` → `#666f12` (giallo oliva scuro, 5,0:1); centri delle tasche,
+    `MARKER_COLOR` `#ffffff` → `#1e293b` (13,3:1; `CENTER_COLOR` in `lib/pockets.ts`). Il tema scuro non cambia. A resta
+    un grigio come «B senza coppia» (`#6b7280`) ma molto più scuro (circa 3:1 fra i due): la differenza è di luminosità e
+    resta con la deuteranopia e la protanopia; un viola, con la deuteranopia, sembrerebbe il blu delle coppie coincidenti
+    della scala delle distanze. Un giallo scuro (ocra, oro) con la deuteranopia diventa quasi uguale al rosso di «3 o
+    più metodi»; l'oliva è la tinta che se ne allontana di più;
+  - `drawColor(scale, value, theme, fixed?)` applica la variante solo ai colori fissi (`ResidueValue.color`), alle fasce
+    e alle categorie; i gradienti delle scale continue restano quelli della scala, altrimenti la conservazione a 0,5,
+    bianca come i centri delle tasche, verrebbe scurita. La usano `coloringMap` (`residueColoring.ts`) e la striscia per
+    residuo (`charts/residue.tsx`); `ConsensusTracks` colora barre e legenda con `themedColor`, quindi «1 metodo» è
+    oliva anche nel grafico del consenso. In `Viewer3D` sfere e linee prendono il colore del tema al momento del disegno
+    e si ridisegnano quando il tema cambia;
+  - contorno nel tema chiaro (`VIEWER_VIEW_STYLE` in `lib/theme.ts`, `setViewStyle` di 3Dmol): `outline` `#1e293b`,
+    0,5 Å, al più 1,5 px, applicato da `Viewer3D` alla creazione e a ogni cambio di tema; nel tema scuro nessun
+    contorno. Stacca dal fondo i colori chiari che restano tali: i gradienti delle scale continue (centro bianco di
+    blu-bianco-rosso, del potenziale e della conservazione, giallo di viridis e della scala delle distanze), gli schemi di
+    3Dmol (B-factor, struttura secondaria, catene) e le fasce e categorie chiare senza variante. Scurire quei gradienti
+    ne cambierebbe la lettura: il centro neutro di una scala divergente sembrerebbe un estremo, viridis perderebbe la
+    luminosità crescente. Il contorno compare anche nel PNG della vista e nell'immagine del report. Valori scelti con una
+    pagina statica fuori dall'app (3Dmol 2.5.5, 1UBQ): con 0,1 Å il contorno spariva a struttura intera, con un massimo di
+    2 px riempiva i vuoti dei tratteggi;
+  - legenda del 3D nel tema chiaro (`styles.css`): campioni e barra con un bordo `--chart-axis` (almeno 3:1);
+  - limiti noti nel tema chiaro: restano sotto 3:1 sul fondo, aiutati solo dal contorno, «2 metodi» (`#fb923c`, circa
+    2,1:1), «1 clash» (`#f59e0b`), l'interfaccia (`#facc15`), l'ambra `#fbbf24` di struttura secondaria e Ramachandran,
+    i colori pLDDT `#FFDB13` e `#65CBF3`, le tasche `#F0E442`, `#56B4E9` ed `#E69F00`, il coil `#94a3b8` e il centro
+    `#fee090` della scala delle distanze. Con la deuteranopia «1 metodo» dista 12 (ΔE CIE76) da «3 o più», contro circa
+    20 della coppia più vicina nel tema scuro: per fare meglio servirebbe una scala del consenso per il tema chiaro con
+    «3 o più» molto più scuro, ma `#dc2626` è condiviso con la scala dei clash. Contorno e colori nuovi non sono stati
+    provati dentro BioLoom avviato; nella pagina di prova le sfere semitrasparenti sembravano senza contorno, e a
+    struttura intera le linee di coordinazione tratteggiate sembrano quasi continue. Il grigio di contesto è vicino a
+    «senza valore» (`#6b7280`): oggi non compaiono insieme in consenso, clash, tasche e scansione, ma potrebbero nella
+    vista dell'interfaccia con valori mancanti.
+- **Client** (`api/client.ts`): gli id di progetti, sequenze, documenti, job e pipeline nei percorsi passano da `enc()`
+  (`encodeURIComponent`), come già template e file; `request()` accetta un `AbortSignal` e la lettura come testo; un 429
+  (`rate_limited`) è un errore come gli altri, con il messaggio e l'attesa del server; `logoutAll()` chiama
+  `POST /api/auth/logout-all`.
+- **Link esterni:** il rapporto di SWISS-MODEL in Qualità è un link solo se l'indirizzo è `https://` con un host
+  (`lib/links.httpsUrl`), come lo filtra già il backend (`remote.https_url`).
+- **Letture superate:** in Modellazione la lettura delle sequenze del progetto ha `.catch` con la notifica d'errore e,
+  come quella del documento PIR, un flag di annullamento: una risposta arrivata dopo il cambio di progetto o di
+  documento non sostituisce i dati nuovi.
+- **Download automatico dei template** (`TemplatePicker`): un codice PDB o un id `AF-…` che la libreria non ha (404) si
+  scarica dopo `AUTO_FETCH_DELAY_MS` (600 ms) e solo se è ancora scelto; ogni lettura ha un numero di tentativo, quindi
+  un template tolto (o rimesso) o un selettore smontato non scrivono nulla, e un template tolto durante l'attesa si
+  rilegge da capo se torna.
+- **Esci da tutti i dispositivi** (`Layout`, solo con `runtime.auth`): accanto a «Disconnetti», con la conferma
+  «Chiudere tutte le sessioni aperte con la chiave d'accesso, su ogni computer e browser, compresa questa? …»; poi la
+  notifica «Tutte le sessioni sono state chiuse: inserisci di nuovo la chiave d'accesso.» e la schermata di accesso
+  (`notifyAuthRequired`: il cookie è già cancellato). Un errore resta una notifica con il messaggio del server, e la
+  sessione non cambia.
+- **Impostazioni:** l'interprete di MODELLER (campo presente solo in esecuzione nativa, `!container`) è in sola lettura
+  in modalità server, con la nota «In modalità server lo imposta l'amministratore sul server (variabile d'ambiente
+  BIOLOOM_MODELLER_PYTHON); vuoto = rilevamento automatico.»: la variabile e non `server.env`, che conta solo nei
+  container (lo passano `compose.yml` e `bioloom-podman.sh`), dove il campo non c'è. Nella scheda Spazio, accanto alla
+  cache dei calcoli, «Spazio massimo della cache dei calcoli (MB)» (da 100 a 102400, predefinito 2048); il campo è
+  obbligatorio nel tipo `Settings`.
 
 **ESLint** (`npm run lint`, configurazione flat in `eslint.config.js`):
 
@@ -3949,12 +4210,12 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 | Editor PIR (`/pir`) | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
 | Modellazione (`/modeling`) | input automatico, da PIR o «Complesso» (template o assemblaggio, una sequenza per catena anche «stessa della catena …», simmetria, anteprima dell'allineamento per catena; nei risultati confronto delle interfacce con DockQ e 3D colorato per catena e interfaccia), parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); avvisi prima del lancio su regioni disordinate e domini non coperti dai template, con suggerimento; modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job; «Trasferisci ligandi, cofattori e metalli dai template» con la scelta dei gruppi (additivi e ioni del tampone deselezionati per default, `LigandPicker`, che usa le analisi già lette dal selettore dei template anche dopo un download; una lettura non riuscita si mostra con «Riprova», un 404 di un template in download si riprova da sé, e sotto «Avvia modellazione» si dice quale template blocca) e la verifica del modello migliore; «Rifinisci» (OpenMM) per ogni modello e per una struttura qualunque, con i risultati prima/dopo; «Mutagenesi» (mutazioni, varianti di UniProt, scansione di alanina) per ogni modello e per una struttura qualunque, con i risultati del mutante o della scansione; «Confronta con una predizione (ESMFold)» per il modello scelto (F9.3) |
 | Qualità (`/quality`) | voto, consenso tra i metodi (discordanze, regioni problematiche, disordine predetto come segnale informativo), Ramachandran, profili, clash, 3D colorato per valore per residuo con selezione bidirezionale, confronto analisi; report HTML (con QMEAN calcolato nella pagina e, dalla scheda 3D, la vista corrente); «Confronta con» il template del modello o un'altra struttura; sezione Ligandi e metalli (esiti, coordinazione, confronto con il sito del template): il clic su un gruppo lo mostra nel 3D con i residui coordinanti e le linee di coordinazione (`LigandsPanel`, `lib/ligands.ts`; ioni metallici sempre a sfere); scheda Interazioni (analisi strutturale: legami H, ponti salini, disolfuri, aromatiche, interfacce, conservazione; `?ajob=`); schede Tasche (fpocket, `?pjob=`) ed Elettrostatica (PDB2PQR + APBS, `?ejob=`); scheda Mutagenesi (mutazioni e scansione di alanina della struttura del rapporto, cronologia); «Confronta con una predizione (ESMFold)» con l'esito motivato e il confronto per residuo, incluso nel consenso e nel report (`?prjob=`, F9.3) |
-| Confronto (`/compare`) | `?a=&ca=&b=&cb=&job=`: B sovrapposta ad A (riferimento), metriche (TM-score su A e su B, RMSD, RMSD entro 5 Å, GDT-TS, GDT-HA, lDDT, lunghezza allineata), 3D con B colorata per distanza (0 → ≥ 5 Å) o lDDT e A in grigio chiaro, grafico di distanza e lDDT per posizione, tratti che deviano, tabella per coppia; clic ovunque → coppia evidenziata nel 3D |
+| Confronto (`/compare`) | `?a=&ca=&b=&cb=&job=`: B sovrapposta ad A (riferimento), metriche (TM-score su A e su B, RMSD, RMSD entro 5 Å, GDT-TS, GDT-HA, lDDT, lunghezza allineata), 3D con B colorata per distanza (0 → ≥ 5 Å) o lDDT e A in grigio (ardesia scura nel tema chiaro), grafico di distanza e lDDT per posizione, tratti che deviano, tabella per coppia; clic ovunque → coppia evidenziata nel 3D |
 | Pipeline batch (`/pipeline`) | multi-FASTA → modelli validati, template da ricerca automatica, «Più template complementari» (N da 2 a 5) o fissi (casella «Ligandi» del template solo se la scelta predefinita trasferisce qualcosa dalle catene scelte, con i gruppi esclusi nel suggerimento: `lib/ligands.defaultTransfer`); filtro zona crepuscolare, tabella paginata (template usati elencati, motivazioni nel suggerimento), CSV/ZIP; ricerche riusate dalla cache; ripresa (tutti gli elementi non conclusi o solo i falliti); avanzamento, tempo residuo e tabella aggiornati in tempo reale |
 | Job (`/jobs`) | log e file di ogni calcolo; ripresa delle pipeline fallite, annullate o completate con elementi falliti; elenco e dettaglio in tempo reale, con il tempo residuo dei job in esecuzione e la posizione di quelli in coda ("2° in coda"); stella, etichette e filtro per etichetta o preferiti (`?tag=`); «Pacchetto riproducibile» e «Riesegui da pacchetto»; eliminazione di un job dal dettaglio e «Pulisci job…» per i job terminati in blocco, con criteri, anteprima e conferma (vedi [Eliminazione di progetti e pulizia dei job](#eliminazione-di-progetti-e-pulizia-dei-job)) |
 | Riesegui da pacchetto (`/rerun`) | caricamento e verifica di un pacchetto, anteprima del manifest con le versioni, controlli preventivi, avvio, rapporto del confronto; `?job=` apre una riesecuzione (vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione)) |
-| Impostazioni (`/settings`) | schede Generale (esecuzione, QMEAN, email, consenso e indirizzo di ESMFold), Licenze (MODELLER, ProSA, PROCHECK), Database (pdbaa, MMseqs2, UniClust30), Strumenti (verifica dell'installazione), Spazio e file temporanei (spazio occupato con le copie di sicurezza del database, «Pulisci file temporanei», cache dei calcoli, file intermedi di MODELLER, riquadro «Job e progetti» con «Elimina job…») |
-| Login (`Login.tsx`, senza rotta) | solo in modalità server, quando l'API risponde 401 |
+| Impostazioni (`/settings`) | schede Generale (esecuzione, QMEAN, email, consenso e indirizzo di ESMFold), Licenze (MODELLER, ProSA, PROCHECK), Database (pdbaa, MMseqs2, UniClust30), Strumenti (verifica dell'installazione), Spazio e file temporanei (spazio occupato con le copie di sicurezza del database, «Pulisci file temporanei», cache dei calcoli con il suo spazio massimo, file intermedi di MODELLER, riquadro «Job e progetti» con «Elimina job…») |
+| Login (`Login.tsx`, senza rotta) | solo in modalità server, quando l'API risponde 401 (anche dal visualizzatore 3D e dopo «Esci da tutti i dispositivi»); un 429 del login mostra il messaggio del server con l'attesa |
 
 ## Sicurezza e privacy
 
@@ -3965,8 +4226,8 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   HTTP in chiaro e, con Docker, una porta che scavalca il firewall: l'avviatore lo segnala a ogni avvio (vedi
   [Avviatori](#avviatori-un-bioloom-alla-volta-e-controlli-allavvio)).
 - **Server:** con `BIOLOOM_AUTH=on` tutte le API (e `/docs`) richiedono la chiave d'accesso, tramite
-  cookie HttpOnly firmato o header Bearer, con ritardo sui tentativi falliti; il middleware controlla anche le rotte di
-  streaming prima che il flusso parta.
+  cookie HttpOnly firmato o header Bearer, con il freno ai tentativi anche per la chiave come Bearer (sotto,
+  **Accesso con chiave**); il middleware controlla anche le rotte di streaming prima che il flusso parta.
 - **Richieste di altri siti (CSRF):** la porta su `127.0.0.1` non basta, perché il browser che apre BioLoom apre anche
   altri siti, e un `fetch` con `mode: "no-cors"` o un form arrivano senza preflight CORS (arresto, aggiornamento dei
   database, upload). `core/guard`, il middleware più esterno (rifiuta prima della chiave d'accesso), controlla in
@@ -3990,15 +4251,45 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 - **Cookie dietro un reverse proxy:** il cookie di sessione è `Secure` se la richiesta arriva in HTTPS. Vale anche
   quando un proxy TLS lo dichiara con `X-Forwarded-Proto: https` (`api/auth._https`). uvicorn si fida degli header
   inoltrati solo da 127.0.0.1, e il proxy raggiunge il container dalla rete di Docker. L'header conta solo per
-  questo flag: se falso, rende il cookie più restrittivo. Gli header inoltrati non sono fidati in generale, perché
-  `X-Forwarded-For` aggirerebbe il ritardo sui tentativi, legato all'indirizzo del client.
+  questo flag: se falso, rende il cookie più restrittivo. Gli header inoltrati non sono fidati in generale:
+  `X-Forwarded-For` conta solo per il freno ai tentativi e solo dai proxy di `BIOLOOM_TRUSTED_PROXIES` (sotto),
+  altrimenti chiunque lo scriverebbe per aggirarlo.
 - **Arresto dall'interfaccia:** solo con `BIOLOOM_ALLOW_SHUTDOWN=1` (preset locale).
 - **Container:** gira senza root (`setpriv` all'utente proprietario di `/data`). QMEAN non ha accesso al
   socket di Docker e usa i database in sola lettura.
 - **Licenze:** in `data/licenses` con permessi 0600, mascherate nelle risposte API, mai nelle immagini. Il
-  messaggio d'errore di MODELLER, che ripete la chiave, viene mascherato.
+  messaggio d'errore di MODELLER, che ripete la chiave, viene mascherato ovunque arrivi: risposte delle licenze,
+  `/api/system/info`, verifica dell'installazione, log, output ed errori dei processi dei job (vedi
+  [Licenze](#licenze-dei-programmi-esterni)).
+- **Segreti e programmi esterni:** i programmi esterni non ricevono `BIOLOOM_ACCESS_KEY`, `MODELLER_KEY`,
+  `KEY_MODELLER` né le `BIOLOOM_SMTP_*` (vedi [Job](#job)); ricevono `BIOLOOM_MODELLER_KEY`, la chiave MODELLER attiva,
+  anche quelli diversi da MODELLER.
+- **Errori interni** (`app.unexpected`): al client 500 `internal_error` con «Errore interno (codice xxxxxxxx): i dettagli
+  sono nel log di BioLoom.» (`secrets.token_hex(4)`); nel log «[BioLoom] Errore interno (codice xxxxxxxx) su METODO
+  percorso:» e il traceback. Prima il messaggio conteneva `str(exc)`, con percorsi, parametri o pezzi di file. Limite:
+  uvicorn stampa anche il suo traceback, senza codice, quindi nel log l'errore compare due volte. Le due tracce
+  superano insieme le 60 righe di `compose logs --tail 60` (tasto **L** degli avviatori: misurato con uvicorn, riga del
+  codice alla 6, fine della traccia di uvicorn alla 179), quindi con L la riga del codice resta fuori: la Guida rimanda
+  a `log` (200 righe) e a `docker logs … | grep -A 150 <codice>`.
 - **Percorsi:** passano tutti da `safe_join` e da identificatori validati; nessun endpoint di navigazione
-  del filesystem.
+  del filesystem. `safe_join` (`core/storage`) risolve il percorso e lo accetta se resta dentro la radice:
+  - **cartelle in eliminazione su Windows:** `Path.resolve()` di una cartella che un altro thread sta eliminando (lo
+    scratch a fine job) restituisce `\\?\C:\…` o `C:\$Extend\$Deleted\…`, fuori dalla radice anche per un id valido.
+    Prima `GET /api/jobs/{id}` (e le altre rotte che passano da `workdir` o `live_dir`) rispondeva per un istante 400
+    `unsafe_path`: 3094 rifiuti su 20.000 chiamate in una prova ripetuta. Ora, quando la risoluzione completa esce dalla
+    radice, si risale fino alla prima cartella madre che si risolve dentro la radice e si riaggiungono i nomi restanti
+    così come sono, anche per i percorsi annidati (`id/sub/file`);
+  - **sempre rifiutati:** i percorsi che, risolti, escono dalla radice: `..` che risale oltre la radice, percorsi
+    assoluti esterni, link simbolici e giunzioni verso fuori. Nel caso normale, con la risoluzione dentro la radice, vale
+    il percorso risolto, come prima: `a/../b` diventa `b`, un nome vuoto la radice stessa, `x.` resta `x.`, e un link o
+    una giunzione che porta dentro la radice si segue (`test_safe_join_rejects_links_leaving_the_root`);
+  - **in più nel ripiego** (risoluzione completa fuori dalla radice): `..`, nomi vuoti o di soli punti e spazi, madri
+    fuori dalla radice, ogni link simbolico o giunzione fra i nomi riaggiunti (`os.lstat` con l'attributo di reparse,
+    perché `os.path.islink` non vede le giunzioni) e i nomi che Windows riscriverebbe (il percorso finale deve coincidere
+    con `os.path.abspath`: dispositivi come `CON`, punti o spazi finali). Su Linux un percorso esce dalla radice solo con
+    `..`, percorsi assoluti o link, che il ripiego rifiuta: le garanzie sono quelle di prima;
+  - **limite:** se è la radice stessa a essere in eliminazione, si risolve ancora nella forma strana; il risultato resta
+    confinato lì dentro e il file non esiste, quindi la risposta è 404 invece di 400.
 - **Upload:** limitati (50 MB, `BIOLOOM_MAX_UPLOAD_MB`; 20 MB per i file di sequenze e allineamenti, 200 MB
   decompressi; 256 MB per un pacchetto di riproducibilità; 64 kB per `LicenseDB`) e validati come strutture prima
   dell'uso. Oltre il limite dell'endpoint `read_upload` risponde 413 `too_large` («File troppo grande: massimo N MB.»;
@@ -4041,6 +4332,90 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   duplicati, bombe di decompressione, impronta del manifest, checksum, parametri validati come all'avvio) e nessuno
   script del pacchetto si estrae né si esegue (vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione)).
 
+**Accesso con chiave (modalità server).**
+
+- **Chiave:** `BIOLOOM_ACCESS_KEY` di almeno 16 caratteri (`MIN_KEY_LENGTH`; quella generata e quelle scritte dagli
+  avviatori in `server.env` ne hanno 24). Più corta: `AccessKeyError` nel lifespan, il motivo stampato ben visibile
+  («ERRORE: BIOLOOM_ACCESS_KEY è troppo corta: N caratteri, ne servono almeno 16 …», con le due soluzioni: una chiave più
+  lunga in `server.env`, per esempio `openssl rand -hex 12`, oppure la variabile vuota, così BioLoom ne genera una in
+  `data/access_key`) e uscita con codice 3 (`__main__`, `server.started` falso; prima usciva con 0). Limiti: una chiave
+  scritta a mano in `data/access_key` si controlla solo contro il minimo di 8 caratteri (sotto, `load` ne genera una
+  nuova di 24, `secrets.token_urlsafe(18)`, e la stampa nel log; da 8 a 15 è accettata). Con Docker `start_server` di
+  `bioloom.sh` aspetta la risposta e, se il container esce o riparte, mostra le ultime 30 righe del log e si ferma con
+  l'errore ([Avviatori](#avviatori-un-bioloom-alla-volta-e-controlli-allavvio), **Attesa dell'avvio da server**); con
+  Podman `wait_healthy` ferma l'avviatore dopo 2 minuti, senza il log.
+- **Sessioni revocabili:** il segreto della firma è lo SHA-256 di `bioloom-session:<chiave>`, più `:epoch:<n>` quando
+  l'epoca non è 0. L'epoca sta in `data/session_epoch` (un intero, creato a 0): all'epoca 0 il segreto è quello delle
+  versioni precedenti, quindi aggiornare BioLoom non chiude le sessioni aperte. `POST /api/auth/logout-all` (sessione
+  valida o chiave come Bearer, attraverso il freno) salva l'epoca successiva con una scrittura atomica prima di usarla
+  (`revoke_all`): tutti i cookie emessi prima, compreso quello di chi chiede, non valgono più, anche dopo un riavvio.
+  Risponde `{"ok": true}` e cancella il cookie; gli script con la chiave continuano a funzionare. Errori: 400
+  `auth_disabled` in locale, 401 `auth_required` senza sessione, 429 `rate_limited`, 500 `session_epoch_error` se
+  l'epoca non si salva (nulla cambia). Un file illeggibile o che non contiene solo un intero non negativo non vale 0, che
+  riattiverebbe le sessioni revocate: si sceglie un'epoca nuova a caso, la si salva e lo si scrive nel log, e tutte le
+  sessioni si chiudono. Un file assente vale 0 (come dopo un aggiornamento); uno non scrivibile all'avvio lascia l'epoca
+  in memoria. Limite: cancellare il file riporta l'epoca a 0 e riattiva le sessioni dell'epoca 0 non ancora scadute
+  (serve l'accesso in scrittura alla cartella dati). `/api/auth/status` non dipende dall'epoca (con un cookie risponde
+  come prima); con la chiave come Bearer passa dal freno (sotto) e può rispondere 429 `rate_limited`.
+- **Freno ai tentativi** (`core/auth.LoginLimiter`, uno per app in `app.state.login_limiter`), per indirizzo del client:
+  - un login alla volta: gli altri dallo stesso indirizzo, in parallelo, ricevono subito 429;
+  - dopo una chiave sbagliata la rotta attende `LOGIN_STEP` (0,5 s) per ogni errore degli ultimi 15 minuti
+    (`LOGIN_WINDOW`), al più 10 s (`LOGIN_MAX_DELAY`), più 0,05 s di margine (asyncio può svegliarsi qualche millisecondo
+    prima), poi risponde 401 `auth_failed`; fino alla fine dell'attesa ogni tentativo dallo stesso indirizzo, anche con
+    la chiave giusta, riceve 429 `rate_limited` («Troppi tentativi d'accesso da questo indirizzo: riprova tra N s.»),
+    anche se il client ha chiuso la connessione;
+  - la chiave come Bearer, su ogni rotta protetta, su `/status` e su `logout-all`, passa da `try_key`, che controlla,
+    confronta e registra l'errore insieme sotto il lock: indirizzo fermo → 429 senza confrontare la chiave (nemmeno
+    quella giusta: la risposta direbbe quale è); chiave sbagliata → un errore come quelli del login e 401 subito
+    (l'attesa la fanno i tentativi successivi); chiave giusta → passa senza occupare l'indirizzo né azzerare gli errori,
+    così gli script fanno richieste in parallelo. Un cookie di sessione valido non passa mai dal freno;
+  - al più 4096 indirizzi seguiti (`LOGIN_MAX_CLIENTS`): quelli senza errori recenti né tentativi in corso si
+    dimenticano, oltre il massimo i meno recenti;
+  - prima: un dizionario globale senza limite di indirizzi, l'attesa solo nella richiesta che aveva sbagliato (le
+    richieste in parallelo la scavalcavano) e la chiave come Bearer senza freno. `AuthConfig.request_allowed` e
+    `authenticated` non ci sono più: al loro posto `requires_auth`, `session_valid`, `bearer_key` e
+    `api/auth.authenticate` / `access_denied`, usati dal middleware, da `/status` e da `logout-all`.
+- **Indirizzo del client** (`client_address`): quello della connessione. Con `BIOLOOM_TRUSTED_PROXIES` (indirizzi o
+  reti CIDR separati da virgole o spazi; una voce non valida ferma l'avvio con il motivo, `AccessKeyError`) e una
+  connessione da uno di quei proxy, il primo indirizzo di `X-Forwarded-For` partendo da destra che non è un proxy fidato:
+  l'ultimo aggiunto è quello che il proxy ha visto collegarsi, quelli più a sinistra li può scrivere il client; una voce
+  che non è un indirizzo ferma la ricerca all'ultimo proxy fidato, e gli IPv4 scritti come IPv6 (`::ffff:…`) tornano
+  IPv4. Senza proxy fidati, una richiesta inoltrata da un indirizzo non fidato che passa dal freno (`client_of`: il
+  `login` della schermata d'accesso o una chiave come Bearer in `authenticate`; non quelle con un cookie di sessione
+  valido né quelle senza chiave, come `/api/auth/status` e i file statici) fa scrivere nel log, una volta per indirizzo
+  (al più 16), che il freno tratta tutti i client come uno solo, con il valore da mettere nella variabile.
+  Con `BIOLOOM_BIND=127.0.0.1` il container vede lo stesso indirizzo (il gateway della rete di Docker, da
+  docker-proxy; con Podman senza root di solito quello del port forwarder di rootlessport) per tutte le connessioni,
+  sia dal reverse proxy sia dal tunnel SSH. Con il tunnel non c'è `X-Forwarded-For`: niente avviso nel log, e il
+  freno vale per tutti i client anche con `BIOLOOM_TRUSTED_PROXIES`: chi sbaglia la chiave fa aspettare gli altri fino a
+  10 s a ogni errore, e ritentando di continuo (ogni errore rinnova l'attesa) li tiene fuori finché non smette.
+  - **Dal file al container:** `compose.yml` (`BIOLOOM_TRUSTED_PROXIES: "${BIOLOOM_TRUSTED_PROXIES:-}"`) e
+    `bioloom-podman.sh` (ciclo dei `-e`) la passano da `server.env`. `server.env.example` la elenca vuota dopo
+    `BIOLOOM_ALLOWED_HOSTS`, con il commento: solo dietro un reverse proxy che invia `X-Forwarded-For`; indirizzi o reti
+    CIDR separati da virgole; il valore giusto lo suggerisce il log al primo inserimento della chiave arrivato dal
+    proxy (schermata d'accesso o Bearer; con una sessione già aperta bisogna uscire prima), di solito il gateway della
+    rete dei container (es. `172.18.0.1`: compose crea la rete del progetto, mentre `172.17.0.1` è quello della rete
+    `bridge` predefinita); tutta la rete `172.16.0.0/12` solo con `BIOLOOM_BIND=127.0.0.1`, perché con `0.0.0.0` Docker
+    conserva l'indirizzo dei client diretti (DNAT) e un computer della LAN in 172.16–31.x.x, o un altro container
+    sull'host, diventerebbe fidato e potrebbe scrivere `X-Forwarded-For`; vuota = header ignorato; un valore sbagliato
+    ferma l'avvio. Il backend la legge solo con `BIOLOOM_AUTH=on` (`app.state.trusted_proxies`, vuota in locale), e
+    con Docker l'errore lo mostra l'attesa di `start_server` (log e uscita 1). Prima nessuno dei due la passava: dietro
+    un reverse proxy il freno valeva per tutti i client insieme anche se il log suggeriva la variabile.
+  - **Limiti:** risolve solo il caso del reverse proxy, non quello del tunnel SSH. Con la variabile impostata anche le
+    connessioni del tunnel e dei programmi sul server arrivano dallo stesso indirizzo del proxy, quindi fidato, e possono
+    scrivere da sé `X-Forwarded-For`: chi ha un account sul server può cambiare indirizzo a ogni tentativo e non subire
+    l'attesa. Non c'è un limite globale (con IPv6 un client ha molti indirizzi).
+- **Impostazioni dell'amministratore** (`api/system.SERVER_LOCKED`): in modalità server `esmfold_url` e
+  `modeller_python` vengono da `BIOLOOM_ESMFOLD_URL` e `BIOLOOM_MODELLER_PYTHON`; la pagina rimanda il valore in uso, che
+  si accetta, e un valore diverso dà 403 `esmfold_url_locked` o `modeller_python_locked`. La verifica da riga di comando
+  usa le stesse impostazioni (`auth.server_mode()`). Nei container `BIOLOOM_MODELLER_PYTHON` arriva da `server.env`
+  (`compose.yml`, `bioloom-podman.sh`; `server.env.example` la elenca vuota dopo `MODELLER_KEY`), come percorso nel
+  container. `engines/tools.modeller_candidates` prova in ordine il valore in uso, `BIOLOOM_MODELLER_PYTHON` e
+  `sys.executable`: un percorso inesistente o senza MODELLER si salta e vale il Python dell'immagine. Dal desktop compose
+  la passa se è esportata nella shell, e lì è solo una candidata in più.
+- **Limiti delle email:** email di prova e avvisi di fine job hanno limiti di frequenza anche in locale (vedi [Avviso per
+  email](#avviso-per-email-alla-fine-delle-pipeline)).
+
 **Richieste in uscita** (`engines/remote.py`, tranne il download di pdbaa in `services/databases.py`). Tutte vanno a
 indirizzi fissi con identificatori validati (codici PDB, accessioni UniProt con la regex ufficiale, isoforme escluse),
 tranne il servizio ESMFold, il cui indirizzo è un'impostazione. QMEAN locale, BLAST+, MMseqs2, l'analisi di qualità, le
@@ -4054,7 +4429,7 @@ analisi strutturali, la rifinitura e la mutagenesi non usano la rete; l'interfac
 | UniProt (`rest.uniprot.org`) | accessione o testo cercato | importazione, annotazioni, domini sul bersaglio, varianti della mutagenesi | cache 7 giorni |
 | InterPro (`www.ebi.ac.uk/interpro`) | accessione UniProt, mai la sequenza | domini (pagina Sequenze, `/api/bio/coverage`, controlli preventivi) | cache 7 giorni; disordine e bassa complessità si calcolano nel container |
 | AlphaFold DB (`alphafold.ebi.ac.uk`) | accessione UniProt, mai la sequenza né le coordinate | importazione nella libreria, motore `alphafold`, predizione `alphafold` | file scaricati solo da URL `https://alphafold.ebi.ac.uk/files/…`, qualunque URL contenga la risposta; cache 7 giorni |
-| SWISS-MODEL QMEAN (`swissmodel.expasy.org`) | coordinate del modello ed email | QMEAN remoto, scelto o come fallback | consenso esplicito all'invio (`qmean_remote`) ed email obbligatori |
+| SWISS-MODEL QMEAN (`swissmodel.expasy.org`) | coordinate del modello ed email | QMEAN remoto, scelto o come fallback | consenso esplicito all'invio (`qmean_remote`) ed email obbligatori; pagina dei risultati restituita solo se è un indirizzo `https://` con un host, senza credenziali né spazi (`remote.https_url`), altrimenti `null` |
 | ESMFold (`esmfold_url`, predefinito `api.esmatlas.com` di Meta) | sequenza di una catena, mai le coordinate | job `predict` con ESMFold | consenso esplicito (sotto); nessun reindirizzamento seguito; risposta al più 20 MB, verificata prima di essere salvata; cache 30 giorni |
 | NCBI FTP (`ftp.ncbi.nlm.nih.gov`) | nulla: solo download | job `db_update_pdbaa` | estrazione con filtro `data` |
 
@@ -4070,13 +4445,13 @@ analisi strutturali, la rifinitura e la mutagenesi non usano la rete; l'interfac
 
 ## Test
 
-**Conteggi** (contati il 10 ottobre 2026 con `pytest --collect-only -q` in `backend/` e con `npx vitest list` in
+**Conteggi** (contati l'11 ottobre 2026 con `pytest --collect-only -q` in `backend/` e con `npx vitest list` in
 `frontend/`):
 
 | Suite | File | Test |
 |---|---|---|
-| backend, `backend/tests` (pytest) | 55 | 1355 nella suite predefinita (54 file), più i 4 di `test_remote.py` (marcatore `network`, esclusi da `addopts`: `pytest -m network`) |
-| frontend, `frontend/src/**/*.test.ts(x)` (vitest) | 88 | 750 |
+| backend, `backend/tests` (pytest) | 59 | 1461 nella suite predefinita (58 file), più 5 con il marcatore `network`, esclusi da `addopts` (`pytest -m network`): i 4 di `test_remote.py` e uno di `test_rete_bloccata.py` |
+| frontend, `frontend/src/**/*.test.ts(x)` (vitest) | 101 | 815 (11 file in ambiente jsdom) |
 
 I test che richiedono MODELLER, PROCHECK, ProSA o gli strumenti dell'immagine di sviluppo (fpocket, PDB2PQR, APBS,
 OpenMM, PDBFixer) si saltano da soli, con il motivo, dove mancano (`requires_modeller` e le condizioni degli strumenti):
@@ -4088,16 +4463,41 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
 **Esecuzione:**
 
 - `scripts/test.sh`: ruff, pytest nell'immagine con MODELLER reale, eslint, typecheck e vitest (`test.sh frontend`:
-  eslint, typecheck e vitest). L'immagine di test `bioloom-test:<base>` (pytest, pytest-timeout, ruff) si ricostruisce
-  quando cambia l'immagine di base o `docker/test/Dockerfile`: l'etichetta `bioloom.test.base` contiene l'id
-  dell'immagine di base e la somma `cksum` del Dockerfile senza CR (prima solo l'id, quindi un `bioloom-test` esistente
-  non prendeva i pacchetti nuovi finché non cambiava la base).
+  eslint, typecheck e vitest, senza Docker né `launcher/VERSION`, che servono solo ai comandi con l'immagine: backend e
+  `lint`, cioè ruff nel container). L'immagine di test `bioloom-test:<base>` (pytest, pytest-timeout, ruff) si
+  ricostruisce quando cambia l'immagine di base o `docker/test/Dockerfile`: l'etichetta `bioloom.test.base` contiene
+  l'id dell'immagine di base e la somma `cksum` del Dockerfile senza CR (prima solo l'id, quindi un `bioloom-test`
+  esistente non prendeva i pacchetti nuovi finché non cambiava la base).
 - **Limite per test:** `timeout = 1800` in `[tool.pytest.ini_options]`, con pytest-timeout 2.4.0 (la 2.5.0 è stata
   ritirata da PyPI) nelle dipendenze dev di `pyproject.toml`, nell'immagine di test e nella CI. Un test bloccato
   fallisce con «Failed: Timeout (>1800.0s) from pytest-timeout» e il suo stack, invece di lasciare appesa la suite.
   1800 s e non meno: il test più lungo misurato dura 44,7 s, ma i test aspettano un singolo job fino a 1200 s
   (`wait_job`), e su un computer lento deve arrivare prima il loro messaggio. Senza il plugin (Python di sistema)
   pytest dà solo «PytestConfigWarning: Unknown config option: timeout».
+- **Senza Docker e su Windows:** dalla cartella `backend/`, un ambiente virtuale con `pip install -e ".[dev]"` (pytest,
+  pytest-timeout, ruff; per le versioni dell'immagine prima `pip install -r requirements.lock`); i test che chiedono
+  MODELLER o gli strumenti dell'immagine si saltano. La suite passa anche con il Python di Windows: ultima esecuzione
+  completa (11 ottobre 2026) 1395 passati, 66 saltati e 5 esclusi in 6 min 47 s. I test sensibili al sistema si
+  adattano: in `test_cleanup.py` i permessi si confrontano con quelli reali della cartella (0o755 solo su Linux), e il
+  link simbolico di `safe_join` si salta su Windows (manca il privilegio) mentre la giunzione gira solo lì;
+  in `test_compute_cache.py` `write_bytes` invece di `write_text`, che su Windows scrive CRLF; in `test_report.py` e in
+  `test_exports.py` il nome di file con `" < >` si salta su Windows, e uno con caratteri ammessi anche da NTFS gira
+  dappertutto (in `test_report.py` con `'` e `&`); in `test_reproducibility.py` i separatori del sistema (e il percorso
+  come lo scrive JSON); in `test_predict.py` id brevi nel parametrize (con quelli lunghi `PYTEST_CURRENT_TEST` superava
+  i 32767 caratteri ammessi su Windows).
+- **Niente rete reale** (fixture autouse `_no_real_network` in `tests/conftest.py`): nei test senza il marcatore
+  `network` falliscono subito, con un messaggio che dice come fare, httpx con il trasporto vero (anche asincrono), la
+  risoluzione di nomi non locali (`socket.getaddrinfo`) e `connect`/`connect_ex` verso indirizzi non locali (quindi anche
+  smtplib e urllib). Locali sono localhost, 127.0.0.0/8, `::1`, 0.0.0.0, `::` e i nomi `*.localhost`. Ogni tentativo si
+  registra, e il test fallisce anche se il codice ha trasformato l'errore in «servizio non raggiungibile». La fixture non
+  usa `monkeypatch`, quindi un `monkeypatch.undo()` nel test non toglie il blocco. `httpx.MockTransport`, `TestClient` e
+  i server su 127.0.0.1 funzionano; i test verso i servizi veri hanno il marcatore `network` (dichiarato in
+  `pyproject.toml`, escluso da `addopts`).
+- **Attese senza pause fisse** (`tests/conftest.py`): `until()` (attesa su una condizione, con scadenza, al posto delle
+  sei copie locali), `blocked_in(thread, funzione)` (un thread fermo in un'attesa chiamata da quella funzione),
+  `dispatcher_settled()` (tutti i worker liberi di un pool in attesa e la coda ferma), `WatchedLock` (lock che segnala
+  chi lo trova occupato). Restano solo pause che simulano lavoro, cicli di polling con scadenza e la pausa voluta di
+  1,3 s in `test_scheduling.py`. `wait_job` mostra codice e corpo di una risposta d'errore invece di un `KeyError`.
 - **CI** (`.github/workflows/ci.yml`), quattro job più uno manuale:
   - **backend:** «Versione unica» (`scripts/versione.sh`: le copie devono coincidere con `launcher/VERSION`) e «Impronta
     del codice» (`impronta.sh`, `impronta.sh` con `IMPRONTA_SENZA_PERL=1` e `Get-BioLoomImpronta` in pwsh devono dare lo
@@ -4118,8 +4518,32 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
   - **qmean**, solo da Actions → CI → Run workflow con l'opzione «qmean» (l'immagine di base pesa circa 2 GB):
     costruzione di `bioloom-qmean` e `/status` del worker, che risponde anche senza database.
 
-  `ci.yml` passa actionlint 1.7.12; gli script passano shellcheck 0.11.0 e 0.9.0 (la versione dei runner) a livello
-  warning e PSScriptAnalyzer 1.25.0 senza errori.
+  `ci.yml` passa actionlint 1.7.12 (verificato prima del passaggio agli SHA, che cambia solo gli 11 `uses`); gli script
+  passano shellcheck 0.11.0 e 0.9.0 (la versione dei runner) a livello warning e PSScriptAnalyzer 1.25.0 senza errori.
+
+  **Actions fissate per SHA:** ogni `uses:` punta allo SHA completo del commit, con il tag nel commento: checkout v4.4.0
+  (`11d5960a…`), setup-python v5.6.0 (`a26af69b…`), setup-node v4.4.0 (`49933ea5…`), setup-buildx-action v3.12.0
+  (`8d2750c6…`), build-push-action v6.19.2 (`10e90e36…`), cioè i commit a cui puntavano i tag principali usati prima
+  (`@v4`, `@v5`, `@v3`, `@v6`): il codice eseguito è lo stesso, ma un tag spostato non lo cambia più. I cinque sono tag
+  semplici, che puntano direttamente al commit (verificato anche con l'API di GitHub). Per trovare il commit di un tag:
+  `git ls-remote https://github.com/<owner>/<repo> 'refs/tags/<tag>' 'refs/tags/<tag>^{}'`; se c'è la riga che finisce
+  con `^{}` (tag annotato) il commit è quello, perché con il solo nome del tag `ls-remote` dà l'oggetto del tag.
+
+  **Dependabot** (`.github/dependabot.yml`), ogni lunedì alle 06:00 (Europe/Rome), con un'attesa (`cooldown`) di 7
+  giorni prima di proporre una versione appena uscita (14 per le major npm) e senza attesa per gli aggiornamenti di
+  sicurezza:
+  - `github-actions`: minori e correzioni in una PR (`actions-minori`), major in un'altra (`actions-principali`), da
+    leggere con le note di rilascio; al più 3 PR aperte. Riscrive SHA e commento insieme;
+  - `npm` in `programma/frontend`: minori e correzioni in una PR (`npm-minori`), major una per PR, perché di solito
+    chiedono modifiche a codice o configurazione; al più 5;
+  - `pip` in `programma/backend` con `increase-if-necessary`: tocca i limiti minimi di `requirements.txt` e
+    `pyproject.toml` solo se una versione nuova ne resta fuori; al più 3. `requirements.lock` e `requirements-tools.lock`
+    restano fuori (estensione `.lock`) e si rigenerano a mano, quindi questa voce produrrà poche PR;
+  - fuori da Dependabot anche i digest delle immagini di base e gli SHA-256 e i commit dei file scaricati nei
+    Dockerfile, che si aggiornano a mano ([Costruzione riproducibile](#costruzione-riproducibile-dellimmagine)).
+
+  `dependabot.yml` è valido rispetto allo schema di SchemaStore, ma `cooldown` e `groups` non sono verificati sul parser
+  di GitHub: dopo il push si controllano in Insights → Dependency graph → Dependabot.
 - **Immagine di sviluppo:** per provare strumenti nuovi senza toccare l'immagine dell'avviatore,
   `docker build -f docker/Dockerfile -t bioloom:dev .` e `BIOLOOM_BASE_IMAGE=bioloom:dev scripts/test.sh` (test in
   `bioloom-test:bioloom-dev`).
@@ -4147,7 +4571,7 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
   stato finale scritto anche se il salvataggio non riesce.
 - **Flusso dei dati** (`test_dataflow.py`, 11): scratch, salvataggio definitivo, intermedi, blocco SQLite (seconda
   istanza), pulizia, gruppi di processi, archivi su file temporanei.
-- **Eliminazione di progetti e pulizia dei job** (`test_cleanup.py`, 98; job inseriti direttamente nel database con una
+- **Eliminazione di progetti e pulizia dei job** (`test_cleanup.py`, 108; job inseriti direttamente nel database con una
   cartella di dimensione nota, e dopo ogni eliminazione il controllo che non restino job orfani, cartelle di job senza
   riga, etichette o stelle di elementi spariti, elementi di pipeline senza job né resti `.deleting-*`):
   - `submit`: progetto inesistente (404, nessuna riga né cartella), progetto vuoto = nessun progetto, preparazione
@@ -4182,9 +4606,26 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
     impostazione predefinita, protetti ed esempi, stella aggiunta fra selezione e DELETE, 2500 job in un ciclo di
     chiamate, un job per chiamata con l'orologio che salta 10 s a ogni lettura, job in uso saltato senza attesa e che
     non tiene vivo il ciclo, job sparito, errore contato senza interrompere, eventi, etichette e ricerca globale, byte
-    senza i resti, rotte (400, non 404 o 405) e chiave d'accesso (401).
+    senza i resti, rotte (400, non 404 o 405) e chiave d'accesso (401);
+  - `safe_join` (10): una cartella e un file annidato creati ed eliminati da un altro thread mentre se ne calcola il
+    percorso (gara reale: in una prova su Windows il ripiego è scattato 383 volte su 1732 chiamate, senza risultati
+    errati), 5 casi di risalita fuori dalla radice (`..`, `../fuori`, `sub/../../fuori`, `a/../../fuori` in un solo
+    nome, `<job>/../../fuori`) con in più un percorso assoluto esterno, il ripiego simulato con `Path.resolve` sostituito
+    (gira su ogni sistema), link verso fuori e verso dentro: symlink su Linux (su Windows manca il privilegio), giunzione
+    su Windows.
 - **Licenze e accesso** (`test_licenses_auth.py`, 11): chiave MODELLER (fonti, formato, prova prima del salvataggio),
   LicenseDB di ProSA, chiave d'accesso, modalità server, cookie `Secure` dietro un proxy HTTPS, arresto consentito dal solo avviatore.
+- **Segreti e accesso** (`test_segreti_accesso.py`, 25): `mask` e `redact` (maiuscole, segreti contenuti in altri);
+  prova di MODELLER con la chiave attiva e la candidata mascherate; `/api/system/info`, verifica dell'installazione e
+  licenze senza la chiave in chiaro; ambiente dei programmi esterni senza segreti (anche con i nomi in minuscolo) e
+  output di un job mascherato; freno ai tentativi (un tentativo alla volta e attese crescenti, memoria limitata, login in
+  parallelo rifiutati, chiave come Bearer attraverso il freno con 40 richieste in parallelo su `/status` che confrontano
+  una sola chiave, rotte protette e `logout-all` con Bearer, `try_key`); indirizzo del client dietro un proxy fidato
+  (voci scritte dal client ignorate, avviso per un proxy non fidato, valore non valido che ferma l'avvio) e freno per
+  client dietro il proxy; chiave corta che ferma l'avvio; `logout-all` che chiude ogni sessione, epoca 0 che tiene le
+  sessioni delle versioni precedenti, file dell'epoca rovinato o illeggibile che le chiude tutte, `logout-all` in locale;
+  `modeller_python` fissato dal server e verifica da riga di comando con le impostazioni del server; limiti delle email
+  di prova (anche gli invii falliti contano, anche dall'API) e degli avvisi di fine job.
 - **Richieste di altri siti** (`test_guard.py`, 17): header Host (loopback con qualunque porta, IPv6,
   `BIOLOOM_ALLOWED_HOSTS` anche come URL, `*`, spento con l'accesso protetto, `/api/health` esente), origine
   (`Sec-Fetch-Site`, `Origin` uguale all'Host o a `X-Forwarded-Host`, `null`, origini dello sviluppo solo fuori dal
@@ -4258,6 +4699,16 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
 - **Cache dei calcoli** (`test_compute_cache.py`, 39): riscontri senza rieseguire i motori (simulati), invalidazione per
   parametri, sequenza, timbro del database o dello strumento, scadenza, file corrotti, job falliti e annullati,
   riuso nella pipeline e scritture concorrenti.
+- **Robustezza del backend** (`test_robustezza_backend.py`, 20): `log_if_present` che non ricrea un job eliminato, e
+  avviso per email inviato mentre il job si elimina senza cartelle rimaste; blastp locale che legge l'XML dal file (800
+  risultati, oltre 20.000 righe, tutti letti, mentre all'output del processo, troncato, mancano l'intestazione XML e il
+  primo risultato) e i suoi errori (uscita con errore, file dei risultati non scritto); tetto della cache dei calcoli
+  (voci usate meno di recente eliminate per prime, con l'ordine fissato da `os.utime`; `lookup` che segna la voce come
+  usata, con l'orologio di `_touch` spostato avanti di un'ora; stima dello spazio aggiornata a ogni scrittura e scansione
+  solo oltre il tetto; tetto applicato dopo la scrittura di `run_cached` e dalla pulizia automatica; impostazione
+  validata, e valore scritto a mano che torna al predefinito); errori 500 senza dettagli, con il codice nel log; pagina
+  dei risultati di SWISS-MODEL solo https (9 casi: http, `javascript:`, `data:`, senza host, con credenziali, con spazi,
+  valori non testuali).
 - **Confronto strutturale** (`test_comparison.py`, 29; integrato e TM-align/US-align veri dell'immagine): lDDT calcolato
   a mano (tre Cα, residuo senza corrispondente, raggio e soglie esclusi), invarianza al moto rigido, GDT massimizzato
   per soglia (due gruppi rigidi), 1UBQ contro sé stessa e contro una copia ruotata e traslata (TM 1, GDT 100, lDDT 1,
@@ -4294,14 +4745,15 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
   Biopython; prefissi dei passi nel log; qualità "all" con 3 modelli insieme uguale a quella seriale; cache dei
   template (copia per elemento, chiave con template, catene, ligandi e soglia pLDDT, file sostituito, errori non
   conservati, elementi concorrenti, attesa annullabile) e pipeline di 4 sequenze con una sola preparazione.
-- **Report del modello** (`test_report.py`, 57; MODELLER simulato con le coordinate e il profilo DOPE reali di 1UBQ, più
+- **Report del modello** (`test_report.py`, 58; MODELLER simulato con le coordinate e il profilo DOPE reali di 1UBQ, più
   un test con MODELLER reale): tutte le sezioni; identità 96,1% dell'ubiquitina di lievito su 1UBQ, voto 98,9,
   consenso 99,6; SVG ben formati con 74 punti di Ramachandran e il picco DOPE 73–76; escape di `<script>`, `"` e `&`
   in titoli, nomi, metadati, residui e atomi; PNG valido incorporato, PNG malformati (firma, CRC, troncati, dati
   dopo IEND, senza IDAT, altri tipi) e oltre 3 MB rifiutati; modelli non del job, falliti, job non completato;
   loop; report di un job quality con QMEAN simulato (70–76 sotto 0,6); ZIP della pipeline con un report per
   elemento completato e rotta del report di un elemento; nomi unici nello ZIP ("abc" e "abc-", "x", "x", "x_2", job
-  precedenti con nomi ripetuti); nomi di file sicuri; ogni tipo di report e le sezioni facoltative con sezioni bilanciate
+  precedenti con nomi ripetuti); nomi di file sicuri (con `'` e `&` dappertutto; con `" < >` solo dove il file system li
+  ammette, quindi non su Windows); ogni tipo di report e le sezioni facoltative con sezioni bilanciate
   e mai annidate, id univoci e HTML ben formato (`html.parser`); `_Doc` rifiuta sezioni annidate, chiuse due volte,
   ripetute o aperte a fine documento.
 - **Scelta ragionata dei template** (`test_template_rank.py`, 40; RCSB simulato con monkeypatch e `httpx.MockTransport`):
@@ -4505,11 +4957,35 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
   ligandi (WAT scritta come HOH), colonne '.' in BioLoom e 'w' per MODELLER (stessa colonna per la stessa acqua di due
   template), verifica dell'acqua nel modello e dell'acqua che ha perso il metallo, acque nell'analisi del template,
   esempi con template HETATM; con MODELLER, ubiquitina di lievito su `ubq_zn.pdb` con lo Zn e la sua acqua catalitica.
+- **Sessione PyMOL** (`test_exports.py`, 28): il blocco `python … python end` della sessione eseguito davvero, con un
+  `cmd` finto, per verificare che la struttura arrivi identica: barre rovesciate (sequenze come `\t` e `\1`, escape
+  Unicode, `C:\Users\…` in un REMARK), virgolette finali e tre virgolette, che non chiudono il testo e non diventano più
+  tre apici; testo incorporato su una sola riga ASCII anche con «python end», `\r`, altri separatori di riga e caratteri
+  non ASCII nel file; nome dell'oggetto sicuro per i comandi di PyMOL (7 casi: punti, virgolette, comandi, non ASCII,
+  lungo, vuoto); schemi di colore, e schema sconosciuto che torna alla struttura secondaria; la rotta
+  `/api/jobs/{id}/pymol/{modello}` (sessione di un modello, file assente e percorso fuori dalla cartella del job, nome
+  del file scaricato ripulito come quello dei report: con caratteri ammessi anche da NTFS gira dappertutto, con `"<>`
+  si salta su Windows). Il codice: `domain/exports.pymol_script` incorpora il testo con `ascii()` (`repr()` con gli
+  escape anche per i caratteri non ASCII) in una sola riga `cmd.read_pdbstr(…)`, quindi nessuna riga del file può
+  chiudere il blocco `python` prima del tempo né aggiungere comandi, e lo script `.pml` è tutto ASCII;
+  `api/jobs.py::model_pymol` passa il nome da `report.safe_filename(name, ".pml", "bioloom_model")`. Prima le barre
+  rovesciate arrivavano a PyMOL come sequenze di escape, `C:\Users\…` o una virgoletta finale davano SyntaxError, le tre
+  virgolette diventavano tre apici, e un nome con `"` o non codificabile nell'intestazione (anche su Windows, per
+  esempio `modello finale;€ (1).pdb`) dava 500. Limiti: il `.pml` non è stato provato con un PyMOL vero (la riga è lunga
+  quanto il PDB); il nome del file scaricato può differire dal nome dell'oggetto e dalla riga «Apri con:» dello script
+  (`safe_filename` comprime i `_`: `y_a_b.pml` contro `y__a_b_`), mentre per i nomi normali come `1UBQ_B99990001`
+  coincidono.
+- **Rete bloccata** (`test_rete_bloccata.py`, 22 più uno con il marcatore `network`): connessioni reali (httpx, nomi,
+  socket) che falliscono subito con il messaggio e fanno fallire il test; `MockTransport` e server locali che
+  funzionano; che cosa conta come locale (19 casi: loopback IPv4 e IPv6, IPv4 scritto come IPv6, 0.0.0.0, `localhost` e
+  `*.localhost` anche con maiuscole e punto finale; non locali gli indirizzi privati e pubblici, `rest.uniprot.org`,
+  `qmean`, `localhost.example.org`); marcatore `network` dichiarato ed escluso per default (`test_remote.py` resta
+  escluso), e il test marcato, escluso anche lui, che verifica che il blocco non valga per i test `network`.
 - **Servizi reali** (`test_remote.py`, 4, solo con `-m network`): ricerca RCSB dell'ubiquitina, voce e domini UniProt,
   metadati RCSB con R-free e stato oligomerico.
 
-**Frontend** (logica pura in `lib/`, markup statico dei componenti con `react-dom/server`; numero di test fra
-parentesi):
+**Frontend** (logica pura in `lib/`, markup statico dei componenti con `react-dom/server` e, nei file con
+`// @vitest-environment jsdom`, componenti montati con @testing-library/react; numero di test fra parentesi):
 
 - **Formati, file e stato:** `pir.test.ts` (3: parser PIR, identità e copertura, formattazione); `files.test.ts` (8:
   decodifica dei file, chiave MODELLER da file, vincoli da e verso file, nomi dei record); `format.test.ts` (16: numeri
@@ -4639,8 +5115,15 @@ parentesi):
   server di posta), `residueTerms.test.ts` (3).
 - **Componenti di base e accessibilità:** `foundation.test.tsx` (14: card e sezioni richiudibili montate alla prima
   apertura, gruppi di comandi con un nome, esito scritto oltre al colore), `contrast.test.ts` (11: testi ≥ 4,5:1 su ogni
-  superficie nei due temi), `chartTokens.test.ts` (6) e `sequenceTokens.test.ts` (4: colori dei grafici e delle classi di
-  residui ≥ 3:1, anello del focus), `aminoAcids.test.ts` (3: una sola tabella delle classi), `formatHelpers.test.ts` (4).
+  superficie nei due temi), `chartTokens.test.ts` (20) e `sequenceTokens.test.ts` (4): colori dei grafici e delle classi
+  di residui ≥ 3:1 e anello del focus nei due temi; per il visualizzatore 3D fondo e comandi del tema (`--viewer-*`,
+  testi ≥ 4,5:1, regole senza colori fissi, anello pieno sui pulsanti) e grigio di contesto ≥ 3:1 sul fondo, sotto la
+  legenda e sui pannelli, usato dalle cinque colorazioni; varianti del tema chiaro almeno 3:1 sul fondo del 3D, sotto la
+  legenda e sui pannelli, tema scuro invariato, A contro «B senza coppia» almeno 2,5:1 e 25 di ΔE CIE76 (visione
+  normale, deuteranopia e protanopia simulate con Machado 2009), A nel tema chiaro almeno 25 contro tutta la scala delle
+  distanze, «1 metodo» almeno 12 contro le altre fasce, gradienti continui non scuriti, contorno solo nel tema chiaro e
+  almeno 3:1, regola CSS del bordo della legenda; `aminoAcids.test.ts` (3: una sola tabella delle classi),
+  `formatHelpers.test.ts` (4).
 - **Errori dell'interfaccia e caricamento dei template** (`ErrorBoundary.test.tsx` 8, `templateUpload.test.ts` 5):
   sessionStorage sicuro (dati del sito bloccati: lettura null e scrittura non riuscita senza eccezioni; senza
   sessionStorage e con la scrittura che fallisce; storage funzionante); ricarica per i moduli obsoleti una volta e poi
@@ -4656,6 +5139,27 @@ parentesi):
   `shortcuts.test.ts` (6: Ctrl+K e ⌘K, `/`, `?`, `g` + lettera, campi di testo e dialoghi aperti), `tags.test.ts` (8:
   stessa normalizzazione del backend, filtro degli elenchi), `Layout.test.tsx` (3: pulsante del menu e barra laterale
   sugli schermi stretti, griglia dei passi della Panoramica).
+- **Interfaccia montata (jsdom)**, con @testing-library/react e gli strumenti di `src/test/dom.ts`:
+  `CopyButton.test.tsx` (5: Clipboard API, textarea temporanea con `execCommand` e focus restituito, `writeText`
+  rifiutato, «Non copiato» con la notifica, fuori dall'app senza eccezioni); `TemplateUpload.test.tsx` (2: 409 →
+  domanda → «Sostituisci» con il secondo invio in `overwrite`; «Annulla» senza secondo invio); `Layout.dom.test.tsx` (5:
+  contatore dei job fermo con la scheda nascosta; «Esci da tutti i dispositivi» assente in locale, conferma →
+  `logout-all` → notifica e schermata di accesso, «Annulla», errore); `ErrorBoundary.dom.test.tsx` (3: sessionStorage
+  che lancia davvero, modulo obsoleto senza ricarica, «Riprova» e «Copia i dettagli» senza Clipboard API);
+  `Viewer3D.dom.test.tsx` (7: 401 con la schermata di accesso, richiesta precedente annullata, sfondo che cambia con il
+  tema senza ricaricare la struttura, grigio di contesto più scuro nel tema chiaro nel disegno e nella legenda, contorno
+  che compare e sparisce al cambio di tema, colore dei centri delle tasche per tema, riferimento A nel disegno e nella
+  legenda); `context.dom.test.tsx` (6: chiusura a 4 e a 8 s, pausa con il puntatore sopra e ripresa con il minimo di
+  2 s, ripresa con il tempo residuo quando supera il minimo, pausa con il focus e ripresa quando esce, puntatore e focus
+  insieme, chiusura a mano durante la pausa senza timer rimasti; con i timer finti di vitest user-event aspetta un
+  `setTimeout` che non arriva, quindi `fireEvent` e `focus()`);
+  `Pickers.test.tsx` (3: download dopo l'attesa se il template è ancora scelto, nessun download se tolto o con il
+  selettore smontato); `keyboard.test.tsx` (4: notifiche chiuse da tastiera e con il clic, righe con Tab, Invio e Spazio,
+  `DropZone`); `hooks.dom.test.tsx` (3: `useVisibleInterval`); `theme.dom.test.tsx` (2: sfondo del 3D dal tema e da
+  `--viewer-bg`); `Settings.test.tsx` (3: interprete di MODELLER in sola lettura in modalità server e modificabile in
+  locale, spazio massimo della cache). Il test del polling fallisce con il vecchio `useInterval` (12 richieste invece di
+  2). In ambiente node: `client.test.ts` (6: id codificati nei percorsi, `fileText` come testo, richiesta annullata senza
+  «Server non raggiungibile», sessione scaduta, 429 come errore, `logout-all`) e `links.test.ts` (2: `httpsUrl`).
 
 ## Fuori perimetro
 

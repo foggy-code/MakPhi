@@ -6,7 +6,7 @@ import { FeatureMap, SSStrip, StackBar, type Track } from "../components/charts"
 import { SequenceFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
 import { FavoriteStar, LabelEditor, TagChips } from "../components/Labels";
-import { Alert, Badge, BarCell, Card, Confirm, CopyButton, DetailGrid, Disclosure, Empty, PageHead, Spinner, Stat, Tabs } from "../components/ui";
+import { Alert, Badge, BarCell, Card, Confirm, CopyButton, DetailGrid, Disclosure, Empty, PageHead, rowActivate, Spinner, Stat, Tabs } from "../components/ui";
 import { InfoChips } from "../components/WorkflowParts";
 import { sequenceAccession } from "../lib/alphafold";
 import { useProject, useToast } from "../lib/context";
@@ -363,7 +363,8 @@ function UniProtImport({ onAdded }: { onAdded: () => void }) {
             <thead><tr><th>Accession</th><th>Proteina</th><th>Organismo</th><th className="num">aa</th></tr></thead>
             <tbody>
               {hits.map((h) => (
-                <tr key={h.accession} className={`clickable${entry?.accession === h.accession ? " selected" : ""}`} onClick={() => api.uniprot(h.accession).then(setEntry).catch(toast.error)}>
+                <tr key={h.accession} className={`clickable${entry?.accession === h.accession ? " selected" : ""}`} aria-current={entry?.accession === h.accession || undefined}
+                  {...rowActivate(() => api.uniprot(h.accession).then(setEntry).catch(toast.error))}>
                   <td className="nowrap">{h.accession} {h.reviewed && <Badge tone="ok" title="Swiss-Prot (revisionato)">SP</Badge>}</td>
                   <td>{h.protein_name}<div className="tiny text-2">{h.genes.join(", ")}</div></td>
                   <td className="small">{h.organism}</td>
@@ -475,7 +476,7 @@ export default function Sequences() {
                 <table className="table">
                   <tbody>
                     {shown.map((s) => (
-                      <tr key={s.id} className={`clickable ${s.id === selected ? "selected" : ""}`} onClick={() => setSelected(s.id)}>
+                      <tr key={s.id} className={`clickable ${s.id === selected ? "selected" : ""}`} aria-current={s.id === selected || undefined} {...rowActivate(() => setSelected(s.id))}>
                         <td style={{ width: 30 }}><FavoriteStar type="sequence" id={s.id} value={!!s.favorite} onChange={patchLabels} size={13} /></td>
                         <td><b>{s.name}</b> <TagChips tags={s.tags} max={3} /><div className="tiny text-2">{s.source} · {relTime(s.created_at)}</div></td>
                         <td className="num nowrap">{fmtInt(s.length)} aa</td>

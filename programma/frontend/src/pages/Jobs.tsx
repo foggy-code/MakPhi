@@ -7,7 +7,7 @@ import { JobCleanupDialog } from "../components/JobCleanupDialog";
 import { JobPanel } from "../components/JobPanel";
 import { ReproButton } from "../components/ReproButton";
 import { FavoriteStar, LabelEditor, LabelFilterSelect, TagChips } from "../components/Labels";
-import { Alert, Card, Confirm, DetailGrid, Disclosure, Empty, ExpandButton, PageHead, Progress, Spinner, StatusBadge, useExpanded } from "../components/ui";
+import { Alert, Card, Confirm, DetailGrid, Disclosure, Empty, ExpandButton, PageHead, Progress, rowActivate, Spinner, StatusBadge, useExpanded } from "../components/ui";
 import { useProject, useToast } from "../lib/context";
 import { fmtBytes, fmtDate, fmtDuration, fmtEta, isActive, KIND_LABEL, queueLabel, relTime, STATUS_LABEL } from "../lib/format";
 import { useAsync, useInterval, useJob, useLiveJobList } from "../lib/hooks";
@@ -306,7 +306,7 @@ export default function Jobs() {
                     const isOpen = open.has(j.id);
                     return (
                       <Fragment key={j.id}>
-                        <tr className={`clickable${j.id === selected ? " selected" : ""}${isOpen ? " row-open" : ""}`} onClick={() => choose(j.id)}>
+                        <tr className={`clickable${j.id === selected ? " selected" : ""}${isOpen ? " row-open" : ""}`} aria-current={j.id === selected || undefined} {...rowActivate(() => choose(j.id))}>
                           <td style={{ width: 30, verticalAlign: "top" }}>
                             <ExpandButton open={isOpen} onClick={() => open.toggle(j.id)} label={`dettagli di ${j.title || KIND_LABEL[j.kind]}`} />
                           </td>

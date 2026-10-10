@@ -8,7 +8,7 @@ import { Icon } from "../components/Icon";
 import { FavoriteStar, LabelEditor, LabelFilterSelect, TagChips } from "../components/Labels";
 import { useTemplateUpload } from "../components/TemplateUpload";
 import { Viewer3D } from "../components/Viewer3D";
-import { Alert, Badge, Card, Confirm, DetailGrid, Disclosure, DropZone, Empty, ExpandAll, ExpandButton, PageHead, Spinner, Stat, useExpanded } from "../components/ui";
+import { Alert, Badge, Card, Confirm, DetailGrid, Disclosure, DropZone, Empty, ExpandAll, ExpandButton, PageHead, rowActivate, Spinner, Stat, useExpanded } from "../components/ui";
 import { FormSection } from "../components/WorkflowParts";
 import {
   isAlphaFoldId, isUniProtAccession, normalizeAccession, PLDDT_BAND_LABEL, PLDDT_BAND_TONE, plddtLabel, plddtTone, predictorBadge, predictorTitle, type PlddtBand,
@@ -397,7 +397,7 @@ export default function Templates() {
                       const isOpen = open.has(t.id);
                       return (
                         <Fragment key={t.id}>
-                          <tr className={`clickable ${t.id === selected ? "selected" : ""}${isOpen ? " row-open" : ""}`} onClick={() => selectTemplate(t.id)}>
+                          <tr className={`clickable ${t.id === selected ? "selected" : ""}${isOpen ? " row-open" : ""}`} aria-current={t.id === selected || undefined} {...rowActivate(() => selectTemplate(t.id))}>
                             <td><ExpandButton open={isOpen} onClick={() => open.toggle(t.id)} label={`dettagli di ${t.id}`} /></td>
                             <td>
                               <FavoriteStar type="template" id={t.id} value={!!t.favorite} onChange={patchLabels} size={13} />{" "}

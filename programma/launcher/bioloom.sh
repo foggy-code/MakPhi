@@ -11,6 +11,8 @@
 #            --uniclust <cartella>  cartella con UniClust30/UniRef30 (qualunque versione; auto = ricerca automatica)
 #            --con-licenze  la copia portatile include chiavi di licenza, posta.env e chiave d'accesso (solo per sé)
 #            --sposta-prosa  sposta su questo computer, senza chiedere, la licenza ProSA attiva su un altro
+#   porta: dal desktop la prima libera da 8765 a 8800 (si riparte dall'ultima usata); BIOLOOM_PORT=<porta> nell'ambiente
+#          ne chiede una precisa (se è occupata ci si ferma). Da server quella di server.env (o di BIOLOOM_PORT).
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # programma/: il codice
@@ -54,6 +56,10 @@ fail()  { printf '\n  %s[!] %s%s\n\n' "$c_red" "$*" "$c_off"; exit 1; }
 [ -n "$VERSION" ] || fail "Manca il file programma/launcher/VERSION (versione di BioLoom): la cartella programma è incompleta, copiala di nuovo."
 # Le variabili della shell prevalgono su --env-file: una BIOLOOM_VERSION vecchia in .env.locale o server.env non conta
 export BIOLOOM_VERSION="$VERSION"
+# Porta chiesta con BIOLOOM_PORT. Non resta nell'ambiente: compose la preferirebbe alla porta che l'avviatore sceglie e
+# scrive in .env.locale (e "aggiorna" non riavvierebbe BioLoom com'era); da server start_server la riesporta
+REQ_PORT="${BIOLOOM_PORT:-}"
+unset BIOLOOM_PORT
 
 # comando da suggerire nei messaggi: quello della Guida, con il percorso (questo script non è nel PATH)
 LAUNCH_CMD="$BASE/avvia-bioloom.sh"; [ -f "$LAUNCH_CMD" ] || LAUNCH_CMD="$ROOT/launcher/bioloom.sh"
@@ -87,11 +93,25 @@ server_data() {  # cartella dati di server.env (BIOLOOM_DATA_PATH; predefinita q
 }
 
 # ------------------------------------------------------------------------------------------- Docker
+docker_desktop_note() {  # licenza di Docker Desktop (termini di Docker: abbonamento a pagamento per l'uso professionale
+  # negli enti pubblici, di qualunque dimensione, e nelle organizzazioni con almeno 250 dipendenti o almeno 10 milioni di
+  # dollari di fatturato annuo) e alternative
+  warn "Docker Desktop è gratuito per uso personale, didattico e nelle aziende piccole (meno di 250 dipendenti e meno di"
+  warn "10 milioni di dollari di fatturato annuo); negli enti pubblici, anche piccoli, e nelle altre organizzazioni, se"
+  warn "l'uso non è didattico, verifica la licenza (https://www.docker.com/pricing/). In alternativa un programma che"
+  local alt="Rancher Desktop o Podman Desktop con la compatibilità Docker"
+  [ "$OS" = mac ] && alt="Colima, $alt"
+  warn "dia i comandi docker e docker compose (non provati con BioLoom): $alt."
+}
+
 ensure_docker() {
   if ! command -v docker >/dev/null 2>&1; then
     warn "Docker non è installato. BioLoom gira dentro Docker:"
-    if [ "$OS" = mac ]; then warn "installa Docker Desktop per Mac (https://www.docker.com/products/docker-desktop/)"
-    else warn "installa Docker Engine (https://docs.docker.com/engine/install/) oppure Docker Desktop"; fi
+    case "$OS" in
+      mac) warn "installa Docker Desktop per Mac (https://www.docker.com/products/docker-desktop/)."; docker_desktop_note ;;
+      windows) warn "installa Docker Desktop (https://www.docker.com/products/docker-desktop/)."; docker_desktop_note ;;
+      *) warn "installa Docker Engine con il plugin compose (gratuito: https://docs.docker.com/engine/install/)." ;;
+    esac
     exit 1
   fi
   local out
@@ -550,7 +570,74 @@ prosa_check() {  # $1 MAC della licenza  $2 cartella dati  $3 1 = si può chiede
 
 random_mac() { printf '02:%02x:%02x:%02x:%02x:%02x\n' $((RANDOM % 256)) $((RANDOM % 256)) $((RANDOM % 256)) $((RANDOM % 256)) $((RANDOM % 256)); }
 
-port_free() { ! (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+port_free() {  # $1 porta, $2 indirizzo (127.0.0.1): libera se lì nessun programma accetta connessioni
+  local host="${2:-127.0.0.1}" rc=0
+  case "$host" in
+    # anche in locale un programma bloccato (coda delle connessioni piena) terrebbe ferma la connessione per minuti,
+    # perché Linux scarta le richieste in più invece di rifiutarle: con timeout, dopo 3 s senza risposta, la porta è
+    # occupata (una porta chiusa in locale rifiuta subito). Senza timeout (di solito su macOS) si prova senza limite;
+    # su Windows non serve, e 3 s sarebbero pochi: rifiuta sempre, anche una porta chiusa dopo circa 2 s
+    127.*|::1)
+      if [ "$OS" != windows ] && command -v timeout >/dev/null 2>&1; then
+        # shellcheck disable=SC2016 # $0 e $1 sono quelli della shell figlia
+        { timeout 3 bash -c 'exec 3<>"/dev/tcp/$0/$1"' "$host" "$1"; } 2>/dev/null || rc=$?
+        # 0: un programma accetta; 124, o 128 e oltre (timeout di busybox, ucciso da un segnale): nessuna risposta
+        [ "$rc" != 0 ] && [ "$rc" != 124 ] && [ "$rc" -lt 128 ]
+      else
+        ! (exec 3<>"/dev/tcp/$host/$1") 2>/dev/null
+      fi ;;
+    # un indirizzo di rete che non risponde terrebbe ferma la connessione per minuti: senza timeout decide Docker
+    *) command -v timeout >/dev/null 2>&1 || return 0
+       # shellcheck disable=SC2016 # $0 e $1 sono quelli della shell figlia
+       ! timeout 3 bash -c 'exec 3<>"/dev/tcp/$0/$1"' "$host" "$1" 2>/dev/null ;;
+  esac
+}
+
+valid_port() {  # stampa $1 se è una porta TCP (da 1 a 65535), senza zeri iniziali; uscita 1 altrimenti
+  case "$1" in ""|*[!0-9]*) return 1 ;; esac
+  [ "${#1}" -le 5 ] || return 1
+  set -- "$((10#$1))"
+  [ "$1" -ge 1 ] && [ "$1" -le 65535 ] || return 1
+  printf '%s' "$1"
+}
+
+probe_host() {  # indirizzo dove guardare se la porta di BIOLOOM_BIND=$1 è occupata: per tutte le interfacce (0.0.0.0)
+  # basta 127.0.0.1, dove risponde anche chi ascolta su tutte
+  case "$1" in ""|0.0.0.0|localhost|::|"[::]") printf '127.0.0.1' ;; "[::1]") printf '::1' ;; *) printf '%s' "$1" ;; esac
+}
+
+port_hint() {  # come vedere quali programmi ascoltano sulle porte, per i messaggi
+  case "$OS" in
+    windows) printf 'netstat -ano | findstr LISTENING, il numero in fondo è il processo in Gestione attività' ;;
+    mac) printf 'lsof -nP -iTCP -sTCP:LISTEN' ;;
+    *) printf 'ss -ltnp' ;;
+  esac
+}
+
+own_port() {  # porta pubblicata dal BioLoom in esecuzione (vuota se non è in esecuzione): per lui è libera, compose
+  # ricrea il container. $1 = porta da supporre se compose non la dice
+  local p
+  compose ps --status running --services 2>/dev/null | grep -qx bioloom || return 0
+  p="$(compose port bioloom 8765 2>/dev/null | tail -n1 | tr -d '\r')"; p="${p##*:}"
+  case "$p" in ""|*[!0-9]*) p="$1" ;; esac
+  printf '%s' "$p"
+}
+
+port_range() { local p="$1"; while [ "$p" -le "$2" ]; do printf '%s\n' "$p"; p=$((p + 1)); done; }   # da $1 a $2
+
+pick_port() {  # prima porta libera: $1 (l'ultima usata), poi le seguenti fino a 8800 e da 8765; $2 = porta del BioLoom
+  # in esecuzione, libera per lui. Uscita 1 se sono tutte occupate
+  local p list
+  if [ "$1" -ge 8765 ] && [ "$1" -le 8800 ]; then
+    list="$1 $(port_range $(($1 + 1)) 8800) $(port_range 8765 $(($1 - 1)))"
+  else
+    list="$1 $(port_range 8765 8800)"
+  fi
+  for p in $list; do
+    if [ "$p" = "$2" ] || port_free "$p"; then printf '%s' "$p"; return 0; fi
+  done
+  return 1
+}
 
 host_path() {  # percorso comprensibile da Docker (su Git Bash per Windows: C:\...)
   if [ "$OS" = windows ] && command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s\n' "$1"; fi
@@ -573,13 +660,43 @@ read_saved() {
 
 ensure_env() { [ -f "$ENV_FILE" ] || printf 'BIOLOOM_VERSION=%s\n' "$VERSION" > "$ENV_FILE"; }
 
-wait_healthy() {
-  local port="$1"
+url_host() { case "$1" in *:*) printf '[%s]' "$1" ;; *) printf '%s' "$1" ;; esac; }   # IPv6 fra [] negli URL
+
+health_ok() {  # $1 porta  $2 indirizzo: vero se BioLoom risponde a /api/health. Senza curl una richiesta HTTP scritta
+  # a mano: la sola connessione non basta, perché la porta pubblicata da Docker la accetta anche prima che BioLoom ascolti
+  if command -v curl >/dev/null 2>&1; then
+    # --noproxy: curl manderebbe al proxy di http_proxy anche 127.0.0.1 (o l'IP del server), comune sui server degli
+    # enti; --max-time come il read -t 5 qui sotto, così un proxy irraggiungibile non blocca ogni tentativo
+    curl -fsS --noproxy '*' --max-time 5 "http://$(url_host "$2"):$1/api/health" >/dev/null 2>&1
+  else
+    (exec 3<>"/dev/tcp/$2/$1" || exit 1
+     printf 'GET /api/health HTTP/1.0\r\nHost: %s:%s\r\n\r\n' "$(url_host "$2")" "$1" >&3
+     IFS= read -r -t 5 line <&3 || exit 1
+     case "$line" in "HTTP/1."?" 200"*) exit 0 ;; *) exit 1 ;; esac) 2>/dev/null
+  fi
+}
+
+wait_healthy() {  # $1 porta  $2 indirizzo (127.0.0.1)  $3 1 = smette di aspettare se il container di BioLoom si ferma.
+  # Uscita: 0 risponde; 1 nessuna risposta in 2 minuti; 2 container fermo; 3 container che Docker riavvia (restart di
+  # compose.yml, BIOLOOM_RESTART): BioLoom è uscito con un errore e riparte, di solito per ripeterlo. I riavvii si
+  # contano dal primo controllo: un container che compose non ha ricreato può averne di vecchi
+  local port="$1" host="${2:-127.0.0.1}" watch="${3:-0}" id="" state="" status count policy restarts=""
   for _ in $(seq 1 120); do
-    if command -v curl >/dev/null 2>&1; then
-      curl -fsS "http://127.0.0.1:$port/api/health" >/dev/null 2>&1 && return 0
-    elif (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
-      return 0
+    health_ok "$port" "$host" && return 0
+    if [ "$watch" = 1 ]; then
+      [ -n "$id" ] || id="$(compose ps -a -q bioloom 2>/dev/null | head -n1 | tr -d '\r')"
+      state=""
+      [ -n "$id" ] && state="$(docker inspect --format \
+        '{{.State.Status}} {{.RestartCount}} {{.HostConfig.RestartPolicy.Name}}' "$id" 2>/dev/null | tr -d '\r')"
+      if [ -n "$state" ]; then
+        read -r status count policy <<< "$state"
+        case "$status" in
+          exited|dead) case "$policy" in ""|no) return 2 ;; *) return 3 ;; esac ;;   # fra un'uscita e il riavvio
+          restarting) return 3 ;;
+        esac
+        [ -n "$restarts" ] || restarts="$count"
+        [ "$count" = "$restarts" ] || return 3
+      fi
     fi
     sleep 1
   done
@@ -617,7 +734,7 @@ start_local() {
   fi
   UNICLUST_MANUAL="$SAVED_MANUAL"
   find_databases
-  local mac port
+  local mac port run_port
   mac="$(prosa_mac)"; MAC_LIC=""; PROSA_STATE=""
   if [ -n "$mac" ] && prosa_check "$mac" "$DATA_DIR" "$((1 - NO_MENU))"; then
     MAC_LIC=1
@@ -626,10 +743,17 @@ start_local() {
   else
     mac="$(random_mac)"
   fi
-  port="${SAVED_PORT:-8765}"
+  port="$(valid_port "$SAVED_PORT")" || port=8765
   ensure_env
-  if ! compose ps --status running --services 2>/dev/null | grep -qx bioloom; then
-    while ! port_free "$port" && [ "$port" -lt 8800 ]; do port=$((port + 1)); done
+  run_port="$(own_port "$port")"
+  if [ -n "$REQ_PORT" ]; then
+    port="$(valid_port "$REQ_PORT")" || fail "BIOLOOM_PORT=$REQ_PORT non è una porta valida (un numero da 1 a 65535)."
+    [ "$port" = "$run_port" ] || port_free "$port" \
+      || fail "La porta $port (BIOLOOM_PORT) è già usata da un altro programma: chiudilo (per vedere quale: $(port_hint)) oppure scegli un'altra porta con BIOLOOM_PORT."
+  elif ! port="$(pick_port "$port" "$run_port")"; then
+    port="$(valid_port "$SAVED_PORT")" || port=8765
+    if [ "$port" -ge 8765 ] && [ "$port" -le 8800 ]; then port=""; fi   # già nell'intervallo: non si ripete
+    fail "Nessuna porta libera per BioLoom: ${port:+la $port e }le porte da 8765 a 8800 sono tutte usate da altri programmi. Chiudine uno (per vedere quali: $(port_hint)) oppure scegli una porta libera, per esempio: BIOLOOM_PORT=9000 $LAUNCH_CMD"
   fi
   {
     echo "# Generato dall'avviatore di BioLoom: configurazione di questo computer (non va copiata altrove)."
@@ -818,10 +942,22 @@ start_server() {
   check_env_version
   single_instance "Avvio annullato"
   # valori letti come li legge compose (virgolette, commenti a fine riga); percorsi relativi a compose.yml
-  local uniclust data mac lic_mac port bind
+  local uniclust data mac lic_mac port bind origin
   uniclust="$(compose_path "$(env_val UNICLUST_PATH "$server_env")")"
   data="$(server_data)"
   mkdir -p "$data" 2>/dev/null
+  # porta fissa: se un altro programma la usa ci si ferma qui, prima di caricare o costruire le immagini, con un
+  # messaggio chiaro (compose fallirebbe dopo, con "address already in use" o "ports are not available")
+  bind="${BIOLOOM_BIND:-$(env_val BIOLOOM_BIND "$server_env")}"   # per compose la variabile della shell prevale
+  if [ -n "$REQ_PORT" ]; then
+    origin="BIOLOOM_PORT"; port="$REQ_PORT"
+  else
+    origin="BIOLOOM_PORT in server.env"; port="$(env_val BIOLOOM_PORT "$server_env")"; port="${port:-8765}"
+  fi
+  port="$(valid_port "$port")" || fail "$origin non è una porta valida (un numero da 1 a 65535): ${REQ_PORT:-$(env_val BIOLOOM_PORT "$server_env")}"
+  [ -z "$REQ_PORT" ] || export BIOLOOM_PORT="$port"   # come prima: la variabile della shell prevale su server.env
+  [ "$port" = "$(own_port "$port")" ] || port_free "$port" "$(probe_host "$bind")" \
+    || fail "La porta $port ($origin) è già usata da un altro programma${bind:+ su $bind}: chiudilo (per vedere quale: $(port_hint)) oppure cambia $origin e rilancia $LAUNCH_CMD server"
   # ProSA: se BIOLOOM_MAC è il MAC della licenza nella cartella dati, vale un computer alla volta come sul desktop;
   # con la licenza su un altro computer il container prende il MAC predefinito di compose.yml (come senza licenza)
   mac="$(norm_mac "$(env_val BIOLOOM_MAC "$server_env")")"
@@ -838,8 +974,21 @@ start_server() {
   else
     compose up -d --remove-orphans || fail "Avvio non riuscito."
   fi
-  port="$(env_val BIOLOOM_PORT "$server_env")"; port="${port:-8765}"
-  bind="${BIOLOOM_BIND:-$(env_val BIOLOOM_BIND "$server_env")}"   # per compose la variabile della shell prevale
+  # compose up non aspetta BioLoom: un errore all'avvio (per esempio BIOLOOM_ACCESS_KEY troppo corta, il backend esce
+  # con il motivo nel log) passerebbe inosservato. Con BIOLOOM_BIND=0.0.0.0 si interroga 127.0.0.1 (probe_host)
+  local host rc=0
+  host="$(probe_host "$bind")"
+  say "${c_dim}Attesa della risposta di BioLoom su http://$(url_host "$host"):$port ...${c_off}"
+  wait_healthy "$port" "$host" 1 || rc=$?
+  if [ "$rc" != 0 ]; then
+    warn "Ultime righe del log di BioLoom:"
+    compose logs --tail 30 bioloom
+    case "$rc" in
+      1) fail "BioLoom non risponde su http://$(url_host "$host"):$port dopo 2 minuti: il motivo è di solito nelle righe qui sopra (tutto il log: $LAUNCH_CMD log)." ;;
+      2) fail "BioLoom si è fermato durante l'avvio: il motivo è nelle righe qui sopra (spesso un valore di server.env, per esempio BIOLOOM_ACCESS_KEY più corta di 16 caratteri). Correggilo e rilancia $LAUNCH_CMD server" ;;
+      *) fail "BioLoom si è fermato durante l'avvio: il motivo è nelle righe qui sopra (spesso un valore di server.env, per esempio BIOLOOM_ACCESS_KEY più corta di 16 caratteri). Correggilo e rilancia $LAUNCH_CMD server; intanto Docker continua a riavviarlo (BIOLOOM_RESTART), per fermarlo: $LAUNCH_CMD arresta" ;;
+    esac
+  fi
   title "BioLoom (server) avviato sulla porta $port"
   say "Accesso protetto dalla chiave in server.env (BIOLOOM_ACCESS_KEY). Per HTTPS usa un reverse proxy (vedi Guida/5 - Chiavetta e server.md)."
   if loopback "$bind"; then
@@ -941,6 +1090,7 @@ if command -v podman >/dev/null 2>&1 && ! docker compose version >/dev/null 2>&1
       warn "Qui c'è Podman ma non Docker con compose, che serve per avviare BioLoom dal desktop:"
       if [ "$OS" = mac ]; then
         warn "installa Docker Desktop per Mac (https://www.docker.com/products/docker-desktop/; Guida/1 - Primo avvio.md)."
+        docker_desktop_note
       else
         warn "installa Docker Desktop, o Docker Engine con il plugin compose (https://docs.docker.com/engine/install/;"
         warn "Guida/1 - Primo avvio.md)."

@@ -11,6 +11,8 @@
 #            -SenzaDati -SenzaQmean (copia portatile senza dati o senza l'immagine di QMEAN)
 #            -ConLicenze  la copia portatile include chiavi di licenza, posta.env e chiave d'accesso (solo per sé)
 #            -SpostaProsa  sposta su questo computer, senza chiedere, la licenza ProSA attiva su un altro
+#   porta: la prima libera da 8765 a 8800 (si riparte dall'ultima usata); la variabile d'ambiente BIOLOOM_PORT ne chiede
+#          una precisa (se è occupata ci si ferma)
 param(
     [ValidateSet("avvia", "arresta", "stato", "log", "verifica", "prepara", "aggiorna")]
     [string]$Azione = "avvia",
@@ -60,6 +62,10 @@ function Fail([string]$text) {
 if (-not $Version) { Fail "Manca il file programma\launcher\VERSION (versione di BioLoom): la cartella programma è incompleta, copiala di nuovo." }
 # Le variabili d'ambiente prevalgono su --env-file: una BIOLOOM_VERSION vecchia in .env.locale non conta
 $env:BIOLOOM_VERSION = $Version
+# Porta chiesta con BIOLOOM_PORT. Non resta nell'ambiente: docker compose la preferirebbe alla porta che l'avviatore
+# sceglie e scrive in .env.locale (e "aggiorna" non riavvierebbe BioLoom com'era)
+$RequestedPort = "$env:BIOLOOM_PORT".Trim()
+Remove-Item Env:BIOLOOM_PORT -ErrorAction SilentlyContinue
 
 function Invoke-Docker([string[]]$Arguments, [switch]$Quiet) {
     # Docker scrive i messaggi di avanzamento su stderr: in PowerShell 5.1 non vanno trattati come errori.
@@ -107,8 +113,16 @@ function Ensure-EnvFile {  # .env.locale minimo, se manca: docker compose --env-
 function Ensure-Docker {
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
         Say "  Docker non è installato su questo computer." Yellow
-        Say "  BioLoom gira dentro Docker: installa Docker Desktop (gratuito per uso personale e accademico)," Yellow
-        Say "  riavvia il computer se richiesto e poi fai di nuovo doppio clic su 'Avvia BioLoom'." Yellow
+        Say "  BioLoom gira dentro Docker: installa Docker Desktop, riavvia il computer se richiesto e poi fai di nuovo" Yellow
+        Say "  doppio clic su 'Avvia BioLoom'." Yellow
+        # termini di Docker: abbonamento a pagamento per l'uso professionale negli enti pubblici, di qualunque dimensione,
+        # e nelle organizzazioni con almeno 250 dipendenti o almeno 10 milioni di dollari di fatturato annuo (gratuito per
+        # uso personale, didattico e nelle aziende piccole)
+        Say "  Docker Desktop è gratuito per uso personale, didattico e nelle aziende piccole (meno di 250 dipendenti e meno" Yellow
+        Say "  di 10 milioni di dollari di fatturato annuo); negli enti pubblici, anche piccoli, e nelle altre organizzazioni," Yellow
+        Say "  se l'uso non è didattico, verifica la licenza (https://www.docker.com/pricing/). In alternativa un programma" Yellow
+        Say "  che dia i comandi docker e docker compose (non provati con BioLoom): Rancher Desktop o Podman Desktop con la" Yellow
+        Say "  compatibilità Docker." Yellow
         if (-not $NoMenu) {
             $answer = Read-Host "  Aprire la pagina di download di Docker Desktop? (S/n)"
             if ($answer -notmatch '^[nN]') { Start-Process "https://www.docker.com/products/docker-desktop/" }
@@ -544,7 +558,17 @@ function Test-ProsaComputer([string]$mac) {  # vero se il MAC della licenza ProS
     return $false
 }
 
-function Test-PortFree([int]$port) {
+function Test-PortFree([int]$port) {  # libera se su 127.0.0.1 nessuno risponde e se si può aprire
+    # Prima una connessione: chi ascolta su tutte le interfacce (0.0.0.0) risponde subito, ma non sempre impedisce a
+    # TcpListener di aprire 127.0.0.1. Su una porta chiusa Windows ritenta per circa 2 s: dopo 300 ms si passa oltre
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        if ($client.ConnectAsync([System.Net.IPAddress]::Loopback, $port).Wait(300) -and $client.Connected) { return $false }
+    } catch {
+    } finally {
+        $client.Close()
+    }
+    # poi l'apertura, che trova anche le porte riservate da Windows (netsh interface ipv4 show excludedportrange)
     $listener = $null
     try {
         $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $port)
@@ -556,6 +580,38 @@ function Test-PortFree([int]$port) {
         if ($listener) { $listener.Stop() }
     }
 }
+
+function Get-ValidPort([string]$text) {  # porta TCP (da 1 a 65535) come intero; 0 se $text non lo è
+    $p = 0
+    $t = "$text".Trim()
+    if ($t -match '^\d{1,5}$' -and [int]::TryParse($t, [ref]$p) -and $p -ge 1 -and $p -le 65535) { return $p }
+    return 0
+}
+
+function Get-OwnPort([int]$assumed) {  # porta pubblicata dal BioLoom in esecuzione (0 se non è in esecuzione): per lui è
+    # libera, compose ricrea il container. $assumed se compose non la dice
+    if (-not (Test-Running)) { return 0 }
+    $r = Compose @("port", "bioloom", "8765") -Quiet
+    $line = @($r.Output -split "`r?`n" | Where-Object { $_ -match ':\d+\s*$' }) | Select-Object -Last 1
+    if ($r.Code -eq 0 -and $line -match ':(\d+)\s*$') { return [int]$Matches[1] }
+    return $assumed
+}
+
+function Find-FreePort([int]$first, [int]$own) {  # prima porta libera: $first (l'ultima usata), poi le seguenti fino a
+    # 8800 e da 8765; $own (BioLoom in esecuzione) conta come libera. 0 se sono tutte occupate
+    $list = @($first)
+    if ($first -ge 8765 -and $first -le 8800) {
+        for ($p = $first + 1; $p -le 8800; $p++) { $list += $p }
+        for ($p = 8765; $p -lt $first; $p++) { $list += $p }
+    } else {
+        for ($p = 8765; $p -le 8800; $p++) { $list += $p }
+    }
+    foreach ($p in $list) { if ($p -eq $own -or (Test-PortFree $p)) { return $p } }
+    return 0
+}
+
+# come vedere quali programmi usano le porte, per i messaggi
+$PortHint = "netstat -ano | findstr LISTENING; il numero in fondo è il processo, in Gestione attività > Dettagli"
 
 function Test-Running {
     $ps = Compose @("ps", "--status", "running", "--services") -Quiet
@@ -677,15 +733,28 @@ function Start-BioLoom {
     elseif ($saved["BIOLOOM_MAC"] -and -not $saved["BIOLOOM_MAC_FROM_LICENSE"]) { $cfg["BIOLOOM_MAC"] = $saved["BIOLOOM_MAC"] }
     else { $cfg["BIOLOOM_MAC"] = New-LocalMac }
 
-    $port = 8765
-    if ($saved["BIOLOOM_PORT"]) { $port = [int]$saved["BIOLOOM_PORT"] }
+    $port = Get-ValidPort $saved["BIOLOOM_PORT"]
+    if (-not $port) { $port = 8765 }
     $current = $saved.Clone()
     $current["BIOLOOM_VERSION"] = $Version
     foreach ($k in @("UNICLUST_PATH", "QMTL_PATH", "COMPOSE_PROFILES", "BIOLOOM_QMEAN_URL")) { $current.Remove($k) }  # il disco può non esserci più
     Write-EnvFile $current  # per interrogare lo stato dei container con la configurazione attuale
-    $running = Test-Running
-    if (-not $running) {
-        while (-not (Test-PortFree $port) -and $port -lt 8800) { $port++ }
+    $own = Get-OwnPort $port
+    if ($RequestedPort) {
+        $port = Get-ValidPort $RequestedPort
+        if (-not $port) { Fail "BIOLOOM_PORT=$RequestedPort non è una porta valida (un numero da 1 a 65535)." }
+        if ($port -ne $own -and -not (Test-PortFree $port)) {
+            Fail "La porta $port (BIOLOOM_PORT) è già usata da un altro programma: chiudilo (per vedere quale: $PortHint) oppure scegli un'altra porta con BIOLOOM_PORT."
+        }
+    } else {
+        $free = Find-FreePort $port $own
+        if (-not $free) {
+            $also = if ($port -lt 8765 -or $port -gt 8800) { "la $port e " } else { "" }   # già nell'intervallo: non si ripete
+            Fail ("Nessuna porta libera per BioLoom: ${also}le porte da 8765 a 8800 sono tutte usate da altri programmi. Chiudine uno " +
+                  "(per vedere quali: $PortHint) oppure scegli una porta libera con BIOLOOM_PORT, per esempio in PowerShell " +
+                  "`$env:BIOLOOM_PORT = 9000 (nel Prompt dei comandi: set BIOLOOM_PORT=9000) e poi $LaunchCmd")
+        }
+        $port = $free
     }
     $cfg["BIOLOOM_PORT"] = "$port"
     if ($dbs.Uniclust) {
@@ -816,8 +885,8 @@ function Update-BioLoom {  # azione aggiorna: immagini al codice in programma\, 
         # stesse impostazioni dell'ultimo avvio (.env.locale): compose ricrea i container con le immagini nuove
         Say "  Riavvio di BioLoom con le immagini aggiornate (i calcoli in corso vengono interrotti)..." Yellow
         if ((Compose @("up", "-d", "--remove-orphans")).Code -ne 0) { Fail "Docker non è riuscito a riavviare BioLoom (vedi i messaggi sopra)." }
-        $port = 8765
-        if ($saved["BIOLOOM_PORT"]) { $port = [int]$saved["BIOLOOM_PORT"] }
+        $port = Get-ValidPort $saved["BIOLOOM_PORT"]
+        if (-not $port) { $port = 8765 }
         if (-not (Wait-Healthy $port)) { Fail "BioLoom non risponde: controlla con $LaunchCmd -Azione log" }
         Title "BioLoom è pronto: http://127.0.0.1:$port"
     }
@@ -895,7 +964,8 @@ function Export-Portable {
         $left += "licenze o chiave d'accesso in data"
     }
     Title "Copia portatile pronta: $dest"
-    Say "  Sul computer di destinazione serve solo Docker Desktop: doppio clic su 'Avvia BioLoom'."
+    Say "  Sul computer di destinazione serve solo Docker (Docker Desktop o un programma con i comandi docker e docker compose):"
+    Say "  doppio clic su 'Avvia BioLoom'."
     if ($SenzaDati -or -not (Test-Path -LiteralPath $DataDir)) {
         Say "  Dati e licenze non copiati: sul computer di destinazione le licenze si inseriscono da Impostazioni > Licenze." Yellow
     } elseif ($ConLicenze) {

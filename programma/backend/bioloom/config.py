@@ -100,6 +100,12 @@ FRONTEND_DIST = _env_path("BIOLOOM_FRONTEND_DIST", ROOT_DIR / "frontend" / "dist
 MAX_UPLOAD_BYTES = int(os.environ.get("BIOLOOM_MAX_UPLOAD_MB", "50")) * 1024 * 1024
 
 
+# Tetto della cache dei calcoli (impostazione `compute_cache_max_mb`, MB): predefinito, minimo e massimo
+COMPUTE_CACHE_MAX_MB = 2048
+COMPUTE_CACHE_MIN_MB = 100
+COMPUTE_CACHE_LIMIT_MB = 102400
+
+
 def _url_like(value: str) -> bool:
     """Forma minima di un URL http(s) senza spazi; la verifica completa è in engines/remote.validate_esmfold_url."""
     return value.lower().startswith(("http://", "https://")) and len(value) > len("https://") and \
@@ -130,6 +136,9 @@ class UserSettings(BaseModel):
     uploads_retention_days: int = Field(30, ge=0, le=3650, description="Giorni di conservazione degli upload; 0 = sempre")
     compute_cache: bool = Field(True, description="Riusa i risultati già calcolati di ricerche di template e "
                                                   "allineamenti multipli e strutturali (cache dei calcoli)")
+    compute_cache_max_mb: int = Field(
+        COMPUTE_CACHE_MAX_MB, ge=COMPUTE_CACHE_MIN_MB, le=COMPUTE_CACHE_LIMIT_MB,
+        description="Spazio massimo della cache dei calcoli (MB): oltre, si eliminano le voci usate meno di recente")
     # ESMFold (F9.3): la sequenza lascia il computer, quindi solo con il consenso esplicito (spento per default)
     esmfold_remote: bool = Field(False, description="Consente l'invio delle sequenze al servizio ESMFold per la "
                                                     "predizione di struttura usata come controllo di plausibilità")
@@ -170,6 +179,9 @@ class UserSettings(BaseModel):
           predefiniti (invio spento, servizio pubblico). Il consenso vale solo come vero booleano: un valore diverso
           (nullo, testo, numero in un file modificato a mano) torna spento invece di essere interpretato; un indirizzo
           non valido torna vuoto. Così un file con un valore strano non azzera tutte le impostazioni.
+        - Tetto della cache dei calcoli: le impostazioni precedenti non hanno `compute_cache_max_mb` e prendono il
+          predefinito (2048 MB); un valore che non è un intero fra il minimo e il massimo (file modificato a mano)
+          torna al predefinito invece di azzerare tutte le impostazioni.
         """
         if isinstance(data, dict) and data.get("qmean_mode") == "auto":
             data = {**data, "qmean_mode": "local"}
@@ -184,6 +196,17 @@ class UserSettings(BaseModel):
                 data = {k: v for k, v in data.items() if k != "esmfold_url"}
         return data
 
+    @classmethod
+    def from_file(cls, raw: dict) -> "UserSettings":
+        """Impostazioni lette da settings.json: un tetto della cache non valido (scritto a mano) torna al predefinito,
+        come i valori strani di `_migrate`, invece di azzerare tutte le impostazioni."""
+        if isinstance(raw, dict) and "compute_cache_max_mb" in raw:
+            value = raw["compute_cache_max_mb"]
+            if isinstance(value, bool) or not isinstance(value, int) \
+                    or not COMPUTE_CACHE_MIN_MB <= value <= COMPUTE_CACHE_LIMIT_MB:
+                raw = {k: v for k, v in raw.items() if k != "compute_cache_max_mb"}
+        return cls(**raw)
+
     def remote_qmean_allowed(self) -> bool:
         return bool(self.qmean_remote and self.contact_email)
 
@@ -196,13 +219,22 @@ def server_esmfold_url() -> str:
     return os.environ.get("BIOLOOM_ESMFOLD_URL", "").strip()
 
 
+def server_modeller_python() -> str:
+    """Interprete Python con MODELLER scelto dall'amministratore per la modalità server (BIOLOOM_MODELLER_PYTHON;
+    vuoto = rilevamento automatico, cioè l'interprete del server)."""
+    return os.environ.get("BIOLOOM_MODELLER_PYTHON", "").strip().strip('"')
+
+
 class SettingsStore:
     """Impostazioni salvate in settings.json.
 
-    In modalità server (`server`, accesso con chiave: BIOLOOM_AUTH=on) l'indirizzo di ESMFold è quello
-    dell'amministratore (`server_esmfold_url`), mai quello salvato: è l'unico indirizzo a cui il server invia richieste
-    che si potrebbe scegliere dall'interfaccia, e chi ha la chiave d'accesso non deve poterlo puntare sulla rete interna
-    del server. Il valore salvato (anche da una versione precedente) resta nel file e vale di nuovo in locale.
+    In modalità server (`server`, accesso con chiave: BIOLOOM_AUTH=on) due impostazioni sono quelle
+    dell'amministratore, mai quelle salvate:
+    - l'indirizzo di ESMFold (`server_esmfold_url`): è l'unico indirizzo a cui il server invia richieste che si potrebbe
+      scegliere dall'interfaccia, e chi ha la chiave d'accesso non deve poterlo puntare sulla rete interna del server;
+    - l'interprete Python con MODELLER (`server_modeller_python`): è un programma che il server esegue, e chi ha la
+      chiave d'accesso non deve poter scegliere quale.
+    I valori salvati (anche da una versione precedente) restano nel file e valgono di nuovo in locale.
     """
 
     def __init__(self, path: Path, *, server: bool = False) -> None:
@@ -211,13 +243,14 @@ class SettingsStore:
         self.server = server
         raw = read_json(path, default={}) or {}
         try:
-            self._settings = UserSettings(**raw)
-        except ValueError:
+            self._settings = UserSettings.from_file(raw)
+        except (ValueError, TypeError):
             self._settings = UserSettings()
 
     def _effective(self) -> UserSettings:
         if self.server:
-            return self._settings.model_copy(update={"esmfold_url": server_esmfold_url()})
+            return self._settings.model_copy(update={"esmfold_url": server_esmfold_url(),
+                                                     "modeller_python": server_modeller_python()})
         return self._settings.model_copy()
 
     def get(self) -> UserSettings:

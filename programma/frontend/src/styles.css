@@ -52,6 +52,16 @@
   --trk-disorder: #f87171;
   --trk-lowc: #fbbf24;
   --trk-domain: #22d3ee;
+  /* visualizzatore 3D (components/Viewer3D.tsx): sfondo della tela WebGL, letto anche dal codice, e comandi sopra la
+     struttura (pulsanti, legenda, etichetta del residuo) su fondo proprio; contrasto in lib/chartTokens.test.ts */
+  --viewer-bg: #0b1120;
+  --viewer-chip: rgba(15, 23, 42, 0.86);
+  --viewer-chip-hover: rgba(30, 41, 59, 0.95);
+  --viewer-chip-border: rgba(148, 163, 184, 0.4);
+  --viewer-text: #e2e8f0;
+  --viewer-muted: #cbd5e1;
+  --viewer-accent: #3ddcf3;
+  --viewer-err: #ff8a8a;
   /* altezza disponibile per un grafico nella vista espansa (finestra a tutto schermo) */
   --chart-expanded-h: calc(100vh - 260px);
   /* livelli: ogni z-index dell'interfaccia viene da qui (le notifiche restano sopra il 3D a schermo intero) */
@@ -109,6 +119,14 @@
   --trk-disorder: #dc2626;
   --trk-lowc: #a16207;
   --trk-domain: #0e7490;
+  --viewer-bg: #f2f4f8;
+  --viewer-chip: rgba(255, 255, 255, 0.92);
+  --viewer-chip-hover: #e8ecf3;
+  --viewer-chip-border: rgba(100, 116, 139, 0.45);
+  --viewer-text: #0a1222;
+  --viewer-muted: #283850;
+  --viewer-accent: #0a6379;
+  --viewer-err: #a81919;
   color-scheme: light;
 }
 
@@ -449,22 +467,25 @@ table.table { width: 100%; border-collapse: collapse; font-size: 13px; }
 }
 :root[data-theme="light"] .log { background: #0f172a; }
 
-.viewer3d { position: relative; width: 100%; height: 420px; border-radius: 12px; overflow: hidden; border: 1px solid var(--border); background: #0b1120; }
+.viewer3d { position: relative; width: 100%; height: 420px; border-radius: 12px; overflow: hidden; border: 1px solid var(--border); background: var(--viewer-bg); }
 .viewer3d .overlay { position: absolute; left: 10px; bottom: 10px; display: flex; gap: 6px; flex-wrap: wrap; z-index: var(--z-overlay); }
-.viewer3d .overlay .btn, .viewer3d .overlay-tr .btn { background: rgba(15, 23, 42, 0.86); border-color: rgba(148, 163, 184, 0.4); color: #e2e8f0; }
-.viewer3d .overlay .btn:hover:not(:disabled), .viewer3d .overlay-tr .btn:hover:not(:disabled) { border-color: #3ddcf3; background: rgba(30, 41, 59, 0.95); }
-/* il fondo del visualizzatore è scuro in entrambi i temi: anello di focus chiaro */
-.viewer3d .overlay .btn:focus-visible, .viewer3d .overlay-tr .btn:focus-visible { outline-color: #3ddcf3; border-color: #3ddcf3; }
+.viewer3d .overlay .btn, .viewer3d .overlay-tr .btn { background: var(--viewer-chip); border-color: var(--viewer-chip-border); color: var(--viewer-text); }
+.viewer3d .overlay .btn:hover:not(:disabled), .viewer3d .overlay-tr .btn:hover:not(:disabled) { border-color: var(--viewer-accent); background: var(--viewer-chip-hover); }
+/* il fondo del visualizzatore segue il tema: anello di focus del tema, ≥ 3:1 su --viewer-bg */
+.viewer3d .overlay .btn:focus-visible, .viewer3d .overlay-tr .btn:focus-visible { outline-color: var(--viewer-accent); border-color: var(--viewer-accent); }
 .viewer3d .overlay-tr { position: absolute; right: 10px; bottom: 10px; display: flex; gap: 6px; z-index: var(--z-overlay); }
 .viewer3d .legend3d, .viewer3d .hover3d {
-  position: absolute; z-index: var(--z-overlay); background: rgba(15, 23, 42, 0.86); border: 1px solid rgba(148, 163, 184, 0.4);
-  border-radius: 8px; color: #e2e8f0; font-size: 11.5px; padding: 6px 9px; pointer-events: none;
+  position: absolute; z-index: var(--z-overlay); background: var(--viewer-chip); border: 1px solid var(--viewer-chip-border);
+  border-radius: 8px; color: var(--viewer-text); font-size: 11.5px; padding: 6px 9px; pointer-events: none;
 }
 .viewer3d .legend3d { right: 10px; top: 10px; width: 210px; display: grid; gap: 4px; }
 .viewer3d .legend3d .bar { height: 10px; border-radius: 3px; }
 .viewer3d .legend3d .ticks { position: relative; height: 14px; }
-.viewer3d .legend3d .ticks span { position: absolute; top: 1px; white-space: nowrap; color: #cbd5e1; font-size: 10.5px; }
+.viewer3d .legend3d .ticks span { position: absolute; top: 1px; white-space: nowrap; color: var(--viewer-muted); font-size: 10.5px; }
 .viewer3d .legend3d .sw i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+/* tema chiaro: campioni e barra della legenda con un bordo ≥ 3:1, come il contorno della vista 3D (lib/theme.ts): i
+   colori chiari delle scale (centro bianco, giallo) restano visibili sul fondo bianco della legenda */
+:root[data-theme="light"] .viewer3d .legend3d .sw i, :root[data-theme="light"] .viewer3d .legend3d .bar { box-shadow: inset 0 0 0 1px var(--chart-axis); }
 .viewer3d .hover3d { left: 10px; top: 10px; max-width: 60%; }
 /* ripiego senza Fullscreen API: il visualizzatore copre la finestra, sopra le modali (sotto le notifiche) */
 .viewer3d.fullscreen { position: fixed; inset: 0; z-index: var(--z-viewer-full); width: auto; height: auto !important; border: 0; border-radius: 0; }
@@ -551,7 +572,12 @@ table.table { width: 100%; border-collapse: collapse; font-size: 13px; }
 /* come l'intestazione, i pulsanti restano visibili anche quando il contenuto di una finestra lunga scorre */
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border); position: sticky; bottom: 0; background: var(--panel); z-index: var(--z-overlay); }
 .toasts { position: fixed; right: 18px; bottom: 18px; display: grid; gap: 8px; z-index: var(--z-toast); }
-.toast { background: var(--panel-3); border: 1px solid var(--border-strong); border-left: 4px solid var(--ok); border-radius: 10px; padding: 10px 14px; box-shadow: var(--shadow); max-width: 420px; cursor: pointer; font-size: 13px; white-space: pre-line; color: var(--text); animation: pop-in 0.16s ease-out; }
+.toast { background: var(--panel-3); border: 1px solid var(--border-strong); border-left: 4px solid var(--ok); border-radius: 10px; padding: 10px 8px 10px 14px; display: flex; align-items: flex-start; gap: 8px; box-shadow: var(--shadow); max-width: 420px; cursor: pointer; font-size: 13px; white-space: pre-line; color: var(--text); animation: pop-in 0.16s ease-out; }
+/* chiusura da tastiera (il clic sulla notifica la chiude comunque): anello del focus come gli altri pulsanti */
+.toast-text { flex: 1; min-width: 0; }
+.toast-close { flex: none; width: 22px; height: 22px; margin: -2px 0; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: 600 16px/1 var(--font); cursor: pointer; }
+.toast-close:hover { color: var(--text); background: var(--panel-2); }
+.toast-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; color: var(--text); }
 .toast-err { border-left-color: var(--err); }
 .toast-info { border-left-color: var(--info); }
 .toast-warn { border-left-color: var(--warn); }

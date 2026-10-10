@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from .config import SettingsStore, default_paths
+from .core import auth
 from .core.db import Database
 from .core.jobs import JobManager
 from .engines import remote, search, tools
@@ -24,7 +25,9 @@ SYMBOL = {"ok": "OK ", "missing": "-- ", "error": "ERR"}
 
 def main() -> int:
     paths = default_paths()
-    settings = SettingsStore(paths.settings_file)
+    # nel container del server (BIOLOOM_AUTH=on) le impostazioni dell'amministratore, come il server: per esempio
+    # l'interprete di MODELLER di BIOLOOM_MODELLER_PYTHON, non quello salvato in settings.json
+    settings = SettingsStore(paths.settings_file, server=auth.server_mode())
     tools.configure(paths.tools)
     remote.configure(paths.cache)
     search.configure(paths.local_cache)

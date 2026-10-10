@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ValidationError
 
 from .. import __version__
-from ..core import auth
+from ..core import auth, cache
 from ..core.container import Core
 from ..core.errors import AppError
 from ..engines import tools
@@ -141,6 +141,7 @@ class SettingsUpdate(BaseModel):
     procheck_plots: str | None = None
     uploads_retention_days: int | None = None
     compute_cache: bool | None = None
+    compute_cache_max_mb: int | None = None  # tetto della cache dei calcoli (MB)
     esmfold_remote: bool | None = None  # F9.3: consenso all'invio delle sequenze a ESMFold
     esmfold_url: str | None = None
 
@@ -155,9 +156,19 @@ SETTING_LABELS = {
     "uploads_retention_days": "Conservazione dei file caricati (giorni)",
     "procheck_plots": "Grafici PostScript di PROCHECK",
     "esmfold_url": "Indirizzo del servizio ESMFold",
+    "compute_cache_max_mb": "Spazio massimo della cache dei calcoli (MB)",
 }
 ESMFOLD_URL_LOCKED = ("In modalità server l'indirizzo del servizio ESMFold lo imposta l'amministratore sul server "
                       "(BIOLOOM_ESMFOLD_URL in server.env; vuoto = API pubblica di ESM Atlas), non l'interfaccia.")
+MODELLER_PYTHON_LOCKED = ("In modalità server l'interprete Python con MODELLER lo imposta l'amministratore sul server "
+                          "(variabile d'ambiente BIOLOOM_MODELLER_PYTHON; vuoto = rilevamento automatico, cioè "
+                          "l'interprete dell'immagine di BioLoom), non l'interfaccia.")
+# Impostazioni che in modalità server sceglie l'amministratore (config.SettingsStore): la pagina rimanda il valore in
+# uso, che si accetta e resta com'è; un valore diverso è un errore 403 (campo → messaggio, codice)
+SERVER_LOCKED = {
+    "esmfold_url": (ESMFOLD_URL_LOCKED, "esmfold_url_locked"),
+    "modeller_python": (MODELLER_PYTHON_LOCKED, "modeller_python_locked"),
+}
 
 
 def _setting_error(err: dict) -> str:
@@ -189,11 +200,14 @@ def get_settings(core: Core = Depends(get_core)) -> dict:
 @router.put("/settings")
 def update_settings(body: SettingsUpdate, core: Core = Depends(get_core)) -> dict:
     changes = body.model_dump(exclude_none=True)
-    if "esmfold_url" in changes and core.settings.server:
-        # l'unico indirizzo impostabile: in modalità server lo sceglie l'amministratore, non chi ha la chiave d'accesso
-        # (la pagina rimanda il valore in uso, che resta com'è)
-        if changes.pop("esmfold_url").strip() != core.settings.get().esmfold_url:
-            raise AppError(ESMFOLD_URL_LOCKED, code="esmfold_url_locked", status=403)
+    if core.settings.server:
+        # In modalità server l'indirizzo di ESMFold (l'unico indirizzo impostabile) e l'interprete di MODELLER (un
+        # programma che il server esegue) li sceglie l'amministratore, non chi ha la chiave d'accesso. La pagina
+        # rimanda il valore in uso, che resta com'è.
+        current = core.settings.get()
+        for name, (message, code) in SERVER_LOCKED.items():
+            if name in changes and changes.pop(name).strip().strip('"') != getattr(current, name):
+                raise AppError(message, code=code, status=403)
     if "esmfold_url" in changes:  # stessa verifica dell'uso (F9.3): un indirizzo sbagliato è un errore, non si ignora
         from ..engines import remote
 
@@ -210,6 +224,10 @@ def update_settings(body: SettingsUpdate, core: Core = Depends(get_core)) -> dic
         tools.detect_modeller(updated.modeller_python, force=True)
     if "max_workers" in changes:
         core.jobs.reconfigure()  # job in parallelo e slot di CPU cambiano subito, senza riavvio
+    if "compute_cache_max_mb" in changes:
+        # tetto più basso: la cache si riduce subito, in un thread (una cache grande si scorre in qualche secondo)
+        threading.Thread(target=cache.enforce, args=(cache.max_bytes(updated),), name="bioloom-cache-prune",
+                         daemon=True).start()
     return updated.model_dump()
 
 

@@ -28,7 +28,8 @@ Guida di BioLoom: [1. Primo avvio](1%20-%20Primo%20avvio.md) · [2. Funzioni](2%
   stesse, perché vengono dal riepilogo. Vale per le analisi fatte dopo il cambio.
 - **Pulizia automatica** (all'avvio, ogni 24 ore e con **Pulisci file temporanei** in Impostazioni → Spazio e file
   temporanei, che mostra anche lo spazio occupato): file caricati più vecchi dei giorni impostati (predefinito 30), voci
-  di cache oltre i 30 giorni, file temporanei rimasti, resti di job che hai già eliminato (file che erano in uso).
+  di cache oltre i 30 giorni, voci della cache dei calcoli usate meno di recente se la cache supera il suo spazio massimo
+  (sotto), file temporanei rimasti, resti di job che hai già eliminato (file che erano in uso).
   Risultati dei job, libreria template, database e licenze non vengono mai toccati.
 - **Eliminazione manuale:** i risultati dei job si eliminano solo a mano e con conferma: un job dal suo dettaglio, molti
   insieme con **Pulisci job…**, un progetto intero dal dialogo **Progetti** ([sopra](2%20-%20Funzioni.md#pipeline-job-e-coda-dei-calcoli)).
@@ -39,6 +40,16 @@ Guida di BioLoom: [1. Primo avvio](1%20-%20Primo%20avvio.md) · [2. Funzioni](2%
   7 giorni (il PDB si aggiorna ogni settimana); le altre finché non cambiano il database locale, il programma o il
   contenuto delle strutture. In Ricerca, Allineamenti e Pipeline **Ricalcola ignorando la cache** rifà il calcolo; la
   cache si disattiva in Impostazioni → Spazio e file temporanei.
+- **Spazio massimo della cache dei calcoli (MB)** (Impostazioni → Spazio e file temporanei, accanto alla cache; da 100 a
+  102400, predefinito 2048): oltre il limite BioLoom elimina le voci usate meno di recente (scritte o riusate per ultime
+  da più tempo) finché la cache scende al 90% del limite. Lo fa all'avvio e con la pulizia automatica, dopo un calcolo
+  che aggiunge una voce (il log del job lo dice: «Cache dei calcoli oltre il tetto delle Impostazioni: eliminate 12 voci
+  usate meno di recente (210 MB).») e subito quando abbassi il limite. Le eliminazioni costano solo il ricalcolo, la
+  prossima volta che serve. Un valore fuori intervallo scritto a mano in `settings.json` torna al predefinito senza
+  toccare le altre impostazioni.
+- **Chiavi e password:** la chiave di MODELLER compare sempre mascherata (`MOD••••••A9`): in Impostazioni, nella verifica
+  dell'installazione e nei log dei job, anche quando MODELLER la ripete in un messaggio d'errore. I programmi che BioLoom
+  esegue (MODELLER, PROCHECK, BLAST+…) non ricevono la password della posta né la chiave d'accesso del server.
 - **Aggiornamenti** ([come si aggiorna BioLoom](1%20-%20Primo%20avvio.md#aggiornare-bioloom), senza toccare `data/`):
   quando una nuova versione di BioLoom aggiorna la struttura del database (`data/bioloom.db`), lo fa da
   sola all'avvio dopo averne salvato una copia in `data/backups/` (una per aggiornamento; si può cancellare quando tutto
@@ -57,6 +68,13 @@ chi usa BioLoom sceglie soltanto se ricevere l'avviso e a quale indirizzo.
    (mittente) e, se BioLoom è raggiungibile da altri computer, `BIOLOOM_PUBLIC_URL` per il link al job.
 3. In Impostazioni → Generale → **Notifiche email** premi **Rileggi**, poi **Invia email di prova**. Non serve
    riavviare.
+
+**Limiti.** Al più un'email di prova ogni 30 secondi e 5 all'ora per tutto BioLoom, anche con più utenti: oltre,
+**Invia email di prova** risponde «È appena stata inviata un'email di prova: riprova tra 25 s.» oppure «Limite di 5 email
+di prova all'ora raggiunto: riprova tra 40 min.». Gli avvisi di fine pipeline sono al più 10 all'ora allo stesso
+indirizzo e 30 all'ora in tutto: oltre, l'avviso non parte e il log del job lo dice («Email di avviso a … non inviata:
+limite di 10 avvisi all'ora allo stesso indirizzo raggiunto.»). Contano anche gli invii non riusciti. Così nessuno può
+usare il server di posta per mandare messaggi a raffica.
 
 Conviene un account dedicato agli avvisi, per esempio un indirizzo Gmail creato apposta con una «password per le app»
 (Account Google → Sicurezza: verifica in due passaggi, poi Password per le app), oppure il server di posta dell'università.
@@ -85,3 +103,23 @@ il calcolo indicato:
 
 Le risposte di UniProt, InterPro e AlphaFold DB restano in `data/cache` per 7 giorni, i metadati RCSB e le predizioni di
 ESMFold per 30. Sul server l'indirizzo di ESMFold lo sceglie l'amministratore ([Chiavetta e server](5%20-%20Chiavetta%20e%20server.md#server)).
+
+## Errori interni
+
+Un errore imprevisto del server (un difetto di BioLoom, non un dato sbagliato) compare nell'interfaccia come «Errore
+interno (codice 3f9a0c1b): i dettagli sono nel log di BioLoom.». Il messaggio non contiene percorsi, parametri o pezzi
+di file, che restano nel log sul computer (o sul server) che fa girare BioLoom: lì c'è la riga «[BioLoom] Errore interno
+(codice 3f9a0c1b) su POST /api/…:» seguita dalla traccia dell'errore. Subito dopo l'errore apri il log con
+`./avvia-bioloom.sh log`, che mostra le ultime 200 righe (Windows:
+`powershell -ExecutionPolicy Bypass -File programma\launcher\bioloom.ps1 -Azione log`), e cerca il codice. Il tasto
+**L** della finestra dell'avviatore non basta: mostra solo le ultime 60 righe, e dopo la riga con il codice vengono la
+traccia dell'errore e una sua seconda copia senza codice, stampata dal server web (in tutto più di 100 righe). Se nel
+frattempo il log è andato avanti, cerca il codice del tuo messaggio in tutto il log:
+
+```bash
+docker logs bioloom-bioloom-1 2>&1 | grep -A 150 3f9a0c1b       # Linux e macOS
+podman logs bioloom 2>&1 | grep -A 150 3f9a0c1b                 # server con Podman
+```
+
+In PowerShell: `docker logs bioloom-bioloom-1 2>&1 | Select-String 3f9a0c1b -Context 0,150`. Per una segnalazione
+allega quel tratto del log, dopo averlo riletto: può contenere percorsi e nomi di file del tuo computer.

@@ -7,7 +7,7 @@ import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { SequencePicker, TemplatePicker } from "../components/Pickers";
 import { PirWorkspace, type PirSource, type PirWorkspaceState } from "../components/PirWorkspace";
-import { Card, Confirm, Empty, Modal, PageHead } from "../components/ui";
+import { Card, Confirm, Empty, Modal, PageHead, rowActivate } from "../components/ui";
 import { FormSection } from "../components/WorkflowParts";
 import { useProject, useToast } from "../lib/context";
 import { fileStem } from "../lib/files";
@@ -200,7 +200,7 @@ export default function PirEditor() {
               <table className="table">
                 <tbody>
                   {docs.map((d) => (
-                    <tr key={d.id} className={`clickable ${d.id === docId ? "selected" : ""}`} onClick={() => setParams({ doc: d.id })}>
+                    <tr key={d.id} className={`clickable ${d.id === docId ? "selected" : ""}`} aria-current={d.id === docId || undefined} {...rowActivate(() => setParams({ doc: d.id }))}>
                       <td>
                         <b>{d.name}</b>
                         <div className="tiny text-2">{d.kind.toUpperCase()} · {relTime(d.updated_at)}{d.size ? ` · ${fmtBytes(d.size)}` : ""}</div>

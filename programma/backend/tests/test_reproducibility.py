@@ -353,15 +353,18 @@ def test_package_never_contains_secrets_or_local_paths(tmp_path, monkeypatch):
         log = tmp_path / "data" / "jobs" / job["id"] / "job.log"
         with open(log, "a", encoding="utf-8") as fh:
             fh.write(f"chiave {FAKE_MODELLER_KEY} {real_key} contatto {EMAIL} accesso {ACCESS_KEY}\n"
-                     f"file {tmp_path / 'data' / 'jobs'}/x.pdb\n")
+                     f"file {tmp_path / 'data' / 'jobs' / 'x.pdb'}\n")  # separatori del sistema, come nei log veri
         data = _package(c, job["id"])
     secrets = [s for s in (FAKE_MODELLER_KEY, real_key, EMAIL, ACCESS_KEY) if s]
     files = _members(data)
     # controllo programmatico: nessun segreto in nessun file, senza stamparli (si elencano solo i file)
     leaks = sorted({name for name, content in files.items() for s in secrets if s.lower().encode() in content.lower()})
     assert leaks == []
-    assert not [name for name, content in files.items() if str(tmp_path).encode() in content]
-    assert repro.REDACTED in files["log/job.log"].decode() and "<cartella dati>/jobs/x.pdb" in files["log/job.log"].decode()
+    # il percorso anche come lo scrive JSON (su Windows le barre rovesciate raddoppiano: "C:\\Users\\...") e con "/"
+    local = {str(tmp_path).encode(), json.dumps(str(tmp_path))[1:-1].encode(), tmp_path.as_posix().encode()}
+    assert not [name for name, content in files.items() if any(path in content for path in local)]
+    text = files["log/job.log"].decode()
+    assert repro.REDACTED in text and f"<cartella dati>{os.sep}jobs{os.sep}x.pdb" in text
     manifest = json.loads(files["manifest.json"])
     assert next(f for f in manifest["files"] if f["path"] == "log/job.log").get("redacted") is True
 

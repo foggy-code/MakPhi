@@ -282,10 +282,12 @@ def model_report_with_image(job_id: str, model: str, body: Optional[ReportIn] = 
 
 @router.get("/{job_id}/pymol/{model:path}", response_class=PlainTextResponse)
 def model_pymol(job_id: str, model: str, scheme: str = "ss", core: Core = Depends(get_core)) -> Response:
+    """Sessione PyMOL autocontenuta di un modello; il nome del file scaricato è ripulito come quello dei report."""
     file = core.jobs.file_path(job_id, model)
     name = file.stem.replace(".", "_")
     script = exports.pymol_script(file.read_text(encoding="utf-8", errors="replace"), name, scheme)
-    return PlainTextResponse(script, headers={"Content-Disposition": f'attachment; filename="{name}.pml"'})
+    filename = report.safe_filename(name, ".pml", "bioloom_model")
+    return PlainTextResponse(script, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 def temp_download(core: Core, suffix: str) -> Path:

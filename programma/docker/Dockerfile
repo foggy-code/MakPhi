@@ -20,9 +20,10 @@
 #   - immagine di base: `docker buildx imagetools inspect ubuntu:24.04` (o node:22-slim) e il "Digest" in cima, quello
 #     dell'indice multi-architettura (non quello di una sola piattaforma), in UBUNTU_IMAGE o NODE_IMAGE
 #   - MODELLER, APBS: la versione nell'ARG e in *_SHA256 lo `sha256sum` del file scaricato dall'URL del RUN
-#   - US-align, fpocket: in *_COMMIT il commit del tag (`git ls-remote <repository> refs/tags/<tag>`; per un tag
-#     annotato la riga ^{}) e in *_SHA256 quello del tar non compresso:
-#     `curl -fsSL <URL del RUN> | gzip -dc | sha256sum`
+#   - US-align, fpocket: in *_COMMIT il commit del tag, da
+#     `git ls-remote https://github.com/<owner>/<repo> 'refs/tags/<tag>' 'refs/tags/<tag>^{}'`: se c'è la riga che
+#     finisce con ^{} il commit è quello (tag annotato: l'altra riga è l'oggetto tag), altrimenti è quello dell'unica
+#     riga; in *_SHA256 lo SHA-256 del tar non compresso: `curl -fsSL <URL del RUN> | gzip -dc | sha256sum`
 # poi una costruzione completa (e le versioni nuove in THIRD_PARTY_NOTICES.md).
 
 ARG BIOLOOM_VERSION=4.2.0

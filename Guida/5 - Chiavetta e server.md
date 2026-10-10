@@ -43,7 +43,8 @@ redistribuita. Se rifai la copia su una chiavetta preparata con una versione pre
 pacchetti e chiavi rimasti: cancellali prima di darla ad altri.
 
 Formatta la chiavetta in **exFAT**: si legge da Windows, macOS e Linux e non ha il limite di 4 GB del FAT32. Sul
-computer di destinazione basta Docker e un doppio clic sull'avviatore.
+computer di destinazione basta Docker ([Docker Desktop o un'alternativa](1%20-%20Primo%20avvio.md#docker-desktop-licenza-e-alternative))
+e un doppio clic sull'avviatore.
 
 - **Mac Apple Silicon:** i container girano in emulazione x86 (MODELLER, ProSA e QMEAN esistono solo per x86), quindi
   più lenti; conviene l'emulazione con Rosetta di Docker Desktop, e ProSA potrebbe non funzionare
@@ -116,6 +117,7 @@ chmod +x avvia-bioloom.sh programma/launcher/*.sh
 #    UNICLUST_PATH=/mnt/db                      cartella con uno o più database UniClust30/UniRef30 (entro 3 livelli)
 #    QMTL_PATH=/mnt/db/qmtl                     facoltativa (QMEANDisCo)
 #    BIOLOOM_PORT=8765
+#    BIOLOOM_ACCESS_KEY=...                     almeno 16 caratteri (quella creata dall'avviatore ne ha 24)
 #    MODELLER_KEY=...                           oppure inseriscila poi dall'interfaccia
 #    BIOLOOM_MAC=aa:bb:cc:dd:ee:ff              solo per la licenza ProSA (3° campo di LicenseDB)
 
@@ -130,6 +132,23 @@ docker compose -f programma/launcher/compose.yml --env-file server.env up -d
 COMPOSE_PROFILES=qmean BIOLOOM_QMEAN_URL=http://qmean:8080 \
   docker compose -f programma/launcher/compose.yml --env-file server.env up -d   # con QMEAN locale
 ```
+
+**Porta occupata.** Se la porta di `server.env` (`BIOLOOM_PORT`, 8765 se manca) è già usata da un altro programma,
+`./avvia-bioloom.sh server` si ferma prima di caricare o costruire le immagini: «La porta 8765 (BIOLOOM_PORT in
+server.env) è già usata da un altro programma su 127.0.0.1: chiudilo (per vedere quale: ss -ltnp) oppure cambia
+BIOLOOM_PORT in server.env e rilancia … server». Lo stesso con Podman, e con un valore che non è un numero da 1 a 65535.
+La porta del BioLoom già acceso non conta come occupata.
+
+**Attesa dell'avvio.** Dopo aver avviato i container, `./avvia-bioloom.sh server` aspetta che BioLoom risponda (con
+`BIOLOOM_BIND=0.0.0.0` su `127.0.0.1`, altrimenti sull'indirizzo di `BIOLOOM_BIND`) e solo allora scrive «BioLoom
+(server) avviato…». Se BioLoom si ferma durante l'avvio, per esempio per un valore sbagliato in `server.env`, o non
+risponde entro 2 minuti, l'avviatore mostra le ultime 30 righe del log, dove di solito c'è il motivo, e si ferma con un
+errore (codice d'uscita 1): «BioLoom si è fermato durante l'avvio: il motivo è nelle righe qui sopra…» oppure «BioLoom
+non risponde su http://127.0.0.1:8765 dopo 2 minuti…». Con `BIOLOOM_RESTART=unless-stopped` Docker intanto continua a
+riavviare il container, e il messaggio lo dice: correggi `server.env` e rilancia `./avvia-bioloom.sh server`, oppure
+fermalo con `./avvia-bioloom.sh arresta`. Lo stesso vale per `aggiorna` quando riavvia BioLoom da server. Con Podman
+l'avviatore aspetta fino a 2 minuti, ma non si accorge prima che il container si è fermato e non mostra il log: dice
+«BioLoom non risponde» e il motivo si legge con `./avvia-bioloom.sh log`.
 
 ### Accesso dagli altri computer
 
@@ -274,26 +293,72 @@ fino a 50.000 sequenze. Per stimare tempi e spazio sul server prima di partire c
   ./avvia-bioloom.sh log        # ultime 200 righe del log, con Docker o con Podman
   ```
 
-- **Sessione:** il login crea un cookie HttpOnly firmato, valido 30 giorni. Cambiando la chiave e riavviando
-  si invalidano tutte le sessioni.
+- **Lunghezza della chiave:** almeno 16 caratteri; quella che l'avviatore scrive in `server.env` ne ha 24. Con una
+  chiave più corta BioLoom non parte, e il log dice perché: «ERRORE: BIOLOOM_ACCESS_KEY è troppo corta: 10 caratteri, ne
+  servono almeno 16…». Con Docker l'avviatore mostra queste righe del log e si ferma con «BioLoom si è fermato durante
+  l'avvio…» (**Attesa dell'avvio** in [Installazione](#installazione)); con Podman si ferma dopo 2 minuti con «BioLoom
+  non risponde», e il motivo si legge con `./avvia-bioloom.sh log`. Scrivi una chiave più lunga (per esempio quella che
+  stampa `openssl rand -hex 12`), oppure lascia vuota la variabile perché BioLoom ne generi una, e rilancia
+  `./avvia-bioloom.sh server`. Nel file `access_key` il controllo è più debole: una chiave di meno di 8 caratteri viene
+  sostituita da una nuova di 24, stampata nel log, mentre da 8 a 15 caratteri è accettata senza avvisi. Se la scrivi a
+  mano, usa anche lì almeno 16 caratteri.
+- **Sessione:** il login crea un cookie HttpOnly firmato, valido 30 giorni. Per chiudere tutte le sessioni aperte:
+  - **Esci da tutti i dispositivi**, in fondo alla barra laterale accanto a **Disconnetti** (c'è solo in modalità
+    server), chiede conferma («Chiudere tutte le sessioni aperte con la chiave d'accesso, su ogni computer e browser,
+    compresa questa?») e chiude ogni sessione, anche la tua, senza cambiare la chiave né riavviare. Ogni browser dovrà
+    inserire di nuovo la chiave; i calcoli in corso continuano, e gli script con `Authorization: Bearer` funzionano come
+    prima. Serve per esempio quando un computer condiviso è rimasto collegato;
+  - cambiare la chiave in `server.env` e rilanciare `./avvia-bioloom.sh server`: chiude anche le sessioni e toglie
+    l'accesso a chi conosceva la chiave vecchia, script compresi. È la strada se la chiave è finita a chi non doveva.
+
+  Le sessioni chiuse restano chiuse anche dopo un riavvio: BioLoom lo ricorda nel file `session_epoch` della cartella
+  dati. Non cancellarlo: le sessioni chiuse potrebbero tornare valide. Se il file è rovinato BioLoom ne scrive uno nuovo
+  e chiude tutte le sessioni; se non lo può scrivere, **Esci da tutti i dispositivi** risponde «Sessioni non chiuse: …»
+  e le sessioni restano aperte.
 - **ESMFold:** chi ha la chiave può consentire l'invio delle sequenze (Impostazioni → Generale), ma non scegliere
   l'indirizzo del servizio: lo imposti tu con `BIOLOOM_ESMFOLD_URL` in `server.env` (vuoto = API pubblica di ESM
   Atlas), così nessuno può far chiamare al server indirizzi della sua rete interna.
+- **Interprete di MODELLER:** come l'indirizzo di ESMFold, non si sceglie dall'interfaccia: lo fissi tu con
+  `BIOLOOM_MODELLER_PYTHON` in `server.env`, come percorso dentro il container (vuoto = rilevamento automatico, cioè il
+  Python dell'immagine di BioLoom, che ha già MODELLER e di solito va bene). Se a quel percorso non c'è un Python con
+  MODELLER, BioLoom lo salta e usa quello dell'immagine. In un'esecuzione senza Docker con `BIOLOOM_AUTH=on` vale la
+  variabile d'ambiente con lo stesso nome. In entrambi i casi un valore diverso mandato dalle Impostazioni viene
+  rifiutato.
 - **Avviso per email:** il server di posta lo imposti solo tu, con `BIOLOOM_SMTP_HOST`, `BIOLOOM_SMTP_PORT`,
   `BIOLOOM_SMTP_SECURITY` (starttls, ssl o none), `BIOLOOM_SMTP_USER`, `BIOLOOM_SMTP_PASSWORD`, `BIOLOOM_SMTP_FROM` e,
   per il link al job nel messaggio, `BIOLOOM_PUBLIC_URL` in `server.env` (oppure nel file `licenses/posta.env` della
   cartella dati, come in locale: le variabili di `server.env` hanno la precedenza). Dall'interfaccia non si modifica:
   chi ha la chiave d'accesso sceglie solo se ricevere l'avviso di una pipeline e a quale indirizzo, e può inviare
-  l'email di prova. Chiedi ai tecnici se il server può uscire verso un server SMTP esterno (porte 587 e 465) oppure
+  l'email di prova: al più una ogni 30 secondi e 5 all'ora per tutto il server, mentre gli avvisi di fine pipeline sono
+  al più 10 all'ora allo stesso indirizzo e 30 all'ora in tutto ([Dati e privacy](4%20-%20Dati%20e%20privacy.md#avviso-per-email)).
+  Chiedi ai tecnici se il server può uscire verso un server SMTP esterno (porte 587 e 465) oppure
   quale relay interno usare.
-- **Script:** possono usare l'header `Authorization: Bearer <chiave>`.
+- **Script:** possono usare l'header `Authorization: Bearer <chiave>`; una chiave sbagliata conta come un tentativo
+  d'accesso sbagliato (sotto).
 - **Richieste da altri siti:** le richieste che modificano i dati partite da pagine di altri siti vengono
   rifiutate, e le pagine di BioLoom non si possono aprire dentro quelle di altri siti.
 - **Senza chiave d'accesso** (`BIOLOOM_AUTH=off`, sconsigliato su un server): BioLoom risponde solo a `localhost`
   e `127.0.0.1`, che va bene con il tunnel SSH. Per aprirlo con il nome o l'indirizzo del server aggiungilo a
   `BIOLOOM_ALLOWED_HOSTS` in `server.env` (più nomi separati da virgole; `*` = qualunque nome). Con
   `BIOLOOM_AUTH=on` non serve.
-- **Tentativi sbagliati:** vengono rallentati progressivamente.
+- **Tentativi d'accesso:** da uno stesso indirizzo si prova una chiave alla volta. Dopo una chiave sbagliata nella
+  schermata d'accesso la risposta arriva dopo un'attesa di mezzo secondo per ogni errore dell'ultimo quarto d'ora, al
+  più 10 secondi; fino alla fine dell'attesa ogni altro tentativo da quell'indirizzo, anche con la chiave giusta, riceve
+  subito «Troppi tentativi d'accesso da questo indirizzo: riprova tra N s.». Uno script con una chiave sbagliata
+  nell'header `Authorization` riceve subito l'errore, e l'attesa vale per i tentativi successivi dallo stesso
+  indirizzo. Chi ha già una sessione aperta non ne risente.
+- **Indirizzo condiviso:** con il tunnel SSH o dietro un reverse proxy (`BIOLOOM_BIND=127.0.0.1`) BioLoom vede per
+  tutti lo stesso indirizzo. Chi sbaglia la chiave fa aspettare anche gli altri, fino a 10 secondi a ogni errore, e chi
+  continua a sbagliare può tenerli fuori finché non smette.
+  - Dietro un reverse proxy che invia l'header `X-Forwarded-For` il rimedio è `BIOLOOM_TRUSTED_PROXIES` in
+    `server.env`: BioLoom distingue allora i client con l'indirizzo che il proxy gli passa ([HTTPS](#https)).
+  - Con il tunnel SSH non c'è rimedio: le richieste arrivano senza `X-Forwarded-For`, quindi il freno vale per tutti
+    insieme anche con la variabile impostata, e il log non dice nulla.
+- **Segreti e programmi esterni:** MODELLER, PROCHECK, ProSA, BLAST+ e gli altri programmi che BioLoom esegue non
+  ricevono la chiave d'accesso, la configurazione della posta (utente e password compresi) né `MODELLER_KEY` di
+  `server.env`, ma solo la chiave di MODELLER attiva (`BIOLOOM_MODELLER_KEY`). La chiave di MODELLER compare sempre
+  mascherata (`MOD••••••A9`) nelle Impostazioni, nella verifica dell'installazione e nei log dei job, anche quando
+  MODELLER la ripete in un messaggio d'errore.
 - **Arresto:** dall'interfaccia è disabilitato (`BIOLOOM_ALLOW_SHUTDOWN=0`). Si arresta con
   `./avvia-bioloom.sh arresta`, con Docker o con Podman.
 
@@ -312,6 +377,32 @@ Con HTTPS il cookie di sessione viene marcato `Secure`. BioLoom lo riconosce dal
 proxy: Caddy lo invia da solo, con nginx aggiungi `proxy_set_header X-Forwarded-Proto $scheme;`. Con nginx aggiungi
 anche `proxy_set_header X-Forwarded-Host $http_host;`: serve ai browser vecchi, che non dicono da quale pagina parte
 una richiesta, per riconoscere quelle di BioLoom.
+
+**Indirizzo dei client dietro il proxy.** Dietro il proxy BioLoom vede lo stesso indirizzo per tutti, quindi il freno ai
+tentativi d'accesso vale per tutti insieme ([Accesso](#accesso), **Indirizzo condiviso**). Per distinguere i client:
+
+1. il proxy deve inviare `X-Forwarded-For`: Caddy lo fa da solo, con nginx aggiungi
+   `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`;
+2. apri BioLoom dal proxy, inserisci la chiave nella schermata d'accesso e leggi il log (`./avvia-bioloom.sh log`). Al
+   primo inserimento della chiave arrivato dal proxy (dalla schermata d'accesso, o come `Authorization: Bearer` di uno
+   script) BioLoom scrive da quale indirizzo arriva, con il valore da usare: «[BioLoom] Richieste inoltrate da un
+   reverse proxy (X-Forwarded-For) arrivano da 172.18.0.1, che non è fra i proxy fidati… scrivi
+   BIOLOOM_TRUSTED_PROXIES=172.18.0.1 in server.env e riavvia BioLoom.». Le altre richieste non lo scrivono: con una
+   sessione già aperta il log resta vuoto, quindi prima premi **Disconnetti** oppure usa una finestra anonima;
+3. scrivi quel valore in `server.env` e rilancia `./avvia-bioloom.sh server`.
+
+Con Docker l'indirizzo è di solito il gateway della rete dei container (per esempio `172.18.0.1`): usa quello che
+suggerisce il log. Tutta la rete, `172.16.0.0/12`, va bene solo con `BIOLOOM_BIND=127.0.0.1`, e serve se la rete dei
+container cambia indirizzo quando viene ricreata. Con `BIOLOOM_BIND=0.0.0.0` Docker conserva l'indirizzo dei client che
+si collegano direttamente: un computer della rete locale con un indirizzo fra 172.16.0.0 e 172.31.255.255, o un altro
+container sul server, sarebbe fidato e potrebbe scrivere da sé `X-Forwarded-For` a ogni tentativo. Più valori, indirizzi
+o reti CIDR, vanno separati da virgole. Vuota, BioLoom ignora `X-Forwarded-For` (chiunque potrebbe scriverlo). La
+variabile vale solo con `BIOLOOM_AUTH=on`, e con Podman si imposta allo stesso modo. Un valore che non è un indirizzo né
+una rete ferma l'avvio: «BIOLOOM_TRUSTED_PROXIES contiene «…», che non è un indirizzo IP né una rete…», e con Docker
+l'avviatore mostra la riga del log (**Attesa dell'avvio** in [Installazione](#installazione)). Limite: con la variabile
+impostata, anche le connessioni del tunnel SSH e dei programmi sul server arrivano dallo stesso indirizzo del proxy, e
+possono scrivere da sé `X-Forwarded-For`. Chi ha un account sul server può quindi presentarsi ogni volta con un
+indirizzo diverso ed evitare l'attesa dopo una chiave sbagliata.
 
 Gli aggiornamenti in tempo reale dei job usano Server-Sent Events (`/api/jobs/events`, `/api/jobs/<id>/events`):
 connessioni lunghe su cui il server scrive man mano. Caddy le inoltra senza configurazione; nginx rispetta

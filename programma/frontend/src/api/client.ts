@@ -78,8 +78,15 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown, isForm = false): Promise<T> {
-  const init: RequestInit = { method, headers: {} };
+/** `signal` annulla la richiesta (l'AbortError arriva a chi chiama così com'è); `text` legge la risposta come testo anche
+ * se il server la dichiara JSON (file di struttura): gli errori restano quelli JSON di BioLoom. */
+interface RequestOptions {
+  signal?: AbortSignal;
+  text?: boolean;
+}
+
+async function request<T>(method: string, path: string, body?: unknown, isForm = false, opts: RequestOptions = {}): Promise<T> {
+  const init: RequestInit = { method, headers: {}, signal: opts.signal };
   if (body !== undefined) {
     if (isForm) {
       init.body = body as FormData;
@@ -91,11 +98,13 @@ async function request<T>(method: string, path: string, body?: unknown, isForm =
   let resp: Response;
   try {
     resp = await fetch(path, init);
-  } catch {
+  } catch (err) {
+    if (opts.signal?.aborted) throw err; // annullata da chi chiama: non è un server irraggiungibile
     throw new ApiError("Server BioLoom non raggiungibile. È ancora in esecuzione?", 0, "network");
   }
   const type = resp.headers.get("content-type") || "";
-  const payload = type.includes("application/json") ? await resp.json().catch(() => null) : await resp.text();
+  const json = type.includes("application/json") && (!resp.ok || !opts.text);
+  const payload = json ? await resp.json().catch(() => null) : await resp.text();
   if (!resp.ok) {
     const err = payload && typeof payload === "object" ? (payload as { error?: { message?: string; code?: string; details?: unknown } }).error : undefined;
     if (resp.status === 401 && err?.code === "auth_required") notifyAuthRequired();
@@ -190,6 +199,8 @@ export const api = {
   authStatus: () => get<AuthStatus>("/api/auth/status"),
   login: (key: string) => post<AuthStatus>("/api/auth/login", { key }),
   logout: () => post<AuthStatus>("/api/auth/logout"),
+  /** esce da tutte le sessioni aperte con la chiave d'accesso (anche questa): il server cambia l'epoca delle sessioni */
+  logoutAll: () => post<{ ok: boolean }>("/api/auth/logout-all"),
 
   // licenze
   licenses: () => get<LicenseStatus>("/api/licenses"),
@@ -222,6 +233,9 @@ export const api = {
     return request<ParsedFile>("POST", "/api/files/sequences", form, true);
   },
   uploadFileUrl: (name: string) => `/api/files/uploads/${enc(name)}`,
+  /** testo di un file (struttura per il visualizzatore 3D, da un indirizzo di api.*Url): sessione scaduta ed errori come
+   *  le altre chiamate; `signal` annulla la richiesta */
+  fileText: (url: string, signal?: AbortSignal) => request<string>("GET", url, undefined, false, { signal, text: true }),
   uploadStructure: (file: File) => {
     const form = new FormData();
     form.append("file", file);
@@ -231,21 +245,21 @@ export const api = {
   // progetti
   projects: (q: LabelQuery = {}) => get<Project[]>(`/api/projects${queryString(q)}`),
   createProject: (name: string, description = "") => post<Project>("/api/projects", { name, description }),
-  updateProject: (id: string, data: Partial<Project>) => patch<Project>(`/api/projects/${id}`, data),
+  updateProject: (id: string, data: Partial<Project>) => patch<Project>(`/api/projects/${enc(id)}`, data),
   /** cosa porterebbe via l'eliminazione: sequenze, documenti, job (attivi, con stella, riprendibili) e byte */
   projectUsage: (id: string) => get<ProjectUsage>(`/api/projects/${enc(id)}/usage`),
   /** elimina il progetto con tutti i suoi job (sincrono); se era l'ultimo il server ne crea uno vuoto (`replacement`) */
-  deleteProject: (id: string) => del<ProjectDeleteResult>(`/api/projects/${id}`),
-  sequences: (pid: string, q: LabelQuery = {}) => get<Sequence[]>(`/api/projects/${pid}/sequences${queryString(q)}`),
+  deleteProject: (id: string) => del<ProjectDeleteResult>(`/api/projects/${enc(id)}`),
+  sequences: (pid: string, q: LabelQuery = {}) => get<Sequence[]>(`/api/projects/${enc(pid)}/sequences${queryString(q)}`),
   addSequence: (pid: string, name: string, sequence: string, source = "manual", meta: Record<string, unknown> = {}) =>
-    post<Sequence>(`/api/projects/${pid}/sequences`, { name, sequence, source, meta }),
-  importFasta: (pid: string, fasta: string) => post<Sequence[]>(`/api/projects/${pid}/sequences/import`, { fasta }),
-  deleteSequence: (pid: string, sid: string) => del(`/api/projects/${pid}/sequences/${sid}`),
-  documents: (pid: string) => get<DocumentItem[]>(`/api/projects/${pid}/documents`),
-  document: (pid: string, did: string) => get<DocumentItem>(`/api/projects/${pid}/documents/${did}`),
+    post<Sequence>(`/api/projects/${enc(pid)}/sequences`, { name, sequence, source, meta }),
+  importFasta: (pid: string, fasta: string) => post<Sequence[]>(`/api/projects/${enc(pid)}/sequences/import`, { fasta }),
+  deleteSequence: (pid: string, sid: string) => del(`/api/projects/${enc(pid)}/sequences/${enc(sid)}`),
+  documents: (pid: string) => get<DocumentItem[]>(`/api/projects/${enc(pid)}/documents`),
+  document: (pid: string, did: string) => get<DocumentItem>(`/api/projects/${enc(pid)}/documents/${enc(did)}`),
   saveDocument: (pid: string, doc: { name: string; kind: string; content: string; meta?: Record<string, unknown> }, did?: string) =>
-    did ? put<DocumentItem>(`/api/projects/${pid}/documents/${did}`, doc) : post<DocumentItem>(`/api/projects/${pid}/documents`, doc),
-  deleteDocument: (pid: string, did: string) => del(`/api/projects/${pid}/documents/${did}`),
+    did ? put<DocumentItem>(`/api/projects/${enc(pid)}/documents/${enc(did)}`, doc) : post<DocumentItem>(`/api/projects/${enc(pid)}/documents`, doc),
+  deleteDocument: (pid: string, did: string) => del(`/api/projects/${enc(pid)}/documents/${enc(did)}`),
 
   // sequenze e banche dati
   analyzeSequence: (sequence: string) => post<SequenceAnalysis>("/api/sequences/analyze", { sequence }),
@@ -291,38 +305,38 @@ export const api = {
     Object.entries(q).forEach(([k, v]) => v !== undefined && v !== "" && params.set(k, String(v)));
     return get<JobSummary[]>(`/api/jobs?${params}`);
   },
-  job: <R,>(id: string) => get<Job<R>>(`/api/jobs/${id}`),
-  jobStatus: (id: string) => get<JobSummary>(`/api/jobs/${id}/status`),
-  jobLog: (id: string, offset = 0) => get<{ text: string; offset: number; size: number }>(`/api/jobs/${id}/log?offset=${offset}`),
-  cancelJob: (id: string) => post<JobSummary>(`/api/jobs/${id}/cancel`),
-  resumeJob: (id: string, scope: ResumeScope = "incomplete") => post<JobSummary>(`/api/jobs/${id}/resume`, { scope }),
+  job: <R,>(id: string) => get<Job<R>>(`/api/jobs/${enc(id)}`),
+  jobStatus: (id: string) => get<JobSummary>(`/api/jobs/${enc(id)}/status`),
+  jobLog: (id: string, offset = 0) => get<{ text: string; offset: number; size: number }>(`/api/jobs/${enc(id)}/log?offset=${offset}`),
+  cancelJob: (id: string) => post<JobSummary>(`/api/jobs/${enc(id)}/cancel`),
+  resumeJob: (id: string, scope: ResumeScope = "incomplete") => post<JobSummary>(`/api/jobs/${enc(id)}/resume`, { scope }),
   /** `leftover` > 0: cartella rimossa solo in parte (il resto lo toglie «Pulisci file temporanei») */
-  deleteJob: (id: string) => del<JobDeleteResult>(`/api/jobs/${id}`),
+  deleteJob: (id: string) => del<JobDeleteResult>(`/api/jobs/${enc(id)}`),
   /** anteprima della pulizia dei job (non elimina nulla) */
   cleanupPreview: (req: CleanupRequest) => post<CleanupPreview>("/api/jobs/cleanup/preview", req),
   /** una chiamata della pulizia, a tempo (`max_seconds`): si ripete finché `remaining` non è 0 (lib/cleanup.runCleanup) */
   cleanupJobs: (req: CleanupRequest) => post<CleanupRun>("/api/jobs/cleanup", req),
   jobFileUrl: (id: string, path: string, download = false) =>
-    `/api/jobs/${id}/files/${path.split("/").map(enc).join("/")}${download ? "?download=true" : ""}`,
-  jobFileText: (id: string, path: string) => get<string>(`/api/jobs/${id}/files/${path.split("/").map(enc).join("/")}`),
-  modelQuality: (id: string, model: string) => get<QualityReport>(`/api/jobs/${id}/quality/${model.split("/").map(enc).join("/")}`),
+    `/api/jobs/${enc(id)}/files/${path.split("/").map(enc).join("/")}${download ? "?download=true" : ""}`,
+  jobFileText: (id: string, path: string) => get<string>(`/api/jobs/${enc(id)}/files/${path.split("/").map(enc).join("/")}`),
+  modelQuality: (id: string, model: string) => get<QualityReport>(`/api/jobs/${enc(id)}/quality/${model.split("/").map(enc).join("/")}`),
   /** consenso di un'analisi di qualità (senza `model`) o di un modello; `qmeanJob` = job qmean sulla stessa struttura;
    *  `predictJob` = confronto con una predizione esterna sulla stessa struttura (F9.3) */
   consensus: (id: string, model?: string | null, qmeanJob?: string | null, predictJob?: string | null) =>
-    get<ConsensusResult>(`/api/jobs/${id}/consensus${model ? `/${model.split("/").map(enc).join("/")}` : ""}${queryString({ qmean_job: qmeanJob, predict_job: predictJob })}`),
-  pymolUrl: (id: string, model: string, scheme = "ss") => `/api/jobs/${id}/pymol/${model.split("/").map(enc).join("/")}?scheme=${scheme}`,
+    get<ConsensusResult>(`/api/jobs/${enc(id)}/consensus${model ? `/${model.split("/").map(enc).join("/")}` : ""}${queryString({ qmean_job: qmeanJob, predict_job: predictJob })}`),
+  pymolUrl: (id: string, model: string, scheme = "ss") => `/api/jobs/${enc(id)}/pymol/${model.split("/").map(enc).join("/")}?scheme=${enc(scheme)}`,
   /** report HTML autonomo (stampabile in PDF) di un modello (job model, loop, pipeline) o, senza `model`, di
    * un'analisi di qualità; `qmeanJob` = job qmean sulla stessa struttura da includere; `predictJob` = confronto con
    * una predizione (F9.3; senza, il server include il più recente sulla stessa struttura) */
   reportUrl: (id: string, model?: string | null, qmeanJob?: string | null, predictJob?: string | null) =>
-    `/api/jobs/${id}/report${model ? `/${model.split("/").map(enc).join("/")}` : ""}${queryString({ qmean_job: qmeanJob, predict_job: predictJob })}`,
+    `/api/jobs/${enc(id)}/report${model ? `/${model.split("/").map(enc).join("/")}` : ""}${queryString({ qmean_job: qmeanJob, predict_job: predictJob })}`,
   /** genera il report, con la vista 3D se `body.image_png_base64` c'è, e lo restituisce come file da salvare */
   report: (id: string, model: string | null, body: ReportRequest = {}, qmeanJob?: string | null, predictJob?: string | null): Promise<ReportFile> =>
     requestFile(api.reportUrl(id, model, qmeanJob, predictJob), body, reportFallbackName(model, id)),
-  archiveUrl: (id: string) => `/api/jobs/${id}/archive`,
+  archiveUrl: (id: string) => `/api/jobs/${enc(id)}/archive`,
   /** flusso SSE di un job (status, log dal byte `offset`, end); `offset` null = senza righe di log */
   jobEventsUrl: (id: string, offset: number | null) =>
-    `/api/jobs/${id}/events?${offset === null ? "log=false" : `offset=${Math.max(0, Math.floor(offset))}`}`,
+    `/api/jobs/${enc(id)}/events?${offset === null ? "log=false" : `offset=${Math.max(0, Math.floor(offset))}`}`,
   /** flusso SSE dell'elenco dei job (ready, job, items, active, deleted, resync), tutti o di un progetto */
   jobsEventsUrl: (projectId?: string) => `/api/jobs/events${projectId ? `?project_id=${enc(projectId)}` : ""}`,
 
@@ -360,12 +374,12 @@ export const api = {
   pipelineItems: (id: string, q: { page: number; size: number; status?: string; sort?: string; direction?: string; q?: string; sequence?: number; template?: number; best?: boolean }) => {
     const params = new URLSearchParams();
     Object.entries(q).forEach(([k, v]) => v !== undefined && v !== "" && params.set(k, String(v)));
-    return get<PipelinePage>(`/api/pipeline/${id}/items?${params}`);
+    return get<PipelinePage>(`/api/pipeline/${enc(id)}/items?${params}`);
   },
-  pipelineItem: (id: string, idx: number) => get<PipelineItem & { sequence: string }>(`/api/pipeline/${id}/items/${idx}`),
-  pipelineMatrix: (id: string) => get<PipelineMatrix>(`/api/pipeline/${id}/matrix`),
-  pipelineCsvUrl: (id: string) => `/api/pipeline/${id}/export.csv`,
-  pipelineZipUrl: (id: string) => `/api/pipeline/${id}/export.zip`,
+  pipelineItem: (id: string, idx: number) => get<PipelineItem & { sequence: string }>(`/api/pipeline/${enc(id)}/items/${idx}`),
+  pipelineMatrix: (id: string) => get<PipelineMatrix>(`/api/pipeline/${enc(id)}/matrix`),
+  pipelineCsvUrl: (id: string) => `/api/pipeline/${enc(id)}/export.csv`,
+  pipelineZipUrl: (id: string) => `/api/pipeline/${enc(id)}/export.zip`,
 
   // etichette, preferiti e ricerca globale (F8b)
   /** etichette in uso con i conteggi (tutte o di un tipo) */

@@ -51,6 +51,7 @@ from .dispatch import Dispatcher
 from .errors import AppError, Conflict, NotFound
 from .eta import progress_eta, seconds_between
 from .events import DELETED, IDLE, JOB, LOG, ChangeFeed
+from .sensitive import redactor, subprocess_env
 from .storage import atomic_write_json, dir_size, remove_tree, safe_join, validate_identifier
 
 TERMINAL = frozenset({"completed", "failed", "cancelled"})
@@ -118,11 +119,23 @@ def set_subprocess_env(name: str, value: Optional[str]) -> None:
 
 
 def default_env() -> dict:
-    env = os.environ.copy()
+    """Ambiente dei programmi esterni: quello del server senza i suoi segreti (chiave d'accesso, configurazione della
+    posta, MODELLER_KEY: core/sensitive.py), più le variabili di `set_subprocess_env` (BIOLOOM_MODELLER_KEY)."""
+    env = subprocess_env(os.environ)
     env.update(_extra_env)
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
     return env
+
+
+def output_secrets(env: Optional[dict] = None) -> list[str]:
+    """Chiavi MODELLER che un programma esterno può ripetere nel suo output (MODELLER scrive la chiave rifiutata nel
+    messaggio d'errore): quella attiva dei sottoprocessi (o dell'ambiente `env` del processo) e MODELLER_KEY del server.
+    Si mascherano nel log del job e nell'output restituito a chi ha lanciato il processo."""
+    values = [_extra_env.get("BIOLOOM_MODELLER_KEY"), os.environ.get("MODELLER_KEY")]
+    if env is not None:
+        values.append(env.get("BIOLOOM_MODELLER_KEY"))
+    return [v for v in values if v]
 
 
 def is_intermediate(name: str) -> bool:
@@ -414,8 +427,11 @@ class JobContext:
                on_line: Optional[Callable[[str], None]], log_output: bool) -> ProcessResult:
         self.check()  # annullato mentre aspettava la CPU: il processo non parte
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+        env = env if env is not None else default_env()
+        # chiave MODELLER ripetuta nell'output (licenza rifiutata): mascherata in log, file dell'output ed esito
+        hide = redactor(output_secrets(env))
         proc = subprocess.Popen(
-            cmd, cwd=str(cwd or self.workdir), env=env if env is not None else default_env(),
+            cmd, cwd=str(cwd or self.workdir), env=env,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True,
             encoding="utf-8", errors="replace", bufsize=1, creationflags=creationflags,
             start_new_session=os.name == "posix",
@@ -438,6 +454,8 @@ class JobContext:
                 timer.start()
             assert proc.stdout is not None
             for line in proc.stdout:
+                if hide is not None:
+                    line = hide(line)
                 tail.append(line)
                 if to_file:
                     lines.append(line)
@@ -1267,6 +1285,25 @@ class JobManager:
         """
         self._append_log(job_id, f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
         self._close_log(job_id)
+
+    def log_if_present(self, job_id: str, message: str) -> bool:
+        """Come `_log_now`, ma solo se il job esiste ancora (riga nel database, cartella al suo posto e non in
+        eliminazione): per chi scrive nel log dopo la fine dell'esecuzione, da un altro thread (l'esito dell'avviso per
+        email, services/notify.py). Senza il controllo una riga scritta dopo l'eliminazione ricreerebbe
+        `jobs/<id>/job.log`, una cartella senza riga che nessuna pulizia toglie.
+
+        Sotto il lock di `delete`, che rinomina la cartella e cancella la riga nello stesso passo: o la riga finisce
+        nella cartella che `delete` sposterà, o il job non c'è più e non si scrive nulla. False se non scritta.
+        """
+        with self._lock:
+            if f"{TOMBSTONE_PREFIX}{job_id}" in self._removing:
+                return False
+            if self.db.query_one("SELECT 1 FROM jobs WHERE id=?", (job_id,)) is None:
+                return False
+            if not self.workdir(job_id).is_dir():
+                return False
+            self._log_now(job_id, message)
+            return True
 
     def _flush_all(self) -> None:
         with self._log_lock:

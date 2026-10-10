@@ -11,7 +11,6 @@ import copy
 import json
 import re
 import threading
-import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -26,7 +25,7 @@ from bioloom.engines import modeller, remote, search
 from bioloom.services.compute import ComputeService
 from bioloom.services.templates import TemplateLibrary
 
-from .conftest import DATA, HUMAN_UB, YEAST_UB, requires_modeller, wait_job
+from .conftest import DATA, HUMAN_UB, YEAST_UB, requires_modeller, until, wait_job
 
 AF_HEADER = [
     "HEADER                                            01-AUG-25",
@@ -293,11 +292,21 @@ def test_concurrent_fetches_download_the_model_once(tmp_path, afdb):
     library = TemplateLibrary(tmp_path / "templates")
     handler = afdb.handler
     started = threading.Event()
+    entered: list[str] = []
+    fetch_lock = library._fetch_lock
+
+    def counted_lock(tid):
+        entered.append(tid)
+        return fetch_lock(tid)
+
+    library._fetch_lock = counted_lock
 
     def slow(request):
         if "/files/" in request.url.path:
             started.set()
-            time.sleep(0.3)
+            # il download resta in corso finché tutti e quattro hanno preso il lock del modello: gli altri tre lo
+            # aspettano davvero (senza questa attesa potrebbero arrivare a download finito e trovarlo già in libreria)
+            until(lambda: len(entered) == 4, timeout=10)
         return handler(request)
 
     afdb.handler = slow
@@ -370,8 +379,9 @@ def test_waiting_for_the_same_alphafold_download_can_be_cancelled(tmp_path, afdb
     thread = threading.Thread(target=fetch)
     try:
         thread.start()
-        time.sleep(0.2)
-        assert thread.is_alive()  # in attesa del lock
+        # il controllo si chiama solo nel ciclo d'attesa del lock (acquire con timeout): il thread sta aspettando
+        until(lambda: cancelled.calls >= 1)
+        assert thread.is_alive() and not outcome  # in attesa del lock, non ancora annullato
         cancelled.event.set()
         thread.join(3)
         assert not thread.is_alive() and "cancelled" in outcome

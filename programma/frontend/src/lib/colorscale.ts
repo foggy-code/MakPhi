@@ -3,6 +3,8 @@
 // e categoriale (etichette, es. regioni di Ramachandran). Colori sempre esadecimali: 3Dmol non legge le
 // variabili CSS.
 
+import type { Theme } from "./theme";
+
 export interface ColorStop {
   value: number;
   color: string;
@@ -38,6 +40,57 @@ export type ColorScale = ContinuousScale | BinnedScale | CategoricalScale;
 
 /** Grigio dei residui senza valore (estremità senza φ/ψ, residui fuori dal profilo…). */
 export const NO_VALUE_COLOR = "#6b7280";
+
+// ---------------------------------------------------------------------------------- colori per tema
+// Colori fissi pensati per il fondo scuro del 3D, troppo chiari per il fondo del tema chiaro (--viewer-bg #f2f4f8):
+// lì si disegna la variante `*_LIGHT`, ≥ 3:1 sul fondo del 3D, sotto la legenda e sui pannelli (WCAG 1.4.11; controllato
+// in chartTokens.test.ts). Il tema scuro disegna i colori di sempre.
+
+/**
+ * Grigio di contesto dei residui senza niente da segnalare (nessuna segnalazione del consenso, nessun clash, fuori
+ * dall'interfaccia, fuori dalle tasche, non scanditi): chiaro, così i residui colorati risaltano sul fondo scuro del 3D.
+ * Sul fondo chiaro sparirebbe (1,1:1): lì è `CONTEXT_COLOR_LIGHT`.
+ */
+export const CONTEXT_COLOR = "#e2e8f0";
+export const CONTEXT_COLOR_LIGHT = "#7c8797";
+
+/**
+ * Struttura A (riferimento) del confronto strutturale (lib/compare.ts): grigio chiaro sul fondo scuro, ardesia scura sul
+ * chiaro (1,4:1 il grigio chiaro). In entrambi i temi è un grigio come «B senza coppia» (`NO_VALUE_COLOR`) ma lontano da
+ * lui per luminosità (≥ 2,5:1 fra i due), una differenza che non dipende dalla percezione delle tinte (resta con la
+ * deuteranopia e la protanopia); scura e poco satura, non si confonde con il blu della scala delle distanze, come
+ * succederebbe a un viola.
+ */
+export const REFERENCE_COLOR = "#cbd5e1";
+export const REFERENCE_COLOR_LIGHT = "#1e293b";
+
+/**
+ * «1 metodo» del consenso per residuo (lib/residueColoring.ts): giallo sul fondo scuro (1,2:1 sul chiaro), giallo oliva
+ * scuro sul chiaro. Un giallo scuro ha la luminosità del rosso di «3 o più metodi» (#dc2626): con la deuteranopia e la
+ * protanopia i due diventano quasi uguali (ΔE2000 2–6 per l'ocra e l'oro); la tinta oliva è quella che se ne allontana di
+ * più (ΔE2000 ≈ 9, contro ≈ 12 della coppia più vicina della scala nel tema scuro).
+ */
+export const ONE_METHOD_COLOR = "#fde047";
+export const ONE_METHOD_COLOR_LIGHT = "#666f12";
+
+/** Segno disegnato sopra la struttura (centro delle tasche di fpocket): bianco sul fondo scuro, ardesia quasi nera sul
+ *  chiaro, distinta dai colori delle tasche e dal grigio di contesto. */
+export const MARKER_COLOR = "#ffffff";
+export const MARKER_COLOR_LIGHT = "#1e293b";
+
+/** Varianti per il tema chiaro (chiave: colore del tema scuro, minuscolo). */
+export const LIGHT_THEME_COLORS: ReadonlyMap<string, string> = new Map([
+  [CONTEXT_COLOR, CONTEXT_COLOR_LIGHT],
+  [REFERENCE_COLOR, REFERENCE_COLOR_LIGHT],
+  [ONE_METHOD_COLOR, ONE_METHOD_COLOR_LIGHT],
+  [MARKER_COLOR, MARKER_COLOR_LIGHT],
+]);
+
+/** Colore fisso da disegnare nel tema (3D, strisce, legende): nel tema chiaro la variante di `LIGHT_THEME_COLORS`, se
+ *  c'è; gli altri colori restano quelli della scala. */
+export function themedColor(color: string, theme: Theme): string {
+  return theme === "light" ? LIGHT_THEME_COLORS.get(color.toLowerCase()) ?? color : color;
+}
 
 export const PALETTES = {
   /** blu (basso) → bianco → rosso (alto), come lo schema B-factor di PyMOL */
@@ -104,6 +157,19 @@ export function colorFor(scale: ColorScale, value: number | string | null | unde
   if (typeof value !== "number") return NO_VALUE_COLOR;
   if (scale.kind === "binned") return binFor(scale, value).color;
   return interpolateStops(scale.stops, value);
+}
+
+/**
+ * Colore da disegnare nel tema per un valore (3D, strisce): il colore fisso (`fixed`, es. il riferimento A) o quello
+ * della scala, con la variante del tema chiaro (`themedColor`) per i colori fissi, le fasce e le categorie. I gradienti
+ * delle scale continue restano quelli della scala anche dove passano per un colore di `LIGHT_THEME_COLORS` (il bianco a
+ * metà della scala di conservazione non è il centro di una tasca): nel tema chiaro li stacca dal fondo il contorno del
+ * visualizzatore 3D (`VIEWER_VIEW_STYLE` in lib/theme.ts).
+ */
+export function drawColor(scale: ColorScale, value: number | string | null | undefined, theme: Theme, fixed?: string): string {
+  if (fixed) return themedColor(fixed, theme);
+  const color = colorFor(scale, value);
+  return scale.kind === "continuous" ? color : themedColor(color, theme);
 }
 
 export function fmtScaleValue(value: number, digits = 2, unit?: string): string {

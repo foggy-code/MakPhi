@@ -73,6 +73,56 @@ export function initialTheme(storage: Pick<Storage, "getItem"> | null): Theme {
   return resolveTheme(parseThemePref(raw), systemPrefersDark());
 }
 
+/** Tema effettivo scritto su `<html data-theme>` (senza documento o senza attributo: scuro, il predefinito). */
+export function documentTheme(): Theme {
+  return typeof document !== "undefined" && document.documentElement.dataset.theme === "light" ? "light" : "dark";
+}
+
+/** Tema effettivo della pagina, aggiornato quando `<html data-theme>` cambia (pulsante del tema, tema del sistema). */
+export function useDocumentTheme(): Theme {
+  const [theme, setTheme] = useState<Theme>(documentTheme);
+  useEffect(() => {
+    if (typeof MutationObserver === "undefined") return;
+    const update = () => setTheme(documentTheme());
+    update();
+    const observer = new MutationObserver(update);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, []);
+  return theme;
+}
+
+/** Sfondo del visualizzatore 3D per tema: gli stessi valori di `--viewer-bg` in styles.css (ripiego senza foglio di stile). */
+export const VIEWER_BACKGROUND: Record<Theme, string> = { dark: "#0b1120", light: "#f2f4f8" };
+
+/**
+ * Stile della vista 3D per tema (3Dmol `setViewStyle`). Nel tema chiaro un contorno sottile scuro intorno a nastri,
+ * bastoncini e sfere: `width` in Å, al più `maxpixels` px (per il rapporto di pixel dello schermo), così si vede anche
+ * con la struttura intera e ingrandendo non copre i tratteggi sottili (provato con 3Dmol 2.5 su 1UBQ: con 0,1 Å il
+ * contorno spariva a struttura intera, con 2 px riempiva i vuoti dei tratteggi). Stacca dal fondo chiaro i colori
+ * chiari che restano tali, cioè i gradienti delle scale continue (centro bianco di blu-bianco-rosso, del potenziale e
+ * della conservazione, giallo di viridis e della scala delle distanze), gli schemi di 3Dmol (B-factor, struttura
+ * secondaria, catene) e i colori chiari di fasce e categorie senza variante (pLDDT, tasche…). Scurire quei gradienti
+ * ne cambierebbe la lettura (il centro neutro di una scala divergente sembrerebbe un estremo, viridis perderebbe la
+ * luminosità crescente). Nel tema scuro nessun contorno, come prima.
+ */
+export const VIEWER_VIEW_STYLE: Record<Theme, { style: string; color?: string; width?: number; maxpixels?: number }> = {
+  dark: { style: "" },
+  light: { style: "outline", color: "#1e293b", width: 0.5, maxpixels: 1.5 },
+};
+
+/** Sfondo del visualizzatore 3D: `--viewer-bg` del tema corrente, o il valore predefinito del tema. Il visualizzatore
+ *  lo ricalcola quando cambia `useDocumentTheme` (WebGL non legge le variabili CSS: serve il valore). */
+export function viewerBackground(theme: Theme): string {
+  try {
+    const css = getComputedStyle(document.documentElement).getPropertyValue("--viewer-bg").trim();
+    if (css) return css;
+  } catch {
+    /* niente documento o foglio di stile (test) */
+  }
+  return VIEWER_BACKGROUND[theme];
+}
+
 /**
  * Scelta del tema salvata e tema effettivo applicato a `<html data-theme>`; con "Sistema" ascolta i cambi del sistema
  * operativo finché la scelta resta quella.

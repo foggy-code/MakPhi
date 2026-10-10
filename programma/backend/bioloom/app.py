@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -42,7 +43,15 @@ def create_app(paths: Optional[Paths] = None, frontend_dist: Optional[Path] = FR
     async def lifespan(app: FastAPI):
         resolved = paths or default_paths()
         resolved.ensure()  # la chiave generata va nella cartella dati
-        app.state.auth = auth_config or auth.load(resolved.data)
+        try:
+            app.state.auth = auth_config or auth.load(resolved.data)
+            # reverse proxy fidati per l'indirizzo del client nel freno ai tentativi (BIOLOOM_TRUSTED_PROXIES)
+            app.state.trusted_proxies = auth.trusted_proxies() if app.state.auth.enabled else ()
+        except auth.AccessKeyError as exc:  # l'avvio si ferma: il motivo ben visibile, non solo nel traceback
+            print(f"\n  ERRORE: {exc}\n", flush=True)
+            raise
+        if app.state.auth.enabled and app.state.auth.epoch_file is None:
+            app.state.auth.attach(resolved.data)  # configurazione passata da chi crea l'app (test): stessa epoca
         app.state.allowed_hosts = guard.allowed_hosts()  # BIOLOOM_ALLOWED_HOSTS, letta all'avvio come BIOLOOM_AUTH
         app.state.core = build_core(resolved, server=app.state.auth.enabled)
         if app.state.auth.enabled and app.state.auth.generated:
@@ -53,6 +62,7 @@ def create_app(paths: Optional[Paths] = None, frontend_dist: Optional[Path] = FR
 
     app = FastAPI(title="BioLoom v4", version=__version__, lifespan=lifespan,
                   description="Suite per la modellazione di proteine per omologia (MODELLER).")
+    app.state.login_limiter = auth.LoginLimiter()  # tentativi di accesso per indirizzo (api/auth.py)
     # Corpo oltre il più grande caricamento legittimo: 413 prima che Starlette scriva il multipart su disco
     # (core/bodylimit). Aggiunto per primo, quindi il più interno: richieste di altri siti (guardia) e senza chiave
     # d'accesso si rifiutano prima, e nessuno dei due controlli legge il corpo; dentro CORS, così in sviluppo anche il
@@ -63,11 +73,12 @@ def create_app(paths: Optional[Paths] = None, frontend_dist: Optional[Path] = FR
 
     @app.middleware("http")
     async def access_control(request: Request, call_next):
+        # cookie di sessione, o chiave come Bearer attraverso il freno ai tentativi (api/auth.authenticate): 401 o 429
         cfg = getattr(request.app.state, "auth", None)
-        if cfg is not None and not cfg.request_allowed(request.url.path, request.cookies.get(auth.COOKIE),
-                                                       request.headers.get("authorization")):
-            return JSONResponse(status_code=401, content={"error": {
-                "code": "auth_required", "message": "Accesso richiesto: inserisci la chiave d'accesso."}})
+        if cfg is not None and cfg.requires_auth(request.url.path):
+            denied = auth_api.access_denied(request, cfg)
+            if denied is not None:
+                return denied
         return await call_next(request)
 
     # Host (DNS rebinding), origine (CSRF) e iframe (clickjacking), core/guard. In Starlette l'ultimo middleware
@@ -87,10 +98,16 @@ def create_app(paths: Optional[Paths] = None, frontend_dist: Optional[Path] = FR
                                                                 "details": details}})
 
     @app.exception_handler(Exception)
-    async def unexpected(_request: Request, exc: Exception):
-        traceback.print_exception(type(exc), exc, exc.__traceback__)
-        return JSONResponse(status_code=500, content={"error": {"code": "internal_error",
-                                                                "message": f"Errore interno: {exc}"}})
+    async def unexpected(request: Request, exc: Exception):
+        # Al client un messaggio generico con un codice; il dettaglio (che può contenere percorsi, parametri o pezzi di
+        # file) solo nel log, con lo stesso codice per ritrovarlo.
+        code = secrets.token_hex(4)
+        detail = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        print(f"[BioLoom] Errore interno (codice {code}) su {request.method} {request.url.path}:\n{detail}",
+              flush=True)
+        return JSONResponse(status_code=500, content={"error": {
+            "code": "internal_error",
+            "message": f"Errore interno (codice {code}): i dettagli sono nel log di BioLoom."}})
 
     for module in (auth_api, system, licenses, notify, databases, files, projects, bio, templates, jobs, compute):
         app.include_router(module.router)

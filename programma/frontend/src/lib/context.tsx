@@ -17,25 +17,62 @@ interface ToastApi {
 }
 const ToastCtx = createContext<ToastApi | null>(null);
 
+/** Durata di una notifica (ms): gli errori restano il doppio. */
+export const TOAST_MS: Record<ToastTone, number> = { ok: 4000, info: 4000, warn: 4000, err: 8000 };
+/** Tempo minimo (ms) dopo che una notifica perde il puntatore o il focus, per finire di leggerla: se ne restava meno,
+ *  riparte da qui. */
+export const TOAST_RESUME_MS = 2000;
+
+/**
+ * Una notifica: si chiude da sola dopo `TOAST_MS`, ma non mentre ha il puntatore sopra o il focus dentro (il pulsante
+ * «Chiudi la notifica»), così non sparisce mentre la si legge o la si sta chiudendo (WCAG 2.2.1). Quando li perde
+ * riprende con il tempo che restava, almeno `TOAST_RESUME_MS`.
+ */
+function Toast({ item, onDismiss }: { item: ToastItem; onDismiss: (id: number) => void }) {
+  const [hover, setHover] = useState(false);
+  const [focus, setFocus] = useState(false);
+  const remaining = useRef(TOAST_MS[item.tone]);
+  const paused = hover || focus;
+  useEffect(() => {
+    if (paused) return;
+    const started = Date.now();
+    const timer = setTimeout(() => onDismiss(item.id), remaining.current);
+    // pausa (o notifica chiusa): si conserva il tempo che resta, con il minimo per la ripresa
+    return () => {
+      clearTimeout(timer);
+      remaining.current = Math.max(TOAST_RESUME_MS, remaining.current - (Date.now() - started));
+    };
+  }, [paused, item.id, onDismiss]);
+  return (
+    // il clic sulla notifica la chiude come prima; da tastiera c'è il pulsante «Chiudi la notifica» (Tab, Invio)
+    <div className={`toast toast-${item.tone}`} onClick={() => onDismiss(item.id)}
+      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      onFocus={() => setFocus(true)}
+      onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocus(false); }}>
+      <span className="toast-text">{item.text}</span>
+      <button type="button" className="toast-close" aria-label="Chiudi la notifica" title="Chiudi"
+        onClick={(e) => { e.stopPropagation(); onDismiss(item.id); }}>
+        <span aria-hidden="true">×</span>
+      </button>
+    </div>
+  );
+}
+
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
   const counter = useRef(0);
   const push = useCallback((text: string, tone: ToastTone = "ok") => {
     const id = ++counter.current;
     setItems((prev) => [...prev.slice(-4), { id, tone, text }]);
-    setTimeout(() => setItems((prev) => prev.filter((t) => t.id !== id)), tone === "err" ? 8000 : 4000);
   }, []);
   const error = useCallback((e: unknown) => push(e instanceof Error ? e.message : String(e), "err"), [push]);
+  const dismiss = useCallback((id: number) => setItems((p) => p.filter((x) => x.id !== id)), []);
   const value = useMemo(() => ({ push, error }), [push, error]);
   return (
     <ToastCtx.Provider value={value}>
       {children}
       <div className="toasts" role="status" aria-live="polite">
-        {items.map((t) => (
-          <div key={t.id} className={`toast toast-${t.tone}`} onClick={() => setItems((p) => p.filter((x) => x.id !== t.id))}>
-            {t.text}
-          </div>
-        ))}
+        {items.map((t) => <Toast key={t.id} item={t} onDismiss={dismiss} />)}
       </div>
     </ToastCtx.Provider>
   );
@@ -45,6 +82,11 @@ export function useToast(): ToastApi {
   const ctx = useContext(ToastCtx);
   if (!ctx) throw new Error("ToastProvider mancante");
   return ctx;
+}
+
+/** Notifiche se c'è il ToastProvider, altrimenti null: per i componenti di base usati anche fuori dall'app (CopyButton). */
+export function useOptionalToast(): ToastApi | null {
+  return useContext(ToastCtx);
 }
 
 // ---------------------------------------------------------------------------------- progetto attivo
