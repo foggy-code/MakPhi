@@ -397,6 +397,14 @@ start_server() {
   say "Accesso protetto dalla chiave in server.env (BIOLOOM_ACCESS_KEY). Per HTTPS usa un reverse proxy (vedi Guida/5 - Chiavetta e server.md)."
 }
 
+# Server con Podman ma senza compose (per esempio RHEL 8, Podman 2.x): le stesse azioni con podman run
+if command -v podman >/dev/null 2>&1 && ! docker compose version >/dev/null 2>&1; then
+  case "$ACTION" in
+    server) exec bash "$ROOT/launcher/bioloom-podman.sh" avvia ;;
+    arresta|stato|log|verifica) [ -f "$BASE/server.env" ] && exec bash "$ROOT/launcher/bioloom-podman.sh" "$ACTION" ;;
+  esac
+fi
+
 case "$ACTION" in
   avvia) start_local ;;
   arresta) stop_all ;;

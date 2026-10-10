@@ -70,6 +70,38 @@ COMPOSE_PROFILES=qmean BIOLOOM_QMEAN_URL=http://qmean:8080 \
   docker compose -f programma/launcher/compose.yml --env-file server.env up -d   # con QMEAN locale
 ```
 
+### Server con Podman (senza Docker)
+
+Su molti server Red Hat il comando `docker` è in realtà **Podman** (avviso «Emulate Docker CLI using podman»), spesso
+vecchio e senza `compose`. L'avviatore se ne accorge da solo: `./avvia-bioloom.sh server` (e `arresta`, `stato`, `log`,
+`verifica`) usa allora `programma/launcher/bioloom-podman.sh`, che avvia gli stessi container con `podman run`. Non
+servono permessi di amministratore.
+
+```bash
+# 1. sul tuo PC: copia portatile con le immagini (PROCHECK e ProSA non sono su GitHub)
+powershell -ExecutionPolicy Bypass -File programma\launcher\bioloom.ps1 -Azione prepara -Destinazione D:\BioLoom_server -SenzaDati
+scp -r D:/BioLoom_server utente@server:~/bioloom
+
+# 2. sul server: la prima esecuzione crea server.env (dati in ~/bioloom/data, porta solo locale), la seconda avvia
+cd ~/bioloom && ./avvia-bioloom.sh server
+nano server.env
+./avvia-bioloom.sh server
+
+# 3. sul tuo PC: tunnel SSH, poi http://localhost:8765
+ssh -N -L 8765:127.0.0.1:8765 utente@server
+```
+
+- **Accesso:** con Podman `server.env` nasce con `BIOLOOM_BIND=127.0.0.1`: BioLoom è raggiungibile solo dal server, e
+  dal tuo PC con il tunnel. Non serve aprire porte nel firewall né HTTPS.
+- **File:** i file della cartella dati restano del tuo utente.
+- **ProSA:** Podman senza root non può assegnare al container il MAC della licenza, quindi l'analisi prosegue senza
+  ProSA (PROCHECK, DOPE e le altre misure restano).
+- **Riavvio:** i container ripartono da soli se si fermano per errore. Senza linger, chiudendo SSH di solito restano
+  attivi, ma non è garantito: controlla con `./avvia-bioloom.sh stato` dopo esserti ricollegato. Per tenerli attivi e
+  farli ripartire con il server, l'amministratore attiva il linger (`loginctl enable-linger <utente>`); poi
+  `programma/launcher/bioloom-podman.sh servizio` installa le unità systemd. Senza linger, dopo un riavvio del server
+  rilancia `./avvia-bioloom.sh server`.
+
 ### Pipeline grandi
 
 Per modellare molte coppie sequenza × template (per esempio 20.000 sequenze × 6 template) imposta in Impostazioni →

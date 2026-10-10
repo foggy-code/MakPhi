@@ -203,6 +203,18 @@ che richiamano `programma/launcher/`), `LEGGIMI.txt`, il manuale `Guida/`, `data
 Dockerfile, versione) e `BASE`/`$Base` = la cartella di BioLoom (dati, immagini, configurazione della macchina).
 `compose.yml` costruisce l'immagine con contesto `programma/` (la `.dockerignore` è lì) e monta `../../data`.
 
+**Server con Podman senza compose** (RHEL 8, Podman 2.x senza root): `bioloom.sh server`, se c'è `podman` e manca
+`docker compose`, passa a `launcher/bioloom-podman.sh`, che ripete `compose.yml` con `podman run` e legge lo stesso
+`server.env` (variabile per variabile, non con `--env-file`, così nel container entrano solo quelle di compose).
+Differenze: QMEAN gira con `--network container:bioloom` e BioLoom lo chiama su `127.0.0.1:8080` (un pod vorrebbe
+l'immagine `pause` da internet); `--security-opt label=disable` evita di rietichettare con SELinux le cartelle
+montate, che possono essere dischi condivisi; `--health-cmd none` perché il controllo di salute di Podman 2.x passa da
+systemd, e l'attesa la fa l'avviatore; senza root il root del container è l'utente del server, quindi l'avviatore
+passa `BIOLOOM_UID=0` e l'entrypoint resta root invece di passare all'utente 1000 (che sul server sarebbe un subuid
+estraneo, senza permessi sulla cartella dati); il MAC non si può assegnare, quindi ProSA non trova una licenza valida.
+`bioloom-podman.sh servizio` genera le unità systemd dell'utente (`podman generate systemd --name`), che partono
+con il server solo con il linger attivo.
+
 **Radice**
 
 | Modulo | Contenuto |
