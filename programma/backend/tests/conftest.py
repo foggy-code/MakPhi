@@ -16,6 +16,12 @@ from bioloom.engines import tools
 
 DATA = Path(__file__).parent / "data"
 
+# I TestClient mandano l'header Host "testserver", che senza accesso protetto il controllo dell'Host (core/guard)
+# rifiuterebbe. Aggiunto qui, prima di ogni create_app, vale anche per le app create direttamente nei test; aggiunto e
+# non solo predefinito, perché la variabile può esistere vuota (compose.yml) o con altri nomi. I test della guardia la
+# tolgono o la cambiano con monkeypatch.
+os.environ["BIOLOOM_ALLOWED_HOSTS"] = f"{os.environ.get('BIOLOOM_ALLOWED_HOSTS', '')} testserver".strip()
+
 # Chiave MODELLER per i test (es. nel container: -e MODELLER_KEY=...), come la usa il server.
 if os.environ.get("MODELLER_KEY"):
     jobs_module.set_subprocess_env("BIOLOOM_MODELLER_KEY", os.environ["MODELLER_KEY"])

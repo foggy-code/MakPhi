@@ -9,7 +9,9 @@ Guida di BioLoom: [1. Primo avvio](1%20-%20Primo%20avvio.md) · [2. Funzioni](2%
 - **PROCHECK:** licenza accademica, senza chiave.
 
 Le chiavi restano in `data/licenses/` e non entrano mai nelle immagini Docker. I pacchetti PROCHECK e ProSA
-(`programma/docker/vendor/`) e le chiavi sono tuoi: non distribuirli ad altri.
+(`programma/docker/vendor/`) e le chiavi sono tuoi: non distribuirli ad altri. La copia portatile non contiene i
+pacchetti né, salvo `-ConLicenze` / `--con-licenze`, le chiavi; le sue immagini però hanno i programmi già installati
+([Chiavetta e server](5%20-%20Chiavetta%20e%20server.md#copia-portatile-chiavetta-usb)).
 
 **Strumenti open source dell'immagine** aggiunti per tasche, elettrostatica e rifinitura (versioni fissate in
 `programma/docker/Dockerfile` e `programma/backend/requirements-tools.lock`; insieme circa 140 MB):

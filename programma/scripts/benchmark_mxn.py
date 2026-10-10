@@ -123,7 +123,9 @@ def main() -> None:
     (data / "settings.json").write_text(json.dumps({"max_workers": a.parallel, "compute_cache": False,
                                                     "job_timeout_minutes": 240}))
     app = create_app(Paths(data, scratch_dir=root / "scratch", local_cache_dir=root / "lc"), frontend_dist=None)
-    with TestClient(app) as client:
+    # Host di loopback: senza accesso protetto l'Host "testserver" predefinito del TestClient sarebbe rifiutato
+    # (core/guard, protezione dal DNS rebinding)
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
         files = [Path(f) for f in a.template_file]
         templates = []
         for i in range(a.templates):

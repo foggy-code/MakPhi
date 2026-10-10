@@ -7,6 +7,7 @@
 #   bioloom.sh server            avvio da server (server.env: rete, chiave d'accesso, percorsi)
 #   opzioni: --no-browser --no-menu --senza-dati --senza-qmean
 #            --uniclust <cartella>  cartella con UniClust30/UniRef30 (qualunque versione; auto = ricerca automatica)
+#            --con-licenze  la copia portatile include chiavi di licenza, posta.env e chiave d'accesso (solo per sé)
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # programma/: il codice
@@ -17,13 +18,14 @@ DATA_DIR="$BASE/data"
 IMAGES_DIR="$BASE/immagini"
 VERSION="$(head -n1 "$ROOT/launcher/VERSION" 2>/dev/null | tr -d '[:space:]')"
 VERSION="${VERSION:-4.1.0}"
-ACTION="avvia"; DEST=""; NO_BROWSER=0; NO_MENU=0; NO_DATA=0; NO_QMEAN=0
+ACTION="avvia"; DEST=""; NO_BROWSER=0; NO_MENU=0; NO_DATA=0; NO_QMEAN=0; WITH_LICENSES=0
 UNICLUST_CHOICE=""; UNICLUST_CHOICE_SET=0; UNICLUST_MANUAL=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-browser) NO_BROWSER=1 ;;
     --no-menu) NO_MENU=1 ;;
     --senza-dati) NO_DATA=1 ;;
+    --con-licenze) WITH_LICENSES=1 ;;
     --senza-qmean) NO_QMEAN=1 ;;
     --uniclust) UNICLUST_CHOICE="${2:-}"; UNICLUST_CHOICE_SET=1; shift
                 case "$UNICLUST_CHOICE" in auto|automatica) UNICLUST_CHOICE="" ;; esac ;;
@@ -337,22 +339,44 @@ stop_all() {
   printf '  %sBioLoom è arrestato. I dati restano in %s.%s\n' "$c_green" "$DATA_DIR" "$c_off"
 }
 
+portable_data() {  # copia di data/ nella copia portatile; gli argomenti sono esclusioni in più
+  tar -C "$BASE" --exclude=.scratch --exclude=.localcache "$@" -cf - data | tar -C "$DEST" -xf -
+}
+
+leftover() {  # primo file nei percorsi dati, esclusi README.md e i file nascosti o di sistema (.DS_Store, ._README.md
+  # che macOS crea sulle chiavette exFAT, desktop.ini, Thumbs.db): servono a riconoscere i resti di una copia precedente
+  find "$@" -type f ! -name README.md ! -name '.*' ! -name desktop.ini ! -name Thumbs.db 2>/dev/null | head -n1
+}
+
 prepare_portable() {
   [ -n "$DEST" ] || { [ "$NO_MENU" = 1 ] && fail "Indica la cartella di destinazione."; read -r -p "  Cartella di destinazione: " DEST; }
   [ -n "$DEST" ] || fail "Nessuna destinazione."
   ensure_docker
   mkdir -p "$DEST" && DEST="$(cd "$DEST" && pwd)"
+  # -ef confronta il file, non la stringa: vale anche con maiuscole diverse (APFS, NTFS) e con link simbolici
+  [ "$DEST" -ef "$BASE" ] && fail "La destinazione è la cartella di BioLoom stessa: scegline un'altra."
   title "Preparazione della copia portatile in $DEST"
   local f
   for f in "Avvia BioLoom.bat" "Arresta BioLoom.bat" "Avvia BioLoom.command" "Arresta BioLoom.command" avvia-bioloom.sh \
            README.md LEGGIMI.txt .gitattributes .gitignore; do
     [ -e "$BASE/$f" ] && cp -p "$BASE/$f" "$DEST/"
   done
+  # Pacchetti con licenza (PROCHECK, ProSA: vedi docker/vendor/README.md) mai nella copia. vendor/ resta con il
+  # README e le sottocartelle vuote perché il Dockerfile la copia (COPY docker/vendor/prosa/ fallisce se manca):
+  # senza pacchetti la build prosegue e BioLoom mostra quegli strumenti come "non installato".
   tar -C "$BASE" --exclude=node_modules --exclude=dist --exclude=__pycache__ --exclude=.pytest_cache \
-      -cf - Guida programma | tar -C "$DEST" -xf - || fail "Copia dei programmi non riuscita."
+      --exclude=programma/docker/vendor -cf - Guida programma | tar -C "$DEST" -xf - || fail "Copia dei programmi non riuscita."
+  mkdir -p "$DEST/programma/docker/vendor/procheck" "$DEST/programma/docker/vendor/prosa" || fail "Copia dei programmi non riuscita."
+  [ -f "$ROOT/docker/vendor/README.md" ] && cp -p "$ROOT/docker/vendor/README.md" "$DEST/programma/docker/vendor/"
+  # Chiavi di licenza, posta.env (password SMTP) e chiave d'accesso del server: solo con --con-licenze
   if [ "$NO_DATA" = 0 ] && [ -d "$DATA_DIR" ]; then
-    say "Copia dei dati (progetti, risultati, licenze, database)..."
-    tar -C "$BASE" --exclude=.scratch --exclude=.localcache -cf - data | tar -C "$DEST" -xf - || fail "Copia dei dati non riuscita."
+    if [ "$WITH_LICENSES" = 1 ]; then
+      say "Copia dei dati (progetti, risultati, licenze, database)..."
+      portable_data || fail "Copia dei dati non riuscita."
+    else
+      say "Copia dei dati (progetti, risultati, database; senza licenze e chiave d'accesso)..."
+      portable_data --exclude=data/licenses --exclude=data/access_key || fail "Copia dei dati non riuscita."
+    fi
   fi
   mkdir -p "$DEST/immagini"
   local spec name tarname service
@@ -363,8 +387,25 @@ prepare_portable() {
     say "Salvataggio dell'immagine $name (qualche minuto)..."
     docker save -o "$DEST/immagini/$tarname" "$name" || fail "Salvataggio di $name non riuscito."
   done
+  # resti di una copia fatta con una versione precedente, che copiava pacchetti e chiavi: si segnalano, non si cancellano
+  local left=""
+  [ -n "$(leftover "$DEST/programma/docker/vendor")" ] && left="pacchetti con licenza in programma/docker/vendor"
+  if [ "$WITH_LICENSES" = 0 ] && [ -n "$(leftover "$DEST/data/licenses" "$DEST/data/access_key")" ]; then
+    left="${left:+$left, }licenze o chiave d'accesso in data"
+  fi
   title "Copia portatile pronta: $DEST"
   say "Sul computer di destinazione serve solo Docker: doppio clic su 'Avvia BioLoom' (.bat, .command o avvia-bioloom.sh)."
+  if [ "$NO_DATA" = 1 ] || [ ! -d "$DATA_DIR" ]; then
+    warn "Dati e licenze non copiati: sul computer di destinazione le licenze si inseriscono da Impostazioni > Licenze."
+  elif [ "$WITH_LICENSES" = 1 ]; then
+    warn "La copia contiene chiavi di licenza e password personali (data/licenses, data/access_key): non darla ad altri."
+  else
+    warn "Licenze non copiate: sul computer di destinazione si inseriscono da Impostazioni > Licenze (MODELLER, ProSA)"
+    warn "e posta.env, se serve, va ricreato in data/licenses. Per includerle rifai la copia con --con-licenze."
+  fi
+  [ -n "$left" ] && warn "Nella destinazione restano file di una copia precedente ($left): cancellali se la copia va ad altri."
+  warn "Le immagini in 'immagini' contengono MODELLER e, se installati, PROCHECK e ProSA II: la copia è per uso"
+  warn "personale (o del gruppo, se le licenze lo consentono) e non va redistribuita."
 }
 
 start_server() {

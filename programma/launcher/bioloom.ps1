@@ -6,6 +6,8 @@
 #   bioloom.ps1 -Azione prepara -Destinazione E:\BioLoom   copia portatile (chiavetta) con le immagini
 #   bioloom.ps1 -UniClust E:\database   cartella con UniClust30/UniRef30 (qualunque versione; auto = ricerca automatica)
 #   opzioni: -NoBrowser -NoMenu (avvio senza interazione, per script e test)
+#            -SenzaDati -SenzaQmean (copia portatile senza dati o senza l'immagine di QMEAN)
+#            -ConLicenze  la copia portatile include chiavi di licenza, posta.env e chiave d'accesso (solo per sé)
 param(
     [ValidateSet("avvia", "arresta", "stato", "log", "verifica", "prepara")]
     [string]$Azione = "avvia",
@@ -14,6 +16,7 @@ param(
     [switch]$NoMenu,
     [switch]$SenzaDati,
     [switch]$SenzaQmean,
+    [switch]$ConLicenze,
     [string]$UniClust = $null
 )
 
@@ -427,6 +430,13 @@ function Stop-BioLoom {
     Say "  BioLoom è arrestato. I dati restano in $DataDir." Green
 }
 
+function Find-Leftover([string[]]$paths) {  # primo file nei percorsi, esclusi README.md e i file nascosti o di sistema
+    # (.DS_Store, ._README.md che macOS crea sulle chiavette exFAT, desktop.ini, Thumbs.db): resti di una copia precedente
+    Get-ChildItem -LiteralPath $paths -Recurse -File -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne "README.md" -and -not $_.Name.StartsWith(".") -and $_.Name -notin @("desktop.ini", "Thumbs.db") } |
+        Select-Object -First 1
+}
+
 function Export-Portable {
     if (-not $Destinazione) {
         if ($NoMenu) { Fail "Indica la destinazione con -Destinazione." }
@@ -436,20 +446,35 @@ function Export-Portable {
     Ensure-Docker
     New-Item -ItemType Directory -Force -Path $Destinazione | Out-Null
     $dest = (Resolve-Path $Destinazione).Path
+    if ($dest.TrimEnd('\') -ieq $Base.TrimEnd('\')) { Fail "La destinazione è la cartella di BioLoom stessa: scegline un'altra." }
     Title "Preparazione della copia portatile in $dest"
     $files = @("Avvia BioLoom.bat", "Arresta BioLoom.bat", "Avvia BioLoom.command", "Arresta BioLoom.command", "avvia-bioloom.sh",
                "README.md", "LEGGIMI.txt", ".gitattributes", ".gitignore")
     foreach ($f in $files) { if (Test-Path (Join-Path $Base $f)) { Copy-Item (Join-Path $Base $f) $dest -Force } }
-    $dirs = @{ "Guida" = @(); "programma" = @("__pycache__", ".pytest_cache", "node_modules", "dist") }
+    # Pacchetti con licenza (PROCHECK, ProSA: vedi docker\vendor\README.md) mai nella copia. vendor\ resta con il
+    # README e le sottocartelle vuote perché il Dockerfile la copia (COPY docker/vendor/prosa/ fallisce se manca):
+    # senza pacchetti la build prosegue e BioLoom mostra quegli strumenti come "non installato".
+    $vendor = Join-Path $Root "docker\vendor"
+    $destVendor = Join-Path $dest "programma\docker\vendor"
+    $dirs = @{ "Guida" = @(); "programma" = @("__pycache__", ".pytest_cache", "node_modules", "dist", $vendor) }
     foreach ($d in $dirs.Keys) {
         $rcArgs = @((Join-Path $Base $d), (Join-Path $dest $d), "/E", "/NFL", "/NDL", "/NJH", "/NJS", "/NP")
         if ($dirs[$d].Count) { $rcArgs += "/XD"; $rcArgs += $dirs[$d] }
         robocopy @rcArgs | Out-Null
         if ($LASTEXITCODE -ge 8) { Fail "Copia di $d non riuscita." }
     }
+    foreach ($sub in @("procheck", "prosa")) { New-Item -ItemType Directory -Force -Path (Join-Path $destVendor $sub) | Out-Null }
+    if (Test-Path (Join-Path $vendor "README.md")) { Copy-Item (Join-Path $vendor "README.md") $destVendor -Force }
+    # Chiavi di licenza, posta.env (password SMTP) e chiave d'accesso del server: solo con -ConLicenze
     if (-not $SenzaDati -and (Test-Path $DataDir)) {
-        Say "  Copia dei dati (progetti, risultati, licenze, database)..." DarkGray
-        robocopy $DataDir (Join-Path $dest "data") /E /XD .scratch .localcache /NFL /NDL /NJH /NJS /NP | Out-Null
+        $rcArgs = @($DataDir, (Join-Path $dest "data"), "/E", "/NFL", "/NDL", "/NJH", "/NJS", "/NP", "/XD", ".scratch", ".localcache")
+        if ($ConLicenze) {
+            Say "  Copia dei dati (progetti, risultati, licenze, database)..." DarkGray
+        } else {
+            Say "  Copia dei dati (progetti, risultati, database; senza licenze e chiave d'accesso)..." DarkGray
+            $rcArgs += @((Join-Path $DataDir "licenses"), "/XF", (Join-Path $DataDir "access_key"))
+        }
+        robocopy @rcArgs | Out-Null
         if ($LASTEXITCODE -ge 8) { Fail "Copia dei dati non riuscita." }
     }
     $imgDir = Join-Path $dest "immagini"
@@ -461,8 +486,25 @@ function Export-Portable {
         Say "  Salvataggio dell'immagine $($img[0]) (qualche minuto)..." DarkGray
         if ((Invoke-Docker @("save", "-o", (Join-Path $imgDir $img[1]), $img[0])).Code -ne 0) { Fail "Salvataggio di $($img[0]) non riuscito." }
     }
+    # resti di una copia fatta con una versione precedente, che copiava pacchetti e chiavi: si segnalano, non si cancellano
+    $left = @()
+    if (Find-Leftover @($destVendor)) { $left += "pacchetti con licenza in programma\docker\vendor" }
+    if (-not $ConLicenze -and (Find-Leftover @((Join-Path $dest "data\licenses"), (Join-Path $dest "data\access_key")))) {
+        $left += "licenze o chiave d'accesso in data"
+    }
     Title "Copia portatile pronta: $dest"
     Say "  Sul computer di destinazione serve solo Docker Desktop: doppio clic su 'Avvia BioLoom'."
+    if ($SenzaDati -or -not (Test-Path $DataDir)) {
+        Say "  Dati e licenze non copiati: sul computer di destinazione le licenze si inseriscono da Impostazioni > Licenze." Yellow
+    } elseif ($ConLicenze) {
+        Say "  La copia contiene chiavi di licenza e password personali (data\licenses, data\access_key): non darla ad altri." Yellow
+    } else {
+        Say "  Licenze non copiate: sul computer di destinazione si inseriscono da Impostazioni > Licenze (MODELLER, ProSA)" Yellow
+        Say "  e posta.env, se serve, va ricreato in data\licenses. Per includerle rifai la copia con -ConLicenze." Yellow
+    }
+    if ($left.Count) { Say "  Nella destinazione restano file di una copia precedente ($($left -join ', ')): cancellali se la copia va ad altri." Yellow }
+    Say "  Le immagini in 'immagini' contengono MODELLER e, se installati, PROCHECK e ProSA II: la copia è per uso" Yellow
+    Say "  personale (o del gruppo, se le licenze lo consentono) e non va redistribuita." Yellow
 }
 
 switch ($Azione) {

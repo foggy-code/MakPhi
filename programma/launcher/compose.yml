@@ -4,6 +4,7 @@
 # Variabili principali (tutte facoltative):
 #   BIOLOOM_PORT        porta sul computer (8765)
 #   BIOLOOM_BIND        127.0.0.1 = solo questo computer; 0.0.0.0 = rete (server, con BIOLOOM_AUTH=on)
+#   BIOLOOM_ALLOWED_HOSTS  senza BIOLOOM_AUTH: nomi con cui aprire BioLoom oltre a localhost e 127.0.0.1 ("*" = tutti)
 #   BIOLOOM_DATA_PATH   cartella dati (progetti, risultati, licenze, database); predefinita ../../data (la cartella data accanto a programma)
 #   UNICLUST_PATH       cartella (disco esterno) con UniClust30/UniRef30, qualunque versione → QMEAN locale
 #   QMTL_PATH           cartella QMTL (facoltativa) → QMEANDisCo
@@ -25,6 +26,7 @@ services:
     environment:
       BIOLOOM_AUTH: "${BIOLOOM_AUTH:-off}"
       BIOLOOM_ACCESS_KEY: "${BIOLOOM_ACCESS_KEY:-}"
+      BIOLOOM_ALLOWED_HOSTS: "${BIOLOOM_ALLOWED_HOSTS:-}"   # header Host ammessi senza BIOLOOM_AUTH (DNS rebinding)
       BIOLOOM_ALLOW_SHUTDOWN: "${BIOLOOM_ALLOW_SHUTDOWN:-1}"
       MODELLER_KEY: "${MODELLER_KEY:-}"
       BIOLOOM_QMEAN_URL: "${BIOLOOM_QMEAN_URL:-}"   # http://qmean:8080 quando il profilo qmean è attivo

@@ -30,6 +30,19 @@ Dalla sua finestra: **A** riapre il browser, **V** verifica gli strumenti, **L**
 ricerca dei dischi (dopo aver collegato quello di UniClust30), **U** indica a mano la cartella di UniClust30, **S** arresta
 BioLoom, **C** chiude la finestra lasciando BioLoom attivo.
 
+### macOS: doppio clic bloccato
+
+I file scaricati da internet (zip di GitHub, allegati di posta) restano in quarantena e macOS non apre
+`Avvia BioLoom.command`. La prima volta fai clic destro sul file → **Apri** e conferma (da macOS 15: Impostazioni di
+Sistema → Privacy e sicurezza → **Apri comunque**), oppure togli la quarantena a tutta la cartella dal Terminale. Se il
+doppio clic dice invece che mancano i permessi, rendi eseguibili gli avviatori:
+
+```bash
+cd /percorso/di/BioLoom        # scrivi "cd " e trascina la cartella nel Terminale
+xattr -dr com.apple.quarantine .
+chmod +x "Avvia BioLoom.command" "Arresta BioLoom.command" avvia-bioloom.sh programma/launcher/bioloom.sh   # permessi
+```
+
 ## Un percorso tipico
 
 | Passo | Dove | Che cosa succede |

@@ -6,7 +6,8 @@ Guida di BioLoom: [1. Primo avvio](1%20-%20Primo%20avvio.md) · [2. Funzioni](2%
 
 | Cosa | Dove | Viaggia con la chiavetta? |
 |---|---|---|
-| Progetti, risultati dei job, libreria template, licenze, impostazioni, pdbaa e database MMseqs2 | `data/`, nella cartella di BioLoom | sì |
+| Progetti, risultati dei job, libreria template, impostazioni, pdbaa e database MMseqs2 | `data/`, nella cartella di BioLoom | sì |
+| Chiavi di licenza (MODELLER, ProSA), `posta.env` con la password della posta, chiave d'accesso del server | `data/licenses/`, `data/access_key` | sì se BioLoom gira dalla chiavetta; la [copia portatile](5%20-%20Chiavetta%20e%20server.md#copia-portatile-chiavetta-usb) le include solo con `-ConLicenze` / `--con-licenze` |
 | Risposte dei servizi remoti e cache dei calcoli | `data/cache/` | sì |
 | Calcoli in corso e file temporanei | volume Docker `scratch`, veloce e svuotato a ogni avvio | no |
 | Indice veloce MMseqs2 (≈ 1,5 GB) | volume Docker `cache` di ogni computer | no, si ricrea da Impostazioni → Database |
@@ -53,8 +54,9 @@ chi usa BioLoom sceglie soltanto se ricevere l'avviso e a quale indirizzo.
 
 Conviene un account dedicato agli avvisi, per esempio un indirizzo Gmail creato apposta con una «password per le app»
 (Account Google → Sicurezza: verifica in due passaggi, poi Password per le app), oppure il server di posta dell'università.
-Il file sta con le chiavi di licenza: non finisce nei pacchetti di riproducibilità né su Git, e la password non viene mai
-mostrata dall'interfaccia. Sul server le stesse variabili in `server.env` hanno la precedenza sul file.
+Il file sta con le chiavi di licenza: non finisce nei pacchetti di riproducibilità, su Git o nella copia portatile (salvo
+`-ConLicenze` / `--con-licenze`), e la password non viene mai mostrata dall'interfaccia. Sul server le stesse variabili
+in `server.env` hanno la precedenza sul file.
 
 ## Che cosa lascia il computer
 

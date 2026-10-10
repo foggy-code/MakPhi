@@ -20,6 +20,9 @@ da una cartella qualsiasi o da un server. Sul computer serve solo Docker.
 3. Si apre il browser su `http://127.0.0.1:8765`. Al primo avvio inserisci la chiave di licenza di MODELLER in
    **Impostazioni → Licenze**: è gratuita per uso accademico (<https://salilab.org/modeller/>).
 
+Su macOS, se il doppio clic su un avviatore scaricato da internet è bloccato, vedi
+[Primo avvio → macOS](Guida/1%20-%20Primo%20avvio.md#macos-doppio-clic-bloccato).
+
 ## La cartella di BioLoom
 
 ```

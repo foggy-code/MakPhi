@@ -11,6 +11,13 @@ AVVIO
 Si apre il browser su http://127.0.0.1:8765. Per chiudere: "Arresta BioLoom" oppure il tasto S
 nella finestra dell'avviatore.
 
+macOS: se il doppio clic e' bloccato (file scaricati da internet), la prima volta fai clic
+destro > Apri (da macOS 15: Impostazioni di Sistema > Privacy e sicurezza > Apri comunque),
+oppure nel Terminale, dalla cartella di BioLoom:
+    xattr -dr com.apple.quarantine .
+Se mancano i permessi:
+    chmod +x "Avvia BioLoom.command" "Arresta BioLoom.command" avvia-bioloom.sh programma/launcher/bioloom.sh
+
 CARTELLE
   Guida       manuale d'uso completo (primo avvio, funzioni, QMEAN, dati e privacy,
               chiavetta e server, licenze)
@@ -20,7 +27,8 @@ CARTELLE
 
 AL PRIMO AVVIO SU UN COMPUTER
   - le immagini Docker vengono caricate dalla cartella "immagini" (qualche minuto, senza internet);
-  - se non trovi la chiave MODELLER gia' inserita, aggiungila in Impostazioni > Licenze;
+  - la copia di solito non contiene le licenze: inserisci la chiave MODELLER (e il file
+    LicenseDB di ProSA, poi R nella finestra dell'avviatore) in Impostazioni > Licenze;
   - la ricerca MMseqs2 funziona subito; per renderla piu' veloce crea l'indice locale
     (Impostazioni > Database > Crea indice veloce).
 
@@ -53,3 +61,6 @@ DATI
 LICENZE
   MODELLER, ProSA II e PROCHECK sono concessi con licenza accademica personale a chi li ha
   registrati: questa copia e' per uso personale e non va distribuita ad altri.
+  La copia portatile non contiene i pacchetti di PROCHECK e ProSA ne' (salvo l'opzione
+  --con-licenze / -ConLicenze) chiavi di licenza, password della posta e chiave d'accesso;
+  le immagini Docker pero' hanno i programmi gia' installati.

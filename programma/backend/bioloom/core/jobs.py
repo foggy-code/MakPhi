@@ -60,6 +60,9 @@ ACTIVE = frozenset({"queued", "running", "cancelling"})
 REQUEUABLE = frozenset({"failed", "cancelled"})
 LOG_NAME = "job.log"
 LOG_FLUSH_SECONDS = 0.5
+# attesa massima della fine di un processo esterno terminato perché la lettura del suo output si è interrotta con un
+# errore (JobContext._popen): con SIGKILL basta un istante, salvo un processo bloccato in I/O del kernel
+KILL_WAIT_SECONDS = 10.0
 # attesa massima, per una ripresa o un'eliminazione, della chiusura dell'esecuzione precedente (spostamento
 # dei file, scratch) o della preparazione di una ripresa
 REQUEUE_WAIT_SECONDS = 10.0
@@ -417,21 +420,22 @@ class JobContext:
             encoding="utf-8", errors="replace", bufsize=1, creationflags=creationflags,
             start_new_session=os.name == "posix",
         )
-        self._manager._register_process(self.job_id, proc)
         timed_out = threading.Event()
 
         def _kill_on_timeout() -> None:
             timed_out.set()
             _kill(proc)
 
-        timer = threading.Timer(timeout, _kill_on_timeout) if timeout else None
-        if timer:
-            timer.daemon = True
-            timer.start()
+        timer: Optional[threading.Timer] = None
         tail: collections.deque[str] = collections.deque(maxlen=20000)
         to_file = log_output and self._output_log is not None
         lines: list[str] = []  # output per il file `output_log`, scritto in un blocco a fine processo
         try:
+            self._manager._register_process(self.job_id, proc)
+            if timeout:
+                timer = threading.Timer(timeout, _kill_on_timeout)
+                timer.daemon = True
+                timer.start()
             assert proc.stdout is not None
             for line in proc.stdout:
                 tail.append(line)
@@ -445,6 +449,21 @@ class JobContext:
         finally:
             if timer:
                 timer.cancel()
+            if proc.poll() is None:
+                # uscita per un errore mentre il processo gira (on_line, log o lettura dell'output: disco pieno,
+                # database pieno, thread del timer non avviato): si termina con i figli, altrimenti continuerebbe fuori
+                # dal budget di CPU e non più annullabile. Un'attesa che scade non nasconde l'errore originale.
+                _kill(proc)
+                try:
+                    proc.wait(timeout=KILL_WAIT_SECONDS)
+                except subprocess.TimeoutExpired:
+                    print(f"[BioLoom] processo {proc.pid} del job {self.job_id} non terminato dopo "
+                          f"{KILL_WAIT_SECONDS:g} s dalla richiesta di chiusura")
+            if proc.stdout is not None:
+                try:
+                    proc.stdout.close()
+                except OSError:
+                    pass
             self._manager._unregister_process(self.job_id, proc)
             if to_file:
                 _write_output_block(self._output_log, self._prefix, cmd, lines, proc.returncode)
@@ -848,11 +867,13 @@ class JobManager:
         job = self.get(job_id, include_result=False)
         if job["status"] in TERMINAL:
             return job
+        # L'evento si imposta nello stesso passo sotto il lock della copia dei processi: un processo che si registra
+        # proprio ora (`_register_process`) o è già nella copia, o trova l'evento impostato e si termina da sé.
         with self._lock:
             event = self._cancel_events.get(job_id)
+            if event is not None:
+                event.set()
             procs = list(self._processes.get(job_id, ()))
-        if event is not None:
-            event.set()
         self.budget.wake()  # un processo in attesa di CPU se ne accorge subito e non parte
         for proc in procs:
             _kill(proc)
@@ -1044,10 +1065,9 @@ class JobManager:
 
     def shutdown(self) -> None:
         with self._lock:
-            events = list(self._cancel_events.values())
+            for event in self._cancel_events.values():
+                event.set()  # sotto il lock con la copia dei processi, come in `cancel`
             procs = [p for group in self._processes.values() for p in group]
-        for event in events:
-            event.set()
         self.budget.close()
         for proc in procs:
             _kill(proc)
@@ -1077,13 +1097,26 @@ class JobManager:
                                "WHERE id=? AND status='queued'", (now, now, job_id)) != 1:
                 return
             self._running.add(job_id)
-        self.events.publish(job_id, JOB)
-        live = self.live_dir(job_id)
-        live.mkdir(parents=True, exist_ok=True)
-        registration = self._handlers[job["kind"]]
-        ctx = JobContext(self, job_id, live, job["params"] or {}, event, priority=registration.priority,
-                         stage="Avvio", release_resource=release_resource)
+        # Da qui in poi il job è 'running' e in `_running`: tutto sta dentro il try, preparazione compresa (cartella
+        # di lavoro, handler, contesto), così qualunque errore lo chiude con uno stato finale e il finally lo toglie da
+        # `_running`. Altrimenti uno scratch pieno o non scrivibile lo lasciava 'running' fino al riavvio, senza
+        # poterlo annullare, riprendere né eliminare (e con lui il suo progetto).
+        live: Optional[Path] = None  # cartella di lavoro, solo dopo che è stata creata
         try:
+            self.events.publish(job_id, JOB)
+            path = self.live_dir(job_id)
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise AppError(f"Cartella di lavoro del job non creata ({path}): {exc.strerror or exc}. Controlla "
+                               "lo spazio libero e i permessi dello scratch (il volume dei calcoli in corso).",
+                               code="scratch_error") from exc
+            live = path
+            registration = self._handlers.get(job["kind"])
+            if registration is None:
+                raise AppError(f"Tipo di job sconosciuto: {job['kind']}")
+            ctx = JobContext(self, job_id, live, job["params"] or {}, event, priority=registration.priority,
+                             stage="Avvio", release_resource=release_resource)
             ctx.log(f"Job {job['kind']} avviato")
             result = registration.fn(ctx, job["params"] or {})
             if event.is_set():
@@ -1094,16 +1127,16 @@ class JobManager:
             self._finish(job_id, "completed", result=result)
         except JobCancelled as exc:
             reason = str(exc)
-            self._end_run(ctx, live, "cancelled", reason or "Annullato dall'utente.",
+            self._end_run(job_id, live, "cancelled", reason or "Annullato dall'utente.",
                           f"Job annullato: {reason}" if reason else "Job annullato dall'utente")
         except AppError as exc:
-            self._end_run(ctx, live, "failed", exc.message, f"ERRORE: {exc.message}")
+            self._end_run(job_id, live, "failed", exc.message, f"ERRORE: {exc.message}")
         except Exception as exc:  # errore inatteso (anche il salvataggio non riuscito): traccia completa nel log
-            self._end_run(ctx, live, "failed", f"{type(exc).__name__}: {exc}",
+            self._end_run(job_id, live, "failed", f"{type(exc).__name__}: {exc}",
                           "ERRORE INATTESO:\n" + traceback.format_exc())
         finally:
             self._close_log(job_id)
-            if live != self.workdir(job_id):
+            if live is not None and live != self.workdir(job_id):
                 remove_tree(live)
             with self._idle:
                 if self._cancel_events.get(job_id) is event:
@@ -1113,23 +1146,27 @@ class JobManager:
                 self._idle.notify_all()  # una ripresa o un'eliminazione in attesa può procedere
             self.events.publish(job_id, IDLE)  # log completo su disco: i flussi SSE possono chiudersi
 
-    def _end_run(self, ctx: JobContext, live: Path, status: str, error: str, message: str) -> None:
+    def _end_run(self, job_id: str, live: Optional[Path], status: str, error: str, message: str) -> None:
         """Chiude un'esecuzione annullata o fallita: salva i file, scrive il motivo nel log e lo stato finale.
 
         Lo stato finale si scrive comunque, anche se salvataggio o log non riescono (es. disco dati pieno):
         altrimenti il job resterebbe 'running' fino al riavvio, senza poterlo riprendere né eliminare.
+        `live` è None se la cartella di lavoro non è mai stata creata (errore nella preparazione): niente da salvare.
         """
+        if live is not None:
+            try:
+                self._commit(job_id, live, success=status == "cancelled")
+            except OSError as exc:
+                note = f"salvataggio dei file non riuscito: {exc}"
+                message = f"{message}\nERRORE: {note}"
+                error = f"{error} ({note})"
         try:
-            self._commit(ctx.job_id, live, success=status == "cancelled")
-        except OSError as exc:
-            note = f"salvataggio dei file non riuscito: {exc}"
-            message = f"{message}\nERRORE: {note}"
-            error = f"{error} ({note})"
-        try:
-            ctx.log(message)
-        except OSError:
+            stamp = datetime.now().strftime("%H:%M:%S")  # come `JobContext.log`, anche senza contesto
+            for line in message.splitlines() or [""]:
+                self._append_log(job_id, f"[{stamp}] {line}")
+        except (OSError, ValueError):  # ValueError: file del log già chiuso
             pass
-        self._finish(ctx.job_id, status, error=error)
+        self._finish(job_id, status, error=error)
 
     def _commit(self, job_id: str, source: Path, *, success: bool) -> None:
         """Sposta i file da `source` (nello scratch) alla cartella definitiva del job.
@@ -1260,6 +1297,8 @@ class JobManager:
 
     # ------------------------------------------------------------------ processi
     def _register_process(self, job_id: str, proc: subprocess.Popen) -> None:
+        """Registra il processo per l'annullamento; se l'annullamento è già arrivato lo termina subito. `cancel` e
+        `shutdown` impostano l'evento sotto lo stesso lock della loro copia dei processi: nessun processo sfugge."""
         with self._lock:
             self._processes.setdefault(job_id, set()).add(proc)
             cancelled = self._cancel_events.get(job_id)

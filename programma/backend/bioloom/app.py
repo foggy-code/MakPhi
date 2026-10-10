@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -20,19 +21,29 @@ from .api import reproducibility, structure_tools
 from .api import mutations as mutations_api
 from .api import predict as predict_api
 from .config import FRONTEND_DIST, Paths, default_paths
-from .core import auth
+from .core import auth, guard
 from .core.container import build_core
 from .core.errors import AppError
 
+DEV_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")  # interfaccia di sviluppo (npm run dev, Vite)
+
 
 def create_app(paths: Optional[Paths] = None, frontend_dist: Optional[Path] = FRONTEND_DIST,
-               dev_origins: tuple[str, ...] = ("http://localhost:5173", "http://127.0.0.1:5173"),
+               dev_origins: Optional[tuple[str, ...]] = None,
                auth_config: Optional[auth.AuthConfig] = None) -> FastAPI:
+    if dev_origins is None:
+        # Origini ammesse da CORS e dal controllo dell'origine (core/guard), solo fuori dal container (sviluppo). Nel
+        # container l'interfaccia è compilata e servita dalla stessa origine, e un npm run dev accanto passa dal proxy
+        # di Vite (stessa origine per il browser): lì lascerebbero solo leggere l'API e arrestare BioLoom a qualunque
+        # pagina sulla porta 5173.
+        dev_origins = () if os.environ.get("BIOLOOM_CONTAINER") == "1" else DEV_ORIGINS
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         resolved = paths or default_paths()
         resolved.ensure()  # la chiave generata va nella cartella dati
         app.state.auth = auth_config or auth.load(resolved.data)
+        app.state.allowed_hosts = guard.allowed_hosts()  # BIOLOOM_ALLOWED_HOSTS, letta all'avvio come BIOLOOM_AUTH
         app.state.core = build_core(resolved, server=app.state.auth.enabled)
         if app.state.auth.enabled and app.state.auth.generated:
             print(f"\n  Accesso protetto: chiave d'accesso generata in {resolved.data / 'access_key'}\n"
@@ -53,6 +64,10 @@ def create_app(paths: Optional[Paths] = None, frontend_dist: Optional[Path] = FR
             return JSONResponse(status_code=401, content={"error": {
                 "code": "auth_required", "message": "Accesso richiesto: inserisci la chiave d'accesso."}})
         return await call_next(request)
+
+    # Host (DNS rebinding), origine (CSRF) e iframe (clickjacking), core/guard. In Starlette l'ultimo middleware
+    # aggiunto è il più esterno: le richieste di altri siti si rifiutano prima del controllo della chiave d'accesso.
+    app.add_middleware(guard.RequestGuard, dev_origins=dev_origins)
 
     @app.exception_handler(AppError)
     async def app_error(_request: Request, exc: AppError):

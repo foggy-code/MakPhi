@@ -16,6 +16,23 @@ powershell -ExecutionPolicy Bypass -File programma\launcher\bioloom.ps1 -Azione 
 ./avvia-bioloom.sh prepara /Volumes/CHIAVETTA/BioLoom
 ```
 
+Per non diffondere per errore software con licenza e credenziali personali, la copia **non contiene**:
+
+- **i pacchetti di PROCHECK e ProSA II** (`programma/docker/vendor/`), che la licenza non permette di distribuire: resta
+  la cartella con il suo README. Per ricostruire le immagini con questi strumenti, per esempio dopo un aggiornamento,
+  rimetti i pacchetti nella cartella;
+- **chiavi e password**, salvo `-ConLicenze` / `--con-licenze`: `data/licenses/` (chiave di MODELLER, `LicenseDB` di
+  ProSA, `posta.env` con la password della posta) e `data/access_key` (chiave d'accesso del server). Sul computer di
+  destinazione le licenze si inseriscono da Impostazioni → Licenze; dopo aver caricato `LicenseDB`, riavvia BioLoom
+  con l'avviatore (**R**) perché applichi il MAC della licenza. `posta.env` va ricreato se serve
+  ([Avviso per email](4%20-%20Dati%20e%20privacy.md#avviso-per-email)). Con l'opzione, per una copia solo tua,
+  l'avviatore ricorda che la copia contiene chiavi personali e non va data ad altri.
+
+Le immagini della cartella `immagini/` contengono comunque i programmi installati (MODELLER e, se c'erano i pacchetti,
+PROCHECK e ProSA II): la copia è per uso personale, o del tuo gruppo se le licenze lo consentono, e non va
+redistribuita. Se rifai la copia su una chiavetta preparata con una versione precedente di BioLoom, l'avviatore segnala
+pacchetti e chiavi rimasti: cancellali prima di darla ad altri.
+
 Formatta la chiavetta in **exFAT**: si legge da Windows, macOS e Linux e non ha il limite di 4 GB del FAT32. Sul
 computer di destinazione basta Docker e un doppio clic sull'avviatore.
 
@@ -44,8 +61,10 @@ BioLoom gira negli stessi container del PC. Sul server cambia solo la configuraz
 ### Installazione
 
 ```bash
-# 1. copia la cartella di BioLoom sul server (git, rsync o la copia portatile con la cartella immagini/)
+# 1. copia la cartella di BioLoom sul server (git, rsync o la copia portatile con la cartella immagini/);
+#    da Windows (scp, WinSCP) i permessi di esecuzione si perdono: chmod li rimette (con git non serve)
 cd /opt/bioloom
+chmod +x avvia-bioloom.sh programma/launcher/*.sh
 
 # 2. prima esecuzione: crea server.env con una chiave d'accesso casuale
 ./avvia-bioloom.sh server
@@ -78,12 +97,14 @@ vecchio e senza `compose`. L'avviatore se ne accorge da solo: `./avvia-bioloom.s
 servono permessi di amministratore.
 
 ```bash
-# 1. sul tuo PC: copia portatile con le immagini (PROCHECK e ProSA non sono su GitHub)
+# 1. sul tuo PC: copia portatile senza dati; le immagini hanno già PROCHECK e ProSA (non sono su GitHub)
 powershell -ExecutionPolicy Bypass -File programma\launcher\bioloom.ps1 -Azione prepara -Destinazione D:\BioLoom_server -SenzaDati
 scp -r D:/BioLoom_server utente@server:~/bioloom
 
-# 2. sul server: la prima esecuzione crea server.env (dati in ~/bioloom/data, porta solo locale), la seconda avvia
-cd ~/bioloom && ./avvia-bioloom.sh server
+# 2. sul server: chmod rimette i permessi di esecuzione persi con scp da Windows; poi la prima esecuzione crea
+#    server.env (dati in ~/bioloom/data, porta solo locale) e la seconda avvia
+cd ~/bioloom && chmod +x avvia-bioloom.sh programma/launcher/*.sh
+./avvia-bioloom.sh server
 nano server.env
 ./avvia-bioloom.sh server
 
@@ -156,6 +177,12 @@ fino a 50.000 sequenze. Per stimare tempi e spazio sul server prima di partire c
   l'email di prova. Chiedi ai tecnici se il server può uscire verso un server SMTP esterno (porte 587 e 465) oppure
   quale relay interno usare.
 - **Script:** possono usare l'header `Authorization: Bearer <chiave>`.
+- **Richieste da altri siti:** le richieste che modificano i dati partite da pagine di altri siti vengono
+  rifiutate, e le pagine di BioLoom non si possono aprire dentro quelle di altri siti.
+- **Senza chiave d'accesso** (`BIOLOOM_AUTH=off`, sconsigliato su un server): BioLoom risponde solo a `localhost`
+  e `127.0.0.1`, che va bene con il tunnel SSH. Per aprirlo con il nome o l'indirizzo del server aggiungilo a
+  `BIOLOOM_ALLOWED_HOSTS` in `server.env` (più nomi separati da virgole; `*` = qualunque nome). Con
+  `BIOLOOM_AUTH=on` non serve.
 - **Tentativi sbagliati:** vengono rallentati progressivamente.
 - **Arresto:** dall'interfaccia è disabilitato (`BIOLOOM_ALLOW_SHUTDOWN=0`). Si arresta con
   `docker compose ... down`.
@@ -172,7 +199,9 @@ bioloom.example.org {
 ```
 
 Con HTTPS il cookie di sessione viene marcato `Secure`. BioLoom lo riconosce dall'header `X-Forwarded-Proto` del
-proxy: Caddy lo invia da solo, con nginx aggiungi `proxy_set_header X-Forwarded-Proto $scheme;`.
+proxy: Caddy lo invia da solo, con nginx aggiungi `proxy_set_header X-Forwarded-Proto $scheme;`. Con nginx aggiungi
+anche `proxy_set_header X-Forwarded-Host $http_host;`: serve ai browser vecchi, che non dicono da quale pagina parte
+una richiesta, per riconoscere quelle di BioLoom.
 
 Gli aggiornamenti in tempo reale dei job usano Server-Sent Events (`/api/jobs/events`, `/api/jobs/<id>/events`):
 connessioni lunghe su cui il server scrive man mano. Caddy le inoltra senza configurazione; nginx rispetta
@@ -206,7 +235,8 @@ all'utente che ha creato la cartella.
 ### Aggiornamento
 
 1. Sostituisci la cartella `programma/`, gli avviatori e `Guida/`, lasciando `data/` e `server.env`.
-2. Ricostruisci le immagini:
+2. Ricostruisci le immagini (con PROCHECK e ProSA solo se i pacchetti sono in `programma/docker/vendor/`: la copia
+   portatile e GitHub non li contengono):
 
    ```bash
    docker compose -f programma/launcher/compose.yml --env-file server.env build

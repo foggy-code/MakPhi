@@ -1,8 +1,8 @@
 """Licenze dei programmi esterni: chiave MODELLER, file LicenseDB di ProSA II, stato di PROCHECK.
 
-Le licenze stanno in `data/licenses/` (permessi 0600) e quindi viaggiano con la cartella dati:
-chiavetta, cartella del server o volume. Non entrano mai nell'immagine Docker né nelle risposte API
-(la chiave è sempre mascherata).
+Le licenze stanno in `data/licenses/` (permessi 0600) e quindi seguono la cartella dati del server o del volume;
+la copia portatile (avviatore, azione «prepara») le include solo con --con-licenze / -ConLicenze. Non entrano mai
+nell'immagine Docker né nelle risposte API (la chiave è sempre mascherata).
 
 - MODELLER: `modeller.key`, in alternativa la variabile d'ambiente MODELLER_KEY (server). La chiave
   viene passata ai sottoprocessi MODELLER con BIOLOOM_MODELLER_KEY e iniettata dal preambolo degli

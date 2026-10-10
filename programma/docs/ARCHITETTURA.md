@@ -161,7 +161,9 @@ pagine liberate per i dati nuovi.
   disco (cartella rinominata in `.deleting-<id>` prima del DELETE della riga) e dice se qualcosa è rimasto
   (`leftover`); vedi [Eliminazione di progetti e pulizia dei job](#eliminazione-di-progetti-e-pulizia-dei-job).
 - **Processi esterni:** ognuno ha il proprio gruppo di processi; annullamento e timeout terminano anche i
-  figli (mafft e PROCHECK sono script). Il timeout dei job vale per tutti gli strumenti. I processi di calcolo
+  figli (mafft e PROCHECK sono script), e così un errore durante la lettura dell'output (log o progresso su disco
+  pieno) prima che arrivi all'handler: nessun processo resta orfano fuori dal budget di CPU. Il timeout dei job vale
+  per tutti gli strumenti. I processi di calcolo
   prendono gli slot del budget di CPU condiviso fra i job (vedi [Coda con priorità e budget di
   CPU](#coda-con-priorità-e-budget-di-cpu)).
 - **MMseqs2:** il database (≈ 140 MB) sta nei dati. L'indice k-mer (≈ 1,5 GB) sta nel volume `/cache` di
@@ -220,7 +222,7 @@ con il server solo con il linger attivo.
 | Modulo | Contenuto |
 |---|---|
 | `__main__` | avvio del server (`python -m bioloom`, `--host`, `--port`, `--no-browser`) e comando `rerun` |
-| `app` | applicazione FastAPI: rotte, middleware d'accesso, interfaccia compilata (`frontend/dist`) |
+| `app` | applicazione FastAPI: rotte, middleware (Host e origine, chiave d'accesso), interfaccia compilata (`frontend/dist`) |
 | `cli` | comandi oltre al server: `python bioloom.py rerun` (vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione)) |
 | `config` | percorsi (`Paths`), impostazioni utente (`UserSettings`, `SettingsStore`), limite degli upload |
 | `selftest` | verifica dell'installazione da riga di comando (`python -m bioloom.selftest`) |
@@ -238,6 +240,7 @@ con il server solo con il linger attivo.
 | `errors` | errori applicativi con codice e stato HTTP, serializzati in modo uniforme |
 | `eta` | stima del tempo residuo |
 | `events` | notifiche in-process dei cambiamenti dei job |
+| `guard` | protezione dalle richieste di altri siti: header Host (DNS rebinding), origine (CSRF), niente iframe (clickjacking), vedi [Sicurezza e privacy](#sicurezza-e-privacy) |
 | `jobs` | `JobManager`, `JobContext`, scratch e salvataggio definitivo, eliminazione atomica sul disco (`.deleting-<id>`) |
 | `parallel` | passi indipendenti di un calcolo su un pool locale di thread (`Steps`, vedi [Prestazioni](#prestazioni)) |
 | `storage` | scritture atomiche, `safe_join`, identificatori validati, rimozione di cartelle con esito (`remove_tree`), dimensioni con un tempo massimo (`dir_size_until`) |
@@ -384,7 +387,8 @@ Tutti i calcoli passano dal `JobManager` (priorità di ogni tipo nella [coda](#c
   predefinito 120);
 - al riavvio i job rimasti attivi vengono marcati come falliti (nessuno stato "fantasma"), con fase
   "Interrotto"; gli elementi di pipeline non conclusi diventano falliti con lo stesso motivo;
-- lo stato finale si scrive anche se il salvataggio dei file non riesce (disco dati pieno): il job finisce
+- lo stato finale si scrive anche se il salvataggio dei file non riesce (disco dati pieno) o se la cartella di
+  lavoro nello scratch non si crea (scratch pieno o non scrivibile, codice `scratch_error`): il job finisce
   `failed` con il motivo invece di restare `running` fino al riavvio;
 - un job fallito o annullato si può rimettere in coda (`JobManager.requeue`), oggi usato dalle pipeline; da
   `completed` solo se il chiamante lo chiede esplicitamente (`statuses`), come la pipeline con elementi falliti;
@@ -3603,6 +3607,26 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 - **Server:** con `BIOLOOM_AUTH=on` tutte le API (e `/docs`) richiedono la chiave d'accesso, tramite
   cookie HttpOnly firmato o header Bearer, con ritardo sui tentativi falliti; il middleware controlla anche le rotte di
   streaming prima che il flusso parta.
+- **Richieste di altri siti (CSRF):** la porta su `127.0.0.1` non basta, perché il browser che apre BioLoom apre anche
+  altri siti, e un `fetch` con `mode: "no-cors"` o un form arrivano senza preflight CORS (arresto, aggiornamento dei
+  database, upload). `core/guard`, il middleware più esterno (rifiuta prima della chiave d'accesso), controlla in
+  entrambe le modalità le richieste che modificano (tutti i metodi tranne GET, HEAD e OPTIONS), in quest'ordine:
+  `Origin` dello sviluppo con Vite (`dev_origins` di `create_app`, le stesse di CORS; solo fuori dal container,
+  dove `BIOLOOM_CONTAINER=1` le spegne) → ammessa; con `Sec-Fetch-Site` passano solo `same-origin` e `none` (punto di
+  vista del browser: vale anche dietro un reverse proxy); altrimenti con `Origin` servono nome e porta dell'header
+  `Host` o del primo `X-Forwarded-Host`, con la porta predefinita dello schema se manca (`null` mai); senza nessuno
+  dei due (curl, script, avviatori, test) la richiesta passa. Rifiuto: 403 `cross_origin`. Il frontend usa percorsi
+  relativi, quindi la stessa origine, anche con `npm run dev` (il proxy di Vite conserva l'header `Host`).
+- **DNS rebinding:** senza accesso protetto un dominio ostile risolto su 127.0.0.1 diventerebbe «stessa origine» e
+  leggerebbe tutta l'API. `core/guard` ammette solo l'header `Host` con nome (la porta non conta: il proxy di Vite
+  inoltra `localhost:5173`) `127.0.0.1`, `localhost`, `::1` o in `BIOLOOM_ALLOWED_HOSTS` (virgole o spazi, senza
+  maiuscole, anche come URL; `*` = tutti; letta all'avvio, come `BIOLOOM_AUTH`), altrimenti 400 `host_not_allowed`;
+  `Host` assente (client non browser) e `/api/health` passano. Con `BIOLOOM_AUTH=on` il controllo è spento:
+  proteggono già chiave e cookie, e il server si raggiunge per IP, nome o reverse proxy.
+- **Iframe (clickjacking):** una pagina di BioLoom in un iframe trasparente di un altro sito invierebbe le richieste
+  come stessa origine e passerebbe il controllo dell'origine (due clic su «Arresta»). `core/guard` aggiunge a ogni
+  risposta, anche ai rifiuti, `X-Frame-Options: DENY` e `Content-Security-Policy: frame-ancestors 'none'`, salvo una
+  CSP con `frame-ancestors` già presente (report HTML). Il frontend non mette mai in un iframe le proprie pagine.
 - **Cookie dietro un reverse proxy:** il cookie di sessione è `Secure` se la richiesta arriva in HTTPS. Vale anche
   quando un proxy TLS lo dichiara con `X-Forwarded-Proto: https` (`api/auth._https`). uvicorn si fida degli header
   inoltrati solo da 127.0.0.1, e il proxy raggiunge il container dalla rete di Docker. L'header conta solo per
@@ -3659,12 +3683,12 @@ analisi strutturali, la rifinitura e la mutagenesi non usano la rete; l'interfac
 
 ## Test
 
-**Conteggi** (contati il 9 ottobre 2026 con `pytest --collect-only -q` in `backend/` e con `npx vitest list` in
+**Conteggi** (contati il 10 ottobre 2026 con `pytest --collect-only -q` in `backend/` e con `npx vitest list` in
 `frontend/`):
 
 | Suite | File | Test |
 |---|---|---|
-| backend, `backend/tests` (pytest) | 49 | 1293 nella suite predefinita (48 file), più i 4 di `test_remote.py` (marcatore `network`, esclusi da `addopts`: `pytest -m network`) |
+| backend, `backend/tests` (pytest) | 51 | 1318 nella suite predefinita (50 file), più i 4 di `test_remote.py` (marcatore `network`, esclusi da `addopts`: `pytest -m network`) |
 | frontend, `frontend/src/**/*.test.ts(x)` (vitest) | 86 | 737 |
 
 I test che richiedono MODELLER, PROCHECK, ProSA o gli strumenti dell'immagine di sviluppo (fpocket, PDB2PQR, APBS,
@@ -3697,11 +3721,13 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
   script validi, livelli di raffinamento con impostazioni distinte e predefinito di MODELLER, opzioni non valide,
   preparazione dei template, modellazione end-to-end); `test_search.py` (5: parsing di BLAST, client NCBI simulato,
   nuovi tentativi su RCSB); `test_synthetic_data.py` (2: le strutture sintetiche restano valide).
-- **Job e ripresa:** `test_jobs.py` (12) e `test_pipeline_resume.py` (13): successo, errori, annullamento e timeout,
-  riavvio simulato; solo gli elementi non conclusi, ambito "solo i falliti", pipeline completate con falliti, file
-  vecchi eliminati, richieste concorrenti, nuovo annullamento, progresso, elementi completati solo a file salvati (disco
-  pieno, modelli mancanti), eliminazione concorrente a una ripresa, stato finale scritto anche se il salvataggio non
-  riesce.
+- **Job e ripresa:** `test_jobs.py` (12), `test_jobs_robustezza.py` (8) e `test_pipeline_resume.py` (13): successo,
+  errori, annullamento e timeout, riavvio simulato; scratch non scrivibile e errori nella preparazione del job (stato
+  finale `failed`, poi eliminazione e ripresa), processo esterno terminato se la lettura del suo output si interrompe,
+  annullamento che arriva mentre un processo si registra; solo gli elementi non conclusi, ambito "solo i falliti",
+  pipeline completate con falliti, file vecchi eliminati, richieste concorrenti, nuovo annullamento, progresso,
+  elementi completati solo a file salvati (disco pieno, modelli mancanti), eliminazione concorrente a una ripresa,
+  stato finale scritto anche se il salvataggio non riesce.
 - **Flusso dei dati** (`test_dataflow.py`, 11): scratch, salvataggio definitivo, intermedi, blocco SQLite (seconda
   istanza), pulizia, gruppi di processi, archivi su file temporanei.
 - **Eliminazione di progetti e pulizia dei job** (`test_cleanup.py`, 98; job inseriti direttamente nel database con una
@@ -3742,6 +3768,11 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
     senza i resti, rotte (400, non 404 o 405) e chiave d'accesso (401).
 - **Licenze e accesso** (`test_licenses_auth.py`, 11): chiave MODELLER (fonti, formato, prova prima del salvataggio),
   LicenseDB di ProSA, chiave d'accesso, modalità server, cookie `Secure` dietro un proxy HTTPS, arresto consentito dal solo avviatore.
+- **Richieste di altri siti** (`test_guard.py`, 17): header Host (loopback con qualunque porta, IPv6,
+  `BIOLOOM_ALLOWED_HOSTS` anche come URL, `*`, spento con l'accesso protetto, `/api/health` esente), origine
+  (`Sec-Fetch-Site`, `Origin` uguale all'Host o a `X-Forwarded-Host`, `null`, origini dello sviluppo solo fuori dal
+  container), arresto da un altro sito rifiutato senza arrestare, intestazioni contro gli iframe, guardia più esterna
+  della chiave d'accesso.
 - **Strumenti esterni** (`test_engines_extra.py`, 10): parser di PROCHECK e ProSA tarati su output reali di 1UBQ,
   MMseqs2, QMEAN locale con worker simulato, strumenti mancanti come avvisi, verifica dell'installazione (anche fpocket,
   PDB2PQR + APBS e OpenMM: "ok" se ci sono, "non disponibile" altrimenti).
