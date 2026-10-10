@@ -489,7 +489,7 @@ def test_consensus_route_rejects_qmean_of_a_replaced_template(client, monkeypatc
     lines = (DATA / "1UBQ.pdb").read_text().splitlines(keepends=True)
     i = next(n for n, line in enumerate(lines) if line.startswith("ATOM"))
     lines[i] = lines[i][:30] + f"{float(lines[i][30:38]) + 0.5:8.3f}" + lines[i][38:]
-    library.save_upload("X.pdb", "".join(lines).encode())
+    library.save_upload("X.pdb", "".join(lines).encode(), overwrite=True)
     other = _run(client, "/api/qmean", {"source": {"type": "template", "id": "X"}})
     r = client.get(f"/api/jobs/{qjob['id']}/consensus", params={"qmean_job": other["id"]})
     assert r.status_code == 400 and r.json()["error"]["code"] == "qmean_source_mismatch"

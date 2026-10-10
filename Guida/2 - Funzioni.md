@@ -29,7 +29,10 @@ va letto come un'indicazione.
 ## Template
 
 - **Motori di ricerca:** **RCSB** (predefinito), **NCBI BLAST**, **AlphaFold DB** (online); **BLAST+** e **MMseqs2** sul
-  database locale pdbaa, che si scarica e si indicizza da Impostazioni → Database.
+  database locale pdbaa, che si scarica e si indicizza da Impostazioni → Database. **Scarica/Aggiorna da NCBI**,
+  **Prepara MMseqs2** e **Crea indice veloce** girano uno alla volta, anche se li lancia più di un utente: chi arriva
+  dopo resta in coda («In coda: un altro job sta aggiornando pdbaa o il database MMseqs2»), e ogni database si
+  sostituisce solo a operazione finita.
 - **Punteggio 0–100** di ogni template (colonna **Punteggio**, ordinata per punteggio): media pesata di identità
   (confrontata con la zona crepuscolare di Rost, che dipende dalla lunghezza allineata), copertura del bersaglio,
   E-value, risoluzione (o pLDDT per i modelli predetti), R-free, metodo, lacune dell'allineamento e data. Fasce buona
@@ -51,6 +54,13 @@ va letto come un'indicazione.
 - **Libreria template:** download da RCSB e da AlphaFold DB, caricamento di file, catene, residui mancanti, ligandi
   classificati, struttura secondaria e 3D. Per le strutture del PDB elenca gli **assemblaggi biologici** dichiarati nel
   file: **Importa come template** crea `<ID>_ASM<n>` con le catene dell'assemblaggio (operatori di simmetria applicati).
+- **Sostituire un template:** un file caricato prende l'id dal nome (`1UBQ.pdb` → 1UBQ). Se nella libreria c'è già un
+  template con quell'id, BioLoom non lo sostituisce da solo: chiede conferma, dicendo quanti job lo usano.
+  **Sostituisci** mette al suo posto il nuovo file, anche in un altro formato (.pdb o .cif), e ne rifà l'analisi: i
+  calcoli successivi useranno il nuovo file. **Annulla** lascia la libreria com'è. Se il nuovo file non è una struttura
+  leggibile, il vecchio template resta intatto. Vale per la pagina Libreria template e per **Da file** del selettore dei
+  template (Modellazione, Allineamenti, Pipeline, Editor PIR); i download da RCSB e da AlphaFold DB non sostituiscono mai
+  un template già presente.
 - **Ricerche già fatte:** una ricerca con gli stessi dati e parametri non si rifà (nota **dalla cache (data)**; vedi
   [Dati e privacy](4%20-%20Dati%20e%20privacy.md)).
 
@@ -334,3 +344,7 @@ per ogni sequenza completata (cartella `report/`, senza vista 3D).
 - **Tasti:** `?` (o **Tasti** nella barra laterale) elenca le scorciatoie: `g` e poi una lettera per le pagine principali
   (`g s` Sequenze, `g j` Job, `g q` Qualità…). Mentre scrivi in un campo valgono solo Ctrl K ed Esc.
 - **Schermi stretti:** la barra laterale si apre dal pulsante del menu (☰) in alto a sinistra.
+- **Errori dell'interfaccia:** se una pagina non si riesce a disegnare compare il messaggio d'errore, con **Ricarica la
+  pagina**, **Riprova** e **Copia i dettagli** (da allegare a una segnalazione), invece di una pagina bianca; i calcoli
+  in corso continuano sul server. Dopo un aggiornamento di BioLoom una scheda rimasta aperta con l'interfaccia vecchia si
+  ricarica da sola, al più una volta al minuto; se il browser blocca i dati dei siti non lo fa, e resta il pulsante.

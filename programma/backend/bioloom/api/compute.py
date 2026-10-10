@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal, Optional
 
+import anyio.to_thread
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel, Field
@@ -237,11 +238,16 @@ async def upload_for_quality(file: UploadFile = File(...), project_id: Optional[
                              core: Core = Depends(get_core)) -> dict:
     from .files import store_structure
 
-    stored = store_structure(core, file.filename or "", await read_upload(file))
-    params = {"project_id": project_id, "source": stored["source"], "dope": dope, "procheck": procheck,
-              "prosa": prosa}
-    return core.jobs.submit("quality", params, project_id=_project(core, project_id),
-                            title=f"Qualità · {stored['label']}")
+    data = await read_upload(file)
+
+    def submit() -> dict:  # lettura della struttura e scritture su disco e database: in un thread, fuori dal loop
+        stored = store_structure(core, file.filename or "", data)
+        params = {"project_id": project_id, "source": stored["source"], "dope": dope, "procheck": procheck,
+                  "prosa": prosa}
+        return core.jobs.submit("quality", params, project_id=_project(core, project_id),
+                                title=f"Qualità · {stored['label']}")
+
+    return await anyio.to_thread.run_sync(submit)
 
 
 @router.post("/qmean")

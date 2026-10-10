@@ -33,8 +33,7 @@ export function PipelineMatrix({ jobId, running, onOpen }: {
   useEffect(() => {
     if (wasRunning.current !== running) reload();
     wasRunning.current = running;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running]);
+  }, [running, reload]);
   const [metric, setMetric] = useState<MatrixMetric>("zdope");
   const [page, setPage] = useState(1);
   const metrics = useMemo(() => (data ? availableMetrics(data) : []), [data]);

@@ -507,7 +507,7 @@ export function RamachandranPlot({ report, onSelect, selected }: {
     };
     follow(phi, target.phi);
     follow(psi, target.psi);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- solo al cambio di selezione: spostare la vista a mano non la riporta indietro
   }, [target]);
 
   const pick = (p: RamaPoint) => {

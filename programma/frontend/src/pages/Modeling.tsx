@@ -449,7 +449,7 @@ export default function Modeling() {
       extended_quality: quality !== "none" && extended,
       ...(mode === "complex" && complexCheck.request ? { complex: complexCheck.request } : {}),
     };
-  }, [projectId, mode, target, templates, nModels, refinement, seed, loopOn, loopModels, loopRegions, restraints, plddtTrim, plddtMin, ligandsOn, ligandRefs, quality, extended, activeTemplates, complexState, complexCheck]);
+  }, [projectId, mode, target, nModels, refinement, seed, loopOn, loopModels, loopRegions, restraints, plddtTrim, plddtMin, ligandsOn, ligandRefs, quality, extended, activeTemplates, complexState, complexCheck]);
   // Controlli preventivi (F8a), compresi disordine e domini fuori dalla copertura (F5.5): accessione dalla sequenza del
   // progetto o dall'intestazione sp|ACC|…
   // nella modalità Complesso niente avvisi di copertura (una sequenza per catena): solo i controlli del corpo
@@ -479,7 +479,7 @@ export default function Modeling() {
       setMode("pir");
       setDocId(doc);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- link letto all'apertura e all'arrivo del progetto: rileggerlo a ogni cambio dell'URL annullerebbe le modifiche
   }, [projectId]);
 
   useEffect(() => {

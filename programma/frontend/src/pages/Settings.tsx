@@ -34,8 +34,7 @@ export default function SettingsPage() {
       setSaved(s);
     }).catch(toast.error);
     api.systemInfo().then(setInfo).catch(toast.error);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [toast]);
   if (!form) return <div className="empty"><Spinner label="Caricamento delle impostazioni" /></div>;
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setForm({ ...form, [k]: v });
   const dirty = !!saved && JSON.stringify(form) !== JSON.stringify(saved);

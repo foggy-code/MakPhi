@@ -101,7 +101,7 @@ export function ComplexInput({ value, onChange }: { value: ComplexState; onChang
     if (!analysis || analysis.id !== value.templateId) return;
     const rows = rowsForChains(analysis.chains, value.rows);
     if (rows.length !== value.rows.length || rows.some((r, i) => r.chain !== value.rows[i]?.chain || r.residues !== value.rows[i]?.residues)) onChange({ ...value, rows });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- solo all'arrivo dell'analisi, non a ogni modifica delle righe
   }, [analysis]);
   useEffect(() => setPreviewJob(null), [value.templateId]);
 

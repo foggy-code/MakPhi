@@ -46,14 +46,46 @@ Formatta la chiavetta in **exFAT**: si legge da Windows, macOS e Linux e non ha 
 computer di destinazione basta Docker e un doppio clic sull'avviatore.
 
 - **Mac Apple Silicon:** i container girano in emulazione x86 (MODELLER, ProSA e QMEAN esistono solo per x86), quindi
-  più lenti.
+  più lenti; conviene l'emulazione con Rosetta di Docker Desktop, e ProSA potrebbe non funzionare
+  ([Primo avvio](1%20-%20Primo%20avvio.md#mac-con-processore-apple)).
 - **Linux:** l'utente deve poter usare Docker (gruppo `docker`).
+- **Un BioLoom alla volta:** se sul computer di destinazione è acceso un BioLoom partito da un'altra cartella (per
+  esempio quello installato), l'avviatore chiede se arrestarlo
+  ([Primo avvio](1%20-%20Primo%20avvio.md#un-bioloom-alla-volta)).
+
+## Copia di sicurezza dell'immagine QMEAN
+
+L'immagine `bioloom-qmean` si costruisce sopra l'immagine ufficiale di QMEAN, fissata per digest, che BioLoom scarica dal
+registro del gruppo Schwede (SIB e Biozentrum di Basilea, `registry.scicore.unibas.ch`). Se quel registro la togliesse o
+non fosse più raggiungibile, l'immagine di BioLoom per QMEAN non si potrebbe più costruire, né con l'avviatore né a mano:
+QMEAN locale resterebbe solo sui computer che l'hanno già. Conservane quindi una copia (circa 2,2 GB), su un disco
+diverso da quello del computer:
+
+- il file `immagini/bioloom-qmean-<versione>.tar` di una copia portatile (`prepara` senza `-SenzaQmean` /
+  `--senza-qmean`);
+- oppure, dove QMEAN locale funziona, un file salvato a mano dalla cartella di BioLoom (la versione è quella di
+  `programma/launcher/VERSION`). La cartella `immagini/` c'è solo nelle copie portatili e `docker save` non la crea:
+
+  ```bash
+  mkdir -p immagini                                                       # in PowerShell: mkdir -Force immagini
+  docker save -o immagini/bioloom-qmean-4.2.0.tar bioloom-qmean:4.2.0     # con Podman: podman save -o ...
+  ```
+
+Per ricaricarla metti il file nella cartella `immagini/` di BioLoom: l'avviatore lo carica da solo all'avvio, se QMEAN
+locale è configurato e l'immagine manca, e l'azione `aggiorna` lo carica prima di provare a costruirla. A mano:
+`docker load -i immagini/bioloom-qmean-4.2.0.tar` (con Podman `podman load -i …`).
+
+Il file contiene `bioloom-qmean:<versione>` e serve a quella versione di BioLoom: a ogni nuova versione salva il nuovo
+file, finché il registro risponde. Se il registro non c'è più e la nuova versione non ha cambiato il worker di QMEAN
+(la cartella `programma/docker/qmean/` è uguale nelle due versioni), l'immagine precedente si riusa dandole il nome
+nuovo: `docker tag bioloom-qmean:<vecchia> bioloom-qmean:<nuova>`. Come le altre immagini contiene programmi con le
+loro licenze ([Avvisi di terze parti](../THIRD_PARTY_NOTICES.md)): è per uso personale e non va redistribuita.
 
 ## Server
 
 BioLoom gira negli stessi container del PC. Sul server cambia solo la configurazione (`server.env`):
 
-- ascolto sulla rete;
+- porta aperta solo sul server, raggiunta dagli altri computer con un reverse proxy HTTPS o un tunnel SSH;
 - accesso con chiave;
 - riavvio automatico;
 - cartella dati e database scelti dall'amministratore.
@@ -75,10 +107,11 @@ BioLoom gira negli stessi container del PC. Sul server cambia solo la configuraz
 cd /opt/bioloom
 chmod +x avvia-bioloom.sh programma/launcher/*.sh
 
-# 2. prima esecuzione: crea server.env con una chiave d'accesso casuale
+# 2. prima esecuzione: crea server.env con una chiave d'accesso casuale e la porta aperta solo sul server
 ./avvia-bioloom.sh server
 
 # 3. modifica server.env
+#    BIOLOOM_BIND=127.0.0.1                     solo dal server (predefinito): dagli altri computer con proxy o tunnel
 #    BIOLOOM_DATA_PATH=/srv/bioloom/data        cartella dati
 #    UNICLUST_PATH=/mnt/db                      cartella con uno o più database UniClust30/UniRef30 (entro 3 livelli)
 #    QMTL_PATH=/mnt/db/qmtl                     facoltativa (QMEANDisCo)
@@ -98,12 +131,49 @@ COMPOSE_PROFILES=qmean BIOLOOM_QMEAN_URL=http://qmean:8080 \
   docker compose -f programma/launcher/compose.yml --env-file server.env up -d   # con QMEAN locale
 ```
 
+### Accesso dagli altri computer
+
+`server.env` nasce con `BIOLOOM_BIND=127.0.0.1`: la porta di BioLoom è aperta solo sul server. Dagli altri computer ci si
+arriva in due modi, senza aprire porte nel firewall:
+
+- **reverse proxy HTTPS** sullo stesso server (per esempio Caddy, [sotto](#https)): un indirizzo stabile e il traffico
+  cifrato, adatto a un gruppo;
+- **tunnel SSH**, per chi ha un account sul server: `ssh -N -L 8765:127.0.0.1:8765 utente@server` dal proprio PC, poi
+  `http://localhost:8765`. L'avviatore ricorda il comando alla fine dell'avvio.
+
+Con `BIOLOOM_BIND=0.0.0.0` BioLoom risponde a tutta la rete, ma va usato solo su una rete fidata:
+
+- BioLoom parla HTTP, quindi la chiave d'accesso e il cookie di sessione viaggiano in chiaro;
+- Docker pubblica la porta con regole proprie, che passano prima di quelle di firewalld e ufw: il firewall del server non
+  la protegge.
+
+Con un valore diverso da `127.0.0.1` (o `localhost`, `::1`) l'avviatore lo segnala a ogni avvio, senza fermarsi
+(«BIOLOOM_BIND=0.0.0.0: BioLoom è raggiungibile dalla rete in HTTP, con chiave d'accesso e cookie in chiaro…»). Un
+`server.env` creato da una versione precedente di BioLoom ha ancora `0.0.0.0`: resta così, con l'avviso, finché non lo
+cambi e riavvii con `./avvia-bioloom.sh server`. Con Podman senza root la porta passa da un processo del tuo utente e il
+firewall la filtra come le altre: l'avviso sul firewall compare solo con root.
+
+### Un BioLoom alla volta
+
+Come sul PC ([Primo avvio](1%20-%20Primo%20avvio.md#un-bioloom-alla-volta)), sul server gira un BioLoom alla volta,
+perché le copie usano gli stessi container. `./avvia-bioloom.sh server` da un'altra cartella (e `aggiorna`, quando
+riavvia) dice da dove è partito il BioLoom acceso e chiede se arrestarlo; con `--no-menu`, o senza un terminale da cui
+rispondere, si ferma con un errore e non tocca nulla. `arresta` ferma invece il BioLoom acceso, da qualunque cartella sia
+partito, e lo dice; `stato`, `log` e `verifica` lo segnalano. Con Podman i container ricordano la cartella da cui sono
+partiti (per quelli creati da versioni precedenti dell'avviatore vale la cartella dati) e, se l'altro BioLoom va
+arrestato, si fermano anche le unità systemd di `servizio`, che l'avvio rigenera per i container nuovi.
+
 ### Server con Podman (senza Docker)
 
 Su molti server Red Hat il comando `docker` è in realtà **Podman** (avviso «Emulate Docker CLI using podman»), spesso
 vecchio e senza `compose`. L'avviatore se ne accorge da solo: `./avvia-bioloom.sh server` (e `arresta`, `stato`, `log`,
 `verifica`, `aggiorna`) usa allora `programma/launcher/bioloom-podman.sh`, che avvia gli stessi container con
-`podman run`. Non servono permessi di amministratore.
+`podman run`. Non servono permessi di amministratore. Lì l'avvio dal desktop (`./avvia-bioloom.sh` senza azione) non
+parte e l'avviatore indica le due strade: su un PC installare Docker Desktop o Docker Engine con il plugin compose
+([Primo avvio](1%20-%20Primo%20avvio.md)), su un server con solo Podman `./avvia-bioloom.sh server`. `arresta`,
+`stato`, `log` e `verifica` funzionano anche senza `server.env` (da una copia nuova `arresta` ferma il BioLoom acceso,
+da qualunque cartella sia partito); `aggiorna` senza `server.env` chiede di crearlo prima con
+`./avvia-bioloom.sh server`.
 
 ```bash
 # 1. sul tuo PC: copia portatile senza dati; le immagini hanno già PROCHECK e ProSA (non sono su GitHub)
@@ -121,8 +191,12 @@ nano server.env
 ssh -N -L 8765:127.0.0.1:8765 utente@server
 ```
 
-- **Accesso:** con Podman `server.env` nasce con `BIOLOOM_BIND=127.0.0.1`: BioLoom è raggiungibile solo dal server, e
-  dal tuo PC con il tunnel. Non serve aprire porte nel firewall né HTTPS.
+- **Accesso:** come con Docker, `server.env` nasce con `BIOLOOM_BIND=127.0.0.1`: BioLoom è raggiungibile solo dal
+  server, e dal tuo PC con il tunnel. Non serve aprire porte nel firewall né HTTPS.
+- **Spazio delle immagini:** se Podman le archivia con il driver vfs l'avviatore lo segnala; conviene passare a
+  fuse-overlayfs ([sotto](#podman-spazio-delle-immagini-vfs-e-fuse-overlayfs)).
+- **Senza domande:** con `--no-menu` (`./avvia-bioloom.sh server --no-menu`, oppure `bioloom-podman.sh --no-menu`)
+  l'avviatore non chiede nulla, per esempio negli script.
 - **File:** i file della cartella dati restano del tuo utente.
 - **ProSA:** Podman senza root non può assegnare al container il MAC della licenza, quindi l'analisi prosegue senza
   ProSA (PROCHECK, DOPE e le altre misure restano) e l'avviatore non lega la licenza al server.
@@ -131,6 +205,33 @@ ssh -N -L 8765:127.0.0.1:8765 utente@server
   farli ripartire con il server, l'amministratore attiva il linger (`loginctl enable-linger <utente>`); poi
   `programma/launcher/bioloom-podman.sh servizio` installa le unità systemd. Senza linger, dopo un riavvio del server
   rilancia `./avvia-bioloom.sh server`.
+
+### Podman: spazio delle immagini (vfs e fuse-overlayfs)
+
+Podman senza root archivia le immagini con il driver **overlay** se c'è `fuse-overlayfs`, altrimenti con **vfs**, che
+copia per intero ogni strato: le immagini di BioLoom (circa 3 GB) occupano allora molte volte il loro spazio, e caricarle
+è lento. All'avvio e con `aggiorna` l'avviatore controlla il driver e con vfs lo segnala, senza fermarsi («Podman
+archivia le immagini con il driver vfs…»). Per passare a overlay:
+
+1. l'amministratore installa il pacchetto (RHEL 8: `sudo dnf install fuse-overlayfs`);
+2. arresta BioLoom (`./avvia-bioloom.sh arresta`) e svuota l'archivio fatto con vfs, che Podman non converte:
+   `podman system reset` cancella **tutte** le immagini, i container e i volumi Podman del tuo utente, anche di altri
+   programmi. La cartella dati di BioLoom non si tocca; si perdono l'indice veloce MMseqs2, la copia locale degli
+   indici di UniClust30 e i `cs219` convertiti per i database HH-suite 2, che si rifanno da Impostazioni → Database
+   (Copia indici, Converti);
+3. scrivi `~/.config/containers/storage.conf`:
+
+   ```toml
+   [storage]
+   driver = "overlay"
+
+   [storage.options.overlay]
+   mount_program = "/usr/bin/fuse-overlayfs"
+   ```
+
+4. `podman info --format '{{.Store.GraphDriverName}}'` deve dire `overlay`; poi `./avvia-bioloom.sh server` ricarica le
+   immagini dalla cartella `immagini/` (se manca le ricostruisce, e se sul server mancano i pacchetti di PROCHECK e
+   ProSA la nuova immagine ne è priva).
 
 ### Pipeline grandi
 
@@ -199,7 +300,7 @@ fino a 50.000 sequenze. Per stimare tempi e spazio sul server prima di partire c
 ### HTTPS
 
 BioLoom parla HTTP. Per l'accesso da Internet mettilo dietro un reverse proxy con certificato, ad esempio
-Caddy. Imposta `BIOLOOM_BIND=127.0.0.1` in `server.env`, così la porta è raggiungibile solo dal proxy:
+Caddy. Con `BIOLOOM_BIND=127.0.0.1`, il valore predefinito di `server.env`, la porta è raggiungibile solo dal proxy:
 
 ```
 bioloom.example.org {

@@ -36,7 +36,7 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []) {
       })
       .catch((e) => id === seq.current && setError(e instanceof ApiError ? e : new ApiError(String(e), 0, "error")))
       .finally(() => id === seq.current && setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- le dipendenze di fn le dichiara chi chiama useAsync
   }, deps);
   useEffect(() => {
     reload();

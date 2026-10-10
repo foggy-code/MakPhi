@@ -268,10 +268,12 @@ export const api = {
   fetchTemplate: (pdb_id: string, format = "pdb") => post<TemplateItem & { cached: boolean }>("/api/templates/fetch", { pdb_id, format }),
   /** modello di AlphaFold DB per accessione UniProt (o id AF-<ACC>-F<n>): l'accessione va a EBI */
   fetchAlphaFold: (accession: string) => post<TemplateItem & { cached: boolean }>("/api/templates/alphafold", { accession }),
-  uploadTemplate: (file: File, templateId?: string) => {
+  /** un id già in libreria risponde 409 `template_exists`, salvo con `overwrite` (sostituisce il file) */
+  uploadTemplate: (file: File, opts: { templateId?: string; overwrite?: boolean } = {}) => {
     const form = new FormData();
     form.append("file", file);
-    if (templateId) form.append("template_id", templateId);
+    if (opts.templateId) form.append("template_id", opts.templateId);
+    if (opts.overwrite) form.append("overwrite", "true");
     return request<TemplateItem>("POST", "/api/templates/upload", form, true);
   },
   template: (id: string) => get<TemplateAnalysis>(`/api/templates/${enc(id)}`),

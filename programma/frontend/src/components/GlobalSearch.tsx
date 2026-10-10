@@ -69,7 +69,7 @@ export function GlobalSearch({ onClose }: { onClose: () => void }) {
       clearTimeout(timer);
     };
     // la chiave riassume testo, etichetta e tipi: spazi o maiuscole in più non rifanno la richiesta
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- key riassume testo, etichetta e tipi (vedi sopra)
   }, [key]);
 
   useEffect(() => {
@@ -113,7 +113,7 @@ export function GlobalSearch({ onClose }: { onClose: () => void }) {
     if (!pendingEnter || !answer || answer.key !== key) return;
     setPendingEnter(false);
     if (flat.length) open(flat[0].item);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- flat deriva da answer; open è la funzione del disegno attuale
   }, [answer, pendingEnter, key]);
 
   const groups = result?.groups ?? [];

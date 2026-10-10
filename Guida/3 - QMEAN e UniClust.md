@@ -30,3 +30,7 @@ esterno.
 - **Fallback facoltativo su SWISS-MODEL:** se QMEAN locale non è disponibile (disco scollegato) o non riesce, il modello
   può essere inviato a SWISS-MODEL. Si attiva in Impostazioni → Generale oppure per il singolo calcolo, e richiede il
   consenso all'invio e la tua email. Il risultato dice sempre dove è stato calcolato e perché.
+- **Copia di sicurezza dell'immagine:** l'immagine di QMEAN si costruisce da quella ufficiale, scaricata dal registro
+  del SIB: se sparisse da lì, non si potrebbe più costruire. Conserva il file `bioloom-qmean-<versione>.tar` della copia
+  portatile
+  ([Copia di sicurezza dell'immagine QMEAN](5%20-%20Chiavetta%20e%20server.md#copia-di-sicurezza-dellimmagine-qmean)).

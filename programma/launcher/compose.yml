@@ -3,7 +3,8 @@
 #
 # Variabili principali (tutte facoltative):
 #   BIOLOOM_PORT        porta sul computer (8765)
-#   BIOLOOM_BIND        127.0.0.1 = solo questo computer; 0.0.0.0 = rete (server, con BIOLOOM_AUTH=on)
+#   BIOLOOM_BIND        127.0.0.1 = solo questo computer; 0.0.0.0 = rete (server, con BIOLOOM_AUTH=on), ma in HTTP e
+#                       con la porta che scavalca il firewall: meglio 127.0.0.1 dietro un reverse proxy HTTPS
 #   BIOLOOM_ALLOWED_HOSTS  senza BIOLOOM_AUTH: nomi con cui aprire BioLoom oltre a localhost e 127.0.0.1 ("*" = tutti)
 #   BIOLOOM_DATA_PATH   cartella dati (progetti, risultati, licenze, database); predefinita ../../data (la cartella data accanto a programma)
 #   UNICLUST_PATH       cartella (disco esterno) con UniClust30/UniRef30, qualunque versione → QMEAN locale
@@ -12,6 +13,8 @@
 #   COMPOSE_PROFILES    "qmean" per avviare il servizio QMEAN locale
 # BIOLOOM_VERSION (versione delle immagini) la esporta l'avviatore leggendola da programma/launcher/VERSION; i valori
 # predefiniti qui sotto (per compose a mano) li tiene allineati programma/scripts/versione.sh.
+# Nome uguale per tutte le copie di BioLoom (il volume cache con l'indice MMseqs2 non va perso): due copie sullo stesso
+# computer userebbero gli stessi container, quindi gli avviatori ne avviano una alla volta.
 name: bioloom
 
 services:

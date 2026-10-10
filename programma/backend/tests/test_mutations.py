@@ -40,10 +40,10 @@ def _model(path):
     return structure.first_model(structure.load_structure(path, "x"))
 
 
-def _upload(client, path, template_id: str) -> None:
+def _upload(client, path, template_id: str, overwrite: bool = False) -> None:
     with open(path, "rb") as fh:
         r = client.post("/api/templates/upload", files={"file": (path.name, fh, "chemical/x-pdb")},
-                        data={"template_id": template_id})
+                        data={"template_id": template_id, "overwrite": str(overwrite).lower()})
     assert r.status_code == 200, r.text
 
 
@@ -661,7 +661,8 @@ def test_pocket_scan_refuses_pockets_of_a_replaced_file(client, monkeypatch, tmp
     muts, _skipped, selection = service.validate_scan(params)
     assert [m.label for m in muts] == ["A:I30A", "A:L43A"]
     assert selection["source_sha256"] == pockets["result"]["source_sha256"]
-    _upload(client, ubq_variant(tmp_path / "rinumerata.pdb", drop=range(28, 32)), "UBQP")  # stesso id, altro file
+    _upload(client, ubq_variant(tmp_path / "rinumerata.pdb", drop=range(28, 32)), "UBQP",
+            overwrite=True)  # stesso id, altro file
     r = client.post("/api/alascan", json=params)
     assert r.status_code == 400 and r.json()["error"]["code"] == "invalid_scan"
     assert "versione precedente del file" in r.json()["error"]["message"]

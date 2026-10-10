@@ -147,7 +147,7 @@ function BarsSvg({ expanded, series, range, zoom, zoomable, selIndex, band, heig
       if (d) out.push(<path key="tops" d={d} fill="none" stroke="var(--chart-axis)" strokeWidth={0.75} />);
     }
     return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- axis, y, y0 e barW derivano da W, H, min/max, dominio ed expanded, già nelle dipendenze
   }, [items, from, to, lo, hi, W, H, min, max, selIndex, expanded]);
   const yTicks = niceTicks(min, max, expanded ? 8 : 4, [1, 2, 5, 10]);
   const yDigits = tickDigits(yTicks);

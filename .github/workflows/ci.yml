@@ -2,13 +2,18 @@
 # - backend: versione unica (programma/scripts/versione.sh), impronta del codice uguale in sh e in PowerShell
 #   (docker/impronta.sh, launcher/impronta.ps1), lint e test rapidi in Python puro (senza MODELLER né strumenti
 #   esterni: quei test vengono saltati)
-# - frontend: typecheck, test e build dell'interfaccia
+# - frontend: eslint, typecheck, test e build dell'interfaccia
+# - avviatori: shellcheck sugli script sh (livello warning), PSScriptAnalyzer sugli script PowerShell (solo errori) e
+#   bit di esecuzione dei file .sh e .command nel repository
 # - docker: costruzione dell'immagine completa e test al suo interno, come programma/scripts/test.sh in locale; l'immagine ha
 #   fpocket, APBS, PDB2PQR, OpenMM e PDBFixer (versioni fissate nel Dockerfile e in programma/backend/requirements-tools.lock),
 #   quindi qui girano anche i test di tasche, elettrostatica e rifinitura, saltati nel job backend.
 #   PROCHECK e ProSA (pacchetti con licenza) non sono nel repository: l'immagine della CI ne è priva.
 #   La chiave di MODELLER, se configurata come secret MODELLER_KEY, abilita i test di MODELLER.
 #   L'impronta salvata nell'immagine (/app/IMPRONTA) deve essere quella del codice da cui è costruita.
+#   Poi l'avviatore vero (avvio, salute, arresto) e la copia portatile (prepara), avviata dal file in immagini/ dopo
+#   aver tolto l'immagine da Docker.
+# - qmean: solo a mano (Run workflow con "qmean"), costruzione dell'immagine bioloom-qmean e prova del worker.
 name: CI
 
 on:
@@ -16,6 +21,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      qmean:
+        description: "Costruisci anche l'immagine bioloom-qmean (l'immagine di base di QMEAN pesa circa 2 GB)"
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -50,7 +60,8 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: programma/backend/requirements.lock
-      - run: pip install -r requirements.lock "pytest>=7" "ruff>=0.6"
+      # pytest-timeout come in pyproject.toml (dipendenze dev): applica il limite per test di [tool.pytest.ini_options]
+      - run: pip install -r requirements.lock "pytest>=7" "pytest-timeout==2.4.0" "ruff>=0.6"
       - run: ruff check --config pyproject.toml . ../docker/qmean
       - run: python -m pytest -q
 
@@ -67,9 +78,41 @@ jobs:
           cache: npm
           cache-dependency-path: programma/frontend/package-lock.json
       - run: npm ci --no-audit --no-fund
+      - run: npm run lint
       - run: npm run typecheck
       - run: npm test
       - run: npx vite build
+
+  avviatori:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck (script sh e .command)
+        run: |
+          shellcheck --version | head -n2
+          shellcheck -S warning programma/launcher/*.sh avvia-bioloom.sh programma/docker/*.sh programma/scripts/*.sh \
+            programma/docker/qmean/tests/*.sh "Avvia BioLoom.command" "Arresta BioLoom.command"
+      - name: PSScriptAnalyzer (script PowerShell, solo errori)
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          "PSScriptAnalyzer " + (Get-Module -ListAvailable PSScriptAnalyzer | Select-Object -First 1).Version
+          $errori = Get-ChildItem programma/launcher/*.ps1 | ForEach-Object {
+            Invoke-ScriptAnalyzer -Path $_.FullName -Severity Error, ParseError
+          }
+          if ($errori) {
+            $errori | Format-Table -AutoSize ScriptName, Line, RuleName, Message | Out-String -Width 200
+            Write-Host "PSScriptAnalyzer: $(@($errori).Count) errori negli script PowerShell."
+            exit 1
+          }
+      - name: Bit di esecuzione degli script (.sh, .command)
+        run: |
+          senza="$(git ls-files -s -- '*.sh' '*.command' | awk '$1 != "100755" { sub(/^[^\t]*\t/, ""); print }')"
+          if [ -n "$senza" ]; then
+            echo "Script senza il bit di esecuzione nel repository (git update-index --chmod=+x <file>):"
+            echo "$senza"
+            exit 1
+          fi
 
   docker:
     runs-on: ubuntu-24.04
@@ -102,3 +145,65 @@ jobs:
         env:
           MODELLER_KEY: ${{ secrets.MODELLER_KEY }}
         run: programma/scripts/test.sh backend
+      - name: Avviatore (avvio, salute, arresto)
+        timeout-minutes: 10
+        env:
+          VERSIONE: ${{ steps.version.outputs.version }}
+        run: |
+          # i test non devono aver toccato il codice: con un'impronta diversa "prepara" ricostruirebbe l'immagine
+          test "$(sh programma/docker/impronta.sh programma)" = "$(docker run --rm --entrypoint cat "bioloom:$VERSIONE" /app/IMPRONTA)"
+          ./avvia-bioloom.sh --no-menu --no-browser
+          curl -fsS http://127.0.0.1:8765/api/health
+          echo
+          ./avvia-bioloom.sh arresta
+      - name: Copia portatile (prepara, avvio dal file in immagini/, arresto)
+        timeout-minutes: 30
+        env:
+          VERSIONE: ${{ steps.version.outputs.version }}
+        run: |
+          copia="$RUNNER_TEMP/copia BioLoom"
+          ./avvia-bioloom.sh prepara "$copia" --no-menu --senza-qmean --senza-dati
+          ls -l "$copia/immagini"
+          test -s "$copia/immagini/bioloom-$VERSIONE.tar"
+          # senza l'immagine in Docker la copia deve caricarla dal file in immagini/
+          docker image rm "bioloom-test:bioloom-$VERSIONE" >/dev/null 2>&1 || true
+          docker image rm "bioloom:$VERSIONE"
+          if docker image inspect "bioloom:$VERSIONE" >/dev/null 2>&1; then echo "bioloom:$VERSIONE non tolta"; exit 1; fi
+          "$copia/avvia-bioloom.sh" --no-menu --no-browser
+          docker image inspect "bioloom:$VERSIONE" >/dev/null
+          curl -fsS http://127.0.0.1:8765/api/health
+          echo
+          "$copia/avvia-bioloom.sh" arresta
+      - name: Container e log (se un passo non è riuscito)
+        if: failure()
+        run: |
+          docker ps -a
+          docker compose -p bioloom logs --tail 200 || true
+
+  qmean:
+    # solo a mano (Actions > CI > Run workflow, con "qmean"): l'immagine di base di QMEAN pesa circa 2 GB
+    if: github.event_name == 'workflow_dispatch' && inputs.qmean
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Versione
+        id: version
+        run: echo "version=$(head -n1 programma/launcher/VERSION | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+      - name: Immagine QMEAN
+        uses: docker/build-push-action@v6
+        with:
+          context: programma/docker/qmean
+          platforms: linux/amd64
+          load: true
+          tags: bioloom-qmean:${{ steps.version.outputs.version }}
+      - name: Worker QMEAN (risponde anche senza database)
+        timeout-minutes: 5
+        run: |
+          docker run -d --name qmean -p 127.0.0.1:8080:8080 bioloom-qmean:${{ steps.version.outputs.version }}
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8080/status && exit 0
+            sleep 2
+          done
+          docker logs qmean
+          exit 1

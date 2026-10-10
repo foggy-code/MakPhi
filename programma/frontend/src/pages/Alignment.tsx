@@ -215,7 +215,7 @@ function SequenceStructureResult({ jobId, result }: { jobId: string; result: Ali
   const [name, setName] = useState(`Allineamento MODELLER · ${templates.map((t) => t.id).join(", ")} (job ${jobId.slice(0, 6)})`);
   useEffect(() => {
     for (const w of result.warnings ?? []) toast.push(w, "warn");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- avvisi una volta per job
   }, [jobId]);
   /** Salva (o aggiorna) il documento PIR del progetto; restituisce il suo id. */
   const save = async (): Promise<string | null> => {

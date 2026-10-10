@@ -10,6 +10,7 @@ import { jobChoices, modelChoices, modelFiles, parsePastedSequence, pastedTextMa
 import { residueRanges } from "../lib/workflowView";
 import { FileButton, SequenceFileButton } from "./FileLoad";
 import { Icon } from "./Icon";
+import { useTemplateUpload } from "./TemplateUpload";
 import { Badge, DetailGrid, DropZone, ExpandButton, Segmented, useExpanded } from "./ui";
 
 /** Dati del template scelto (pannello espanso del selettore): metodo, qualità, catene, mancanti, gruppi eteroatomici. */
@@ -43,7 +44,7 @@ export function SequencePicker({ value, onChange, label = "Sequenza bersaglio" }
   const [pasted, setPasted] = useState(value.sequence);
   useEffect(() => {
     setPasted((raw) => (pastedTextMatches(raw, value) ? raw : value.sequence));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- value conta per nome e sequenza
   }, [value.name, value.sequence]);
   useEffect(() => {
     if (seqs && seqs.length === 0) setMode((m) => (m === "project" ? "paste" : m));
@@ -172,8 +173,44 @@ export function TemplatePicker({ value, onChange, max = 10, ligands = true, onAn
         })
         .catch(() => setStatus((s) => ({ ...s, [t.id]: "error" })));
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- solo per i template aggiunti (ids): value si legge da valueRef, status evita le richieste doppie
   }, [value.map((t) => t.id).join(",")]);
+  // template non più scelto: stato e analisi in memoria si dimenticano, così se torna (anche con un file nuovo o
+  // dopo un errore) l'effetto qui sopra lo rilegge da capo
+  const forget = (id: string) => {
+    setStatus(({ [id]: _old, ...rest }) => rest);
+    setAnalysis(({ [id]: _old, ...rest }) => rest);
+  };
+  // file caricato per un template già scelto: analisi riletta, restano le catene che ci sono ancora
+  const reanalyze = (id: string) => {
+    setStatus((s) => ({ ...s, [id]: "loading" }));
+    api.template(id)
+      .then((a) => {
+        setAnalysis((prev) => ({ ...prev, [id]: a }));
+        setStatus((s) => ({ ...s, [id]: "ok" }));
+        onAnalysis?.(id, a);
+        const names = new Set(a.chains.map((c) => c.chain));
+        onChange(valueRef.current.map((v) => {
+          if (v.id !== id) return v;
+          const chains = v.chains.filter((c) => names.has(c));
+          return { ...v, chains: chains.length || !a.chains.length ? chains : [a.chains[0].chain] };
+        }));
+      })
+      .catch(() => setStatus((s) => ({ ...s, [id]: "error" })));
+  };
+  // «Da file»: con lo stesso id di un template in libreria si chiede se sostituirlo (useTemplateUpload). Un id già
+  // scelto si rilegge subito; uno nuovo, o tolto dalla scelta dopo l'analisi del file di prima, si aggiunge senza
+  // l'analisi vecchia e l'effetto lo rilegge.
+  const { upload, busy: uploading, dialog: replaceDialog } = useTemplateUpload((t, replaced) => {
+    reload();
+    const current = valueRef.current;
+    if (current.some((v) => v.id === t.id)) reanalyze(t.id);
+    else {
+      forget(t.id);
+      onChange([...current, { id: t.id, chains: t.chains?.slice(0, 1) ?? [] }]);
+    }
+    toast.push(replaced ? `Template ${t.id} sostituito nella libreria` : `Template ${t.id} caricato nella libreria`);
+  });
   const add = (id: string) => {
     if (!id || value.some((v) => v.id === id) || value.length >= max) return;
     const tpl = templates?.find((t) => t.id === id);
@@ -197,17 +234,9 @@ export function TemplatePicker({ value, onChange, max = 10, ligands = true, onAn
           accept=".pdb,.ent,.cif,.mmcif"
           small={false}
           disabled={value.length >= max}
+          busy={uploading}
           title="Carica un file PDB/mmCIF nella libreria e usalo come template"
-          onFile={async (file) => {
-            try {
-              const t = await api.uploadTemplate(file);
-              reload();
-              if (!value.some((v) => v.id === t.id)) onChange([...value, { id: t.id, chains: t.chains?.slice(0, 1) ?? [] }]);
-              toast.push(`Template ${t.id} caricato nella libreria`);
-            } catch (e) {
-              toast.error(e);
-            }
-          }}
+          onFile={upload}
         >
           Da file
         </FileButton>
@@ -232,7 +261,7 @@ export function TemplatePicker({ value, onChange, max = 10, ligands = true, onAn
                 </>
               )}
               <span className="small text-2 ellipsis" style={{ maxWidth: 260 }} title={a?.header.title}>{a?.header.title}</span>
-              <button className="btn btn-ghost btn-icon right" onClick={() => onChange(value.filter((v) => v.id !== t.id))} aria-label={`Rimuovi ${t.id}`} title="Rimuovi">
+              <button className="btn btn-ghost btn-icon right" onClick={() => { forget(t.id); onChange(value.filter((v) => v.id !== t.id)); }} aria-label={`Rimuovi ${t.id}`} title="Rimuovi">
                 <Icon name="x" size={14} />
               </button>
             </div>
@@ -261,6 +290,7 @@ export function TemplatePicker({ value, onChange, max = 10, ligands = true, onAn
           </div>
         );
       })}
+      {replaceDialog}
     </div>
   );
 }

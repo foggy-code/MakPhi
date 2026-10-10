@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { sessionGet, sessionSet } from "../lib/safeStorage";
 import { Icon } from "./Icon";
 import { CopyButton, Disclosure } from "./ui";
 
@@ -9,6 +10,22 @@ interface State {
 }
 
 const RELOAD_FLAG = "bioloom.chunk-reload";
+/** intervallo minimo fra due ricariche automatiche della stessa scheda */
+const RELOAD_GAP_MS = 60_000;
+const STALE_MODULE = /dynamically imported module|Importing a module script failed|Failed to fetch/i;
+
+/**
+ * Ricarica automatica per i moduli di una build precedente (import dinamico non riuscito): al più una al minuto per
+ * scheda, con l'ora dell'ultima in sessionStorage. Se un modulo manca davvero la pagina non si ricarica all'infinito ma
+ * mostra l'errore; senza sessionStorage (dati del sito bloccati) nessuna ricarica automatica, per lo stesso motivo:
+ * resta il pulsante «Ricarica la pagina».
+ */
+export function claimStaleReload(message: string, now = Date.now()): boolean {
+  if (!STALE_MODULE.test(message)) return false;
+  const last = Number(sessionGet(RELOAD_FLAG));
+  if (Number.isFinite(last) && now >= last && now - last < RELOAD_GAP_MS) return false;
+  return sessionSet(RELOAD_FLAG, String(now));
+}
 
 /** Mostra gli errori di rendering invece di una pagina bianca; ricarica una volta se una build più
  *  recente ha reso obsoleti i moduli già caricati dal browser. */
@@ -22,19 +39,12 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("Errore dell'interfaccia", error, info.componentStack);
     this.setState({ stack: info.componentStack ?? null });
-    const stale = /dynamically imported module|Importing a module script failed|Failed to fetch/i.test(error.message);
-    if (stale && !sessionStorage.getItem(RELOAD_FLAG)) {
-      sessionStorage.setItem(RELOAD_FLAG, "1");
-      window.location.reload();
-    }
+    if (claimStaleReload(error.message)) window.location.reload();
   }
 
   render() {
     const { error, stack } = this.state;
-    if (!error) {
-      sessionStorage.removeItem(RELOAD_FLAG);
-      return this.props.children;
-    }
+    if (!error) return this.props.children;
     const details = [error.message, error.stack, stack].filter(Boolean).join("\n\n");
     return (
       <div className="page">

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import anyio.to_thread
 from fastapi import APIRouter, Depends, File, UploadFile
 from pydantic import BaseModel
 
@@ -33,7 +34,9 @@ def remove_modeller_key(core: Core = Depends(get_core)) -> dict:
 
 @router.post("/prosa")
 async def upload_prosa_license(file: UploadFile = File(...), core: Core = Depends(get_core)) -> dict:
-    return core.licenses.set_prosa_license(await read_upload(file, limit=64 * 1024))
+    data = await read_upload(file, limit=64 * 1024)
+    # lo stato restituito prova MODELLER con un processo esterno: in un thread, non nel loop
+    return await anyio.to_thread.run_sync(core.licenses.set_prosa_license, data)
 
 
 @router.delete("/prosa")

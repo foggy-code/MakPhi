@@ -3,13 +3,14 @@
 #
 #   programma/scripts/test.sh                 lint + test del backend (nel container) + test del frontend
 #   programma/scripts/test.sh backend [args]  solo backend; gli argomenti vanno a pytest (es. -k pipeline -x)
-#   programma/scripts/test.sh frontend        solo frontend (typecheck + vitest)
+#   programma/scripts/test.sh frontend        solo frontend (eslint + typecheck + vitest)
 #   programma/scripts/test.sh lint            solo ruff
 #
 # Il backend gira in "bioloom-test:<base>", costruita sopra l'immagine locale "bioloom:<versione>"
 # (versione da programma/launcher/VERSION, come l'avviatore; un'altra con BIOLOOM_BASE_IMAGE, es. un'immagine di
 # sviluppo con strumenti nuovi)
-# con pytest e ruff; il codice del repository è montato, non copiato.
+# con pytest, pytest-timeout e ruff (si ricostruisce quando cambia l'immagine di base o docker/test/Dockerfile);
+# il codice del repository è montato, non copiato.
 # MODELLER: chiave da $MODELLER_KEY oppure da <cartella dati>/licenses/modeller.key
 # (cartella dati: $BIOLOOM_DATA_PATH, predefinita la cartella data accanto a programma/).
 # Senza chiave i test di MODELLER vengono saltati.
@@ -41,12 +42,14 @@ ensure_image() {
     echo "  docker compose -f programma/launcher/compose.yml build" >&2
     exit 2
   fi
-  local base_id stamp
+  local base_id want stamp
   base_id="$(docker image inspect -f '{{.Id}}' "$BASE_IMAGE")"
+  # etichetta: immagine di base e somma di docker/test/Dockerfile (senza CR: uguale da Windows e da Linux)
+  want="$base_id $(tr -d '\r' < "$ROOT/docker/test/Dockerfile" | cksum | awk '{ print $1 }')"
   stamp="$(docker image inspect -f '{{index .Config.Labels "bioloom.test.base"}}' "$TEST_IMAGE" 2>/dev/null || true)"
-  if [ "$stamp" != "$base_id" ]; then
+  if [ "$stamp" != "$want" ]; then
     echo "== costruzione di $TEST_IMAGE"
-    docker build -q --build-arg "BASE=$BASE_IMAGE" --label "bioloom.test.base=$base_id" \
+    docker build -q --build-arg "BASE=$BASE_IMAGE" --label "bioloom.test.base=$want" \
       -t "$TEST_IMAGE" "$(host_path "$ROOT/docker/test")" >/dev/null
   fi
 }
@@ -74,7 +77,13 @@ backend() {
 frontend() {
   echo "== frontend"
   cd "$ROOT/frontend"
-  [ -d node_modules ] || npm ci --no-audit --no-fund
+  # reinstalla anche quando package-lock.json è più recente dell'ultima installazione (npm 7+ riscrive
+  # node_modules/.package-lock.json a ogni installazione): una node_modules di prima può non avere eslint
+  if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+    echo "== npm ci (node_modules assente o più vecchia di package-lock.json)"
+    npm ci --no-audit --no-fund
+  fi
+  npm run --silent lint
   npm run --silent typecheck
   npm test --silent
 }

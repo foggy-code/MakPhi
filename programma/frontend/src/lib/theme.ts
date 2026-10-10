@@ -31,7 +31,7 @@ export function isThemePref(value: unknown): value is ThemePref {
 /** Scelta dal valore salvato: JSON (`"system"`) come lo scrive `useLocalStorage`, o testo semplice (`system`). */
 export function parseThemePref(raw: string | null | undefined, fallback: ThemePref = DEFAULT_THEME): ThemePref {
   if (raw === null || raw === undefined) return fallback;
-  let value: unknown = raw;
+  let value: unknown;
   try {
     value = JSON.parse(raw);
   } catch {
@@ -64,7 +64,7 @@ export function systemPrefersDark(): boolean {
 
 /** Tema da applicare prima del primo render (main.tsx), per non far lampeggiare l'altro tema. */
 export function initialTheme(storage: Pick<Storage, "getItem"> | null): Theme {
-  let raw: string | null = null;
+  let raw: string | null;
   try {
     raw = storage?.getItem(THEME_KEY) ?? null;
   } catch {

@@ -21,7 +21,7 @@ from .api import reproducibility, structure_tools
 from .api import mutations as mutations_api
 from .api import predict as predict_api
 from .config import FRONTEND_DIST, Paths, default_paths
-from .core import auth, guard
+from .core import auth, bodylimit, guard
 from .core.container import build_core
 from .core.errors import AppError
 
@@ -53,6 +53,11 @@ def create_app(paths: Optional[Paths] = None, frontend_dist: Optional[Path] = FR
 
     app = FastAPI(title="BioLoom v4", version=__version__, lifespan=lifespan,
                   description="Suite per la modellazione di proteine per omologia (MODELLER).")
+    # Corpo oltre il più grande caricamento legittimo: 413 prima che Starlette scriva il multipart su disco
+    # (core/bodylimit). Aggiunto per primo, quindi il più interno: richieste di altri siti (guardia) e senza chiave
+    # d'accesso si rifiutano prima, e nessuno dei due controlli legge il corpo; dentro CORS, così in sviluppo anche il
+    # 413 arriva leggibile all'interfaccia di Vite; e fra il `receive` contato e le rotte non resta nessun middleware.
+    app.add_middleware(bodylimit.BodyLimit, limit=bodylimit.request_limit())
     app.add_middleware(CORSMiddleware, allow_origins=list(dev_origins), allow_methods=["*"], allow_headers=["*"],
                        allow_credentials=True)
 

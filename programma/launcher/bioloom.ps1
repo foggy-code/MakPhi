@@ -562,6 +562,77 @@ function Test-Running {
     return ($ps.Output -split "`r?`n") -contains "bioloom"
 }
 
+# ---------------------------------------------------------------------------------------- un BioLoom alla volta
+# Le copie di BioLoom su uno stesso computer (per esempio quella installata e quella della chiavetta) hanno lo stesso
+# progetto compose "bioloom", quindi gli stessi container e volumi: avviarne una ricreerebbe i container dell'altra con
+# un'altra cartella dati. Il progetto non cambia nome da una copia all'altra (il volume cache con l'indice MMseqs2
+# resterebbe orfano): prima di avviare si guarda da quale cartella è partito il BioLoom in esecuzione (etichetta
+# working_dir che compose mette ai container: la cartella di compose.yml).
+function Get-RunningContainerId {  # un container di BioLoom in esecuzione, prima quello di bioloom ("" se nessuno)
+    foreach ($a in @(@("ps", "-q", "--status", "running", "bioloom"), @("--profile", "qmean", "ps", "-q", "--status", "running"))) {
+        $ps = Compose $a -Quiet
+        $id = @($ps.Output -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^[0-9a-f]{12,64}$' }) | Select-Object -First 1
+        if ($id) { return $id }
+    }
+    return ""
+}
+
+function Test-SameDir([string]$a, [string]$b) {  # stessa cartella a meno di maiuscole e separatori (NTFS non li distingue)
+    try {
+        $fa = [IO.Path]::GetFullPath($a.Replace('/', '\')).TrimEnd('\')
+        $fb = [IO.Path]::GetFullPath($b.Replace('/', '\')).TrimEnd('\')
+    } catch { return $false }
+    return $fa -ieq $fb
+}
+
+function Get-InspectJson([string]$id, [string]$field) {  # campo di docker inspect come oggetto ($null se non si legge).
+    # {{json ...}} e non {{index ... "etichetta"}}: PowerShell 5.1 toglie le virgolette interne agli argomenti dei programmi
+    $r = Invoke-Docker @("inspect", "--format", "{{json $field}}", $id) -Quiet
+    if ($r.Code -ne 0) { return $null }
+    $line = @($r.Output -split "`r?`n" | Where-Object { $_ -match '^\s*[\[{]' }) | Select-Object -First 1
+    if (-not $line) { return $null }
+    try { return ($line | ConvertFrom-Json) } catch { return $null }
+}
+
+function Get-OtherInstance {  # BioLoom in esecuzione partito da un'altra cartella: @{ Dir; Data }; $null se non è in
+    # esecuzione, se è questa copia o se non si può sapere
+    $id = Get-RunningContainerId
+    if (-not $id) { return $null }
+    $labels = Get-InspectJson $id ".Config.Labels"
+    if (-not $labels) { return $null }
+    $dir = "$($labels.'com.docker.compose.project.working_dir')"
+    if (-not $dir -or (Test-SameDir $dir $PSScriptRoot)) { return $null }
+    $data = "$(@(Get-InspectJson $id ".Mounts" | Where-Object { $_.Destination -eq "/data" } | ForEach-Object { $_.Source }) | Select-Object -First 1)"
+    # Docker Desktop mostra i bind mount con il percorso della sua macchina virtuale (/run/desktop/mnt/host/d/...):
+    # si riporta quello di Windows
+    if ($data -match '^/(?:run/desktop/mnt/host|host_mnt|mnt/host)/([a-zA-Z])(/.*)?$') {
+        $data = "$($Matches[1].ToUpper()):" + $(if ($Matches[2]) { $Matches[2] -replace '/', '\' } else { '\' })
+    }
+    return @{ Dir = ($dir.TrimEnd('\', '/') -replace '[\\/]programma[\\/]launcher$', ''); Data = $data }
+}
+
+function Confirm-SingleInstance([string]$what) {  # prima di avviare: il BioLoom partito da un'altra cartella si arresta
+    # solo con il consenso (domanda; con -NoMenu ci si ferma). $what = cosa si annulla, per il messaggio
+    $other = Get-OtherInstance
+    if (-not $other) { return }
+    $data = if ($other.Data) { $other.Data } else { "quella cartella" }
+    Say "  È già in esecuzione BioLoom da un'altra cartella: $($other.Dir)" Yellow
+    Say "  Le copie di BioLoom su questo computer usano gli stessi container: per continuare va arrestato" Yellow
+    Say "  (i calcoli in corso vengono interrotti; i suoi dati restano in $data)." Yellow
+    $answer = ""
+    if (-not $NoMenu) { $answer = Read-Host "  Arrestarlo e continuare? [s/N]" }
+    if ("$answer".Trim() -notmatch '^[sS]') {
+        Fail "${what}: resta in esecuzione il BioLoom di $($other.Dir). Per usare questa copia arrestalo prima ($LaunchCmd -Azione arresta) e riprova."
+    }
+    Say "  Arresto del BioLoom partito da $($other.Dir)..." Yellow
+    if ((Compose @("--profile", "qmean", "down", "--remove-orphans")).Code -ne 0) { Fail "Arresto non riuscito (vedi i messaggi sopra)." }
+}
+
+function Show-OtherInstance {  # stato, log, verifica: avviso se mostrano il BioLoom di un'altra cartella
+    $other = Get-OtherInstance
+    if ($other) { Say "  Il BioLoom in esecuzione è partito da un'altra cartella: $($other.Dir)" Yellow }
+}
+
 function Wait-Healthy([int]$port) {
     for ($i = 0; $i -lt 120; $i++) {
         try {
@@ -580,6 +651,8 @@ function Start-BioLoom {
     New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
     $probe = Join-Path $DataDir ".scrittura"
     try { Set-Content -LiteralPath $probe -Value "ok"; Remove-Item -LiteralPath $probe -Force } catch { Fail "La cartella dati $DataDir non è scrivibile (chiavetta protetta da scrittura?)." }
+    Ensure-EnvFile
+    Confirm-SingleInstance "Avvio annullato"
 
     $saved = Read-EnvFile
     if ($script:UniclustChoice -ne $null) {
@@ -700,9 +773,17 @@ function Show-Menu([string]$url) {
 
 function Stop-BioLoom {
     Ensure-EnvFile
+    $data = $DataDir
+    # BioLoom partito da un'altra copia: si arresta lo stesso (i container sono gli stessi, "Arresta BioLoom" non chiede
+    # e la cartella di quella copia può non esserci più, per esempio una chiavetta tolta), dicendo quale è
+    $other = Get-OtherInstance
+    if ($other) {
+        Say "  Il BioLoom in esecuzione è partito da un'altra cartella: $($other.Dir)" Yellow
+        $data = if ($other.Data) { $other.Data } else { $other.Dir }
+    }
     Say "  Arresto di BioLoom (i calcoli in corso vengono interrotti)..." Yellow
     Compose @("--profile", "qmean", "down") | Out-Null
-    Say "  BioLoom è arrestato. I dati restano in $DataDir." Green
+    Say "  BioLoom è arrestato. I dati restano in $data." Green
 }
 
 function Get-ImageIds { return "$(Get-ImageId "bioloom:$Version") $(Get-ImageId "bioloom-qmean:$Version")" }
@@ -726,6 +807,11 @@ function Update-BioLoom {  # azione aggiorna: immagini al codice in programma\, 
     } elseif (-not (Test-StaleRunning)) {
         if ($ok) { Say "  BioLoom è in esecuzione e usa già le immagini attuali: nessun riavvio." }
         else { Say "  BioLoom resta in esecuzione con l'immagine che aveva: nessun riavvio." }
+    } elseif (Get-OtherInstance) {
+        # BioLoom di un'altra copia: arrestato (con il consenso) si avvia questa come dal desktop (porta, licenze,
+        # UniClust), perché il suo .env.locale può non venire da un avvio
+        Confirm-SingleInstance "Riavvio annullato"
+        Start-BioLoom
     } else {
         # stesse impostazioni dell'ultimo avvio (.env.locale): compose ricrea i container con le immagini nuove
         Say "  Riavvio di BioLoom con le immagini aggiornate (i calcoli in corso vengono interrotti)..." Yellow
@@ -826,9 +912,9 @@ function Export-Portable {
 switch ($Azione) {
     "avvia" { Start-BioLoom }
     "arresta" { Stop-BioLoom }
-    "stato" { Ensure-EnvFile; Compose @("--profile", "qmean", "ps") | Out-Null }
-    "log" { Ensure-EnvFile; Compose @("logs", "--tail", "200") | Out-Null }
-    "verifica" { Ensure-EnvFile; Compose @("exec", "bioloom", "python", "-m", "bioloom.selftest") | Out-Null }
+    "stato" { Ensure-EnvFile; Show-OtherInstance; Compose @("--profile", "qmean", "ps") | Out-Null }
+    "log" { Ensure-EnvFile; Show-OtherInstance; Compose @("logs", "--tail", "200") | Out-Null }
+    "verifica" { Ensure-EnvFile; Show-OtherInstance; Compose @("exec", "bioloom", "python", "-m", "bioloom.selftest") | Out-Null }
     "prepara" { Export-Portable }
     "aggiorna" { Update-BioLoom }
 }

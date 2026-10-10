@@ -173,7 +173,7 @@ function ProfileSvg({ expanded, title, residues, values, ss, zoom, min, max, hei
       pen = true;
     }
     return d;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- axis e y derivano da W, H, min/max, dominio ed expanded, già nelle dipendenze
   }, [values, from, to, domain.lo, domain.hi, W, H, min, max, expanded]);
   const yTicks = niceTicks(min, max, expanded ? 8 : 4, [1, 2, 5, 10]);
   const digits = tickDigits(yTicks);

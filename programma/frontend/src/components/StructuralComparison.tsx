@@ -265,7 +265,7 @@ function ProfileSvg({ expanded, pairs, breaks, colors, dMax, multi, zoom, select
         ))}
       </>
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- axis, yd, yl e r derivano da W, dMax, dominio ed expanded, già nelle dipendenze
   }, [pairs, breaks, colors, from, to, domain.lo, domain.hi, W, expanded, dMax]);
   const dTicks = niceTicks(0, dMax, expanded ? 8 : 4, [1, 2, 5, 10]);
   const lTicks = expanded ? [0, 0.25, 0.5, 0.75, 1] : [0, 0.5, 1];

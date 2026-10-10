@@ -11,6 +11,13 @@ AVVIO
 Si apre il browser su http://127.0.0.1:8765. Per chiudere: "Arresta BioLoom" oppure il tasto S
 nella finestra dell'avviatore.
 
+Su un computer gira un BioLoom alla volta: se e' gia' acceso quello di un'altra cartella (per
+esempio la copia installata), l'avviatore chiede se arrestarlo prima di partire.
+
+Mac con processore Apple: i container girano in emulazione, piu' lenti. In Docker Desktop
+attiva Settings > General > "Use Rosetta for x86_64/amd64 emulation on Apple Silicon".
+ProSA potrebbe non funzionare.
+
 macOS: se il doppio clic e' bloccato (file scaricati da internet), la prima volta fai clic
 destro > Apri (da macOS 15: Impostazioni di Sistema > Privacy e sicurezza > Apri comunque),
 oppure nel Terminale, dalla cartella di BioLoom:
@@ -45,6 +52,9 @@ QMEAN LOCALE
   basta, BioLoom lo segnala in Impostazioni > Database e spiega come aumentarla.
   Se il disco non c'e', puoi attivare il fallback su SWISS-MODEL in Impostazioni > Generale
   (invia il modello al servizio online: serve il tuo consenso e la tua email).
+  Se c'e', il file immagini/bioloom-qmean-<versione>.tar e' anche la copia di sicurezza
+  dell'immagine di QMEAN, che non si potrebbe piu' costruire se sparisse dal registro del SIB:
+  conservalo (Guida, "Chiavetta e server").
 
 FILE
   Sequenze, allineamenti, strutture, vincoli e licenze si possono caricare anche da file

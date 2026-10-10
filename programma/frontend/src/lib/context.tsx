@@ -78,8 +78,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     reload().catch(() => undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [reload]);
 
   // scheda di nuovo visibile: l'elenco si rilegge, così non offre un progetto eliminato in un'altra scheda (il progetto
   // attivo non si sincronizza fra le schede)

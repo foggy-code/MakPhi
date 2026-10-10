@@ -338,7 +338,7 @@ export function StructuralAnalysisPanel({ source, url, initialJob, memory, onMem
   const { job, summary, cancel } = useJob<AnalysisResult>(jobId);
   useEffect(() => {
     onMemory?.({ sourceKey, jobId, msaMode, msaJob, msaText, row });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- si avvisa solo il cambio; onMemory può cambiare a ogni disegno del genitore
   }, [sourceKey, jobId, msaMode, msaJob, msaText, row]);
 
   useEffect(() => {
@@ -355,7 +355,7 @@ export function StructuralAnalysisPanel({ source, url, initialJob, memory, onMem
     return () => {
       stop = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sourceKey riassume source: il job seguito si sceglie solo cambiando struttura
   }, [sourceKey, initialJob]);
 
   const result = job?.status === "completed" ? job.result : null;

@@ -128,7 +128,7 @@ function ProsaSvg({ expanded, pts, zoom, min, max, named, label, selIndex, onSel
       prev = p.index;
     }
     return d;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- axis e y derivano da W, H, min/max, dominio ed expanded, già nelle dipendenze
   }, [pts, lo, hi, W, H, min, max, expanded]);
   const above = pts.filter((p) => p.energy_w10 > 0 && p.index >= lo - 1 && p.index <= hi + 1);
   const yTicks = niceTicks(min, max, expanded ? 8 : 4, [1, 2, 5, 10]);

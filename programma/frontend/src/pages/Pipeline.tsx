@@ -116,8 +116,7 @@ function Items({ jobId, running, cacheHits }: { jobId: string; running: boolean;
     // stato finale degli elementi al termine; alla ripresa, subito gli elementi rimessi in attesa
     if (wasRunning.current !== running) reload();
     wasRunning.current = running;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running]);
+  }, [running, reload]);
   const parts = useMemo(() => pipelineStatusParts(data?.counts ?? {}), [data?.counts]);
   if (!data) return null;
   const counts = data.counts;
@@ -312,8 +311,7 @@ export default function Pipeline() {
   useEffect(() => {
     if (wasRunning.current !== running) reloadRecent(); // stato aggiornato anche nell'elenco delle recenti
     wasRunning.current = running;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running]);
+  }, [running, reloadRecent]);
 
   const doResume = async (scope: ResumeScope) => {
     const retry = scope === "failed" || summary?.status === "completed"; // da completata restano solo i falliti

@@ -217,14 +217,14 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
     }
     boxRef.current?.focus({ preventScroll: true });
     onFocusDone?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- solo a una nuova richiesta di focus (un oggetto nuovo per richiesta)
   }, [focus]);
 
   const refocus = () => boxRef.current?.focus({ preventScroll: true });
 
   useEffect(() => {
     onCursor?.(cursor.r, cursor.c);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- si avvisa solo lo spostamento del cursore; onCursor può cambiare a ogni disegno del genitore
   }, [cursor.r, cursor.c]);
 
   const moveTo = (r: number, c: number, extend: boolean) => {
@@ -296,8 +296,10 @@ export function PirGrid({ ids, kinds, headers, rows, onEdit, onUndo, onRedo, can
     let handled = true;
     const k = e.key;
     if (e.nativeEvent.isComposing) return;
-    if (mod && (k === "z" || k === "Z")) e.shiftKey ? onRedo() : onUndo();
-    else if (mod && (k === "y" || k === "Y")) onRedo();
+    if (mod && (k === "z" || k === "Z")) {
+      if (e.shiftKey) onRedo();
+      else onUndo();
+    } else if (mod && (k === "y" || k === "Y")) onRedo();
     else if (mod && (k === "a" || k === "A")) {
       setAnchor({ r: 0, c: 0 });
       setCursor({ r: clampR(rows.length - 1), c: clampC(width - 1) });

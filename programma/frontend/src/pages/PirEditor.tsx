@@ -24,8 +24,10 @@ function GenerateDialog({ onClose, onDone }: { onClose: () => void; onDone: (pir
   useEffect(() => {
     if (job?.status !== "completed" || !job.result) return;
     for (const w of job.result.warnings ?? []) toast.push(w, "warn");
-    onDone(job.result.pir, templates, target.name || "target");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // template e bersaglio del job, non quelli del modulo: si possono cambiare mentre il job è in corso
+    const used = (job.params?.target as { name?: string } | null | undefined)?.name;
+    onDone(job.result.pir, job.result.templates.map((t) => ({ id: t.id, chains: t.chains })), used || target.name || "target");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- una volta, al completamento del job
   }, [job?.status]);
   const submit = async () => {
     try {
@@ -115,20 +117,18 @@ export default function PirEditor() {
       setName(d.name);
       open(d.content ?? "", d.meta ?? {}, false);
     }).catch(toast.error);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docId, projectId]);
+  }, [docId, projectId, toast]);
 
+  const fromJob = params.get("fromjob");
   useEffect(() => {
-    const from = params.get("fromjob");
-    if (!from) return;
-    api.job<Align2dResult>(from).then((j) => {
+    if (!fromJob) return;
+    api.job<Align2dResult>(fromJob).then((j) => {
       if (!j.result) return;
       for (const w of j.result.warnings ?? []) toast.push(w, "warn");
-      setName(`Allineamento MODELLER (job ${from.slice(0, 6)})`);
+      setName(`Allineamento MODELLER (job ${fromJob.slice(0, 6)})`);
       open(j.result.pir, { templates: j.result.templates.map((t) => ({ id: t.id, chains: t.chains })) }, true);
     }).catch(toast.error);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.get("fromjob")]);
+  }, [fromJob, toast]);
 
   /** Apre un file PIR così com'è; un allineamento in altro formato (FASTA, Clustal...) viene convertito in PIR. */
   const openFile = async (text: string, file: File) => {

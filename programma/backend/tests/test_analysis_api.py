@@ -15,10 +15,10 @@ from .conftest import DATA, HUMAN_UB, YEAST_UB, wait_job
 UBQ = {"type": "template", "id": "1UBQ"}
 
 
-def _upload(client, name: str, template_id: str) -> str:
+def _upload(client, name: str, template_id: str, overwrite: bool = False) -> str:
     with open(DATA / name, "rb") as fh:
         r = client.post("/api/templates/upload", files={"file": (name, fh, "chemical/x-pdb")},
-                        data={"template_id": template_id})
+                        data={"template_id": template_id, "overwrite": str(overwrite).lower()})
     assert r.status_code == 200, r.text
     return r.json()["id"]
 
@@ -190,7 +190,7 @@ def test_latest_by_source_and_fingerprint(client_with_ubq):
     # lo stesso id con un altro file: l'analisi precedente non vale più
     dimer = _analysis(c, {"source": {"type": "template", "id": tid}})
     assert c.get("/api/analysis/latest", params={"type": "template", "id": tid}).json()["job_id"] == dimer["id"]
-    _upload(c, "1UBQ.pdb", tid)
+    _upload(c, "1UBQ.pdb", tid, overwrite=True)
     assert c.get("/api/analysis/latest", params={"type": "template", "id": tid}).json()["job_id"] is None
 
 

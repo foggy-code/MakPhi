@@ -301,7 +301,7 @@ export function JobCleanupDialog({ onClose, onCleaned, initial }: {
 
   useEffect(() => {
     if (phase === "form") loop.current?.request(request);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- key riassume i criteri della richiesta
   }, [key, phase]);
 
   const run = async () => {

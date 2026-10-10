@@ -56,13 +56,15 @@ Il codice è in `programma/`: `backend/` (Python, FastAPI), `frontend/` (React, 
 `launcher/` (avviatori e `compose.yml`), `scripts/`, `docs/`. I comandi qui sotto partono dalla cartella principale.
 
 ```bash
-# tutto: ruff, pytest nell'immagine di BioLoom (MODELLER reale), typecheck e vitest del frontend
+# tutto: ruff, pytest nell'immagine di BioLoom (MODELLER reale), eslint, typecheck e vitest del frontend
 programma/scripts/test.sh
 # solo il backend, con argomenti per pytest
 programma/scripts/test.sh backend -k pipeline -x
-# backend senza Docker (dalla cartella programma/backend/, con le dipendenze di requirements.lock): i test di
-# MODELLER e degli strumenti esterni vengono saltati
+# backend senza Docker (dalla cartella programma/backend/, con le dipendenze di requirements.lock e pytest-timeout):
+# i test di MODELLER e degli strumenti esterni vengono saltati
 python -m pytest
+# frontend senza Docker (dalla cartella programma/frontend/): eslint, controllo dei tipi, test
+npm run lint && npm run typecheck && npx vitest run
 # immagini
 docker compose -f programma/launcher/compose.yml build
 # versione: stampa quella di programma/launcher/VERSION e controlla che le copie coincidano (con bash davanti: il
@@ -73,10 +75,27 @@ sh programma/docker/impronta.sh programma
 ```
 
 - `programma/scripts/test.sh` costruisce `bioloom-test:<immagine>` sopra l'immagine locale `bioloom:<versione>` (con
-  pytest e ruff) e monta `programma/`. La versione viene da `programma/launcher/VERSION`: se il file manca lo script si
-  ferma, salvo `BIOLOOM_BASE_IMAGE`. La chiave di MODELLER viene da `MODELLER_KEY` oppure da
-  `data/licenses/modeller.key`; da un worktree indica la cartella dati con `BIOLOOM_DATA_PATH`. La stessa verifica gira
-  in CI (`.github/workflows/ci.yml`).
+  pytest, pytest-timeout e ruff; la ricostruisce quando cambia l'immagine di base o `docker/test/Dockerfile`) e monta
+  `programma/`. La versione viene da `programma/launcher/VERSION`: se il file manca lo script si ferma, salvo
+  `BIOLOOM_BASE_IMAGE`. La chiave di MODELLER viene da `MODELLER_KEY` oppure da `data/licenses/modeller.key`; da un
+  worktree indica la cartella dati con `BIOLOOM_DATA_PATH`. `test.sh frontend` esegue eslint, typecheck e vitest.
+- **Limite per test:** con pytest-timeout 2.4.0 (dipendenze dev di `pyproject.toml`, immagine di test, CI) un test
+  bloccato fallisce dopo 1800 s con «Failed: Timeout (>1800.0s) from pytest-timeout» e il suo stack, invece di lasciare
+  appesa la suite. Senza il plugin pytest dà solo l'avviso «Unknown config option: timeout» e il limite non vale.
+- **ESLint:** `npm run lint` (configurazione in `programma/frontend/eslint.config.js`): regole raccomandate di JavaScript
+  e di typescript-eslint e le due regole degli hook di React. `react-hooks/exhaustive-deps` è un errore: un'esclusione
+  voluta si dichiara con il motivo dopo «--»
+  (`// eslint-disable-next-line react-hooks/exhaustive-deps -- <motivo>`), e anche un commento di esclusione che non
+  serve più è un errore.
+- **CI** (`.github/workflows/ci.yml`): `backend` (versione unica, impronta, ruff e pytest in Python puro), `frontend`
+  (eslint, typecheck, vitest, build), `avviatori` (shellcheck, PSScriptAnalyzer e bit di esecuzione degli script `.sh` e
+  `.command`: se manca, `git update-index --chmod=+x <file>`), `docker` (immagine completa con i test al suo interno,
+  poi l'avviatore vero e la copia portatile avviata dal file in `immagini/`). Il job `qmean`, che costruisce l'immagine
+  di QMEAN e prova il worker, parte solo a mano: Actions → CI → Run workflow, con l'opzione «qmean».
+- **Immagini di base e file scaricati:** `programma/docker/Dockerfile` fissa le immagini di base per digest e verifica
+  con SHA-256 MODELLER, APBS, US-align e fpocket (questi due scaricati per commit): se un file cambia, la costruzione si
+  ferma con «…: FAILED». Per aggiornarli segui la procedura nei commenti in testa al Dockerfile, poi aggiorna le versioni
+  in `THIRD_PARTY_NOTICES.md`.
 - Per provare un'immagine con strumenti nuovi senza toccare quella dell'avviatore:
   `docker build -f programma/docker/Dockerfile -t bioloom:dev programma` e poi
   `BIOLOOM_BASE_IMAGE=bioloom:dev programma/scripts/test.sh`. Nelle immagini senza uno strumento (fpocket, APBS,

@@ -17,6 +17,11 @@ Guida di BioLoom: [1. Primo avvio](1%20-%20Primo%20avvio.md) · [2. Funzioni](2%
 - **Risultati:** a fine calcolo in `data/` vengono salvati solo i risultati; i file intermedi di MODELLER restano fuori,
   salvo l'impostazione che li conserva (Impostazioni → Spazio e file temporanei). Non staccare la chiavetta mentre BioLoom
   è in funzione.
+- **File caricati:** sequenze e allineamenti caricati da file vengono solo letti, mai salvati; le strutture da
+  analizzare finiscono in `data/uploads/` (pulizia automatica, sotto) e i template nella libreria. Limiti: 20 MB per
+  sequenze e allineamenti, 50 MB per una struttura o un template, 256 MB per un pacchetto di riproducibilità. Un file più
+  grande viene rifiutato («File troppo grande: massimo 50 MB.») e non entra nella cartella dati; una richiesta oltre
+  257 MB viene interrotta appena arriva, e il browser può segnalarla come errore di connessione.
 - **Grafici di PROCHECK:** l'analisi estesa salva i grafici PostScript di PROCHECK (circa 3,7 MB per modello di 420
   residui, quasi tutto lo spazio dei risultati). In Impostazioni → Esecuzione, **Grafici PostScript di PROCHECK** sceglie
   se conservarli tutti, solo il Ramachandran complessivo (circa 0,1 MB) o nessuno; le metriche di PROCHECK restano le

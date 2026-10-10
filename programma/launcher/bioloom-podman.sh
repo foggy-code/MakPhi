@@ -6,7 +6,8 @@
 #   bioloom-podman.sh arresta | stato | log | verifica
 #   bioloom-podman.sh aggiorna   porta le immagini al codice in programma/ e, se BioLoom è attivo, lo riavvia
 #   bioloom-podman.sh servizio   unità systemd dell'utente: riavvio con il server (serve il linger)
-#   opzione: --sposta-prosa      sposta su questo server la licenza ProSA attiva su un altro computer
+#   opzioni: --sposta-prosa      sposta su questo server la licenza ProSA attiva su un altro computer
+#            --no-menu           senza domande (per script): con BioLoom in esecuzione da un'altra cartella si ferma
 #
 # QMEAN locale (UNICLUST_PATH in server.env) gira in un secondo container che condivide la rete di quello di
 # BioLoom: BioLoom lo raggiunge su http://127.0.0.1:8080. PODMAN=docker usa la CLI di Docker (per le prove).
@@ -17,10 +18,11 @@ BASE="$(cd "$ROOT/.." && pwd)"                               # cartella di BioLo
 ENV_FILE="$BASE/server.env"
 IMAGES_DIR="$BASE/immagini"
 PODMAN="${PODMAN:-podman}"
-ACTION="avvia"; MOVE_PROSA=0
+ACTION="avvia"; MOVE_PROSA=0; NO_MENU=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --sposta-prosa) MOVE_PROSA=1 ;;
+    --no-menu) NO_MENU=1 ;;
     *) ACTION="$1" ;;
   esac
   shift
@@ -70,10 +72,11 @@ check_env_version() {  # server.env di una versione precedente: BIOLOOM_VERSION 
 
 have_image() { "$PODMAN" image inspect "$1" >/dev/null 2>&1; }
 
-build_image() {  # $1 immagine  $2 Dockerfile  $3 contesto (all'immagine di BioLoom passa la versione, come compose.yml)
+build_image() {  # $1 immagine  $2 Dockerfile  $3 contesto (all'immagine di BioLoom passa la versione, come compose.yml,
+  # e BUILDPLATFORM, che i buildah vecchi non valorizzano da sé: il server è amd64)
   [ -f "$2" ] || return 1
   case "$1" in
-    bioloom:*) "$PODMAN" build --build-arg "BIOLOOM_VERSION=$VERSION" -t "$1" -f "$2" "$3" ;;
+    bioloom:*) "$PODMAN" build --build-arg "BIOLOOM_VERSION=$VERSION" --build-arg BUILDPLATFORM=linux/amd64 -t "$1" -f "$2" "$3" ;;
     *) "$PODMAN" build -t "$1" -f "$2" "$3" ;;
   esac
 }
@@ -273,19 +276,87 @@ prosa_check() {  # $1 MAC della licenza  $2 cartella dati; vero se il MAC si pu�
 create_env() {
   local key
   key="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24)"
-  # come "bioloom.sh server", ma con dati nella cartella di BioLoom e porta raggiungibile solo dal server
-  # (accesso con un tunnel SSH): senza root non si scrive in /srv e non si apre il firewall
+  # come "bioloom.sh server", ma con dati nella cartella di BioLoom: senza root non si scrive in /srv. La porta resta
+  # solo locale (BIOLOOM_BIND=127.0.0.1 di server.env.example): accesso con un tunnel SSH, senza aprire il firewall
   sed -e "s/^BIOLOOM_ACCESS_KEY=.*/BIOLOOM_ACCESS_KEY=$key/" \
       -e "s|^BIOLOOM_DATA_PATH=.*|BIOLOOM_DATA_PATH=$BASE/data|" \
-      -e "s/^BIOLOOM_BIND=.*/BIOLOOM_BIND=127.0.0.1/" \
       "$ROOT/launcher/server.env.example" > "$ENV_FILE"
   chmod 600 "$ENV_FILE"
   title "Creato $ENV_FILE"
   say "Chiave d'accesso generata: $key"
+  say "BioLoom ascolterà solo su 127.0.0.1 (BIOLOOM_BIND): dagli altri computer con un tunnel SSH o un reverse proxy HTTPS."
   say "Controlla cartella dati, UniClust30 e porta, poi rilancia: $0 avvia"
 }
 
 remove_containers() { "$PODMAN" rm -f bioloom-qmean bioloom >/dev/null 2>&1 || true; }
+
+stop_containers() { "$PODMAN" stop -t 30 bioloom-qmean bioloom >/dev/null 2>&1; remove_containers; }
+
+container_running() { [ "$("$PODMAN" container inspect --format '{{.State.Running}}' "$1" 2>/dev/null)" = true ]; }
+
+# Un BioLoom alla volta (come in bioloom.sh): i container hanno nomi fissi, quindi l'avvio da un'altra copia di BioLoom
+# sostituirebbe quelli in esecuzione con un'altra cartella dati. L'etichetta bioloom.cartella dei container dice da
+# quale cartella sono partiti; per quelli degli avviatori precedenti, senza etichetta, si confronta la cartella dati.
+OTHER_DIR=""
+
+find_other() {  # imposta OTHER_DIR: da dove è partito il BioLoom in esecuzione, se non è questa copia (vuota altrimenti)
+  local name dir data
+  OTHER_DIR=""
+  for name in bioloom bioloom-qmean; do
+    container_running "$name" || continue
+    dir="$("$PODMAN" container inspect --format '{{index .Config.Labels "bioloom.cartella"}}' "$name" 2>/dev/null)"
+    case "$dir" in
+      ""|"<no value>") ;;
+      *) [ "$dir" = "$BASE" ] || [ "$dir" -ef "$BASE" ] || OTHER_DIR="$dir"; return 0 ;;
+    esac
+    [ "$name" = bioloom ] || return 0   # QMEAN senza etichetta: non si sa
+    dir="$("$PODMAN" container inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' bioloom 2>/dev/null)"
+    data="$(val BIOLOOM_DATA_PATH "$BASE/data")"
+    [ -z "$dir" ] || [ "$dir" = "$data" ] || [ "$dir" -ef "$data" ] || OTHER_DIR="$dir (cartella dati)"
+    return 0
+  done
+}
+
+single_instance() {  # prima di avviare: il BioLoom partito da un'altra cartella si arresta solo con il consenso
+  # (domanda; con --no-menu ci si ferma). $1 = cosa si annulla, per il messaggio
+  local answer=""
+  find_other
+  [ -n "$OTHER_DIR" ] || return 0
+  warn "È già in esecuzione BioLoom da un'altra cartella: $OTHER_DIR"
+  warn "Le copie di BioLoom su questo server usano gli stessi container: per continuare va arrestato"
+  warn "(i calcoli in corso vengono interrotti; i suoi dati restano dove sono)."
+  if [ "$NO_MENU" = 0 ]; then read -r -p "  Arrestarlo e continuare? [s/N] " answer || answer=""; fi
+  case "$answer" in
+    [sS]*) ;;
+    *) fail "$1: resta in esecuzione il BioLoom di $OTHER_DIR. Per usare questa copia arrestalo prima ('$0 arresta') e riprova." ;;
+  esac
+  warn "Arresto del BioLoom partito da $OTHER_DIR..."
+  # le unità systemd ("servizio") sono dell'utente, non della copia: fermate qui, start() le rigenera per i nuovi container
+  have_units && systemctl --user stop container-bioloom-qmean.service container-bioloom.service >/dev/null 2>&1
+  stop_containers
+}
+
+note_other() {  # arresta, stato, log, verifica: avviso se riguardano il BioLoom di un'altra cartella
+  find_other
+  [ -z "$OTHER_DIR" ] || warn "Il BioLoom in esecuzione è partito da un'altra cartella: $OTHER_DIR"
+}
+
+STORAGE_CHECKED=0
+check_storage() {  # avviso, una volta sola, se Podman archivia le immagini con vfs (senza root e senza fuse-overlayfs):
+  # ogni strato è una copia intera, quindi le immagini di BioLoom occupano molte volte il loro spazio. Non blocca.
+  local driver
+  [ "$PODMAN" = podman ] || return 0
+  [ "$STORAGE_CHECKED" = 0 ] || return 0
+  STORAGE_CHECKED=1
+  # {{.Store.GraphDriverName}} da Podman 2 (provato con la 2.2.1); se il formato non va, l'uscita normale (YAML)
+  driver="$("$PODMAN" info --format '{{.Store.GraphDriverName}}' 2>/dev/null)" \
+    || driver="$("$PODMAN" info 2>/dev/null | awk 'tolower($1) == "graphdrivername:" { print $2; exit }')"
+  [ "$driver" = vfs ] || return 0
+  warn "Podman archivia le immagini con il driver vfs: senza fuse-overlayfs quelle di BioLoom (circa 3 GB) occupano"
+  warn "molte volte il loro spazio. Installa fuse-overlayfs e configura storage.conf (Guida/5 - Chiavetta e server.md)."
+}
+
+loopback() { case "$1" in 127.*|localhost|::1|"[::1]") return 0 ;; *) return 1 ;; esac; }   # BIOLOOM_BIND locale
 
 # Unità systemd di "servizio": "podman generate systemd" senza --new le lega all'ID del container (PIDFile), quindi
 # vanno rigenerate ogni volta che start() ricrea i container.
@@ -339,6 +410,8 @@ start() {
     find "$uniclust" -maxdepth 4 -type f \( -name '*_a3m.ffindex' -o -name '*_a3m_db.index' \) -size +0 2>/dev/null \
       | grep -q . || fail "UNICLUST_PATH in server.env non contiene database UniClust30/UniRef30 (entro 3 livelli): $uniclust"
   fi
+  single_instance "Avvio annullato"
+  check_storage
 
   ensure_image "bioloom:$VERSION" "bioloom-$VERSION.tar" "$ROOT/docker/Dockerfile" "$ROOT" \
     || fail "Immagine BioLoom non disponibile: copia la cartella 'immagini' della copia portatile."
@@ -348,7 +421,7 @@ start() {
       || fail "Immagine QMEAN non disponibile."
   fi
 
-  local common=(-d --restart "$restart")
+  local common=(-d --restart "$restart" --label "bioloom.cartella=$BASE")   # etichetta: vedi find_other
   if [ "$PODMAN" = podman ]; then
     # SELinux (RHEL): niente rietichettatura delle cartelle montate, che possono essere dischi condivisi.
     # Il controllo di salute di Podman 2.x passa da systemd: lo sostituisce l'attesa qui sotto.
@@ -408,9 +481,15 @@ start() {
     if write_units; then say "Unità systemd rigenerate per i nuovi container: valgono dal prossimo riavvio del server."
     else warn "Unità systemd non rigenerate: puntano ai container rimossi. Rilancia '$0 servizio'."; fi
   fi
-  if [ "$bind" = 127.0.0.1 ]; then
+  if loopback "$bind"; then
     say "Dal tuo computer: ssh -N -L $port:127.0.0.1:$port ${USER:-utente}@$(hostname -f 2>/dev/null || hostname)"
     say "poi apri http://localhost:$port"
+  else
+    warn "BIOLOOM_BIND=$bind: BioLoom è raggiungibile dalla rete in HTTP, con chiave d'accesso e cookie in chiaro."
+    # Podman con root (come Docker) pubblica la porta con regole NAT, prima di quelle del firewall; senza root la porta
+    # è aperta da un processo dell'utente e il firewall la filtra come le altre
+    [ "$ROOTLESS" = 1 ] || warn "La porta pubblicata da $PODMAN scavalca il firewall (firewalld, ufw)."
+    warn "Meglio BIOLOOM_BIND=127.0.0.1 con un tunnel SSH o un reverse proxy HTTPS (Guida/5 - Chiavetta e server.md)."
   fi
   say "Chiave d'accesso: BIOLOOM_ACCESS_KEY in $ENV_FILE"
   case "$PROSA_STATE" in
@@ -419,8 +498,6 @@ start() {
     altro)    warn "ProSA: licenza attiva su un altro computer, MAC non applicato (per spostarla qui: --sposta-prosa)." ;;
   esac
 }
-
-container_running() { [ "$("$PODMAN" container inspect --format '{{.State.Running}}' "$1" 2>/dev/null)" = true ]; }
 
 stale_running() {  # vero se un container in esecuzione usa un'immagine diversa da quella attuale
   local name img want
@@ -442,6 +519,7 @@ update_all() {  # azione aggiorna: immagini al codice in programma/, poi riavvio
   local running=0 ok=1 before
   title "Aggiornamento delle immagini di BioLoom $VERSION"
   check_env_version
+  check_storage
   container_running bioloom && running=1
   before="$(image_ids)"
   if image_current "bioloom:$VERSION"; then
@@ -456,6 +534,7 @@ update_all() {  # azione aggiorna: immagini al codice in programma/, poi riavvio
     if [ "$ok" = 1 ]; then say "BioLoom è in esecuzione e usa già le immagini attuali: nessun riavvio."
     else say "BioLoom resta in esecuzione con l'immagine che aveva: nessun riavvio."; fi
   else
+    single_instance "Riavvio annullato"
     warn "Riavvio di BioLoom con le immagini aggiornate (i calcoli in corso vengono interrotti)..."
     start
   fi
@@ -475,10 +554,11 @@ install_service() {
 
 case "$ACTION" in
   avvia|server) start ;;
-  arresta) "$PODMAN" stop -t 30 bioloom-qmean bioloom >/dev/null 2>&1; remove_containers; say "BioLoom è arrestato." ;;
-  stato) "$PODMAN" ps -a --filter name=bioloom ;;
-  log) "$PODMAN" logs --tail 200 bioloom ;;
-  verifica) "$PODMAN" exec bioloom python -m bioloom.selftest ;;
+  # arresta: anche il BioLoom partito da un'altra copia (i container sono gli stessi), dicendo quale è
+  arresta) note_other; stop_containers; say "BioLoom è arrestato." ;;
+  stato) note_other; "$PODMAN" ps -a --filter name=bioloom ;;
+  log) note_other; "$PODMAN" logs --tail 200 bioloom ;;
+  verifica) note_other; "$PODMAN" exec bioloom python -m bioloom.selftest ;;
   aggiorna) update_all ;;
   servizio) install_service ;;
   *) fail "Azione sconosciuta: $ACTION (avvia, arresta, stato, log, verifica, aggiorna, servizio)" ;;

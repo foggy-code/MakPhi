@@ -84,7 +84,7 @@ export function AlignmentEditor({ kind, ids, rows, onRows, structures = [] }: {
       cancelled = true;
       clearTimeout(t);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- si richiede solo quando cambiano i residui (residuesKey), non i gap
   }, [residuesKey, ssOn]);
 
   const entries = ss?.data.entries ?? [];
@@ -97,7 +97,7 @@ export function AlignmentEditor({ kind, ids, rows, onRows, structures = [] }: {
     const states = rows.map((r, i) => (usable(i) ? columnStates(r, usable(i)!.ss!) : null));
     const ssCodes = rows.map((r, i) => (usable(i)?.source === "dssp" ? columnCodes(r, usable(i)!.ss!) : null));
     return { states, codes: ssCodes, sources: rows.map((_r, i) => usable(i)?.source ?? null), conflicts: [] };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- usable dipende solo da ss e rows, già nelle dipendenze
   }, [ssOn, ss, rows]);
   const issues = useMemo(() => [...chainBreakIssues(rows), ...emptyColumnIssues(rows)], [rows]);
   const noDssp = structural && ss && rows.some((_r, i) => !usable(i));

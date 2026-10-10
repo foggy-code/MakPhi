@@ -21,12 +21,16 @@ I percorsi di questo documento (`backend/`, `docker/`, `launcher/`, `scripts/`�
 
 - [Vista d'insieme](#vista-dinsieme): [container e volumi](#container-e-volumi) · [cartella dati](#cartella-dati) ·
   [flusso dei dati e file temporanei](#flusso-dei-dati-e-file-temporanei) ·
-  [versione, impronta e aggiornamento delle immagini](#versione-impronta-e-aggiornamento-delle-immagini)
+  [versione, impronta e aggiornamento delle immagini](#versione-impronta-e-aggiornamento-delle-immagini) ·
+  [costruzione riproducibile dell'immagine](#costruzione-riproducibile-dellimmagine) ·
+  [avviatori: un BioLoom alla volta e controlli all'avvio](#avviatori-un-bioloom-alla-volta-e-controlli-allavvio)
 - [Backend](#backend): [pacchetti](#pacchetti) · [job](#job) ·
   [coda con priorità e budget di CPU](#coda-con-priorità-e-budget-di-cpu) ·
   [ripresa delle pipeline](#ripresa-delle-pipeline) ·
   [tempo residuo e aggiornamenti in tempo reale](#tempo-residuo-e-aggiornamenti-in-tempo-reale) ·
-  [cache dei calcoli](#cache-dei-calcoli) · [migrazioni dello schema](#migrazioni-dello-schema) ·
+  [cache dei calcoli](#cache-dei-calcoli) ·
+  [libreria dei template: caricamento e sostituzione](#libreria-dei-template-caricamento-e-sostituzione) ·
+  [migrazioni dello schema](#migrazioni-dello-schema) ·
   [licenze dei programmi esterni](#licenze-dei-programmi-esterni)
 - [Calcoli](#calcoli), nell'ordine del percorso dalla sequenza al modello:
   - sequenza e template: [disordine, bassa complessità e domini](#disordine-bassa-complessità-e-domini) ·
@@ -63,9 +67,10 @@ Computer ospite (Windows, macOS, Linux; Apple Silicon in emulazione x86)
   Avvia BioLoom.bat/.command, avvia-bioloom.sh ─▶ programma/launcher/bioloom.ps1 | bioloom.sh ─▶ docker compose (progetto "bioloom")
     · trova UniClust30/QMTL sui dischi · legge il MAC da LicenseDB · porta libera · carica immagini/ o le costruisce
     · versione da launcher/VERSION · impronta del codice confrontata con /app/IMPRONTA · ProSA un computer alla volta
+    · un BioLoom alla volta per computer (le copie hanno gli stessi container)
 
 Container "bioloom" (Ubuntu 24.04, Python 3.12, utente = proprietario di /data)
-  Browser ──HTTP──▶ FastAPI (8765; pubblicata su 127.0.0.1, oppure in rete con chiave d'accesso)
+  Browser ──HTTP──▶ FastAPI (8765; pubblicata su 127.0.0.1, anche sul server; in rete solo con chiave d'accesso)
                      ├─ /api/*   rotte REST (OpenAPI su /docs)      ├─ /*  interfaccia React compilata
                      ├─ JobManager: code con priorità "cpu" (core−1) + "io" (8) · budget di CPU condiviso · stato su SQLite · lavoro in /scratch
                      │    └─ sottoprocessi: MODELLER 10.8, mkdssp, BLAST+, MMseqs2, Clustal Omega, MAFFT, MUSCLE,
@@ -81,8 +86,10 @@ Container "qmean" (profilo compose "qmean", immagine ufficiale QMEAN 4.3.0 + wor
   /cache ◀─ volume qmean_cache: copia locale di indici e cs219 di UniClust30, cs219 ricreati per i database HH-suite 2
 ```
 
-Le versioni degli strumenti sono fissate in `docker/Dockerfile` e `backend/requirements-tools.lock`; PROCHECK e ProSA
-(pacchetti con licenza) arrivano da `docker/vendor/` e mancano nelle immagini costruite senza.
+Le versioni degli strumenti sono fissate in `docker/Dockerfile` (immagini di base per digest, file scaricati verificati
+con SHA-256: vedi [Costruzione riproducibile dell'immagine](#costruzione-riproducibile-dellimmagine)) e
+`backend/requirements-tools.lock`; PROCHECK e ProSA (pacchetti con licenza) arrivano da `docker/vendor/` e mancano
+nelle immagini costruite senza.
 
 ### Cartella dati
 
@@ -93,13 +100,14 @@ data/
   jobs/<id>/          params.json, job.log, result.json e i soli risultati (niente intermedi MODELLER)
   jobs/.deleting-<id>/   resto di un job eliminato (o mai accodato) con file ancora in uso, tolto dalla pulizia automatica
   jobs/.rerun-incoming/  pacchetti di riproducibilità in arrivo, spostati nel job alla sua creazione
-  templates/          libreria globale (ID.pdb|cif + ID.meta.json + ID.analysis.json in cache)
+  templates/          libreria globale (ID.pdb|cif + ID.meta.json + ID.analysis.json in cache; .upload-*/ file in arrivo)
   uploads/            strutture caricate per l'analisi (pulizia automatica)
   cache/              risposte dei servizi remoti (uniprot, uniprot_variants, interpro, rcsb_meta, alphafold, esmfold)
                       e cache dei calcoli in cache/compute (pulizia automatica)
   licenses/           modeller.key, prosa/LicenseDB (permessi 0600, mai nelle immagini); prosa/computer, il computer
                       a cui è legata ogni licenza ProSA (scritto dagli avviatori, vedi Licenze dei programmi esterni)
-  databases/          pdbaa (BLAST+), pdbaa_mmseqs (database MMseqs2 senza indice)
+  databases/          pdbaa (BLAST+), pdbaa_mmseqs (database MMseqs2 senza indice); durante un aggiornamento
+                      anche le cartelle di lavoro <nome>.new-<job> e <nome>.old-<job>
   tools/              facoltativa: eseguibili aggiunti ai percorsi in cui `engines/tools` cerca gli strumenti
   access_key          chiave d'accesso generata in modalità server, se BIOLOOM_ACCESS_KEY è vuota
   settings.json       impostazioni utente
@@ -203,7 +211,8 @@ eseguibile manca se lo script entra nel repository da Windows (`core.filemode`).
 ripetono il controllo. `compose.yml` passa `BIOLOOM_VERSION` all'immagine `bioloom` come build arg senza valore
 (se non è impostata vale il predefinito del Dockerfile), così `ENV BIOLOOM_IMAGE_VERSION` (in `/api/system/info` e
 nel manifest dei pacchetti di riproducibilità) e `LABEL bioloom.version` sono quelli veri anche costruendo con compose;
-`bioloom-podman.sh` usa `podman build --build-arg`. La versione entra nella chiave della
+`bioloom-podman.sh` usa `podman build --build-arg` (con `BUILDPLATFORM=linux/amd64`, vedi [Costruzione riproducibile
+dell'immagine](#costruzione-riproducibile-dellimmagine)). La versione entra nella chiave della
 [cache dei calcoli](#cache-dei-calcoli), che quindi riparte a ogni nuova versione.
 
 **Impronta del codice.** Riconosce un'immagine che non corrisponde al codice anche a parità di versione (`programma/`
@@ -229,13 +238,13 @@ con `sha256sum`, `shasum -a 256` o `openssl dgst -sha256` (27 s in Git Bash, dov
 `IMPRONTA_SENZA_PERL=1` la forza). `find` usa `-prune` per non scendere in `node_modules`; PowerShell legge a blocchi
 da 1 MiB saltando i CR (0,4 s). Nessuno dei due segue collegamenti simbolici o giunzioni.
 
-Nella build lo stadio `impronta` (`ubuntu:24.04`, `COPY . /ctx`, script letto senza CR come `entrypoint.sh`) scrive
-`/impronta`; l'immagine finale la copia in `/app/IMPRONTA` con `LABEL bioloom.version`, per ultime, così una modifica
-del codice non invalida la cache dei livelli sopra. L'impronta c'è comunque si costruisca l'immagine (avviatore,
-compose a mano, CI); la `.dockerignore` esclude solo cose che la definizione esclude già, quindi il valore della build è
-quello dell'host (verificato con un albero Windows in CRLF). `docker/vendor/` non conta: dopo aver aggiunto i pacchetti con
-licenza l'immagine si ricostruisce a mano. File di sistema come `Thumbs.db` o `desktop.ini` dentro le tre cartelle
-invece contano.
+Nella build lo stadio `impronta` (`UBUNTU_IMAGE`, Ubuntu 24.04 per digest, `COPY . /ctx`, script letto senza CR come
+`entrypoint.sh`) scrive `/impronta`; l'immagine finale la copia in `/app/IMPRONTA` con `LABEL bioloom.version`, per
+ultime, così una modifica del codice non invalida la cache dei livelli sopra. L'impronta c'è comunque si costruisca
+l'immagine (avviatore, compose a mano, CI); la `.dockerignore` esclude solo cose che la definizione esclude già, quindi
+il valore della build è quello dell'host (verificato con un albero Windows in CRLF). `docker/vendor/` non conta: dopo
+aver aggiunto i pacchetti con licenza l'immagine si ricostruisce a mano. File di sistema come `Thumbs.db` o
+`desktop.ini` dentro le tre cartelle invece contano.
 
 Lettura dall'immagine: `docker run --rm --platform linux/amd64 --entrypoint cat <immagine> /app/IMPRONTA` (in Git Bash
 con `MSYS_NO_PATHCONV`; con Podman `podman run --rm --health-cmd none`, senza `--platform`). File assente (immagini
@@ -266,12 +275,125 @@ non li avrà. L'avviatore PowerShell ha solo il desktop.
    altrimenti (o se il caricamento fallisce) `compose --profile qmean build qmean`. Un fallimento è solo un avviso.
 3. Riavvio solo se un container in esecuzione usa un'immagine diversa da quella che ora ha il nome (`{{.Image}}` del
    container contro `{{.Id}}` dell'immagine), così i calcoli non si interrompono se non è cambiato nulla: desktop
-   `compose up -d` con `.env.locale`, server come `bioloom.sh server`, Podman come `avvia`. Con BioLoom fermo e
-   un'immagine cambiata dice che verrà usata al prossimo avvio.
+   `compose up -d` con `.env.locale`, server come `bioloom.sh server`, Podman come `avvia`; prima, il controllo del
+   BioLoom partito da un'altra cartella (vedi [Avviatori](#avviatori-un-bioloom-alla-volta-e-controlli-allavvio)). Con
+   BioLoom fermo e un'immagine cambiata dice che verrà usata al prossimo avvio.
 
 **`prepara`** salva le immagini prima di copiare i file: se `bioloom:<versione>` non corrisponde al codice la aggiorna
 come al passo 1 (senza riavvio) e, se non ci riesce, si ferma prima di copiare, perché una copia portatile con immagine
 vecchia e codice nuovo non deve uscire. Crea `.env.locale` se manca, che serve alla costruzione con compose.
+
+### Costruzione riproducibile dell'immagine
+
+`docker/Dockerfile` fissa tutto ciò che scarica, così due costruzioni dello stesso codice partono dagli stessi byte. I
+pacchetti di Ubuntu no: si installano aggiornati, con le correzioni di sicurezza del giorno, e le versioni rilevate sono
+in `THIRD_PARTY_NOTICES.md`.
+
+| Cosa | Come è fissato | ARG |
+|---|---|---|
+| `node:22-slim` (Node.js 22.23.3) e `ubuntu:24.04` (24.04.5 del 2026-09-17) | digest dell'indice multi-architettura, nella forma `ubuntu@sha256:…` | `NODE_IMAGE`, `UBUNTU_IMAGE` (un solo punto per i tre stadi Ubuntu: `tools-build`, `impronta`, immagine finale) |
+| US-align 20260527, fpocket 4.2.3 | commit del tag (`177cc8a`, `4bb0d84`) e SHA-256 del tar non compresso | `USALIGN_COMMIT`, `USALIGN_SHA256`, `FPOCKET_COMMIT`, `FPOCKET_SHA256`; `USALIGN_TAG` resta e si controlla con l'uscita di `USalign -h` («(Version 20260527)»); `FPOCKET_TAG` tolto (tag e commit nel commento) |
+| MODELLER 10.8 (`modeller_10.8-1_amd64.deb`, 14.229.846 byte) | SHA-256 del `.deb` | `MODELLER_VERSION`, `MODELLER_SHA256` |
+| APBS 3.4.1 | SHA-256 dello zip della release | `APBS_VERSION`, `APBS_SHA256` |
+| immagine di base di QMEAN (`docker/qmean/Dockerfile`) | digest di `registry.scicore.unibas.ch/schwede/qmean` | — |
+
+- **Tag e digest:** il tag non sta davanti al digest perché Podman 2.2.1 (server RHEL 8, `bioloom-podman.sh`) rifiuta i
+  riferimenti con tutti e due («Docker references with both a tag and digest are currently not supported»); resta nel
+  commento, come già in `docker/qmean/Dockerfile`.
+- **US-align e fpocket per commit:** le loro release non hanno file allegati, solo gli archivi dei sorgenti che GitHub
+  genera al volo senza garantire gli stessi byte del `.tar.gz` (la compressione è già cambiata, nel 2023). Un commit non
+  si sposta come un tag, e `git archive` produce lo stesso tar a parità di commit: si scarica
+  `…/archive/<commit>.tar.gz`, si decomprime e si verifica il tar.
+- **Verifica:** `echo "<sha256>  <file>" | sha256sum -c -` nello stesso RUN del download. Un file cambiato ferma la
+  costruzione con «<file>: FAILED» e «sha256sum: WARNING: 1 computed checksum did NOT match»; con `USALIGN_TAG`
+  diverso dalla versione del sorgente si ferma sul controllo di `USalign -h`.
+- **MODELLER:** nello stesso RUN verifica dello SHA-256, `apt-get update`, `KEY_MODELLER=XXXX apt-get install -y
+  --no-install-recommends /tmp/modeller.deb` e cancellazione delle liste. Prima era `dpkg -i … || apt-get -f install
+  -y`, ma il `.deb` (convertito con alien) non dichiara dipendenze: `dpkg -i` riusciva sempre e il ripiego non partiva
+  mai, e senza le liste apt, cancellate dal livello precedente, non avrebbe potuto funzionare.
+- **Piattaforma dell'interfaccia:** lo stadio `frontend` (JavaScript, indipendente dalla piattaforma) gira
+  sull'architettura di chi costruisce: `FROM --platform=$FRONTEND_PLATFORM ${NODE_IMAGE}`, con `ARG BUILDPLATFORM` senza
+  valore e `ARG FRONTEND_PLATFORM=${BUILDPLATFORM:-linux/amd64}`. BuildKit e Podman (anche 2.2.1, provato: `linux/amd64`)
+  danno `BUILDPLATFORM` da sé; `linux/amd64` vale per un costruttore che non lo dà. Non un predefinito di
+  `BUILDPLATFORM` stesso: con BuildKit scavalcherebbe il valore automatico (con `ARG BUILDPLATFORM=linux/s390x` lo stadio
+  veniva costruito per s390x, quindi su un Mac ARM l'interfaccia si compilerebbe in emulazione). `bioloom-podman.sh`
+  passa comunque `--build-arg BUILDPLATFORM=linux/amd64` all'immagine di BioLoom, per i buildah vecchi che non lo
+  valorizzano.
+- **`docker buildx build --check -f docker/Dockerfile .`:** nessun avviso. La seconda riga del file,
+  `# check=skip=FromPlatformFlagConstDisallowed`, salta la regola sul `--platform=linux/amd64` costante, voluto perché
+  l'immagine è solo amd64 (MODELLER per amd64, ProSA a 32 bit).
+- **Aggiornare:** la procedura è nei commenti in testa al Dockerfile: `docker buildx imagetools inspect ubuntu:24.04`
+  (o `node:22-slim`) e il «Digest» dell'indice, non quello di una piattaforma; per MODELLER e APBS la versione nell'ARG
+  e lo `sha256sum` del file; per US-align e fpocket il commit del tag (`git ls-remote <repository> refs/tags/<tag>`, per
+  un tag annotato la riga `^{}`) e `curl -fsSL <URL> | gzip -dc | sha256sum`. Poi una costruzione completa e le versioni
+  nuove in `THIRD_PARTY_NOTICES.md`.
+- **QMEAN:** l'immagine di base di `bioloom-qmean` sta solo nel registro del gruppo Schwede: se sparisse, `bioloom-qmean`
+  non si potrebbe più costruire. La copia di sicurezza è il tar della copia portatile o un `docker save`, che
+  `aggiorna` e l'avvio caricano da `immagini/` ([Guida → Copia di sicurezza dell'immagine
+  QMEAN](../../Guida/5%20-%20Chiavetta%20e%20server.md#copia-di-sicurezza-dellimmagine-qmean)).
+
+### Avviatori: un BioLoom alla volta e controlli all'avvio
+
+**Un BioLoom alla volta.** Tutte le copie di BioLoom hanno lo stesso progetto compose (`name: bioloom` in
+`compose.yml`), quindi gli stessi container e volumi: avviarne una ricreerebbe i container dell'altra con un'altra
+cartella dati. Il nome non cambia da una copia all'altra, perché il volume `cache` con l'indice MMseqs2 resterebbe
+orfano; gli avviatori guardano invece da dove è partito il BioLoom in esecuzione.
+
+- **Docker** (`bioloom.sh`, `bioloom.ps1`): etichetta `com.docker.compose.project.working_dir` del container in
+  esecuzione (`bioloom`, altrimenti uno del profilo `qmean`), cioè la cartella di `compose.yml` come la scrive compose
+  sul computer (Docker Desktop: `C:\…\programma\launcher`), confrontata con il proprio `programma/launcher`. In bash con
+  `-ef` dopo `cygpath -u` (Git Bash) o `wslpath -u` (WSL), quindi a meno di maiuscole e collegamenti; in PowerShell con
+  `GetFullPath` e `-ieq`, che ignora maiuscole, `/` contro `\` e la barra finale. PowerShell legge etichette e mount con
+  `{{json …}}`, perché la 5.1 toglie le virgolette interne agli argomenti dei programmi e `{{index … "etichetta"}}`
+  non arriverebbe intero. La cartella dati dell'altra copia è il `Source` del mount su `/data`.
+- **Podman** (`bioloom-podman.sh`): i container hanno nomi fissi e quelli creati dall'avviatore l'etichetta
+  `bioloom.cartella=<cartella di BioLoom>`. Per quelli delle versioni precedenti, senza etichetta, si confronta la
+  cartella montata su `/data` con `BIOLOOM_DATA_PATH` (nei messaggi: `<cartella dati> (cartella dati)`).
+
+Il controllo si fa prima di avviare: dal desktop subito dopo la verifica della cartella dati (prima di ProSA e della
+ricerca dei dischi), con `server` e, in `aggiorna`, solo quando c'è un riavvio. Il BioLoom di un'altra cartella si
+arresta solo con il consenso: «Arrestarlo e continuare? [s/N]», chiesto come gli altri prompt se non c'è `--no-menu` /
+`-NoMenu`. Invio, input chiuso o la modalità senza domande escono con 1 («[!] Avvio annullato: resta in esecuzione il
+BioLoom di <cartella>. Per usare questa copia arrestalo prima (<comando> arresta) e riprova.», in `aggiorna` «Riavvio
+annullato»), così la finestra del `.bat`/`.command` resta aperta. Con «sì» `compose --profile qmean down
+--remove-orphans`; con Podman lo stop delle unità systemd di `servizio` (dell'utente, non della copia: l'avvio le
+rigenera) e la rimozione dei container. In `aggiorna` dal desktop, arrestata l'altra copia, questa parte come un avvio
+normale (porta, licenze, UniClust), perché il suo `.env.locale` può non venire da un avvio.
+
+`arresta` ferma invece comunque il BioLoom in esecuzione e dice da quale cartella era partito («Il BioLoom in esecuzione
+è partito da un'altra cartella: …», poi la cartella dati di quella copia): i container sono gli stessi, «Arresta
+BioLoom» non fa domande, la cartella dell'altra copia può non esserci più (chiavetta tolta) e arrestare non cancella
+nulla. `stato`, `log` e `verifica` danno lo stesso avviso. Limite noto: un BioLoom avviato da WSL (`/mnt/c/…`) e
+controllato da Git Bash o PowerShell risulta di un'altra cartella anche se è la stessa; il contrario funziona.
+
+**Rete del server (`BIOLOOM_BIND`).** `server.env.example` ha `BIOLOOM_BIND=127.0.0.1` (prima `0.0.0.0`), quindi anche
+il `server.env` creato da `bioloom.sh server`; `bioloom-podman.sh` lo forzava già e ora lo prende dall'esempio.
+Dagli altri computer si arriva con un reverse proxy HTTPS o un tunnel SSH. Sono locali `127.*`, `localhost` e `::1` (in
+bash anche il valore vuoto, che per compose vale 127.0.0.1; la variabile della shell prevale su `server.env`, come per
+compose). Alla creazione di `server.env` l'avviatore dice che BioLoom ascolterà solo su 127.0.0.1; a ogni avvio, con un
+valore locale, stampa il comando del tunnel (`ssh -N -L <porta>:127.0.0.1:<porta> utente@server`), altrimenti avvisa
+senza fermarsi: HTTP con chiave e cookie in chiaro e, con Docker o con Podman da root, porta pubblicata con regole NAT
+che passano prima di firewalld e ufw. Con Podman senza root la porta è aperta da un processo dell'utente e il firewall
+la filtra: la riga sul firewall manca. I `server.env` esistenti con `0.0.0.0` restano così, con l'avviso.
+
+**Mac con processore Apple.** Il riepilogo dell'avvio dal desktop (`bioloom.sh`) aggiunge due righe (container amd64 in
+emulazione, ProSA x86 a 32 bit che potrebbe non funzionare, l'opzione «Use Rosetta for x86_64/amd64 emulation on Apple
+Silicon» di Docker Desktop) se `uname -m` è `arm64`, oppure se `sysctl -n hw.optional.arm64` è 1: in una shell in
+Rosetta `uname -m` dice `x86_64`. ProSA con Rosetta non è verificato su un Mac vero.
+
+**Podman.**
+
+- **Driver di archiviazione:** all'avvio e in `aggiorna`, una volta per esecuzione, `podman info --format
+  '{{.Store.GraphDriverName}}'` (provato con la 2.2.1; se il formato non va, `graphDriverName:` dall'uscita YAML). Con
+  `vfs` (senza root e senza fuse-overlayfs ogni strato è una copia intera) un avviso che rimanda alla Guida
+  (fuse-overlayfs e `storage.conf`); non blocca mai.
+- **Senza compose:** `bioloom.sh` passa sempre a `bioloom-podman.sh` (con `--sposta-prosa` e `--no-menu`) `server`,
+  `arresta`, `stato`, `log` e `verifica`, anche senza `server.env` (bastano i predefiniti; `arresta` ferma il BioLoom
+  acceso da qualunque cartella); `aggiorna` solo con `server.env`, perché senza il riavvio creerebbe il file e
+  uscirebbe. L'avvio dal desktop finisce con un messaggio che dà le due strade (Docker con compose sul PC, `server` su
+  un server con solo Podman). Prima queste azioni arrivavano a `docker compose` con «Docker non è installato», «unknown
+  command: docker compose», un falso «BioLoom è arrestato» o l'uscita 127.
+- **`--no-menu`** (nuova in `bioloom-podman.sh`): nessuna domanda.
 
 ## Backend
 
@@ -316,14 +438,15 @@ systemd, e l'attesa la fa l'avviatore; senza root il root del container è l'ute
 passa `BIOLOOM_UID=0` e l'entrypoint resta root invece di passare all'utente 1000 (che sul server sarebbe un subuid
 estraneo, senza permessi sulla cartella dati); il MAC non si può assegnare, quindi ProSA non trova una licenza valida.
 `bioloom-podman.sh servizio` genera le unità systemd dell'utente (`podman generate systemd --name`), che partono
-con il server solo con il linger attivo.
+con il server solo con il linger attivo. Etichetta `bioloom.cartella`, driver di archiviazione e azioni senza compose:
+vedi [Avviatori](#avviatori-un-bioloom-alla-volta-e-controlli-allavvio).
 
 **Radice**
 
 | Modulo | Contenuto |
 |---|---|
 | `__main__` | avvio del server (`python -m bioloom`, `--host`, `--port`, `--no-browser`) e comando `rerun` |
-| `app` | applicazione FastAPI: rotte, middleware (Host e origine, chiave d'accesso), interfaccia compilata (`frontend/dist`) |
+| `app` | applicazione FastAPI: rotte, middleware (Host e origine, chiave d'accesso, CORS dello sviluppo, limite del corpo), interfaccia compilata (`frontend/dist`) |
 | `cli` | comandi oltre al server: `python bioloom.py rerun` (vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione)) |
 | `config` | percorsi (`Paths`), impostazioni utente (`UserSettings`, `SettingsStore`), limite degli upload |
 | `selftest` | verifica dell'installazione da riga di comando (`python -m bioloom.selftest`) |
@@ -333,6 +456,7 @@ con il server solo con il linger attivo.
 | Modulo | Contenuto |
 |---|---|
 | `auth` | chiave d'accesso della modalità server (`BIOLOOM_AUTH=on`) |
+| `bodylimit` | limite della dimensione del corpo delle richieste, prima che Starlette lo legga (`BodyLimit`, `request_limit`; vedi [Sicurezza e privacy](#sicurezza-e-privacy)) |
 | `budget` | budget di CPU condiviso fra i job (vedi [Coda con priorità e budget di CPU](#coda-con-priorità-e-budget-di-cpu)) |
 | `cache` | cache dei calcoli (vedi [Cache dei calcoli](#cache-dei-calcoli)) |
 | `container` | composizione dei servizi, creata una volta all'avvio |
@@ -410,7 +534,7 @@ con il server solo con il linger attivo.
 | `analysis` | job `analysis` (analisi strutturale) |
 | `compute` | job `search`, `align`, `align2d`, `model`, `loop`, `quality`, `qmean`; template preparati riusati (`PreparedTemplates`) |
 | `coverage` | copertura del bersaglio da parte dei template, avvisi su disordine e domini |
-| `databases` | pdbaa, MMseqs2, stato di UniClust30; job dei database |
+| `databases` | pdbaa, MMseqs2, stato di UniClust30; job dei database (pdbaa e MMseqs2 uno alla volta, risorsa `PDBAA_FILES`) |
 | `globalsearch` | ricerca globale |
 | `housekeeping` | pulizia automatica e spazio occupato |
 | `jobcleanup` | pulizia di massa dei job (criteri, anteprima, ciclo a tempo), uso ed eliminazione dei progetti con i loro job (vedi [Eliminazione di progetti e pulizia dei job](#eliminazione-di-progetti-e-pulizia-dei-job)) |
@@ -427,7 +551,7 @@ con il server solo con il linger attivo.
 | `reproducibility` | pacchetti dei job e job `rerun` |
 | `selftest` | job `selftest` (verifica dell'installazione su 1UBQ) |
 | `structure_tools` | job `pockets` ed `electrostatics` |
-| `templates` | libreria dei template, assemblaggi, download da RCSB e AlphaFold DB |
+| `templates` | libreria dei template, assemblaggi, download da RCSB e AlphaFold DB, caricamento con sostituzione confermata (vedi [Libreria dei template](#libreria-dei-template-caricamento-e-sostituzione)) |
 
 **`api/`** (OpenAPI completo su `/docs`)
 
@@ -438,7 +562,7 @@ con il server solo con il linger attivo.
 | `bio` | `/api` | analisi di sequenza, disordine, copertura, FASTA, conversione degli allineamenti, validazione PIR, UniProt, InterPro, metadati RCSB |
 | `compute` | `/api` | avvio di ricerca di template (`POST /api/search`), allineamenti, modellazione, loop, qualità, QMEAN, pipeline (elementi ed esportazioni) e controlli preventivi |
 | `databases` | `/api/databases` | stato e job dei database |
-| `deps` | — | dipendenze condivise (servizi, lettura limitata degli upload) |
+| `deps` | — | dipendenze condivise (servizi, lettura limitata degli upload: 413 `too_large`) |
 | `files` | `/api/files` | sequenze e strutture da file, strutture caricate |
 | `jobs` | `/api/jobs` | elenco, stato, eventi, log, file, annullamento, ripresa, eliminazione (con byte liberati e resti), pulizia di massa con anteprima (`/cleanup`, `/cleanup/preview`), qualità, consenso, report, PyMOL, archivio |
 | `labels` | `/api/tags`, `/api/favorites`, `/api/search` | etichette, preferiti e ricerca globale (`GET /api/search`) |
@@ -449,7 +573,7 @@ con il server solo con il linger attivo.
 | `reproducibility` | `/api/jobs` | pacchetto di un job, anteprima e riesecuzione di un pacchetto |
 | `structure_tools` | `/api` | tasche, elettrostatica, rifinitura e i più recenti per struttura |
 | `system` | `/api` | salute, informazioni, risorse, spazio, verifica, pulizia, esempi, impostazioni, arresto |
-| `templates` | `/api/templates` | libreria, download, upload, assemblaggi, file, eliminazione |
+| `templates` | `/api/templates` | libreria, download, upload (409 `template_exists` senza `overwrite`), assemblaggi, file, eliminazione |
 
 ### Job
 
@@ -472,8 +596,8 @@ Tutti i calcoli passano dal `JobManager` (priorità di ogni tipo nella [coda](#c
 | `rerun` | `POST /api/jobs/rerun` | cpu |
 | `selftest` | `POST /api/system/selftest` | cpu |
 | `pipeline` | `POST /api/pipeline` | cpu |
-| `db_update_pdbaa` | `POST /api/databases/pdbaa/update` | io |
-| `db_build_mmseqs`, `db_index_mmseqs` | `POST /api/databases/mmseqs/build`, `/mmseqs/index` | cpu |
+| `db_update_pdbaa` | `POST /api/databases/pdbaa/update` | io, con la risorsa esclusiva dei file di pdbaa |
+| `db_build_mmseqs`, `db_index_mmseqs` | `POST /api/databases/mmseqs/build`, `/mmseqs/index` | io, con la risorsa esclusiva dei file di pdbaa |
 | `db_convert_uniclust`, `db_local_uniclust` | `POST /api/databases/uniclust/convert`, `/uniclust/local` | io, con la risorsa esclusiva del QMEAN locale |
 
 - stato `queued → running → completed | failed | cancelled` (più `cancelling`) salvato su SQLite; non ci sono altri
@@ -569,6 +693,18 @@ confronto strutturale usa il job `align` (vedi [Confronto strutturale](#confront
   insieme. Restituita, la risorsa non si libera una seconda volta alla chiusura (quella presa nel frattempo da un
   altro job resta sua). Prima i job QMEAN restavano `running` in attesa della coda del worker e consumavano il loro
   timeout.
+- **File di pdbaa** (`PDBAA_FILES`, `services/databases`): `db_update_pdbaa`, `db_build_mmseqs` e `db_index_mmseqs`
+  scrivono una cartella che un altro legge per costruire la propria (pdbaa → `pdbaa_mmseqs` → indice nel volume
+  `/cache`), quindi girano uno alla volta, anche lanciati da più utenti; chi aspetta resta `queued` con la fase "In
+  coda: un altro job sta aggiornando pdbaa o il database MMseqs2" (aggiunta a `RESOURCE_STAGE` da `services/databases`,
+  senza toccare `core/jobs`). Le risorse valgono dentro un pool, perché ogni dispatcher tiene le proprie: per questo
+  build e indice MMseqs2 sono passati da "cpu" a "io", come QMEAN. I loro processi (`blastdbcmd`, `createdb`,
+  `createindex`) passano comunque dal budget di CPU, e la copia dei file non occupa più un posto di calcolo. Ogni job
+  lavora accanto alla cartella definitiva (stesso disco, per lo scambio con un rename) in `<nome>.new-<job>` e
+  `<nome>.old-<job>`; un'estrazione o una copia non riuscita, anche per annullamento, si toglie subito, e gli avanzi di
+  un'interruzione (arresto, memoria esaurita; anche quelli a nome fisso `<nome>.new`/`.old` delle versioni precedenti)
+  li toglie il job successivo, che tiene la risorsa. Per rendere globali le risorse esclusive, fra pool diversi,
+  andrebbe cambiato `core/dispatch.py`.
 
 **Budget di CPU** (`core/budget.py`). Senza coordinamento, pipeline × elementi in parallelo × strumenti saturavano la
 CPU. Gli slot sono `effective_workers`, condivisi da tutti i job. `JobContext.run(cpu=...)` li prende prima di avviare
@@ -821,6 +957,58 @@ ricerche. Il pairwise è istantaneo e non passa dalla cache.
   riporta "Risultato dalla cache del …". Nella pipeline la data finisce nelle metriche dell'elemento
   (`search_cached_at`, badge "cache" nella tabella) e il risultato del job conta le ricerche riusate
   (`search_cache_hits`).
+
+### Libreria dei template: caricamento e sostituzione
+
+La libreria (`services/templates.TemplateLibrary`, cartella `templates/`) ha per ogni template un file `<ID>.pdb` o
+`<ID>.cif`, il `<ID>.meta.json` e l'analisi in cache. Un file entra sempre allo stesso modo (`_install`): si scrive e si
+legge (`domain/structure.load_structure`) in una cartella temporanea della libreria, `.upload-<casuale>/<ID>.<fmt>`
+(stesso disco; con lo stesso nome del file definitivo, così gli errori di lettura citano `<ID>.pdb` come prima), poi
+un `os.replace` sotto il lock lo mette al suo posto e solo dopo si toglie il file con l'altro formato (.pdb ↔ .cif): chi
+legge trova sempre il vecchio file o il nuovo, mai nessuno dei due. Scritture concorrenti dello stesso id (due
+sostituzioni, un download e una sostituzione) sono in fila su un lock per id (`_write_lock`) attorno a installazione e
+registrazione dei metadati, preso sempre dopo quello dei download (`_fetch_lock`) e mai attorno al download stesso.
+Un file illeggibile non tocca la libreria. Il punto
+iniziale tiene le cartelle temporanee fuori dall'indice della ricerca globale (l'elenco conta solo i file); quelle
+rimaste da un arresto si tolgono alla creazione della libreria, cioè all'avvio.
+
+**`POST /api/templates/upload`** (`file`; `template_id`, altrimenti l'id viene dal nome del file; `overwrite`):
+
+- `overwrite`, campo del modulo: `true`, `1`, `on` (anche `yes`) = sì; `false`, `0`, `off` o assente = no; un altro
+  valore → 422 `validation_error`.
+- **Id già in libreria senza `overwrite`:** 409 subito, prima di scrivere o leggere il file (la domanda all'utente è
+  immediata anche con un file da 50 MB), libreria invariata:
+  `{"error": {"code": "template_exists", "message": …, "details": {"id", "jobs", "projects"}}}` con il messaggio
+  «Nella libreria c'è già un template <ID>[, usato da N job[ in M progetto/progetti]]. Per sostituirlo conferma la
+  sovrascrittura (i calcoli successivi useranno il nuovo file); altrimenti scegli un altro identificativo.». Lo stesso
+  409 se l'id arriva da un'altra richiesta mentre il file si legge.
+- **Con `overwrite`:** il file si sostituisce solo se si legge; uno rovinato dà 400 `invalid_structure` e il template
+  resta intatto. Metadati (`added_at`, `source: "caricamento utente"`) e analisi si rifanno dal nuovo file, anche
+  cambiando formato (resta un solo file); se la registrazione non riesce il `meta.json` vecchio si toglie, perché non
+  descrive il nuovo file. La risposta 200 ha il campo `replaced` (true/false).
+- **Uso:** `api/templates.template_usage` conta i job che citano `"<ID>"` nei parametri JSON (sorgente di un'analisi,
+  template di una modellazione o di una pipeline a template fissi) e i loro progetti distinti. È approssimato: conta
+  anche una sequenza chiamata come l'id e non conta le pipeline che scelgono il template dalla ricerca.
+
+**Altri chiamanti:**
+
+- **Download** (`fetch` da RCSB, `fetch_alphafold`): passano da `_install` senza `overwrite`, quindi non sostituiscono
+  mai un template presente, nemmeno uno caricato dall'utente mentre il download è in corso (si usa quello, con
+  `cached`). Un file scaricato illeggibile non entra in libreria: 502 `remote_error` («RCSB PDB: la struttura <ID>
+  scaricata non è leggibile (…)», lo stesso per AlphaFold DB); prima restava un template rotto.
+- La pipeline scarica solo i template che mancano; gli assemblaggi hanno già il loro conflitto esplicito; la
+  riesecuzione usa una libreria privata. `save_text` è stato tolto: nessuno lo chiamava.
+- `os.replace` non ritenta: nel container Linux un file aperto non lo blocca, fuori da Docker su Windows fallirebbe.
+
+**Interfaccia** (`components/TemplateUpload.tsx`, `lib/templateUpload.ts`): l'hook `useTemplateUpload` è l'unico punto
+che carica un template (pagina Libreria e «Da file» del selettore dei template in Modellazione, Allineamenti, Pipeline ed
+Editor PIR). Al 409 `template_exists` del primo tentativo (`replaceQuestion`) mostra il `Confirm` dell'app, con lo stile
+"danger", il messaggio del server e «"Sostituisci" mette al suo posto il file «<nome>»»; pulsanti **Annulla** e
+**Sostituisci**. Il secondo tentativo ha `overwrite=true` (`api.uploadTemplate(file, { templateId?, overwrite? })`) e
+non chiede mai una seconda conferma. Avvisi: «<ID> sostituito» nella Libreria, «Template <ID> sostituito nella
+libreria» nel selettore (altrimenti «caricato»). Dopo una sostituzione il dettaglio della Libreria si ridisegna da capo
+(chiave con una revisione) e il selettore rilegge l'analisi, togliendo le catene scelte che non esistono più; se non ne
+resta nessuna prende la prima.
 
 ### Migrazioni dello schema
 
@@ -3653,8 +3841,8 @@ interfaccia delle singole funzioni sono descritte nelle loro sezioni (paragrafi 
 | radice | `main.tsx` (tema applicato prima del primo render), `App.tsx` (rotte e accesso con chiave), `styles.css` (variabili CSS e temi) |
 | `api/` | `client.ts` (tutte le chiamate al backend) e `types.ts` (tipi delle risposte) |
 | `pages/` | una pagina per rotta (tabella sotto), caricata su richiesta |
-| `components/` | componenti condivisi (`ui`, `charts`, `Viewer3D`, `JobPanel`, `Pickers`, `AlignmentView`, `Layout`, `GlobalSearch`, `Labels`, `Preflight`, `ReportButton`, `ReproButton`, `FileLoad`, `ErrorBoundary`, `ProjectsDialog`, `JobCleanupDialog`…) e riquadri delle funzioni (`StructuralAnalysis`, `StructureTools`, `Refinement`, `Mutagenesis`, `Predictor`, `ComplexInput`, `ComplexResults`, `AssembliesCard`, `LigandPicker`, `LigandsPanel`, `CoverageAlerts`…) |
-| `lib/` | logica pura con i test accanto (`*.test.ts`, per esempio `cleanup.ts` per la pulizia dei job e l'eliminazione dei progetti, `projectSelection.ts` per il progetto attivo), più gli hook (`hooks.ts`, `useJob`) e i contesti di progetto e notifiche (`context.tsx`) |
+| `components/` | componenti condivisi (`ui`, `charts`, `Viewer3D`, `JobPanel`, `Pickers`, `AlignmentView`, `Layout`, `GlobalSearch`, `Labels`, `Preflight`, `ReportButton`, `ReproButton`, `FileLoad`, `ErrorBoundary`, `ProjectsDialog`, `JobCleanupDialog`, `TemplateUpload`…) e riquadri delle funzioni (`StructuralAnalysis`, `StructureTools`, `Refinement`, `Mutagenesis`, `Predictor`, `ComplexInput`, `ComplexResults`, `AssembliesCard`, `LigandPicker`, `LigandsPanel`, `CoverageAlerts`…) |
+| `lib/` | logica pura con i test accanto (`*.test.ts`, per esempio `cleanup.ts` per la pulizia dei job e l'eliminazione dei progetti, `projectSelection.ts` per il progetto attivo, `templateUpload.ts` per la conferma della sostituzione dei template), `safeStorage.ts` (sessionStorage senza eccezioni), più gli hook (`hooks.ts`, `useJob`) e i contesti di progetto e notifiche (`context.tsx`) |
 
 **Qualità per residuo nel 3D e confidenza degli allineamenti:**
 
@@ -3708,6 +3896,46 @@ interfaccia delle singole funzioni sono descritte nelle loro sezioni (paragrafi 
   riga non è disegnata (`revealScrollTop`, poi `rowScrollDelta` sulla riga vera); lo "scroll anchoring" del browser è
   spento nel contenitore. Misurato con 304 residui: 20 righe disegnate invece di 304.
 
+**Errori dell'interfaccia** (`components/ErrorBoundary.tsx`): un errore di disegno mostra la scheda «Si è verificato un
+errore nell'interfaccia» (messaggio, dettagli tecnici, «Ricarica la pagina», «Riprova», «Copia i dettagli») invece
+della pagina bianca.
+
+- **Moduli obsoleti:** un import dinamico non riuscito (`dynamically imported module`, `Importing a module script
+  failed`, `Failed to fetch`: i moduli di una build precedente dopo un aggiornamento) ricarica la pagina da sé al più una
+  volta al minuto per scheda (`claimStaleReload`). Il segno `bioloom.chunk-reload` in sessionStorage conserva l'ora
+  dell'ultima ricarica e non si cancella mai; un segno delle versioni precedenti («1») o illeggibile vale come assente.
+- **Perché così:** prima il segno si toglieva in `render()`, e con i dati del sito bloccati già leggere `sessionStorage`
+  lancia SecurityError, quindi pagina bianca. Toglierlo in `componentDidMount`/`componentDidUpdate` avrebbe creato un
+  ciclo: il componente si monta e cancella il segno prima che il modulo a caricamento differito fallisca, e con un modulo
+  mancante davvero la pagina si ricaricherebbe senza fine.
+- **Senza sessionStorage** nessuna ricarica automatica, perché non si potrebbe ricordare di averla già fatta: resta il
+  pulsante. `lib/safeStorage.ts` (`sessionGet`, `sessionSet`) legge e scrive dentro try/catch (lettura non riuscita =
+  null, scrittura non riuscita = false), come `main.tsx` per localStorage.
+
+**ESLint** (`npm run lint`, configurazione flat in `eslint.config.js`):
+
+- **Regole:** per `src/**/*.{ts,tsx}` quelle raccomandate di JavaScript e di typescript-eslint, senza informazioni sui
+  tipi per restare veloce (i tipi li controlla `tsc --noEmit`), e di eslint-plugin-react-hooks 7 solo `rules-of-hooks`
+  ed `exhaustive-deps`: il preset `recommended` aggiunge le regole del React Compiler (purity, refs,
+  set-state-in-effect…), che il progetto non usa. I `*.config.{js,ts}` hanno le stesse regole con i globali di Node.
+  Unico ritocco: `no-unused-vars` con `ignoreRestSiblings`, per `{ as_of: _ignored, ...base }`, accettato anche da tsc.
+- **`exhaustive-deps` è un errore**, non un avviso: una dipendenza mancante è di solito una closure obsoleta, e ogni
+  esclusione voluta si dichiara con il suo motivo dopo «--»
+  (`// eslint-disable-next-line react-hooks/exhaustive-deps -- <motivo>`). Con `reportUnusedDisableDirectives: "error"`
+  anche un commento di esclusione che non serve più è un errore, quindi `--max-warnings 0` non serve.
+- **Esclusioni:** 50, tutte con il motivo (49 `exhaustive-deps`, fra cui il layout effect senza dipendenze di
+  `lib/virtual.ts`, che misura la pagina dopo ogni disegno, e una per i tipi di 3Dmol in `Viewer3D`). Delle 61 di prima,
+  nessuna con un motivo, 12 sono state tolte completando le dipendenze senza cambiare comportamento o perché la regola
+  non scattava più.
+- **Difetti trovati:** l'Editor PIR → Genera allineamento prendeva template, catene e nome del bersaglio dal modulo
+  quando il job finiva, quindi da valori cambiati nel frattempo: ora li prende dal job (`job.result.templates`,
+  `job.params.target.name`). Minori: `templatesMeta ?? []` in `PirWorkspace` rendeva inutile un `useMemo`; una
+  dipendenza superflua in `Modeling`.
+- eslint-plugin-react-refresh è stato scartato: serve solo all'aggiornamento a caldo di `npm run dev` e avrebbe chiesto
+  di spostare funzioni in altri file (16 casi in 11 file).
+
+Lo eseguono `scripts/test.sh frontend` e il job frontend della CI.
+
 Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni risultato ha un link stabile.
 
 | Pagina (`pages/`) | Funzione |
@@ -3716,7 +3944,7 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 | Nuovo modello guidato (`/wizard`) | sequenza → template → allineamento → opzioni → avvio → risultati, con i controlli preventivi prima di ogni calcolo e lo stato nell'URL e nel browser (vedi [Procedura guidata](#procedura-guidata)); Modellazione e Pipeline hanno gli stessi controlli sopra il pulsante di avvio |
 | Sequenze (`/sequences`) | import FASTA/UniProt, proprietà ProtParam, predizione GOR, annotazioni UniProt/InterPro/PDB; mappa di disordine (FoldIndex), bassa complessità (SEG), domini InterPro e GOR; stella ed etichette (`?id=` sceglie la sequenza) |
 | Ricerca template (`/search`) | RCSB/NCBI/locale/AlphaFold DB (accessione UniProt facoltativa, precompilata dalle sequenze UniProt), tabella ordinabile (predefinito: punteggio), colonna Punteggio con fascia e motivazioni (suggerimento; per componente nella riga espansa, sopra l'allineamento dell'hit), riquadro dei template consigliati (principale e complementari, esclusi con il motivo) con «Usa i consigliati per la modellazione» (`lib/templateRank.modelingLink`: un `t=ID:CATENA` per template), righe consigliate evidenziate, download, "modella con"; badge "modello predetto" e pLDDT; nota "dalla cache (data)" e ricalcolo ignorando la cache; per ogni hit gli avvisi su regioni disordinate e domini fuori dal tratto allineato |
-| Libreria template (`/templates`) | download RCSB e "Da AlphaFold DB (UniProt)", upload PDB/mmCIF, catene, residui mancanti, ligandi classificati (metallo, cofattore noto, additivo, altro ligando, residuo modificato), DSSP, 3D; badge "AlphaFold", pLDDT medio e fasce di confidenza; assemblaggi biologici (REMARK 350, `pdbx_struct_assembly`) con lo stato oligomerico e «Importa come template» (`<ID>_ASM<n>`), badge "assemblaggio"; stella, etichette e filtro (`?tag=`), preferiti in cima |
+| Libreria template (`/templates`) | download RCSB e "Da AlphaFold DB (UniProt)", upload PDB/mmCIF (con «Sostituisci» per un id già in libreria, vedi [Libreria dei template](#libreria-dei-template-caricamento-e-sostituzione)), catene, residui mancanti, ligandi classificati (metallo, cofattore noto, additivo, altro ligando, residuo modificato), DSSP, 3D; badge "AlphaFold", pLDDT medio e fasce di confidenza; assemblaggi biologici (REMARK 350, `pdbx_struct_assembly`) con lo stato oligomerico e «Importa come template» (`<ID>_ASM<n>`), badge "assemblaggio"; stella, etichette e filtro (`?tag=`), preferiti in cima |
 | Allineamenti (`/alignment`) | pairwise, multiplo, strutturale (con il confronto per residuo e «Apri in Confronto»); esportazione FASTA/Clustal/PIR; salvataggio nel progetto; cache per multiplo e strutturale |
 | Editor PIR (`/pir`) | documenti PIR del progetto, generazione con MODELLER, validazione in tempo reale |
 | Modellazione (`/modeling`) | input automatico, da PIR o «Complesso» (template o assemblaggio, una sequenza per catena anche «stessa della catena …», simmetria, anteprima dell'allineamento per catena; nei risultati confronto delle interfacce con DockQ e 3D colorato per catena e interfaccia), parametri, vincoli, loop; soglia pLDDT con un template AlphaFold (anche nella Pipeline); avvisi prima del lancio su regioni disordinate e domini non coperti dai template, con suggerimento; modelli, 3D, PyMOL, report HTML (con la vista 3D del modello selezionato), archivio; «Confronta…» di ogni modello con un template usato o con un altro modello del job; «Trasferisci ligandi, cofattori e metalli dai template» con la scelta dei gruppi (additivi e ioni del tampone deselezionati per default, `LigandPicker`, che usa le analisi già lette dal selettore dei template anche dopo un download; una lettura non riuscita si mostra con «Riprova», un 404 di un template in download si riprova da sé, e sotto «Avvia modellazione» si dice quale template blocca) e la verifica del modello migliore; «Rifinisci» (OpenMM) per ogni modello e per una struttura qualunque, con i risultati prima/dopo; «Mutagenesi» (mutazioni, varianti di UniProt, scansione di alanina) per ogni modello e per una struttura qualunque, con i risultati del mutante o della scansione; «Confronta con una predizione (ESMFold)» per il modello scelto (F9.3) |
@@ -3732,7 +3960,10 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 
 **Protezioni.**
 
-- **Porta:** in locale è pubblicata solo su `127.0.0.1`.
+- **Porta:** pubblicata solo su `127.0.0.1`, in locale e, per default, anche sul server (`BIOLOOM_BIND` di
+  `server.env.example`), dove gli altri computer arrivano con un reverse proxy HTTPS o un tunnel SSH. `0.0.0.0` espone
+  HTTP in chiaro e, con Docker, una porta che scavalca il firewall: l'avviatore lo segnala a ogni avvio (vedi
+  [Avviatori](#avviatori-un-bioloom-alla-volta-e-controlli-allavvio)).
 - **Server:** con `BIOLOOM_AUTH=on` tutte le API (e `/docs`) richiedono la chiave d'accesso, tramite
   cookie HttpOnly firmato o header Bearer, con ritardo sui tentativi falliti; il middleware controlla anche le rotte di
   streaming prima che il flusso parta.
@@ -3769,8 +4000,35 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 - **Percorsi:** passano tutti da `safe_join` e da identificatori validati; nessun endpoint di navigazione
   del filesystem.
 - **Upload:** limitati (50 MB, `BIOLOOM_MAX_UPLOAD_MB`; 20 MB per i file di sequenze e allineamenti, 200 MB
-  decompressi; 256 MB per un pacchetto di riproducibilità) e validati come strutture prima dell'uso. Gli archivi pdbaa
-  si estraggono con filtro `data` e solo file senza percorso.
+  decompressi; 256 MB per un pacchetto di riproducibilità; 64 kB per `LicenseDB`) e validati come strutture prima
+  dell'uso. Oltre il limite dell'endpoint `read_upload` risponde 413 `too_large` («File troppo grande: massimo N MB.»;
+  prima il codice era `bad_request`). Gli archivi pdbaa si estraggono con filtro `data` e solo file senza percorso.
+- **Limite del corpo** (`core/bodylimit.BodyLimit`, middleware ASGI puro come `core/guard`): i limiti degli endpoint
+  valgono quando l'endpoint legge il file, dopo che Starlette ha già scritto tutto il multipart nella cartella
+  temporanea, quindi un corpo di qualche GB la riempirebbe prima del 413. Il middleware rifiuta le richieste oltre
+  `request_limit()`, il più grande dei caricamenti legittimi più 1 MB per confini e campi del multipart
+  (`max(MAX_UPLOAD_BYTES, MAX_PACKAGE_BYTES, MAX_BYTES delle sequenze) + MULTIPART_MARGIN`: 257 MB con le impostazioni
+  predefinite, di più se `BIOLOOM_MAX_UPLOAD_MB` supera 256), così un caricamento accettato dall'endpoint non si ferma
+  mai qui.
+  - Con `Content-Length` oltre il limite: 413 subito, senza leggere un byte del corpo (misurato con uvicorn: 10 GB
+    dichiarati → 413 in 0,01 s).
+  - Senza (corpo chunked): conta i byte che l'app legge e oltre il limite smette di passarli e sostituisce con il 413
+    la risposta dell'app (FastAPI darebbe 400 al corpo interrotto).
+  - Risposta: 413 `too_large` «Richiesta troppo grande: BioLoom accetta al massimo 257 MB per richiesta.», con
+    `Connection: close`, perché il resto del corpo non si legge.
+  - Ordine dei middleware, dal più esterno: `core/guard` → chiave d'accesso → CORS → `BodyLimit` → rotte. Richieste di
+    altri siti e senza chiave si rifiutano prima, e nessuno dei due controlli legge il corpo; dentro CORS il 413 resta
+    leggibile dall'interfaccia di Vite in sviluppo; fra il `receive` contato e le rotte non c'è nessun
+    `BaseHTTPMiddleware`.
+  - Limiti noti: se il server chiude mentre il client sta ancora inviando, il client può vedere la connessione chiusa
+    (reset) invece del 413 (con uvicorn reale, in chunked, succede), quindi conviene che l'interfaccia controlli la
+    dimensione prima dell'invio; il limite è unico per l'app, quindi un file da 200 MB a un endpoint da 50 MB arriva
+    ancora nella cartella temporanea prima del 413 dell'endpoint (un limite per percorso sarebbe più stretto).
+- **Lavoro sincrono fuori dal loop:** gli endpoint `async` che ricevono un file (`/api/files/sequences`,
+  `/api/files/structure`, `/api/quality/upload`, `/api/templates/upload`, `/api/licenses/prosa`) leggono i byte con
+  `read_upload` e passano a un thread (`anyio.to_thread.run_sync`) decompressione e riconoscimento del formato, lettura
+  della struttura, analisi, scritture su disco e database e, per ProSA, lo stato restituito, che prova MODELLER con un
+  processo esterno: il loop resta libero per le altre richieste (flussi SSE, `/api/health`).
 - **File caricati:** sequenze e allineamenti (`/api/files/sequences`) vengono solo letti e non salvati. Le
   strutture (`/api/files/structure`) vanno tra gli upload, validate e soggette alla pulizia automatica.
 - **Script MODELLER:** generati con valori validati (regex per residui e atomi, numeri con limiti) e
@@ -3817,8 +4075,8 @@ analisi strutturali, la rifinitura e la mutagenesi non usano la rete; l'interfac
 
 | Suite | File | Test |
 |---|---|---|
-| backend, `backend/tests` (pytest) | 52 | 1327 nella suite predefinita (51 file), più i 4 di `test_remote.py` (marcatore `network`, esclusi da `addopts`: `pytest -m network`) |
-| frontend, `frontend/src/**/*.test.ts(x)` (vitest) | 86 | 737 |
+| backend, `backend/tests` (pytest) | 55 | 1355 nella suite predefinita (54 file), più i 4 di `test_remote.py` (marcatore `network`, esclusi da `addopts`: `pytest -m network`) |
+| frontend, `frontend/src/**/*.test.ts(x)` (vitest) | 88 | 750 |
 
 I test che richiedono MODELLER, PROCHECK, ProSA o gli strumenti dell'immagine di sviluppo (fpocket, PDB2PQR, APBS,
 OpenMM, PDBFixer) si saltano da soli, con il motivo, dove mancano (`requires_modeller` e le condizioni degli strumenti):
@@ -3829,13 +4087,39 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
 
 **Esecuzione:**
 
-- `scripts/test.sh`: ruff, pytest nell'immagine con MODELLER reale, typecheck e vitest. La CI
-  (`.github/workflows/ci.yml`) esegue gli stessi controlli in tre job: test rapidi in Python puro senza strumenti esterni,
-  frontend (typecheck, vitest, build) e immagine completa costruita con i test al suo interno. Il job backend comincia
-  con «Versione unica» (`scripts/versione.sh`: le copie devono coincidere con `launcher/VERSION`) e «Impronta del
-  codice» (`impronta.sh`, `impronta.sh` con `IMPRONTA_SENZA_PERL=1` e `Get-BioLoomImpronta` in pwsh devono dare
-  lo stesso valore su `programma/`); il job docker passa `BIOLOOM_VERSION` come build arg e, nel passo «Impronta
-  nell'immagine», controlla che `/app/IMPRONTA` sia l'impronta del codice da cui l'immagine è costruita.
+- `scripts/test.sh`: ruff, pytest nell'immagine con MODELLER reale, eslint, typecheck e vitest (`test.sh frontend`:
+  eslint, typecheck e vitest). L'immagine di test `bioloom-test:<base>` (pytest, pytest-timeout, ruff) si ricostruisce
+  quando cambia l'immagine di base o `docker/test/Dockerfile`: l'etichetta `bioloom.test.base` contiene l'id
+  dell'immagine di base e la somma `cksum` del Dockerfile senza CR (prima solo l'id, quindi un `bioloom-test` esistente
+  non prendeva i pacchetti nuovi finché non cambiava la base).
+- **Limite per test:** `timeout = 1800` in `[tool.pytest.ini_options]`, con pytest-timeout 2.4.0 (la 2.5.0 è stata
+  ritirata da PyPI) nelle dipendenze dev di `pyproject.toml`, nell'immagine di test e nella CI. Un test bloccato
+  fallisce con «Failed: Timeout (>1800.0s) from pytest-timeout» e il suo stack, invece di lasciare appesa la suite.
+  1800 s e non meno: il test più lungo misurato dura 44,7 s, ma i test aspettano un singolo job fino a 1200 s
+  (`wait_job`), e su un computer lento deve arrivare prima il loro messaggio. Senza il plugin (Python di sistema)
+  pytest dà solo «PytestConfigWarning: Unknown config option: timeout».
+- **CI** (`.github/workflows/ci.yml`), quattro job più uno manuale:
+  - **backend:** «Versione unica» (`scripts/versione.sh`: le copie devono coincidere con `launcher/VERSION`) e «Impronta
+    del codice» (`impronta.sh`, `impronta.sh` con `IMPRONTA_SENZA_PERL=1` e `Get-BioLoomImpronta` in pwsh devono dare lo
+    stesso valore su `programma/`), poi ruff e pytest in Python puro senza strumenti esterni, con pytest-timeout;
+  - **frontend:** eslint, typecheck, vitest, build;
+  - **avviatori:** shellcheck con `-S warning` (il livello che oggi passa; restano due note SC2015 di livello info, in
+    `bioloom.sh` e `bioloom-podman.sh`) su `launcher/*.sh`, `avvia-bioloom.sh`, `docker/*.sh`, `scripts/*.sh`, gli
+    script dei test di QMEAN e i due `.command`; PSScriptAnalyzer con `-Severity Error, ParseError` sugli script
+    PowerShell di `launcher/`; bit di esecuzione 100755 di ogni `.sh` e `.command` tracciato, altrimenti «Script senza
+    il bit di esecuzione nel repository (git update-index --chmod=+x <file>):» con l'elenco;
+  - **docker** (dopo backend e frontend): immagine completa con `BIOLOOM_VERSION` come build arg e i test al suo
+    interno; nel passo «Impronta nell'immagine» `/app/IMPRONTA` deve essere l'impronta del codice da cui l'immagine è
+    costruita. Poi un controllo che i test non abbiano cambiato l'impronta (altrimenti `prepara` ricostruirebbe
+    l'immagine), l'avviatore vero (`--no-menu --no-browser`, `/api/health`, `arresta`) e la copia portatile:
+    `prepara "$RUNNER_TEMP/copia BioLoom" --no-menu --senza-qmean --senza-dati`, `bioloom:<versione>` tolta da Docker,
+    avvio dalla copia, che la carica da `immagini/`, salute e arresto. Se un passo fallisce, l'ultimo mostra container e
+    log;
+  - **qmean**, solo da Actions → CI → Run workflow con l'opzione «qmean» (l'immagine di base pesa circa 2 GB):
+    costruzione di `bioloom-qmean` e `/status` del worker, che risponde anche senza database.
+
+  `ci.yml` passa actionlint 1.7.12; gli script passano shellcheck 0.11.0 e 0.9.0 (la versione dei runner) a livello
+  warning e PSScriptAnalyzer 1.25.0 senza errori.
 - **Immagine di sviluppo:** per provare strumenti nuovi senza toccare l'immagine dell'avviatore,
   `docker build -f docker/Dockerfile -t bioloom:dev .` e `BIOLOOM_BASE_IMAGE=bioloom:dev scripts/test.sh` (test in
   `bioloom-test:bioloom-dev`).
@@ -3906,14 +4190,35 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
   (`Sec-Fetch-Site`, `Origin` uguale all'Host o a `X-Forwarded-Host`, `null`, origini dello sviluppo solo fuori dal
   container), arresto da un altro sito rifiutato senza arrestare, intestazioni contro gli iframe, guardia più esterna
   della chiave d'accesso.
-- **Versione unica e impronta del codice** (`test_version.py`, 9; saltati senza `launcher/VERSION`, cioè con il backend
+- **Caricamenti** (`test_upload_limits.py`, 12): `BodyLimit` su un'app ASGI di prova (`Content-Length` oltre il limite
+  rifiutato senza leggere il corpo; corpo a blocchi fermato durante la lettura, anche con un'app che trasformerebbe
+  l'interruzione in 400; corpi entro il limite invariati); limite dell'app uguale al caricamento più grande più il
+  margine, con la guardia più esterna e `BodyLimit` più interno; con un limite ridotto 413 `too_large` prima
+  dell'endpoint, con e senza `Content-Length`; caricamenti normali, altre richieste e limite dell'endpoint (413
+  `too_large` per `LicenseDB`) invariati; per i cinque endpoint che ricevono file, `/api/health` che risponde mentre
+  l'endpoint lavora sul file (controprova: con il lavoro di nuovo nel loop il test rileva il blocco).
+- **Sostituzione dei template** (`test_template_overwrite.py`, 11; due sono sovrapposizioni dello stesso id: due
+  sostituzioni .pdb e .cif, un download RCSB e una sostituzione, registrate nell'ordine): 409 `template_exists` senza `overwrite` con la
+  libreria invariata; job e progetti che usano il template nel messaggio e nei dettagli (un job di un altro template non
+  conta); file rovinato, PDB e mmCIF, che non tocca il template (400 `invalid_structure` che cita l'id e non la cartella
+  temporanea; 409 senza conferma); sostituzione con l'analisi rifatta e nessuna cartella temporanea rimasta; cambio di
+  formato con un solo file (`on`, poi `1`); id nuovo con `overwrite` come un caricamento normale e valore non valido
+  (422); cartelle temporanee tolte all'avvio; download da RCSB che non sostituisce un template caricato nel frattempo e
+  file scaricato illeggibile che non entra in libreria.
+- **Job dei database** (`test_pdbaa_jobs.py`, 4; download di NCBI simulato con cancelli): i tre job nello stesso pool
+  con la stessa risorsa esclusiva; due aggiornamenti di pdbaa mai insieme (il secondo in coda con la sua fase, un solo
+  download alla volta, una cartella di lavoro per job con il suo id, avanzi delle versioni precedenti tolti e cartelle
+  estranee lasciate); build e indice MMseqs2 che aspettano la fine dell'aggiornamento; estrazione non riuscita senza
+  cartelle rimaste.
+- **Versione unica e impronta del codice** (`test_version.py`, 10; saltati senza `launcher/VERSION`, cioè con il backend
   copiato da solo): `bioloom.__version__`, `pyproject.toml` (anche `license = "MIT"`), `package.json` e i due campi
   del progetto in `package-lock.json` (con la licenza), `ARG` dei due Dockerfile, stadio `impronta` con
   `COPY --from=impronta` e `LABEL bioloom.version`, i due predefiniti e il build arg di `compose.yml`,
   `server.env.example` senza `BIOLOOM_VERSION`; la definizione dell'impronta riscritta in Python su una cartella
   `programma/` sintetica con tutti i casi da includere ed escludere (nomi con spazi, ordine per byte, CR isolati, file
   binari, `node_modules` annidati, prefissi simili come `docker/tested/` e `frontend/distribuzione.txt`) e
-  `impronta.sh` uguale a quella, con perl e solo in sh, sulla stessa cartella in CRLF.
+  `impronta.sh` uguale a quella, con perl e solo in sh, sulla stessa cartella in CRLF, come `Get-BioLoomImpronta` di
+  `impronta.ps1` (con Windows PowerShell o pwsh; saltato senza).
 - **Strumenti esterni** (`test_engines_extra.py`, 10): parser di PROCHECK e ProSA tarati su output reali di 1UBQ,
   MMseqs2, QMEAN locale con worker simulato, strumenti mancanti come avvisi, verifica dell'installazione (anche fpocket,
   PDB2PQR + APBS e OpenMM: "ok" se ci sono, "non disponibile" altrimenti).
@@ -4336,6 +4641,13 @@ parentesi):
   apertura, gruppi di comandi con un nome, esito scritto oltre al colore), `contrast.test.ts` (11: testi ≥ 4,5:1 su ogni
   superficie nei due temi), `chartTokens.test.ts` (6) e `sequenceTokens.test.ts` (4: colori dei grafici e delle classi di
   residui ≥ 3:1, anello del focus), `aminoAcids.test.ts` (3: una sola tabella delle classi), `formatHelpers.test.ts` (4).
+- **Errori dell'interfaccia e caricamento dei template** (`ErrorBoundary.test.tsx` 8, `templateUpload.test.ts` 5):
+  sessionStorage sicuro (dati del sito bloccati: lettura null e scrittura non riuscita senza eccezioni; senza
+  sessionStorage e con la scrittura che fallisce; storage funzionante); ricarica per i moduli obsoleti una volta e poi
+  non prima di un minuto, con il segno delle versioni precedenti («1») o illeggibile, mai con i dati del sito bloccati
+  né per gli altri errori, e disegno senza errori che non tocca lo storage; conferma chiesta solo al 409
+  `template_exists` del primo tentativo, mai dopo «Sostituisci», altri errori che restano errori, campo `overwrite`
+  solo per la sostituzione, 409 del server che diventa la domanda.
 - **Navigazione, tema, ricerca ed etichette:** `virtual.test.ts` (5: soglia, posizioni con altezza fissa e per indice,
   righe visibili con margine e spaziatori, fondo e scorrimento oltre il fondo, blocchi dell'allineamento, riga
   selezionata portata in vista sotto l'intestazione fissa e nei limiti), `theme.test.ts` (5: valori salvati vecchi e

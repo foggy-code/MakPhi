@@ -46,6 +46,29 @@ xattr -dr com.apple.quarantine .
 chmod +x "Avvia BioLoom.command" "Arresta BioLoom.command" avvia-bioloom.sh programma/launcher/bioloom.sh   # permessi
 ```
 
+### Mac con processore Apple
+
+MODELLER, ProSA e QMEAN esistono solo per processori x86: sui Mac con processore Apple (M1, M2…) i container girano in
+emulazione e i calcoli sono più lenti. L'avviatore lo ricorda alla fine dell'avvio («Mac ARM: container amd64 in
+emulazione…»). In Docker Desktop attiva **Settings → General → Use Rosetta for x86_64/amd64 emulation on Apple
+Silicon**, l'emulazione più veloce. ProSA II è un programma x86 a 32 bit e su questi Mac non è stato provato: potrebbe
+non funzionare, e in quel caso l'analisi di qualità prosegue senza ProSA, con un avviso.
+
+### Un BioLoom alla volta
+
+Tutte le copie di BioLoom di un computer (per esempio quella installata e quella della chiavetta) usano gli stessi
+container Docker, quindi ne gira una alla volta. Se avvii una copia mentre è acceso il BioLoom di un'altra cartella,
+l'avviatore lo dice («È già in esecuzione BioLoom da un'altra cartella: …») e chiede «Arrestarlo e continuare? [s/N]»:
+
+- con **s** arresta l'altro (i suoi calcoli in corso si interrompono, i suoi dati restano nella sua cartella) e avvia
+  questa copia;
+- con Invio o **n** non tocca nulla e si ferma («Avvio annullato: resta in esecuzione il BioLoom di …»); con
+  `-NoMenu` / `--no-menu` si ferma senza chiedere.
+
+Lo stesso vale per l'azione `aggiorna`, quando deve riavviare BioLoom. **Arresta BioLoom** invece arresta il BioLoom
+acceso da qualunque cartella sia partito, anche se quella copia non c'è più (chiavetta tolta), e dice quale era; le
+azioni `stato`, `log` e `verifica` lo segnalano.
+
 ## Un percorso tipico
 
 | Passo | Dove | Che cosa succede |

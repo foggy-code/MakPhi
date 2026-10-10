@@ -285,9 +285,10 @@ def test_generated_pdb_text_and_interface(tmp_path):
 
 
 # ---------------------------------------------------------------------------------------------- libreria e rotte
-def _upload(client, path: Path, name: str) -> str:
+def _upload(client, path: Path, name: str, overwrite: bool = False) -> str:
     with open(path, "rb") as fh:
-        r = client.post("/api/templates/upload", files={"file": (name, fh, "chemical/x-cif")})
+        r = client.post("/api/templates/upload", files={"file": (name, fh, "chemical/x-cif")},
+                        data={"overwrite": str(overwrite).lower()})
     assert r.status_code == 200, r.text
     return r.json()["id"]
 
@@ -330,7 +331,7 @@ def test_assembly_rebuilt_when_the_source_changes(client, tmp_path):
     changed = tmp_path / "changed" / "C2UBQ.cif"
     changed.parent.mkdir()
     changed.write_text(text, encoding="utf-8")
-    _upload(client, changed, "C2UBQ.cif")
+    _upload(client, changed, "C2UBQ.cif", overwrite=True)
     second = client.post(f"/api/templates/{tid}/assemblies/3").json()
     assert not second["cached"] and second["assembly"]["source_sha256"] != first["assembly"]["source_sha256"]
 

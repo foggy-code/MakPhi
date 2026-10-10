@@ -298,6 +298,69 @@ use_running_env() {  # file per arresta, stato, log, verifica e aggiorna: quello
   return 0
 }
 
+# ------------------------------------------------------------------------------------------- un BioLoom alla volta
+# Le copie di BioLoom su uno stesso computer (per esempio quella installata e quella della chiavetta) hanno lo stesso
+# progetto compose "bioloom", quindi gli stessi container e volumi: avviarne una ricreerebbe i container dell'altra con
+# un'altra cartella dati. Il progetto non cambia nome da una copia all'altra (il volume cache con l'indice MMseqs2
+# resterebbe orfano): prima di avviare si guarda da quale cartella è partito il BioLoom in esecuzione (etichetta
+# working_dir che compose mette ai container: la cartella di compose.yml).
+OTHER_DIR=""; OTHER_DATA=""
+
+same_dir() {  # vero se il percorso $1, scritto da compose su questo computer, è la cartella $2. -ef confronta la
+  # cartella, non il testo: vale con maiuscole diverse (NTFS, APFS) e con link simbolici; i percorsi di Windows
+  # (compose avviato da PowerShell) passano da cygpath in Git Bash e da wslpath in WSL
+  local p="$1"
+  case "$p" in
+    [A-Za-z]:[\\/]*)
+      if command -v cygpath >/dev/null 2>&1; then p="$(cygpath -u "$p")"
+      elif command -v wslpath >/dev/null 2>&1; then p="$(wslpath -u "$p" 2>/dev/null)"; fi ;;
+  esac
+  [ -n "$p" ] && [ "$p" -ef "$2" ]
+}
+
+find_other() {  # imposta OTHER_DIR (cartella di BioLoom del BioLoom in esecuzione, se non è questa) e OTHER_DATA (la
+  # sua cartella dati); vuote se non è in esecuzione, se è questa copia o se non si può sapere
+  local id dir
+  OTHER_DIR=""; OTHER_DATA=""
+  id="$(compose ps -q --status running bioloom 2>/dev/null | head -n1)"
+  [ -n "$id" ] || id="$(compose --profile qmean ps -q --status running 2>/dev/null | head -n1)"
+  [ -n "$id" ] || return 0
+  dir="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$id" 2>/dev/null)"
+  case "$dir" in ""|"<no value>") return 0 ;; esac
+  same_dir "$dir" "$ROOT/launcher" && return 0
+  OTHER_DIR="$(printf '%s' "$dir" | sed -E 's#[\\/]+$##; s#[\\/]programma[\\/]launcher$##')"
+  OTHER_DATA="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$id" 2>/dev/null)"
+  # Docker Desktop mostra i bind mount con il percorso della sua macchina virtuale: si riporta quello del computer
+  case "$OTHER_DATA" in
+    /run/desktop/mnt/host/[a-zA-Z]/*|/host_mnt/[a-zA-Z]/*|/mnt/host/[a-zA-Z]/*)  # Windows: /run/desktop/mnt/host/d/...
+      OTHER_DATA="$(printf '%s' "$OTHER_DATA" | sed -E 's#^/(run/desktop/mnt/host|host_mnt|mnt/host)/([a-zA-Z])/#\2:/#' |
+                    awk '{ print toupper(substr($0, 1, 1)) substr($0, 2) }')" ;;
+    /host_mnt/*) OTHER_DATA="${OTHER_DATA#/host_mnt}" ;;  # macOS (Docker Desktop meno recenti)
+  esac
+}
+
+single_instance() {  # prima di avviare: il BioLoom partito da un'altra cartella si arresta solo con il consenso
+  # (domanda; con --no-menu ci si ferma). $1 = cosa si annulla, per il messaggio
+  local answer=""
+  find_other
+  [ -n "$OTHER_DIR" ] || return 0
+  warn "È già in esecuzione BioLoom da un'altra cartella: $OTHER_DIR"
+  warn "Le copie di BioLoom su questo computer usano gli stessi container: per continuare va arrestato"
+  warn "(i calcoli in corso vengono interrotti; i suoi dati restano in ${OTHER_DATA:-quella cartella})."
+  if [ "$NO_MENU" = 0 ]; then read -r -p "  Arrestarlo e continuare? [s/N] " answer || answer=""; fi
+  case "$answer" in
+    [sS]*) ;;
+    *) fail "$1: resta in esecuzione il BioLoom di $OTHER_DIR. Per usare questa copia arrestalo prima ($LAUNCH_CMD arresta) e riprova." ;;
+  esac
+  warn "Arresto del BioLoom partito da $OTHER_DIR..."
+  compose --profile qmean down --remove-orphans || fail "Arresto non riuscito (vedi i messaggi sopra)."
+}
+
+note_other() {  # stato, log, verifica: avviso se mostrano il BioLoom di un'altra cartella
+  find_other
+  [ -z "$OTHER_DIR" ] || warn "Il BioLoom in esecuzione è partito da un'altra cartella: $OTHER_DIR"
+}
+
 # ------------------------------------------------------------------------------------------- UniClust30/UniRef30 e QMTL
 # Qualunque versione: HH-suite 3 (<nome>_a3m.ffindex) o HH-suite 2 (<nome>_a3m_db.index), anche più versioni.
 # Il worker QMEAN riconosce formati e versioni; qui basta trovare le cartelle e montare quella che le contiene.
@@ -531,6 +594,13 @@ open_url() {
   esac
 }
 
+apple_silicon() {  # Mac con processore Apple (uname -m dice x86_64 se la shell gira in Rosetta: lo dice sysctl)
+  [ "$OS" = mac ] || return 1
+  [ "$(uname -m)" = arm64 ] || [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]
+}
+
+loopback() { case "$1" in ""|127.*|localhost|::1|"[::1]") return 0 ;; *) return 1 ;; esac; }   # BIOLOOM_BIND locale
+
 # ------------------------------------------------------------------------------------------- azioni
 start_local() {
   title "BioLoom $VERSION"
@@ -538,6 +608,8 @@ start_local() {
   mkdir -p "$DATA_DIR" || fail "Impossibile creare la cartella dati $DATA_DIR."
   if ! touch "$DATA_DIR/.scrittura" 2>/dev/null; then fail "La cartella dati $DATA_DIR non è scrivibile."; fi
   rm -f "$DATA_DIR/.scrittura"
+  ensure_env
+  single_instance "Avvio annullato"
   read_saved
   if [ "$UNICLUST_CHOICE_SET" = 1 ]; then
     SAVED_UNICLUST="$UNICLUST_CHOICE"
@@ -605,6 +677,11 @@ start_local() {
               say "${c_yellow}ProSA:       licenza attiva su un altro computer, MAC non applicato ($hint)${c_off}" ;;
     *)        say "ProSA:       nessuna licenza (si carica da Impostazioni > Licenze)" ;;
   esac
+  # le immagini sono amd64 (MODELLER, ProSA, QMEAN esistono solo per x86); ProSA è x86 a 32 bit, che Rosetta 2 non esegue
+  if apple_silicon; then
+    say "Mac ARM:     container amd64 in emulazione, più lenti; ProSA (x86 a 32 bit) potrebbe non funzionare"
+    say "             in Docker Desktop si consiglia: Use Rosetta for x86_64/amd64 emulation on Apple Silicon"
+  fi
   [ "$NO_BROWSER" = 1 ] || open_url "$url"
   [ "$NO_MENU" = 1 ] || menu "$url"
 }
@@ -633,6 +710,13 @@ stop_all() {
   use_running_env; ensure_env
   if [ "$SERVER_MODE" = 1 ]; then
     data="$(server_data)"; [ -d "$data" ] && data="$(cd "$data" && pwd)"
+  fi
+  # BioLoom partito da un'altra copia: si arresta lo stesso (i container sono gli stessi, "Arresta BioLoom" non chiede
+  # e la cartella di quella copia può non esserci più, per esempio una chiavetta tolta), dicendo quale è
+  find_other
+  if [ -n "$OTHER_DIR" ]; then
+    warn "Il BioLoom in esecuzione è partito da un'altra cartella: $OTHER_DIR"
+    data="${OTHER_DATA:-$OTHER_DIR}"
   fi
   warn "Arresto di BioLoom (i calcoli in corso vengono interrotti)..."
   compose --profile qmean down
@@ -726,13 +810,15 @@ start_server() {
     chmod 600 "$server_env"
     title "Creato $server_env"
     say "Chiave d'accesso generata: $key"
+    say "BioLoom ascolterà solo su 127.0.0.1 (BIOLOOM_BIND): dagli altri computer con un tunnel SSH o un reverse proxy HTTPS."
     say "Controlla i percorsi (cartella dati, UniClust30) e la porta, poi rilancia: $LAUNCH_CMD server"
     exit 0
   fi
   ENV_FILE="$server_env"
   check_env_version
+  single_instance "Avvio annullato"
   # valori letti come li legge compose (virgolette, commenti a fine riga); percorsi relativi a compose.yml
-  local uniclust data mac lic_mac port
+  local uniclust data mac lic_mac port bind
   uniclust="$(compose_path "$(env_val UNICLUST_PATH "$server_env")")"
   data="$(server_data)"
   mkdir -p "$data" 2>/dev/null
@@ -752,9 +838,18 @@ start_server() {
   else
     compose up -d --remove-orphans || fail "Avvio non riuscito."
   fi
-  port="$(env_val BIOLOOM_PORT "$server_env")"
-  title "BioLoom (server) avviato sulla porta ${port:-8765}"
+  port="$(env_val BIOLOOM_PORT "$server_env")"; port="${port:-8765}"
+  bind="${BIOLOOM_BIND:-$(env_val BIOLOOM_BIND "$server_env")}"   # per compose la variabile della shell prevale
+  title "BioLoom (server) avviato sulla porta $port"
   say "Accesso protetto dalla chiave in server.env (BIOLOOM_ACCESS_KEY). Per HTTPS usa un reverse proxy (vedi Guida/5 - Chiavetta e server.md)."
+  if loopback "$bind"; then
+    say "Raggiungibile solo da questo server; dagli altri computer con un tunnel SSH: ssh -N -L $port:127.0.0.1:$port utente@server"
+  else
+    # la porta pubblicata da Docker passa dalle sue regole NAT, prima di quelle di firewalld o ufw
+    warn "BIOLOOM_BIND=$bind: BioLoom è raggiungibile dalla rete in HTTP, con chiave d'accesso e cookie in chiaro, e la"
+    warn "porta pubblicata da Docker scavalca il firewall (firewalld, ufw). Meglio BIOLOOM_BIND=127.0.0.1 con un reverse"
+    warn "proxy HTTPS o un tunnel SSH (Guida/5 - Chiavetta e server.md)."
+  fi
   case "$PROSA_STATE" in
     attivata) say "ProSA: licenza attivata su questo computer, MAC applicato." ;;
     spostata) say "ProSA: licenza spostata su questo computer, MAC applicato." ;;
@@ -806,33 +901,62 @@ update_all() {  # azione aggiorna: immagini al codice in programma/, poi riavvio
     warn "Non so se BioLoom è partito dal desktop (.env.locale) o da server (server.env): riavvialo tu per usare le"
     warn "immagini aggiornate ($LAUNCH_CMD arresta, poi di nuovo l'avvio che usi di solito)."
   elif [ "$SERVER_MODE" = 1 ]; then
+    single_instance "Riavvio annullato"
     warn "Riavvio di BioLoom con le immagini aggiornate e le impostazioni di server.env (i calcoli in corso vengono interrotti)..."
     start_server
   else
-    warn "Riavvio di BioLoom con le immagini aggiornate (i calcoli in corso vengono interrotti)..."
-    compose up -d --remove-orphans || fail "Docker non è riuscito a riavviare BioLoom (vedi i messaggi sopra)."
-    wait_healthy "${SAVED_PORT:-8765}" || fail "BioLoom non risponde: controlla con $LAUNCH_CMD log"
-    title "BioLoom è pronto: http://127.0.0.1:${SAVED_PORT:-8765}"
+    single_instance "Riavvio annullato"
+    if [ -n "$OTHER_DIR" ]; then
+      # arrestato il BioLoom di un'altra copia: questa si avvia come dal desktop (porta, licenze, UniClust), perché il
+      # suo .env.locale può non venire da un avvio
+      start_local
+    else
+      warn "Riavvio di BioLoom con le immagini aggiornate (i calcoli in corso vengono interrotti)..."
+      compose up -d --remove-orphans || fail "Docker non è riuscito a riavviare BioLoom (vedi i messaggi sopra)."
+      wait_healthy "${SAVED_PORT:-8765}" || fail "BioLoom non risponde: controlla con $LAUNCH_CMD log"
+      title "BioLoom è pronto: http://127.0.0.1:${SAVED_PORT:-8765}"
+    fi
   fi
   [ "$ok" = 1 ] || fail "L'immagine bioloom:$VERSION non è stata aggiornata (vedi i messaggi sopra)."
 }
 
-# Server con Podman ma senza compose (per esempio RHEL 8, Podman 2.x): le stesse azioni con podman run
+# Server con Podman ma senza compose (per esempio RHEL 8, Podman 2.x): le stesse azioni con podman run. L'avvio dal
+# desktop e aggiorna senza server.env finirebbero su "docker compose" con errori poco chiari: si dice cosa fare
 if command -v podman >/dev/null 2>&1 && ! docker compose version >/dev/null 2>&1; then
   podman_opts=""; [ "$MOVE_PROSA" = 1 ] && podman_opts="--sposta-prosa"
+  [ "$NO_MENU" = 1 ] && podman_opts="$podman_opts --no-menu"
+  # shellcheck disable=SC2086 # podman_opts va diviso negli spazi: una parola per opzione
   case "$ACTION" in
     server) exec bash "$ROOT/launcher/bioloom-podman.sh" avvia $podman_opts ;;
-    arresta|stato|log|verifica|aggiorna)
-      [ -f "$BASE/server.env" ] && exec bash "$ROOT/launcher/bioloom-podman.sh" "$ACTION" $podman_opts ;;
+    # anche senza server.env (copia nuova, per esempio): i container hanno nomi fissi, quindi arresta ferma il BioLoom
+    # acceso da qualunque cartella sia partito, come con Docker; per queste azioni bastano i predefiniti di server.env
+    arresta|stato|log|verifica) exec bash "$ROOT/launcher/bioloom-podman.sh" "$ACTION" $podman_opts ;;
+    aggiorna)
+      # senza server.env il riavvio non saprebbe come avviare BioLoom: bioloom-podman.sh creerebbe il file e uscirebbe
+      [ -f "$BASE/server.env" ] && exec bash "$ROOT/launcher/bioloom-podman.sh" aggiorna $podman_opts
+      fail "Qui c'è Podman senza compose e BioLoom non è ancora configurato da server (manca server.env): crealo con $LAUNCH_CMD server, poi rilancia $LAUNCH_CMD aggiorna (Guida/5 - Chiavetta e server.md)." ;;
+    avvia)
+      # può essere un desktop (Fedora, Podman Desktop sul Mac, Docker senza il plugin compose), dove serve Docker con
+      # compose, o un server con solo Podman, dove BioLoom si avvia con "server": si danno le due strade
+      warn "Qui c'è Podman ma non Docker con compose, che serve per avviare BioLoom dal desktop:"
+      if [ "$OS" = mac ]; then
+        warn "installa Docker Desktop per Mac (https://www.docker.com/products/docker-desktop/; Guida/1 - Primo avvio.md)."
+      else
+        warn "installa Docker Desktop, o Docker Engine con il plugin compose (https://docs.docker.com/engine/install/;"
+        warn "Guida/1 - Primo avvio.md)."
+      fi
+      warn "Su un server con solo Podman BioLoom si avvia invece da server: $LAUNCH_CMD server"
+      warn "(la prima volta crea server.env; Guida/5 - Chiavetta e server.md)."
+      exit 1 ;;
   esac
 fi
 
 case "$ACTION" in
   avvia) start_local ;;
   arresta) stop_all ;;
-  stato) use_running_env; ensure_env; compose --profile qmean ps ;;
-  log) use_running_env; ensure_env; compose logs --tail 200 ;;
-  verifica) use_running_env; ensure_env; compose exec bioloom python -m bioloom.selftest ;;
+  stato) use_running_env; ensure_env; note_other; compose --profile qmean ps ;;
+  log) use_running_env; ensure_env; note_other; compose logs --tail 200 ;;
+  verifica) use_running_env; ensure_env; note_other; compose exec bioloom python -m bioloom.selftest ;;
   prepara) prepare_portable ;;
   server) start_server ;;
   aggiorna) update_all ;;

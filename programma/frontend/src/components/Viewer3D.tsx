@@ -73,7 +73,7 @@ interface ViewerColors {
   chains: Map<string, number>;
 }
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-explicit-any -- 3Dmol non ha tipi TypeScript */
 function applyStyle(viewer: any, scheme: Scheme, highlight: { chain: string; resi: number }[], colors: ViewerColors | null, lines: ViewerLine[] = [], spheres: ViewerSphere[] = []) {
   viewer.setStyle({}, {});
   let cartoon: any;
@@ -281,22 +281,21 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text, format]);
 
   useEffect(() => {
     if (viewer.current && text) applyStyle(viewer.current, scheme, highlight, colors, lines, spheres);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- evidenziazioni, linee e sfere confrontate per contenuto (JSON), non per oggetto
   }, [scheme, JSON.stringify(highlight), colors, JSON.stringify(lines), JSON.stringify(spheres)]);
 
   useEffect(() => {
     if (viewer.current && text) enablePicking(viewer.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- un testo nuovo ridisegna tutto nell'effetto precedente, compresa la selezione
   }, [interactive]);
 
   useEffect(() => {
     if (viewer.current && text && centerKey !== undefined) centerOn(viewer.current, highlight, centerZoom);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- si centra solo a una nuova richiesta (centerKey)
   }, [centerKey]);
 
   // Schermo intero: lo stato segue la Fullscreen API (anche l'uscita con Esc, gestita dal browser)

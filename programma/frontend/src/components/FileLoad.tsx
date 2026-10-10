@@ -7,24 +7,27 @@ import { readTextFile } from "../lib/files";
 import { Icon } from "./Icon";
 import { Spinner } from "./ui";
 
-/** Pulsante che apre il selettore di file (accetta anche il trascinamento di un file sul pulsante). */
-export function FileButton({ accept, onFile, children = "Carica da file", disabled = false, small = true, title }: {
+/** Pulsante che apre il selettore di file (accetta anche il trascinamento di un file sul pulsante). L'attesa dura
+ *  quanto la Promise di `onFile`; `busy` la prolunga dall'esterno (es. un nuovo invio dopo una conferma). */
+export function FileButton({ accept, onFile, children = "Carica da file", disabled = false, small = true, title, busy: working = false }: {
   accept?: string;
   onFile: (file: File) => Promise<void> | void;
   children?: ReactNode;
   disabled?: boolean;
   small?: boolean;
   title?: string;
+  busy?: boolean;
 }) {
   const input = useRef<HTMLInputElement>(null);
-  const [busy, setBusy] = useState(false);
+  const [reading, setReading] = useState(false);
+  const busy = reading || working;
   const [over, setOver] = useState(false);
   const run = async (file: File) => {
-    setBusy(true);
+    setReading(true);
     try {
       await onFile(file);
     } finally {
-      setBusy(false);
+      setReading(false);
     }
   };
   return (

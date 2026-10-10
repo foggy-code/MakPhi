@@ -14,7 +14,7 @@ export function NotifyCard({ contactEmail }: { contactEmail: string }) {
   const [to, setTo] = useState(contactEmail);
   const [busy, setBusy] = useState(false);
   const reload = () => api.notify().then(setStatus).catch(toast.error);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- lettura iniziale, una volta
   useEffect(() => { reload(); }, []);
   useEffect(() => { if (!to && contactEmail) setTo(contactEmail); }, [contactEmail, to]);
   if (!status) return null;

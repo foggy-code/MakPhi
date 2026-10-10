@@ -157,6 +157,7 @@ export function useVirtualRows<T extends HTMLElement = HTMLDivElement>(opts: Vir
   const onScroll = read;
 
   // dimensioni del contenitore e intestazione della tabella; altezza vera delle righe
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- misura il DOM dopo ogni disegno; setHeader e setMeasured solo se la misura cambia
   useLayoutEffect(() => {
     const box = ref.current;
     if (!box) return;

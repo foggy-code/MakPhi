@@ -122,8 +122,7 @@ export default function Wizard() {
     const next = restoreState(new URLSearchParams(), readDraft(draftKey));
     setState(next);
     setParams(encodeWizardParams(next), { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draftKey]);
+  }, [draftKey, setParams]);
   // URL → stato (link, indietro e avanti del browser)
   const urlKey = params.toString();
   useEffect(() => {
@@ -134,7 +133,7 @@ export default function Wizard() {
     writeDraft(draftKey, state);
     const next = encodeWizardParams(state).toString();
     if (next !== urlKey) setParams(new URLSearchParams(next), { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- solo al cambio di stato: con urlKey (e setParams, che cambia con l'URL) un passo indietro del browser verrebbe riscritto con lo stato precedente
   }, [state, draftKey]);
 
   const update = useCallback((fn: (s: WizardState) => WizardState) => setState((s) => fn(s)), []);
@@ -348,7 +347,7 @@ function TemplateStep({ state, update, search, projectId, onNext }: { state: Wiz
       suggested.current = true;
       if (choices.recommended !== state.engine) update((s) => ({ ...s, engine: choices.recommended }));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- il motore consigliato si propone una volta, a caricamento finito
   }, [dbLoading, settingsLoading]);
   const running = !!search.summary && ["queued", "running", "cancelling"].includes(search.summary.status);
   const request = searchRequest(state, projectId);
@@ -529,7 +528,6 @@ function OptionsStep({ state, update, align, projectId, library, onLaunched }: {
       }
     }
     return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templatesKey]);
   const alignment = state.pirDoc ? doc?.content ?? null : align?.pir ?? null;
   const [ligandRefs, setLigandRefs] = useState<LigandRef[]>([]);
@@ -539,7 +537,7 @@ function OptionsStep({ state, update, align, projectId, library, onLaunched }: {
     ligandNames: [...new Set(templates.flatMap((t) => defaultTransfer(t, analyses?.[t.id]).names))],
     procheck: !!licenses?.procheck.installed,
     prosa: !!licenses && licenses.prosa.installed && licenses.prosa.license && licenses.prosa.mac_ok,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- templatesKey riassume templates (array nuovo a ogni disegno)
   }), [templatesKey, library, analyses, licenses]);
   // predefiniti ragionati finché l'utente non cambia le opzioni
   useEffect(() => {

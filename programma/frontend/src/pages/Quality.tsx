@@ -61,7 +61,7 @@ function QmeanPanel({ source, onDone }: { source: StructureSource; onDone?: (job
   const done = job?.status === "completed";
   useEffect(() => {
     if (jobId && done) onDone?.(jobId); // il consenso si ricalcola includendo QMEAN
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- si avvisa una volta per job completato; onDone può cambiare a ogni disegno del genitore
   }, [jobId, done]);
   if (!settings || !dbs) return <p className="small text-2">Controllo della disponibilità di QMEAN…</p>;
   const useFallback = fallback ?? settings.qmean_fallback_remote;
@@ -199,10 +199,12 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
   const reportSource = source ?? report.source;
 
   // Il consenso della rotta aggiunge GA341 di MODELLER, QMEAN calcolato qui e vale anche per i rapporti precedenti.
+  const refJob = consensusRef?.job;
+  const refModel = consensusRef?.model;
   useEffect(() => {
-    if (!consensusRef) return;
+    if (!refJob) return;
     let stop = false;
-    api.consensus(consensusRef.job, consensusRef.model, qmeanJob, predictJob)
+    api.consensus(refJob, refModel, qmeanJob, predictJob)
       .then((c) => {
         if (stop) return;
         setConsensus(c);
@@ -212,7 +214,7 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
     return () => {
       stop = true;
     };
-  }, [consensusRef?.job, consensusRef?.model, qmeanJob, predictJob]);
+  }, [refJob, refModel, qmeanJob, predictJob]);
 
   const options = useMemo(() => colorOptions(report, consensus), [report, consensus]);
   // un'opzione non (ancora) disponibile, es. QMEAN in attesa del consenso, ripiega sulla struttura secondaria

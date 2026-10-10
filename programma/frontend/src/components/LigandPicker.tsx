@@ -63,7 +63,7 @@ export function LigandPicker({ templates, known = {}, enabled, onEnabled, select
           }
         });
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- shape e knownKey riassumono templates e known; own lo scrive questo effetto
   }, [enabled, shape, tick, knownKey]);
   const state = lookupState(templates, own, known);
   const analyses = state.analyses;
@@ -73,14 +73,14 @@ export function LigandPicker({ templates, known = {}, enabled, onEnabled, select
       const ok = a && a !== "loading" && !isLookupError(a) ? a : null;
       return [...candidateGroups(t, ok), ...waterCandidates(t, ok)];
     }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- shape, own e knownKey riassumono templates e analyses
     [shape, own, knownKey],
   );
   const failedKey = state.failed.join(",");
   useEffect(() => {
     const next = syncSelection(selection, candidates);
     onSelection(next, ligandOptions(candidates, next), state.ready, state.failed);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- si riallinea ai candidati nuovi; con selection si ripeterebbe a ogni scelta
   }, [candidates, state.ready, failedKey]);
   const toggle = (key: string, on: boolean) => setMany([key], on);
   const setMany = (keys: string[], on: boolean) => {

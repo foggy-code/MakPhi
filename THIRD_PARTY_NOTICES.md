@@ -54,8 +54,10 @@ Programmi con licenze accademiche o proprietarie: BioLoom li usa, ma non può co
 
 ## 2. Immagine bioloom
 
-Base: **Ubuntu 24.04 LTS** (immagine ufficiale `ubuntu:24.04`) con Python 3.12 di Ubuntu. La licenza di ogni pacchetto
-Ubuntu è nell'immagine in `/usr/share/doc/<pacchetto>/copyright` (testi completi in `/usr/share/common-licenses/`).
+Base: **Ubuntu 24.04 LTS** (immagine ufficiale `ubuntu:24.04`, 24.04.5 del 2026-09-17, fissata per digest:
+`ubuntu@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55`) con Python 3.12 di Ubuntu. La
+licenza di ogni pacchetto Ubuntu è nell'immagine in `/usr/share/doc/<pacchetto>/copyright` (testi completi in
+`/usr/share/common-licenses/`).
 
 ### 2.1 Pacchetti Ubuntu installati dal Dockerfile
 
@@ -178,11 +180,13 @@ Altri 80 pacchetti sorgente, raggruppati per licenza principale (eccezioni e par
 
 - Stadio `tools-build` (Ubuntu 24.04): g++, gcc, gfortran, make, ca-certificates, wget, unzip, per compilare US-align,
   fpocket e PROCHECK. Nell'immagine finale restano i programmi compilati e le librerie di esecuzione di GCC del §2.1.
-- Stadio `frontend` (`node:22-slim`, Node.js e npm) con le dipendenze di sviluppo typescript 5.9.3 (`Apache-2.0`),
-  vite 7.3.6, @vitejs/plugin-react 5.2.0, vitest 3.2.7, @types/react e @types/react-dom 19.3.0 (`MIT`). Nell'immagine
-  resta solo l'interfaccia compilata, in cui Vite può aggiungere piccole funzioni di supporto (`MIT`).
+- Stadio `frontend` (`node:22-slim` fissata per digest,
+  `node@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392`, con Node.js 22.23.3 e npm) con le
+  dipendenze di sviluppo typescript 5.9.3 (`Apache-2.0`), vite 7.3.6, @vitejs/plugin-react 5.2.0, vitest 3.2.7,
+  @types/react e @types/react-dom 19.3.0 (`MIT`). Nell'immagine resta solo l'interfaccia compilata, in cui Vite può
+  aggiungere piccole funzioni di supporto (`MIT`).
 - Stadio `impronta` (calcolo dell'impronta dei sorgenti) e immagine di prova `bioloom-test` di
-  `programma/scripts/test.sh` (aggiunge pytest e ruff).
+  `programma/scripts/test.sh` (aggiunge pytest, pytest-timeout e ruff).
 
 ## 3. Immagine bioloom-qmean
 
@@ -255,11 +259,12 @@ indicazioni), in particolare:
   dei pacchetti sorgente con il primo comando in alto.
 - Pacchetti CentOS 7: archivio <https://vault.centos.org/7.9.2009/> (`os/Source/SPackages/` e
   `updates/Source/SPackages/`); il pacchetto sorgente di ciascuno con il terzo comando in alto.
-- Programmi e librerie di BioLoom, ai tag fissati nel Dockerfile e nei lock: US-align `20260527`, fpocket `4.2.3`,
-  APBS `v3.4.1` con i sottomoduli (fra cui FETK), OpenMM `8.6.1` (<https://github.com/openmm/openmm>), PROPKA `v3.5.1`
-  (<https://github.com/jensengroup/propka>), pip 24.0 (pacchetto sorgente Ubuntu `python-pip`), libgfortran e
-  libquadmath da GCC (<https://gcc.gnu.org/git/>, come indicato nel `LICENSE.txt` della ruota di numpy). Le istruzioni
-  di costruzione sono in `programma/docker/Dockerfile`.
+- Programmi e librerie di BioLoom, alle versioni fissate nel Dockerfile e nei lock: US-align `20260527` (commit
+  `177cc8a2bbd3e2a6e9c5faaaa4ff5dfa1e6048f7`) e fpocket `4.2.3` (commit `4bb0d8447f62fee77e2c3c29f54b5fcaf5e2c066`),
+  scaricati per commit del tag e verificati con SHA-256, APBS `v3.4.1` con i sottomoduli (fra cui FETK), OpenMM
+  `8.6.1` (<https://github.com/openmm/openmm>), PROPKA `v3.5.1` (<https://github.com/jensengroup/propka>), pip 24.0
+  (pacchetto sorgente Ubuntu `python-pip`), libgfortran e libquadmath da GCC (<https://gcc.gnu.org/git/>, come indicato
+  nel `LICENSE.txt` della ruota di numpy). Le istruzioni di costruzione sono in `programma/docker/Dockerfile`.
 - QMEAN: OpenStructure `2.3.0` (<https://git.scicore.unibas.ch/schwede/openstructure>), HH-suite `v3.3.0`
   (<https://github.com/soedinglab/hh-suite>) e QMEAN `4.3.0`, con la ricetta dell'immagine nella cartella `docker/` del
   repository di QMEAN.
