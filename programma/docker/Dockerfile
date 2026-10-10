@@ -7,8 +7,11 @@
 # US-align, fpocket, APBS, PDB2PQR (con PROPKA), OpenMM e PDBFixer, PROCHECK e ProSA II (se i pacchetti con
 # licenza sono in docker/vendor/).
 # Le chiavi di licenza NON entrano nell'immagine: stanno nella cartella dati (data/licenses).
+# Versione: BIOLOOM_VERSION (l'avviatore e compose.yml la passano da programma/launcher/VERSION; il valore predefinito
+# qui sotto lo tiene allineato programma/scripts/versione.sh). In /app/IMPRONTA l'impronta dei sorgenti
+# (docker/impronta.sh), con cui l'avviatore si accorge che l'immagine non corrisponde più al codice.
 
-ARG BIOLOOM_VERSION=4.1.0
+ARG BIOLOOM_VERSION=4.2.0
 
 # ------------------------------------------------------------------ interfaccia web
 # (JavaScript indipendente dalla piattaforma: si compila con l'architettura nativa, anche su Mac ARM)
@@ -59,6 +62,14 @@ RUN mkdir -p /opt/procheck \
          && cp -a /build/procheck/. /opt/procheck/ \
          && rm -f /opt/procheck/*.o /opt/procheck/*.f /opt/procheck/*.for; \
        fi
+
+# ------------------------------------------------------------------ impronta dei sorgenti
+# Stessa definizione dell'avviatore (docker/impronta.sh), calcolata qui così c'è comunque si costruisca l'immagine
+# (avviatore, compose a mano, CI). Quello che .dockerignore esclude (node_modules, __pycache__, frontend/dist...)
+# la definizione lo esclude comunque. Lo script si legge senza CR, come entrypoint.sh, se arriva con fine riga CRLF.
+FROM --platform=linux/amd64 ubuntu:24.04 AS impronta
+COPY . /ctx
+RUN tr -d '\r' < /ctx/docker/impronta.sh > /tmp/impronta.sh && sh /tmp/impronta.sh /ctx > /impronta
 
 # ------------------------------------------------------------------ immagine finale
 FROM --platform=linux/amd64 ubuntu:24.04
@@ -136,6 +147,10 @@ ENV TMPDIR=/scratch/tmp \
     HOME=/scratch/home \
     PYTHONPATH=/app/backend
 WORKDIR /app/backend
+
+# Impronta e versione per ultime: l'impronta cambia a ogni modifica del codice, i livelli sopra restano in cache.
+COPY --from=impronta /impronta /app/IMPRONTA
+LABEL bioloom.version=${BIOLOOM_VERSION}
 
 EXPOSE 8765
 VOLUME ["/scratch", "/cache"]

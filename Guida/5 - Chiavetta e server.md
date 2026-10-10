@@ -16,6 +16,11 @@ powershell -ExecutionPolicy Bypass -File programma\launcher\bioloom.ps1 -Azione 
 ./avvia-bioloom.sh prepara /Volumes/CHIAVETTA/BioLoom
 ```
 
+Le immagini si salvano per prime. Se quella di BioLoom non corrisponde più al codice in `programma/` (codice aggiornato
+senza ricostruirla), l'avviatore la aggiorna prima di salvarla, come l'azione `aggiorna`
+([Primo avvio](1%20-%20Primo%20avvio.md#aggiornare-bioloom)); se non ci riesce la copia si ferma prima di copiare i
+file («Copia interrotta»), perché una copia con l'immagine vecchia e il codice nuovo non deve uscire.
+
 Per non diffondere per errore software con licenza e credenziali personali, la copia **non contiene**:
 
 - **i pacchetti di PROCHECK e ProSA II** (`programma/docker/vendor/`), che la licenza non permette di distribuire: resta
@@ -27,6 +32,10 @@ Per non diffondere per errore software con licenza e credenziali personali, la c
   con l'avviatore (**R**) perché applichi il MAC della licenza. `posta.env` va ricreato se serve
   ([Avviso per email](4%20-%20Dati%20e%20privacy.md#avviso-per-email)). Con l'opzione, per una copia solo tua,
   l'avviatore ricorda che la copia contiene chiavi personali e non va data ad altri.
+
+La licenza ProSA vale per un computer alla volta: se BioLoom gira dalla chiavetta su più computer, o la copia contiene le
+licenze, sugli altri computer la licenza risulta attiva altrove e l'avviatore chiede se spostarla
+([Licenze](6%20-%20Licenze.md#prosa-un-computer-alla-volta)).
 
 Le immagini della cartella `immagini/` contengono comunque i programmi installati (MODELLER e, se c'erano i pacchetti,
 PROCHECK e ProSA II): la copia è per uso personale, o del tuo gruppo se le licenze lo consentono, e non va
@@ -93,8 +102,8 @@ COMPOSE_PROFILES=qmean BIOLOOM_QMEAN_URL=http://qmean:8080 \
 
 Su molti server Red Hat il comando `docker` è in realtà **Podman** (avviso «Emulate Docker CLI using podman»), spesso
 vecchio e senza `compose`. L'avviatore se ne accorge da solo: `./avvia-bioloom.sh server` (e `arresta`, `stato`, `log`,
-`verifica`) usa allora `programma/launcher/bioloom-podman.sh`, che avvia gli stessi container con `podman run`. Non
-servono permessi di amministratore.
+`verifica`, `aggiorna`) usa allora `programma/launcher/bioloom-podman.sh`, che avvia gli stessi container con
+`podman run`. Non servono permessi di amministratore.
 
 ```bash
 # 1. sul tuo PC: copia portatile senza dati; le immagini hanno già PROCHECK e ProSA (non sono su GitHub)
@@ -116,7 +125,7 @@ ssh -N -L 8765:127.0.0.1:8765 utente@server
   dal tuo PC con il tunnel. Non serve aprire porte nel firewall né HTTPS.
 - **File:** i file della cartella dati restano del tuo utente.
 - **ProSA:** Podman senza root non può assegnare al container il MAC della licenza, quindi l'analisi prosegue senza
-  ProSA (PROCHECK, DOPE e le altre misure restano).
+  ProSA (PROCHECK, DOPE e le altre misure restano) e l'avviatore non lega la licenza al server.
 - **Riavvio:** i container ripartono da soli se si fermano per errore. Senza linger, chiudendo SSH di solito restano
   attivi, ma non è garantito: controlla con `./avvia-bioloom.sh stato` dopo esserti ricollegato. Per tenerli attivi e
   farli ripartire con il server, l'amministratore attiva il linger (`loginctl enable-linger <utente>`); poi
@@ -158,10 +167,10 @@ fino a 50.000 sequenze. Per stimare tempi e spazio sul server prima di partire c
 ### Accesso
 
 - Con `BIOLOOM_AUTH=on` l'interfaccia chiede la chiave d'accesso (`BIOLOOM_ACCESS_KEY` in `server.env`).
-  Se la variabile è vuota, BioLoom genera la chiave in `data/access_key` e la stampa nel log:
+  Se la variabile è vuota, BioLoom genera la chiave in `access_key` nella cartella dati e la stampa nel log all'avvio:
 
   ```bash
-  docker compose -f programma/launcher/compose.yml --env-file server.env logs bioloom
+  ./avvia-bioloom.sh log        # ultime 200 righe del log, con Docker o con Podman
   ```
 
 - **Sessione:** il login crea un cookie HttpOnly firmato, valido 30 giorni. Cambiando la chiave e riavviando
@@ -185,7 +194,7 @@ fino a 50.000 sequenze. Per stimare tempi e spazio sul server prima di partire c
   `BIOLOOM_AUTH=on` non serve.
 - **Tentativi sbagliati:** vengono rallentati progressivamente.
 - **Arresto:** dall'interfaccia è disabilitato (`BIOLOOM_ALLOW_SHUTDOWN=0`). Si arresta con
-  `docker compose ... down`.
+  `./avvia-bioloom.sh arresta`, con Docker o con Podman.
 
 ### HTTPS
 
@@ -219,8 +228,8 @@ evento entro 5 s) e torna agli aggiornamenti periodici.
 | `UNICLUST_PATH`, `QMTL_PATH` | database esterni, montati in sola lettura | no, sono scaricabili |
 | volume `bioloom_qmean_cache` | file cs219 ricreati per i database HH-suite 2 | no, si rifanno con Converti |
 
-Il database dei progetti è SQLite in modalità esclusiva. Per un backup coerente fermalo prima
-(`docker compose ... stop bioloom`) oppure copia la cartella dati con BioLoom fermo.
+Il database dei progetti è SQLite in modalità esclusiva. Per un backup coerente copia la cartella dati con BioLoom
+fermo: `./avvia-bioloom.sh arresta`, poi di nuovo `./avvia-bioloom.sh server`.
 
 Il programma gira con l'utente proprietario della cartella dati: su Linux i file creati appartengono
 all'utente che ha creato la cartella.
@@ -229,19 +238,46 @@ all'utente che ha creato la cartella.
 
 - **MODELLER:** `MODELLER_KEY` in `server.env`, oppure dall'interfaccia (salvata in `data/licenses/`).
 - **ProSA II:** carica `LicenseDB` dall'interfaccia e imposta in `BIOLOOM_MAC` il MAC indicato nella
-  licenza, poi riavvia.
+  licenza, poi riavvia. La licenza vale per un computer alla volta
+  ([Licenze](6%20-%20Licenze.md#prosa-un-computer-alla-volta)): al primo avvio con quel MAC l'avviatore la lega al
+  server. Se risulta attiva su un altro computer (per esempio la cartella dati viene da un PC dove la usavi), il
+  container prende il MAC predefinito e l'avviatore lo dice alla fine dell'avvio; sul server non chiede, quindi per
+  spostarla qui (l'altro computer la perde) rilancia con `./avvia-bioloom.sh server --sposta-prosa`.
 - **PROCHECK:** nessuna chiave.
 
 ### Aggiornamento
 
-1. Sostituisci la cartella `programma/`, gli avviatori e `Guida/`, lasciando `data/` e `server.env`.
-2. Ricostruisci le immagini (con PROCHECK e ProSA solo se i pacchetti sono in `programma/docker/vendor/`: la copia
-   portatile e GitHub non li contengono):
+1. Sostituisci la cartella `programma/`, gli avviatori e `Guida/`, lasciando `data/` e `server.env`. Se la vecchia
+   `programma/docker/vendor/` ha i pacchetti di PROCHECK e ProSA, mettili da parte prima e rimettili nella nuova: la
+   nuova versione (copia portatile, GitHub) non li contiene. Se il server non li ha, porta anche la cartella
+   `immagini/` di una copia portatile nuova, preparata dove i pacchetti ci sono: un'immagine ricostruita sul server ne
+   sarebbe priva.
+2. Aggiorna le immagini, con Docker o con Podman:
 
    ```bash
-   docker compose -f programma/launcher/compose.yml --env-file server.env build
+   ./avvia-bioloom.sh aggiorna
    ```
 
-3. Riavvia con `./avvia-bioloom.sh server`.
+   L'avviatore confronta il codice in `programma/` con l'impronta salvata nell'immagine di BioLoom. Se non coincidono
+   carica `immagini/bioloom-<versione>.tar`; se manca o viene anche lei da un codice diverso, ricostruisce l'immagine
+   (serve internet; pochi minuti, 10–20 la prima volta). Aggiorna anche l'immagine di QMEAN se QMEAN locale è
+   configurato (`UNICLUST_PATH`) o la sua immagine o il suo file ci sono; se lì qualcosa non riesce lo segnala, e QMEAN
+   resta con l'immagine che aveva. Se BioLoom è attivo con un'immagine diversa lo riavvia con il file con cui era
+   partito (`server.env`; i calcoli in corso si interrompono); altrimenti le immagini nuove valgono dal prossimo
+   `./avvia-bioloom.sh server`. Se l'immagine di BioLoom non si aggiorna, l'azione finisce con un errore e BioLoom
+   resta com'era. Con Podman, se hai installato le unità systemd (`servizio`), l'avviatore le rigenera per i container
+   nuovi: valgono dal prossimo riavvio del server.
 
-I dati e le impostazioni restano.
+Se il codice è stato sostituito senza `aggiorna`, `./avvia-bioloom.sh server` se ne accorge: avvisa che l'immagine non
+corrisponde al codice e parte con quella esistente.
+
+`server.env` non contiene più `BIOLOOM_VERSION`: la versione delle immagini è sempre quella di
+`programma/launcher/VERSION`. In un `server.env` di una versione precedente la riga può restare: l'avviatore la ignora e
+lo dice («server.env: BIOLOOM_VERSION=4.1.0 viene ignorata, si usa la versione …»). Conta solo con `docker compose`
+lanciato a mano: lì toglila. Senza l'avviatore le immagini si ricostruiscono con
+`docker compose -f programma/launcher/compose.yml --env-file server.env build` (con `COMPOSE_PROFILES=qmean` anche
+QMEAN), poi si riavvia con gli stessi comandi `up -d` dell'[installazione](#installazione).
+
+I dati e le impostazioni restano. Le immagini della versione precedente restano su disco finché non le cancelli
+(`docker image rm bioloom:<versione> bioloom-qmean:<versione>`, con Podman `podman image rm`); quelle sostituite a parità
+di versione restano senza nome e si tolgono con `docker image prune` (`podman image prune`).

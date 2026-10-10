@@ -23,8 +23,11 @@ L'avviatore fa da solo il resto:
 - carica le immagini dalla cartella `immagini/` (senza internet) oppure le costruisce la prima volta;
 - trova il disco con **UniClust30/UniRef30** per QMEAN locale, in qualunque versione, anche se cambia la lettera di
   unità o il punto di montaggio;
-- assegna al container il MAC richiesto dalla licenza **ProSA**;
-- sceglie una porta libera.
+- assegna al container il MAC richiesto dalla licenza **ProSA**, sul computer a cui la licenza è legata
+  ([un computer alla volta](6%20-%20Licenze.md#prosa-un-computer-alla-volta));
+- sceglie una porta libera;
+- si accorge se l'immagine Docker non corrisponde più al codice in `programma/` e propone di aggiornarla
+  ([sotto](#aggiornare-bioloom)).
 
 Dalla sua finestra: **A** riapre il browser, **V** verifica gli strumenti, **L** mostra i log, **R** riavvia rifacendo la
 ricerca dei dischi (dopo aver collegato quello di UniClust30), **U** indica a mano la cartella di UniClust30, **S** arresta
@@ -63,3 +66,37 @@ template AlphaFold) → avvio con l'avanzamento in tempo reale → risultati (mo
 si torna indietro con il browser, si riprende più tardi o da un altro computer con lo stesso link.
 
 Per molte sequenze insieme c'è la **Pipeline batch** ([sotto](2%20-%20Funzioni.md#pipeline-job-e-coda-dei-calcoli)).
+
+## Aggiornare BioLoom
+
+1. Arresta BioLoom e sostituisci nella sua cartella `programma/`, gli avviatori, `Guida/`, `README.md`, `LEGGIMI.txt`,
+   `LICENSE` e `THIRD_PARTY_NOTICES.md`
+   con quelli della nuova versione (anche `immagini/`, se la nuova versione ce l'ha). `data/` resta com'è: progetti,
+   risultati e licenze non si toccano, e se la nuova versione cambia la struttura del database la aggiorna da sola dopo
+   averne salvato una copia ([Dati e privacy](4%20-%20Dati%20e%20privacy.md#dove-stanno-i-dati)). Se hai i pacchetti di
+   PROCHECK e ProSA in `programma/docker/vendor/`, mettili da parte e rimettili nella nuova `programma/` prima di
+   avviare: la nuova versione non li contiene e un'immagine ricostruita senza sarebbe priva dei due strumenti
+   ([pacchetti con licenza](../programma/docker/vendor/README.md)).
+2. Avvia come sempre. Con un numero di versione nuovo l'avviatore carica o costruisce le immagini come al primo avvio.
+   Se la versione è la stessa ma il codice è cambiato (per esempio una correzione), se ne accorge confrontando il codice
+   in `programma/` con l'impronta salvata nell'immagine e chiede «Aggiornarla ora? [S/n]»: con Invio carica l'immagine
+   della cartella `immagini/`, se corrisponde al codice, altrimenti la ricostruisce (serve internet; pochi minuti, 10–20
+   la prima volta). Con **n** BioLoom parte con l'immagine che c'era. Se per ricostruirla mancano i pacchetti di
+   PROCHECK o ProSA, l'avviatore lo dice prima e la domanda diventa «[s/N]»: con Invio non ricostruisce, così non
+   perdi i due strumenti per sbaglio.
+
+Si può anche aggiornare senza avviare BioLoom; se è acceso, viene riavviato con le immagini nuove e i calcoli in corso si
+interrompono:
+
+```bat
+powershell -ExecutionPolicy Bypass -File programma\launcher\bioloom.ps1 -Azione aggiorna
+```
+
+```bash
+./avvia-bioloom.sh aggiorna
+```
+
+L'azione aggiorna anche l'immagine di QMEAN, se QMEAN locale è in uso. Una ricostruzione include PROCHECK e ProSA solo se
+i loro pacchetti sono in `programma/docker/vendor/`, che la copia portatile non contiene: in quel caso usa la cartella
+`immagini/` della nuova copia portatile. Le immagini sostituite restano su disco: si cancellano da Docker Desktop
+(Images), oppure con `docker image rm bioloom:<versione vecchia>` e, per quelle rimaste senza nome, `docker image prune`.

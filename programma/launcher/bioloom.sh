@@ -5,9 +5,12 @@
 #   bioloom.sh                   avvio con menu        bioloom.sh arresta     arresto
 #   bioloom.sh stato | log | verifica                  bioloom.sh prepara <cartella>   copia portatile
 #   bioloom.sh server            avvio da server (server.env: rete, chiave d'accesso, percorsi)
+#   bioloom.sh aggiorna          porta le immagini al codice in programma/ (file in immagini/ o costruzione) e,
+#                                se BioLoom è attivo, lo riavvia come era partito (desktop o server)
 #   opzioni: --no-browser --no-menu --senza-dati --senza-qmean
 #            --uniclust <cartella>  cartella con UniClust30/UniRef30 (qualunque versione; auto = ricerca automatica)
 #            --con-licenze  la copia portatile include chiavi di licenza, posta.env e chiave d'accesso (solo per sé)
+#            --sposta-prosa  sposta su questo computer, senza chiedere, la licenza ProSA attiva su un altro
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # programma/: il codice
@@ -16,9 +19,8 @@ COMPOSE="$ROOT/launcher/compose.yml"
 ENV_FILE="$BASE/.env.locale"
 DATA_DIR="$BASE/data"
 IMAGES_DIR="$BASE/immagini"
-VERSION="$(head -n1 "$ROOT/launcher/VERSION" 2>/dev/null | tr -d '[:space:]')"
-VERSION="${VERSION:-4.1.0}"
-ACTION="avvia"; DEST=""; NO_BROWSER=0; NO_MENU=0; NO_DATA=0; NO_QMEAN=0; WITH_LICENSES=0
+VERSION="$(head -n1 "$ROOT/launcher/VERSION" 2>/dev/null | tr -d '[:space:]')"   # unica fonte della versione
+ACTION="avvia"; DEST=""; NO_BROWSER=0; NO_MENU=0; NO_DATA=0; NO_QMEAN=0; WITH_LICENSES=0; MOVE_PROSA=0
 UNICLUST_CHOICE=""; UNICLUST_CHOICE_SET=0; UNICLUST_MANUAL=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -27,9 +29,10 @@ while [ $# -gt 0 ]; do
     --senza-dati) NO_DATA=1 ;;
     --con-licenze) WITH_LICENSES=1 ;;
     --senza-qmean) NO_QMEAN=1 ;;
+    --sposta-prosa) MOVE_PROSA=1 ;;
     --uniclust) UNICLUST_CHOICE="${2:-}"; UNICLUST_CHOICE_SET=1; shift
                 case "$UNICLUST_CHOICE" in auto|automatica) UNICLUST_CHOICE="" ;; esac ;;
-    avvia|arresta|stato|log|verifica|prepara|server) ACTION="$1" ;;
+    avvia|arresta|stato|log|verifica|prepara|server|aggiorna) ACTION="$1" ;;
     *) DEST="$1" ;;
   esac
   shift
@@ -48,7 +51,40 @@ title() { printf '\n  %s%s%s\n' "$c_cyan" "$*" "$c_off"; }
 warn()  { printf '  %s%s%s\n' "$c_yellow" "$*" "$c_off"; }
 fail()  { printf '\n  %s[!] %s%s\n\n' "$c_red" "$*" "$c_off"; exit 1; }
 
+[ -n "$VERSION" ] || fail "Manca il file programma/launcher/VERSION (versione di BioLoom): la cartella programma è incompleta, copiala di nuovo."
+# Le variabili della shell prevalgono su --env-file: una BIOLOOM_VERSION vecchia in .env.locale o server.env non conta
+export BIOLOOM_VERSION="$VERSION"
+
+# comando da suggerire nei messaggi: quello della Guida, con il percorso (questo script non è nel PATH)
+LAUNCH_CMD="$BASE/avvia-bioloom.sh"; [ -f "$LAUNCH_CMD" ] || LAUNCH_CMD="$ROOT/launcher/bioloom.sh"
+case "$LAUNCH_CMD" in *' '*) LAUNCH_CMD="\"$LAUNCH_CMD\"" ;; esac
+
 compose() { docker compose -f "$COMPOSE" --env-file "$ENV_FILE" "$@"; }
+
+env_val() {  # valore di $1 nel file $2 letto come fa docker compose: ultima riga, senza spazi ai lati, virgolette e
+  # commento a fine riga (" # ..." fuori dalle virgolette)
+  local v=""
+  [ -f "$2" ] && v="$(sed -n "s/^$1=//p" "$2" | tail -n1 | tr -d '\r' | sed 's/^[[:space:]]*//')"
+  case "$v" in
+    \"*) v="${v#\"}"; v="${v%%\"*}" ;;
+    \'*) v="${v#\'}"; v="${v%%\'*}" ;;
+    *) v="$(printf '%s' "$v" | sed 's/[[:space:]]#.*$//;s/[[:space:]]*$//')" ;;
+  esac
+  printf '%s' "$v"
+}
+
+compose_path() {  # percorso di un file env com'è per compose: i relativi partono dalla cartella di compose.yml
+  case "$1" in
+    ""|/*|[A-Za-z]:*) printf '%s' "$1" ;;
+    *) printf '%s' "$ROOT/launcher/$1" ;;
+  esac
+}
+
+server_data() {  # cartella dati di server.env (BIOLOOM_DATA_PATH; predefinita quella di compose.yml)
+  local d
+  d="$(env_val BIOLOOM_DATA_PATH "$BASE/server.env")"
+  compose_path "${d:-../../data}"
+}
 
 # ------------------------------------------------------------------------------------------- Docker
 ensure_docker() {
@@ -77,11 +113,13 @@ ensure_docker() {
 
 have_image() { docker image inspect "$1" >/dev/null 2>&1; }
 
+LOADED_TAR=""   # ultimo file di immagini/ caricato: aggiornare l'immagine non lo ricarica
+
 ensure_image() {  # $1 immagine  $2 file tar  $3 servizio compose
   have_image "$1" && return 0
   if [ -f "$IMAGES_DIR/$2" ]; then
     warn "Caricamento dell'immagine $1 dalla cartella 'immagini' (qualche minuto)..."
-    docker load -i "$IMAGES_DIR/$2" >/dev/null && have_image "$1" && return 0
+    docker load -i "$IMAGES_DIR/$2" >/dev/null && have_image "$1" && { LOADED_TAR="$IMAGES_DIR/$2"; return 0; }
     warn "Caricamento non riuscito: provo a costruire l'immagine."
   fi
   if [ -f "$ROOT/docker/Dockerfile" ]; then
@@ -89,6 +127,175 @@ ensure_image() {  # $1 immagine  $2 file tar  $3 servizio compose
     compose build "$3" && return 0
   fi
   return 1
+}
+
+# ------------------------------------------------------------------------------------------- impronta del codice
+# docker/impronta.sh riassume in un hash i file di backend/, frontend/ e docker/ che entrano nell'immagine e la build
+# lo salva in /app/IMPRONTA: se i due valori differiscono, il codice in programma/ è cambiato (anche a parità di
+# versione) senza ricostruire l'immagine. Senza gli strumenti per calcolarla il controllo si salta.
+CODE_IMPRONTA=""; CODE_IMPRONTA_SET=0
+
+code_impronta() {  # imposta CODE_IMPRONTA, una volta sola (vuota se non si può calcolare)
+  [ "$CODE_IMPRONTA_SET" = 1 ] && return 0
+  CODE_IMPRONTA_SET=1
+  [ -f "$ROOT/docker/impronta.sh" ] || return 0
+  CODE_IMPRONTA="$(sh "$ROOT/docker/impronta.sh" "$ROOT" 2>/dev/null)" || CODE_IMPRONTA=""
+  case "$CODE_IMPRONTA" in *[!0-9a-f]*) CODE_IMPRONTA="" ;; esac
+  [ "${#CODE_IMPRONTA}" = 64 ] || CODE_IMPRONTA=""
+}
+
+image_impronta() {  # impronta salvata nell'immagine $1: vuota se l'immagine manca o non ha /app/IMPRONTA (immagini
+  # precedenti); uscita 1 se Docker non ha potuto avviare il container (non si sa)
+  local out rc
+  have_image "$1" || return 0   # senza immagine "docker run" la cercherebbe su Docker Hub
+  # MSYS_NO_PATHCONV: in Git Bash /app/IMPRONTA non va convertito in un percorso di Windows
+  out="$(MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm --platform linux/amd64 --entrypoint cat "$1" /app/IMPRONTA 2>/dev/null)"
+  rc=$?
+  case "$rc" in
+    0) printf '%s' "$out" | tr -d '[:space:]' ;;
+    1) ;;   # cat: file assente
+    *) return 1 ;;
+  esac
+}
+
+image_outdated() {  # vero se l'immagine $1 non corrisponde al codice in programma/ (falso se non si può sapere)
+  local imp
+  code_impronta
+  [ -n "$CODE_IMPRONTA" ] || return 1
+  imp="$(image_impronta "$1")" || return 1
+  [ "$imp" != "$CODE_IMPRONTA" ]
+}
+
+image_current() {  # vero se si sa che l'immagine $1 corrisponde al codice in programma/
+  local imp
+  code_impronta
+  [ -n "$CODE_IMPRONTA" ] || return 1
+  imp="$(image_impronta "$1")" || return 1
+  [ "$imp" = "$CODE_IMPRONTA" ]
+}
+
+vendor_missing() {  # strumenti con licenza che una costruzione non includerebbe (pacchetti assenti in docker/vendor/)
+  local m=""
+  [ -f "$ROOT/docker/vendor/procheck/procheck.tar.gz" ] || m="PROCHECK"
+  [ -f "$ROOT/docker/vendor/prosa/prosa2003.linux.tar.gz" ] || m="${m:+$m e }ProSA"
+  printf '%s' "$m"
+}
+
+VENDOR_WARNED=0
+warn_vendor() {  # avviso, una volta sola, prima di una costruzione che perderebbe PROCHECK o ProSA
+  local missing
+  missing="$(vendor_missing)"
+  [ -n "$missing" ] || return 1
+  [ "$VENDOR_WARNED" = 1 ] && return 0
+  VENDOR_WARNED=1
+  warn "La nuova immagine non avrà $missing: i pacchetti non sono in programma/docker/vendor/ (vedi il README lì)."
+}
+
+update_bioloom_image() {  # porta bioloom:$VERSION al codice: prima il file in immagini/, poi la costruzione
+  local img="bioloom:$VERSION" tarfile="$IMAGES_DIR/bioloom-$VERSION.tar"
+  if [ -f "$tarfile" ] && [ "$LOADED_TAR" != "$tarfile" ]; then
+    warn "Caricamento dell'immagine $img dalla cartella 'immagini' (qualche minuto)..."
+    if docker load -i "$tarfile" >/dev/null && have_image "$img"; then
+      LOADED_TAR="$tarfile"
+      if ! image_outdated "$img"; then say "${c_green}Immagine $img aggiornata dalla cartella 'immagini'.${c_off}"; return 0; fi
+      warn "Anche l'immagine nella cartella 'immagini' viene da un codice diverso."
+    else
+      warn "Caricamento non riuscito."
+    fi
+  fi
+  if [ ! -f "$ROOT/docker/Dockerfile" ]; then
+    warn "L'immagine $img non corrisponde al codice in programma/ e non si può ricostruire (manca programma/docker/Dockerfile)."
+    return 1
+  fi
+  warn "Costruzione dell'immagine $img dal codice in programma/ (serve internet; pochi minuti, 10-20 la prima volta)."
+  warn_vendor
+  compose build bioloom || { warn "Costruzione dell'immagine $img non riuscita (vedi i messaggi sopra)."; return 1; }
+  if image_outdated "$img"; then
+    warn "L'immagine $img costruita non corrisponde ancora al codice in programma/."
+    return 1
+  fi
+  say "${c_green}Immagine $img ricostruita dal codice in programma/.${c_off}"
+}
+
+update_qmean_image() {  # $1 cartella di UniClust configurata; QMEAN si aggiorna se è in uso o se c'è il suo file
+  local img="bioloom-qmean:$VERSION" tarfile="$IMAGES_DIR/bioloom-qmean-$VERSION.tar"
+  have_image "$img" || [ -f "$tarfile" ] || [ -n "$1" ] || return 0
+  if [ -f "$tarfile" ]; then
+    warn "Caricamento dell'immagine $img dalla cartella 'immagini' (qualche minuto)..."
+    if docker load -i "$tarfile" >/dev/null && have_image "$img"; then
+      say "${c_green}Immagine $img aggiornata dalla cartella 'immagini'.${c_off}"; return 0
+    fi
+    warn "Caricamento non riuscito: provo a costruire l'immagine."
+  fi
+  if [ -f "$ROOT/docker/qmean/Dockerfile" ]; then
+    warn "Costruzione dell'immagine $img (serve internet)..."
+    if compose --profile qmean build qmean; then say "${c_green}Immagine $img aggiornata.${c_off}"; return 0; fi
+  fi
+  warn "Immagine $img non aggiornata: QMEAN locale resta con l'immagine che aveva (se c'era)."
+}
+
+check_image() {  # all'avvio, dopo ensure_image: immagine costruita da un codice diverso da quello in programma/
+  local server="${1:-0}" answer="" ask="[S/n]" tarfile="$IMAGES_DIR/bioloom-$VERSION.tar"
+  image_outdated "bioloom:$VERSION" || return 0
+  if [ "$server" = 0 ] && [ "$NO_MENU" = 0 ]; then
+    warn "L'immagine di BioLoom non corrisponde al codice in programma/ (aggiornato senza ricostruire l'immagine)."
+    # senza un file in immagini/ da caricare si ricostruisce: se così si perdono PROCHECK o ProSA, Invio vale "no"
+    if { [ ! -f "$tarfile" ] || [ "$LOADED_TAR" = "$tarfile" ]; } && warn_vendor; then ask="[s/N]"; fi
+    read -r -p "  Aggiornarla ora? $ask " answer || answer="n"
+    case "$answer" in
+      [sS]*) answer=s ;;
+      [nN]*) answer=n ;;
+      *) if [ "$ask" = "[s/N]" ]; then answer=n; else answer=s; fi ;;
+    esac
+    [ "$answer" = s ] && update_bioloom_image && return 0
+    warn "Avvio con l'immagine esistente: per aggiornarla usa $LAUNCH_CMD aggiorna"
+    return 0
+  fi
+  warn "L'immagine di BioLoom non corrisponde al codice in programma/ (aggiornato senza ricostruire l'immagine):"
+  warn "per aggiornarla usa $LAUNCH_CMD aggiorna. Avvio con l'immagine esistente."
+}
+
+stale_running() {  # vero se un container di BioLoom in esecuzione usa un'immagine diversa da quella attuale
+  local service id img want
+  for service in bioloom qmean; do
+    id="$(compose --profile qmean ps -q --status running "$service" 2>/dev/null | head -n1)"
+    [ -n "$id" ] || continue
+    img="bioloom:$VERSION"; [ "$service" = qmean ] && img="bioloom-qmean:$VERSION"
+    # immagine attuale assente (aggiornamento non riuscito): riavviare farebbe solo ritentare la costruzione a compose
+    want="$(docker image inspect --format '{{.Id}}' "$img" 2>/dev/null)"
+    [ -n "$want" ] || continue
+    [ "$(docker inspect --format '{{.Image}}' "$id" 2>/dev/null)" != "$want" ] && return 0
+  done
+  return 1
+}
+
+running_env_file() {  # --env-file con cui compose ha avviato il BioLoom in esecuzione (etichetta del container): vuoto
+  # se non è in esecuzione, "?" se l'etichetta manca (compose precedente alla 2.20 circa)
+  local id lab
+  id="$(compose ps -q --status running bioloom 2>/dev/null | head -n1)"
+  [ -n "$id" ] || return 0
+  lab="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.environment_file"}}' "$id" 2>/dev/null)"
+  case "$lab" in ""|"<no value>") printf '?' ;; *) printf '%s' "$lab" ;; esac
+}
+
+SERVER_MODE=0
+use_running_env() {  # file per arresta, stato, log, verifica e aggiorna: quello con cui è partito BioLoom. Imposta
+  # ENV_FILE e SERVER_MODE: 1 = server.env, 0 = .env.locale, vuoto = ci sono tutti e due e non si sa quale usa il
+  # BioLoom in esecuzione. Un .env.locale senza BIOLOOM_PORT non viene da un avvio sul desktop: è quello minimo che le
+  # versioni precedenti creavano anche sul server con "arresta" o "log".
+  SERVER_MODE=0
+  [ -f "$BASE/server.env" ] || return 0
+  if ! grep -q '^BIOLOOM_PORT=' "$ENV_FILE" 2>/dev/null; then
+    SERVER_MODE=1
+  else
+    case "$(running_env_file)" in   # compose ps va bene con l'uno o l'altro file: il progetto è sempre "bioloom"
+      *server.env) SERVER_MODE=1 ;;
+      ""|*.env.locale) ;;           # spento: conta il desktop (server.env può essere rimasto da una prova)
+      *) SERVER_MODE="" ;;
+    esac
+  fi
+  [ "$SERVER_MODE" = 1 ] && ENV_FILE="$BASE/server.env"
+  return 0
 }
 
 # ------------------------------------------------------------------------------------------- UniClust30/UniRef30 e QMTL
@@ -193,10 +400,89 @@ ask_uniclust() {  # cartella indicata a mano (menu U o --uniclust)
 }
 
 # ------------------------------------------------------------------------------------------- licenze, porta, file .env
-prosa_mac() {
-  local lic="$DATA_DIR/licenses/prosa/LicenseDB"
+prosa_mac() {  # MAC della licenza ProSA nella cartella dati $1 (predefinita: data/)
+  local lic="${1:-$DATA_DIR}/licenses/prosa/LicenseDB"
   [ -f "$lic" ] || return 0
   awk 'NF >= 4 && $3 ~ /^[0-9A-Fa-f]{12}$/ { m = tolower($3); printf "%s:%s:%s:%s:%s:%s\n", substr(m,1,2), substr(m,3,2), substr(m,5,2), substr(m,7,2), substr(m,9,2), substr(m,11,2); exit }' "$lic"
+}
+
+norm_mac() {  # MAC scritto a mano (server.env) nella forma aa:bb:cc:dd:ee:ff; vuoto se non è un MAC
+  printf '%s\n' "$1" | tr -d '"'"'"':.-' | tr '[:upper:]' '[:lower:]' \
+    | awk 'length($0) == 12 && $0 ~ /^[0-9a-f]+$/ { printf "%s:%s:%s:%s:%s:%s\n", substr($0,1,2), substr($0,3,2), substr($0,5,2), substr($0,7,2), substr($0,9,2), substr($0,11,2) }'
+}
+
+# La licenza ProSA vale per un computer alla volta: il primo computer che applica il MAC di LicenseDB la lega a sé
+# in licenses/prosa/computer (una riga "<mac> <computer>" per licenza), che viaggia con la cartella dati; gli altri
+# non applicano quel MAC finché la licenza non viene spostata (domanda o --sposta-prosa).
+sha256_hex() {  # SHA-256 esadecimale dello standard input (vuoto se manca lo strumento)
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum | awk '{ print $1 }'
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 | awk '{ print $1 }'
+  elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha256 | awk '{ print $NF }'
+  fi
+}
+
+computer_id() {  # 16 cifre esadecimali che identificano questo computer (vuoto se non si ottiene)
+  local raw="" f
+  case "$OS" in
+    # /reg:64: da un Git Bash a 32 bit reg vedrebbe il registro a 32 bit, dove MachineGuid non c'è
+    windows) raw="$(MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' reg query 'HKLM\SOFTWARE\Microsoft\Cryptography' /v MachineGuid \
+                      /reg:64 2>/dev/null | awk '$1 == "MachineGuid" { print $NF }')" ;;
+    mac) raw="$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | awk -F'"' '/IOPlatformUUID/ { print $4; exit }')" ;;
+    linux)
+      # WSL: il computer è Windows (stesso valore di Git Bash e PowerShell), non la distribuzione
+      if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null && command -v reg.exe >/dev/null 2>&1; then
+        raw="$(reg.exe query 'HKLM\SOFTWARE\Microsoft\Cryptography' /v MachineGuid /reg:64 2>/dev/null \
+                 | awk '$1 == "MachineGuid" { print $NF }')"
+      fi
+      for f in /etc/machine-id /var/lib/dbus/machine-id; do
+        [ -z "$raw" ] && [ -s "$f" ] && raw="$(head -n1 "$f")"
+      done ;;
+  esac
+  raw="$(printf '%s' "$raw" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')"
+  [ -n "$raw" ] || return 0
+  printf 'bioloom-computer:%s' "$raw" | sha256_hex | cut -c1-16
+}
+
+# Nel file il MAC si confronta normalizzato (minuscole, solo cifre esadecimali): una riga corretta a mano con le
+# maiuscole o senza i due punti vale come quella scritta dall'avviatore.
+prosa_bind() {  # lega la licenza col MAC $1 al computer $2 nel file $3
+  local tmp="$3.$$"
+  ( umask 077
+    { [ -f "$3" ] && tr -d '\r' < "$3" \
+        | awk -v m="$1" 'BEGIN { gsub(/:/, "", m) } NF { k = tolower($1); gsub(/[^0-9a-f]/, "", k); if (k != m) print }'
+      printf '%s %s\n' "$1" "$2"; } > "$tmp" ) \
+    && mv -f "$tmp" "$3" || { rm -f "$tmp"; return 1; }
+  chmod 600 "$3" 2>/dev/null || true
+}
+
+PROSA_STATE=""   # licenza ProSA: vuoto (nessuna), attivata, questo, spostata, altro, senza-id
+
+prosa_check() {  # $1 MAC della licenza  $2 cartella dati  $3 1 = si può chiedere; vero se il MAC si può applicare
+  local file="$2/licenses/prosa/computer" id bound="" answer=""
+  id="$(computer_id)"
+  if [ -z "$id" ]; then PROSA_STATE=senza-id; return 0; fi
+  [ -f "$file" ] && bound="$(tr -d '\r' < "$file" \
+    | awk -v m="$1" 'BEGIN { gsub(/:/, "", m) } { k = tolower($1); gsub(/[^0-9a-f]/, "", k) } k == m { print tolower($2); exit }')"
+  if [ "$bound" = "$id" ]; then PROSA_STATE=questo; return 0; fi
+  if [ -z "$bound" ]; then
+    prosa_bind "$1" "$id" "$file" || warn "ProSA: impossibile registrare il computer della licenza in $file."
+    PROSA_STATE=attivata; return 0
+  fi
+  warn "ProSA: la licenza è attiva su un altro computer (vale per un computer alla volta)."
+  warn "Per usarla qui chiedi una chiave per questo computer, oppure spostala qui (l'altro computer la perde)."
+  if [ "$MOVE_PROSA" = 1 ]; then
+    answer=s
+  elif [ "$3" = 1 ]; then
+    read -r -p "  Spostare la licenza ProSA su questo computer? [s/N] " answer || answer=""
+  else
+    warn "Per spostarla qui rilancia con --sposta-prosa."
+  fi
+  case "$answer" in
+    [sS]*) if prosa_bind "$1" "$id" "$file"; then PROSA_STATE=spostata; return 0; fi
+           warn "ProSA: impossibile registrare lo spostamento in $file: licenza non spostata." ;;
+  esac
+  PROSA_STATE=altro
+  return 1
 }
 
 random_mac() { printf '02:%02x:%02x:%02x:%02x:%02x\n' $((RANDOM % 256)) $((RANDOM % 256)) $((RANDOM % 256)) $((RANDOM % 256)) $((RANDOM % 256)); }
@@ -260,12 +546,13 @@ start_local() {
   UNICLUST_MANUAL="$SAVED_MANUAL"
   find_databases
   local mac port
-  mac="$(prosa_mac)"
-  if [ -z "$mac" ]; then
-    if [ -n "$SAVED_MAC" ] && [ -z "$SAVED_MAC_LIC" ]; then mac="$SAVED_MAC"; else mac="$(random_mac)"; fi
-    MAC_LIC=""
-  else
+  mac="$(prosa_mac)"; MAC_LIC=""; PROSA_STATE=""
+  if [ -n "$mac" ] && prosa_check "$mac" "$DATA_DIR" "$((1 - NO_MENU))"; then
     MAC_LIC=1
+  elif [ -n "$SAVED_MAC" ] && [ -z "$SAVED_MAC_LIC" ]; then
+    mac="$SAVED_MAC"   # senza licenza (o con la licenza su un altro computer): il MAC locale di questo computer
+  else
+    mac="$(random_mac)"
   fi
   port="${SAVED_PORT:-8765}"
   ensure_env
@@ -288,6 +575,7 @@ start_local() {
   } > "$ENV_FILE"
   ensure_image "bioloom:$VERSION" "bioloom-$VERSION.tar" bioloom \
     || fail "Immagine BioLoom non disponibile: copia la cartella 'immagini' dalla chiavetta originale oppure collegati a internet."
+  check_image
   if [ -n "$UNICLUST" ] && ! ensure_image "bioloom-qmean:$VERSION" "bioloom-qmean-$VERSION.tar" qmean; then
     warn "Immagine QMEAN non disponibile: QMEAN locale resta spento."
     sed -i.bak '/^UNICLUST_PATH=/d;/^COMPOSE_PROFILES=/d;/^QMTL_PATH=/d;/^BIOLOOM_QMEAN_URL=/d' "$ENV_FILE" && rm -f "$ENV_FILE.bak"
@@ -296,8 +584,8 @@ start_local() {
   say "${c_dim}Avvio dei container...${c_off}"
   [ -z "$UNICLUST" ] && compose --profile qmean rm -sf qmean >/dev/null 2>&1
   compose up -d --remove-orphans || fail "Docker non è riuscito ad avviare BioLoom (vedi i messaggi sopra)."
-  wait_healthy "$port" || fail "BioLoom non risponde: controlla con 'bioloom.sh log'."
-  local url="http://127.0.0.1:$port"
+  wait_healthy "$port" || fail "BioLoom non risponde: controlla con $LAUNCH_CMD log"
+  local url="http://127.0.0.1:$port" hint=""
   title "BioLoom è pronto: $url"
   say "Dati:        $DATA_DIR"
   if [ -n "$UNICLUST" ]; then
@@ -308,7 +596,15 @@ start_local() {
   else
     say "${c_yellow}QMEAN:       locale spento (nessun disco con UniClust30/UniRef30; U per indicare la cartella)${c_off}"
   fi
-  if [ -n "$MAC_LIC" ]; then say "ProSA:       licenza trovata, MAC applicato"; else say "ProSA:       nessuna licenza (si carica da Impostazioni > Licenze)"; fi
+  case "$PROSA_STATE" in
+    attivata) say "ProSA:       licenza attivata su questo computer, MAC applicato" ;;
+    questo)   say "ProSA:       licenza di questo computer, MAC applicato" ;;
+    spostata) say "ProSA:       licenza spostata su questo computer, MAC applicato" ;;
+    senza-id) say "ProSA:       licenza trovata, MAC applicato (computer non identificato: nessun controllo)" ;;
+    altro)    if [ "$NO_MENU" = 1 ]; then hint="per spostarla qui: --sposta-prosa"; else hint="R per spostarla qui"; fi
+              say "${c_yellow}ProSA:       licenza attiva su un altro computer, MAC non applicato ($hint)${c_off}" ;;
+    *)        say "ProSA:       nessuna licenza (si carica da Impostazioni > Licenze)" ;;
+  esac
   [ "$NO_BROWSER" = 1 ] || open_url "$url"
   [ "$NO_MENU" = 1 ] || menu "$url"
 }
@@ -333,10 +629,14 @@ menu() {
 }
 
 stop_all() {
-  ensure_env
+  local data="$DATA_DIR"
+  use_running_env; ensure_env
+  if [ "$SERVER_MODE" = 1 ]; then
+    data="$(server_data)"; [ -d "$data" ] && data="$(cd "$data" && pwd)"
+  fi
   warn "Arresto di BioLoom (i calcoli in corso vengono interrotti)..."
   compose --profile qmean down
-  printf '  %sBioLoom è arrestato. I dati restano in %s.%s\n' "$c_green" "$DATA_DIR" "$c_off"
+  printf '  %sBioLoom è arrestato. I dati restano in %s.%s\n' "$c_green" "$data" "$c_off"
 }
 
 portable_data() {  # copia di data/ nella copia portatile; gli argomenti sono esclusioni in più
@@ -356,9 +656,26 @@ prepare_portable() {
   # -ef confronta il file, non la stringa: vale anche con maiuscole diverse (APFS, NTFS) e con link simbolici
   [ "$DEST" -ef "$BASE" ] && fail "La destinazione è la cartella di BioLoom stessa: scegline un'altra."
   title "Preparazione della copia portatile in $DEST"
+  ensure_env
+  # Prima le immagini: se quella di BioLoom non corrisponde al codice in programma/ la si aggiorna, e se non si può
+  # la copia si ferma qui (una copia con immagine vecchia e codice nuovo non deve uscire)
+  mkdir -p "$DEST/immagini"
+  local spec name tarname service
+  for spec in "bioloom:$VERSION bioloom-$VERSION.tar bioloom" "bioloom-qmean:$VERSION bioloom-qmean-$VERSION.tar qmean"; do
+    read -r name tarname service <<< "$spec"
+    [ "$service" = qmean ] && [ "$NO_QMEAN" = 1 ] && continue
+    ensure_image "$name" "$tarname" "$service" || { warn "Immagine $name non disponibile: non inclusa."; continue; }
+    if [ "$service" = bioloom ] && image_outdated "$name"; then
+      warn "L'immagine $name non corrisponde al codice in programma/: la aggiorno prima di salvarla."
+      update_bioloom_image || fail "Immagine $name non aggiornata: la copia avrebbe un'immagine diversa dal codice. Copia interrotta."
+    fi
+    say "Salvataggio dell'immagine $name (qualche minuto)..."
+    docker save -o "$DEST/immagini/$tarname" "$name" || fail "Salvataggio di $name non riuscito."
+  done
   local f
+  # LICENSE e THIRD_PARTY_NOTICES.md: licenza di BioLoom e avvisi (con l'offerta del sorgente) del software nelle immagini
   for f in "Avvia BioLoom.bat" "Arresta BioLoom.bat" "Avvia BioLoom.command" "Arresta BioLoom.command" avvia-bioloom.sh \
-           README.md LEGGIMI.txt .gitattributes .gitignore; do
+           README.md LEGGIMI.txt LICENSE THIRD_PARTY_NOTICES.md .gitattributes .gitignore; do
     [ -e "$BASE/$f" ] && cp -p "$BASE/$f" "$DEST/"
   done
   # Pacchetti con licenza (PROCHECK, ProSA: vedi docker/vendor/README.md) mai nella copia. vendor/ resta con il
@@ -378,15 +695,6 @@ prepare_portable() {
       portable_data --exclude=data/licenses --exclude=data/access_key || fail "Copia dei dati non riuscita."
     fi
   fi
-  mkdir -p "$DEST/immagini"
-  local spec name tarname service
-  for spec in "bioloom:$VERSION bioloom-$VERSION.tar bioloom" "bioloom-qmean:$VERSION bioloom-qmean-$VERSION.tar qmean"; do
-    read -r name tarname service <<< "$spec"
-    [ "$service" = qmean ] && [ "$NO_QMEAN" = 1 ] && continue
-    ensure_image "$name" "$tarname" "$service" || { warn "Immagine $name non disponibile: non inclusa."; continue; }
-    say "Salvataggio dell'immagine $name (qualche minuto)..."
-    docker save -o "$DEST/immagini/$tarname" "$name" || fail "Salvataggio di $name non riuscito."
-  done
   # resti di una copia fatta con una versione precedente, che copiava pacchetti e chiavi: si segnalano, non si cancellano
   local left=""
   [ -n "$(leftover "$DEST/programma/docker/vendor")" ] && left="pacchetti con licenza in programma/docker/vendor"
@@ -418,15 +726,25 @@ start_server() {
     chmod 600 "$server_env"
     title "Creato $server_env"
     say "Chiave d'accesso generata: $key"
-    say "Controlla i percorsi (cartella dati, UniClust30) e la porta, poi rilancia: bioloom.sh server"
+    say "Controlla i percorsi (cartella dati, UniClust30) e la porta, poi rilancia: $LAUNCH_CMD server"
     exit 0
   fi
   ENV_FILE="$server_env"
-  local uniclust data
-  uniclust="$(sed -n 's/^UNICLUST_PATH=//p' "$server_env" | tr -d '\r')"
-  data="$(sed -n 's/^BIOLOOM_DATA_PATH=//p' "$server_env" | tr -d '\r')"
-  [ -n "$data" ] && mkdir -p "$data"
+  check_env_version
+  # valori letti come li legge compose (virgolette, commenti a fine riga); percorsi relativi a compose.yml
+  local uniclust data mac lic_mac port
+  uniclust="$(compose_path "$(env_val UNICLUST_PATH "$server_env")")"
+  data="$(server_data)"
+  mkdir -p "$data" 2>/dev/null
+  # ProSA: se BIOLOOM_MAC è il MAC della licenza nella cartella dati, vale un computer alla volta come sul desktop;
+  # con la licenza su un altro computer il container prende il MAC predefinito di compose.yml (come senza licenza)
+  mac="$(norm_mac "$(env_val BIOLOOM_MAC "$server_env")")"
+  lic_mac="$(prosa_mac "$data")"; PROSA_STATE=""
+  if [ -n "$lic_mac" ] && [ "$mac" = "$lic_mac" ] && ! prosa_check "$lic_mac" "$data" 0; then
+    export BIOLOOM_MAC=02:42:b1:00:00:01
+  fi
   ensure_image "bioloom:$VERSION" "bioloom-$VERSION.tar" bioloom || fail "Immagine BioLoom non disponibile."
+  check_image 1
   if [ -n "$uniclust" ]; then
     [ -n "$(uniclust_below "$uniclust")" ] || fail "UNICLUST_PATH in server.env non contiene database UniClust30/UniRef30 (entro 3 livelli): $uniclust"
     ensure_image "bioloom-qmean:$VERSION" "bioloom-qmean-$VERSION.tar" qmean || fail "Immagine QMEAN non disponibile."
@@ -434,24 +752,88 @@ start_server() {
   else
     compose up -d --remove-orphans || fail "Avvio non riuscito."
   fi
-  title "BioLoom (server) avviato sulla porta $(sed -n 's/^BIOLOOM_PORT=//p' "$server_env" | tr -d '\r')"
+  port="$(env_val BIOLOOM_PORT "$server_env")"
+  title "BioLoom (server) avviato sulla porta ${port:-8765}"
   say "Accesso protetto dalla chiave in server.env (BIOLOOM_ACCESS_KEY). Per HTTPS usa un reverse proxy (vedi Guida/5 - Chiavetta e server.md)."
+  case "$PROSA_STATE" in
+    attivata) say "ProSA: licenza attivata su questo computer, MAC applicato." ;;
+    spostata) say "ProSA: licenza spostata su questo computer, MAC applicato." ;;
+    altro)    warn "ProSA: licenza attiva su un altro computer, MAC non applicato (per spostarla qui: --sposta-prosa)." ;;
+  esac
+}
+
+ENV_VERSION_CHECKED=0
+check_env_version() {  # server.env di una versione precedente: BIOLOOM_VERSION non conta più, vale programma/launcher/VERSION
+  local v
+  [ "$ENV_VERSION_CHECKED" = 1 ] && return 0
+  ENV_VERSION_CHECKED=1
+  v="$(env_val BIOLOOM_VERSION "$ENV_FILE")"
+  [ -z "$v" ] || [ "$v" = "$VERSION" ] \
+    || warn "$(basename "$ENV_FILE"): BIOLOOM_VERSION=$v viene ignorata, si usa la versione $VERSION (programma/launcher/VERSION)."
+}
+
+image_ids() { printf '%s %s' "$(docker image inspect --format '{{.Id}}' "bioloom:$VERSION" 2>/dev/null)" \
+                               "$(docker image inspect --format '{{.Id}}' "bioloom-qmean:$VERSION" 2>/dev/null)"; }
+
+update_all() {  # azione aggiorna: immagini al codice in programma/, poi riavvio se BioLoom è attivo, con il file
+  # (server.env o .env.locale) con cui era partito
+  local running=0 ok=1 uniclust="" before
+  ensure_docker
+  use_running_env; ensure_env
+  title "Aggiornamento delle immagini di BioLoom $VERSION"
+  if [ "$SERVER_MODE" = 1 ]; then
+    check_env_version
+    uniclust="$(env_val UNICLUST_PATH "$ENV_FILE")"
+  else
+    read_saved; uniclust="$SAVED_UNICLUST"
+    # non si sa quale dei due file usa BioLoom: QMEAN è in uso se UniClust è configurato in uno dei due
+    [ -z "$SERVER_MODE" ] && [ -z "$uniclust" ] && uniclust="$(env_val UNICLUST_PATH "$BASE/server.env")"
+  fi
+  compose ps --status running --services 2>/dev/null | grep -qx bioloom && running=1
+  before="$(image_ids)"
+  if image_current "bioloom:$VERSION"; then
+    say "${c_green}L'immagine bioloom:$VERSION corrisponde già al codice in programma/.${c_off}"
+  else
+    update_bioloom_image || ok=0
+  fi
+  update_qmean_image "$uniclust"
+  if [ "$running" = 0 ]; then
+    [ "$(image_ids)" = "$before" ] || say "BioLoom non è in esecuzione: le immagini aggiornate verranno usate al prossimo avvio."
+  elif ! stale_running; then
+    if [ "$ok" = 1 ]; then say "BioLoom è in esecuzione e usa già le immagini attuali: nessun riavvio."
+    else say "BioLoom resta in esecuzione con l'immagine che aveva: nessun riavvio."; fi
+  elif [ -z "$SERVER_MODE" ]; then
+    warn "Non so se BioLoom è partito dal desktop (.env.locale) o da server (server.env): riavvialo tu per usare le"
+    warn "immagini aggiornate ($LAUNCH_CMD arresta, poi di nuovo l'avvio che usi di solito)."
+  elif [ "$SERVER_MODE" = 1 ]; then
+    warn "Riavvio di BioLoom con le immagini aggiornate e le impostazioni di server.env (i calcoli in corso vengono interrotti)..."
+    start_server
+  else
+    warn "Riavvio di BioLoom con le immagini aggiornate (i calcoli in corso vengono interrotti)..."
+    compose up -d --remove-orphans || fail "Docker non è riuscito a riavviare BioLoom (vedi i messaggi sopra)."
+    wait_healthy "${SAVED_PORT:-8765}" || fail "BioLoom non risponde: controlla con $LAUNCH_CMD log"
+    title "BioLoom è pronto: http://127.0.0.1:${SAVED_PORT:-8765}"
+  fi
+  [ "$ok" = 1 ] || fail "L'immagine bioloom:$VERSION non è stata aggiornata (vedi i messaggi sopra)."
 }
 
 # Server con Podman ma senza compose (per esempio RHEL 8, Podman 2.x): le stesse azioni con podman run
 if command -v podman >/dev/null 2>&1 && ! docker compose version >/dev/null 2>&1; then
+  podman_opts=""; [ "$MOVE_PROSA" = 1 ] && podman_opts="--sposta-prosa"
   case "$ACTION" in
-    server) exec bash "$ROOT/launcher/bioloom-podman.sh" avvia ;;
-    arresta|stato|log|verifica) [ -f "$BASE/server.env" ] && exec bash "$ROOT/launcher/bioloom-podman.sh" "$ACTION" ;;
+    server) exec bash "$ROOT/launcher/bioloom-podman.sh" avvia $podman_opts ;;
+    arresta|stato|log|verifica|aggiorna)
+      [ -f "$BASE/server.env" ] && exec bash "$ROOT/launcher/bioloom-podman.sh" "$ACTION" $podman_opts ;;
   esac
 fi
 
 case "$ACTION" in
   avvia) start_local ;;
   arresta) stop_all ;;
-  stato) ensure_env; compose --profile qmean ps ;;
-  log) ensure_env; compose logs --tail 200 ;;
-  verifica) ensure_env; compose exec bioloom python -m bioloom.selftest ;;
+  stato) use_running_env; ensure_env; compose --profile qmean ps ;;
+  log) use_running_env; ensure_env; compose logs --tail 200 ;;
+  verifica) use_running_env; ensure_env; compose exec bioloom python -m bioloom.selftest ;;
   prepara) prepare_portable ;;
   server) start_server ;;
+  aggiorna) update_all ;;
 esac

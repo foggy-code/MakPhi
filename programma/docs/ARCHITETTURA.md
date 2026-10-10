@@ -20,7 +20,8 @@ I percorsi di questo documento (`backend/`, `docker/`, `launcher/`, `scripts/`�
 ## Indice
 
 - [Vista d'insieme](#vista-dinsieme): [container e volumi](#container-e-volumi) · [cartella dati](#cartella-dati) ·
-  [flusso dei dati e file temporanei](#flusso-dei-dati-e-file-temporanei)
+  [flusso dei dati e file temporanei](#flusso-dei-dati-e-file-temporanei) ·
+  [versione, impronta e aggiornamento delle immagini](#versione-impronta-e-aggiornamento-delle-immagini)
 - [Backend](#backend): [pacchetti](#pacchetti) · [job](#job) ·
   [coda con priorità e budget di CPU](#coda-con-priorità-e-budget-di-cpu) ·
   [ripresa delle pipeline](#ripresa-delle-pipeline) ·
@@ -61,6 +62,7 @@ I percorsi di questo documento (`backend/`, `docker/`, `launcher/`, `scripts/`�
 Computer ospite (Windows, macOS, Linux; Apple Silicon in emulazione x86)
   Avvia BioLoom.bat/.command, avvia-bioloom.sh ─▶ programma/launcher/bioloom.ps1 | bioloom.sh ─▶ docker compose (progetto "bioloom")
     · trova UniClust30/QMTL sui dischi · legge il MAC da LicenseDB · porta libera · carica immagini/ o le costruisce
+    · versione da launcher/VERSION · impronta del codice confrontata con /app/IMPRONTA · ProSA un computer alla volta
 
 Container "bioloom" (Ubuntu 24.04, Python 3.12, utente = proprietario di /data)
   Browser ──HTTP──▶ FastAPI (8765; pubblicata su 127.0.0.1, oppure in rete con chiave d'accesso)
@@ -95,7 +97,8 @@ data/
   uploads/            strutture caricate per l'analisi (pulizia automatica)
   cache/              risposte dei servizi remoti (uniprot, uniprot_variants, interpro, rcsb_meta, alphafold, esmfold)
                       e cache dei calcoli in cache/compute (pulizia automatica)
-  licenses/           modeller.key, prosa/LicenseDB (permessi 0600, mai nelle immagini)
+  licenses/           modeller.key, prosa/LicenseDB (permessi 0600, mai nelle immagini); prosa/computer, il computer
+                      a cui è legata ogni licenza ProSA (scritto dagli avviatori, vedi Licenze dei programmi esterni)
   databases/          pdbaa (BLAST+), pdbaa_mmseqs (database MMseqs2 senza indice)
   tools/              facoltativa: eseguibili aggiunti ai percorsi in cui `engines/tools` cerca gli strumenti
   access_key          chiave d'accesso generata in modalità server, se BIOLOOM_ACCESS_KEY è vuota
@@ -175,6 +178,101 @@ pagine liberate per i dati nuovi.
   | indice sul bind mount | 22 s |
   | senza indice | 12 s |
 
+### Versione, impronta e aggiornamento delle immagini
+
+**Versione unica.** La fonte è `launcher/VERSION` (4.2.0). Gli avviatori (`bioloom.sh`, `bioloom.ps1`,
+`bioloom-podman.sh`) e `scripts/test.sh` la leggono da lì, senza numeri di riserva: se il file manca si fermano con un
+errore (`test.sh` no, se ha `BIOLOOM_BASE_IMAGE`). Gli avviatori la esportano come `BIOLOOM_VERSION` prima di ogni `docker compose`: nell'interpolazione di compose
+le variabili della shell prevalgono su `--env-file`, quindi una `BIOLOOM_VERSION` rimasta in `.env.locale` o in un
+`server.env` di una versione precedente non conta (per `server.env` l'avviatore avvisa che è ignorata);
+`bioloom-podman.sh` legge `server.env` variabile per variabile e fa prevalere `VERSION`. `server.env.example` non ha più
+la variabile. Le copie letterali, per chi non passa dagli avviatori:
+
+| File | Copia |
+|---|---|
+| `backend/pyproject.toml`, `backend/bioloom/__init__.py` | `version`, `__version__` |
+| `frontend/package.json`, `frontend/package-lock.json` | `version` del progetto (nel lock i due del progetto, in cima e nel pacchetto `""`, non quelli delle dipendenze) |
+| `docker/Dockerfile` | `ARG BIOLOOM_VERSION=…`, predefinito delle costruzioni senza `--build-arg` |
+| `docker/test/Dockerfile` | `ARG BASE=bioloom:…` |
+| `launcher/compose.yml` | i due `${BIOLOOM_VERSION:-…}` delle immagini `bioloom` e `bioloom-qmean` |
+
+`bash scripts/versione.sh` stampa la versione e controlla le copie (se differiscono le elenca su stderr ed esce con 1);
+`bash scripts/versione.sh X.Y.Z` porta `VERSION` e tutte le copie a X.Y.Z conservando i fine riga, e scrive solo se
+in ogni file trova il numero di copie atteso (altrimenti non tocca nulla). Si lancia con `bash` davanti perché il bit
+eseguibile manca se lo script entra nel repository da Windows (`core.filemode`). `tests/test_version.py` e la CI
+ripetono il controllo. `compose.yml` passa `BIOLOOM_VERSION` all'immagine `bioloom` come build arg senza valore
+(se non è impostata vale il predefinito del Dockerfile), così `ENV BIOLOOM_IMAGE_VERSION` (in `/api/system/info` e
+nel manifest dei pacchetti di riproducibilità) e `LABEL bioloom.version` sono quelli veri anche costruendo con compose;
+`bioloom-podman.sh` usa `podman build --build-arg`. La versione entra nella chiave della
+[cache dei calcoli](#cache-dei-calcoli), che quindi riparte a ogni nuova versione.
+
+**Impronta del codice.** Riconosce un'immagine che non corrisponde al codice anche a parità di versione (`programma/`
+sostituito o modificato senza ricostruire). Definizione, identica nell'implementazione di riferimento
+`docker/impronta.sh` (sh POSIX: dash nella build, bash 3.2 di macOS, Git Bash) e in `launcher/impronta.ps1`
+(`Get-BioLoomImpronta([string]$Root)`, Windows PowerShell 5.1 e pwsh 7, `$null` se non può calcolarla; `bioloom.ps1` la
+carica con dot-source):
+
+1. radice `programma/` (il contesto della build);
+2. file regolari sotto `backend/`, `frontend/` e `docker/`, esclusi: ogni percorso con un segmento che inizia con `.`
+   (file e cartelle nascosti: `.gitkeep`, `.venv`, `.ruff_cache`, `.DS_Store`…), uguale a `node_modules` o
+   `__pycache__` o che finisce in `.egg-info`; i file `*.pyc`; i prefissi `frontend/dist/`, `docker/vendor/`,
+   `docker/qmean/`, `docker/test/`, `backend/tests/`;
+3. percorsi relativi alla radice con `/`, ordinati per byte UTF-8 (`LC_ALL=C sort`; in PowerShell sulle chiavi
+   esadecimali dei byte, perché l'ordinale di .NET confronta unità UTF-16 e sbaglia i caratteri fuori dal piano base);
+4. per ogni file la riga `<SHA-256 del contenuto senza i byte CR>  <percorso>` più LF (esadecimale minuscolo, due
+   spazi): i CR si tolgono perché nella copia di Windows i file di testo sono CRLF;
+5. impronta = SHA-256 (64 cifre esadecimali minuscole) di queste righe in UTF-8.
+
+`sh impronta.sh <radice>` stampa solo l'impronta (uscita 2 = uso sbagliato, 3 = nessuno strumento per l'SHA-256, 1 =
+altro errore). Con perl e `Digest::SHA` calcola tutto in un processo (0,3 s in Git Bash); altrimenti segue la via in sh,
+con `sha256sum`, `shasum -a 256` o `openssl dgst -sha256` (27 s in Git Bash, dove creare processi costa;
+`IMPRONTA_SENZA_PERL=1` la forza). `find` usa `-prune` per non scendere in `node_modules`; PowerShell legge a blocchi
+da 1 MiB saltando i CR (0,4 s). Nessuno dei due segue collegamenti simbolici o giunzioni.
+
+Nella build lo stadio `impronta` (`ubuntu:24.04`, `COPY . /ctx`, script letto senza CR come `entrypoint.sh`) scrive
+`/impronta`; l'immagine finale la copia in `/app/IMPRONTA` con `LABEL bioloom.version`, per ultime, così una modifica
+del codice non invalida la cache dei livelli sopra. L'impronta c'è comunque si costruisca l'immagine (avviatore,
+compose a mano, CI); la `.dockerignore` esclude solo cose che la definizione esclude già, quindi il valore della build è
+quello dell'host (verificato con un albero Windows in CRLF). `docker/vendor/` non conta: dopo aver aggiunto i pacchetti con
+licenza l'immagine si ricostruisce a mano. File di sistema come `Thumbs.db` o `desktop.ini` dentro le tre cartelle
+invece contano.
+
+Lettura dall'immagine: `docker run --rm --platform linux/amd64 --entrypoint cat <immagine> /app/IMPRONTA` (in Git Bash
+con `MSYS_NO_PATHCONV`; con Podman `podman run --rm --health-cmd none`, senza `--platform`). File assente (immagini
+precedenti: `cat` esce con 1) = impronta diversa; container che non parte = non si sa, controllo saltato; immagine
+assente = nessun `run`, che la cercherebbe su Docker Hub. L'impronta del codice si calcola una volta per esecuzione
+dell'avviatore; se non si può calcolare (strumenti assenti) i controlli si saltano in silenzio.
+
+**Controllo all'avvio** (desktop, `bioloom.sh server`, `bioloom-podman.sh avvia`), dopo aver assicurato
+`bioloom:<versione>`: con impronte diverse, sul desktop in modo interattivo l'avviatore chiede «Aggiornarla ora? [S/n]»
+(Invio = sì; «[s/N]», Invio = no, con un avviso prima, quando ricostruirebbe senza i pacchetti di PROCHECK o ProSA:
+nessun tar da caricare e pacchetti assenti in `docker/vendor/`) ed esegue il passo 1 di `aggiorna`; con no o se l'aggiornamento non riesce, con `--no-menu` / `-NoMenu` e
+sul server avvisa con il comando da usare e parte con l'immagine esistente.
+
+**Azione `aggiorna`**: `bioloom.sh aggiorna` (anche da `avvia-bioloom.sh`), `bioloom.ps1 -Azione aggiorna`,
+`bioloom-podman.sh aggiorna`. `bioloom.sh` la inoltra a `bioloom-podman.sh` (con `--sposta-prosa`, se c'è) quando c'è
+`podman` senza `docker compose` e la cartella di BioLoom ha `server.env`. Con Docker il riavvio usa il file con cui
+BioLoom è partito (etichetta `com.docker.compose.project.environment_file` del container; un `.env.locale` minimo
+senza porta vale come server; senza etichetta e con entrambi i file nessun riavvio automatico, con un messaggio).
+Prima di ogni ricostruzione, se mancano i pacchetti di PROCHECK o ProSA, l'avviatore avvisa che la nuova immagine
+non li avrà. L'avviatore PowerShell ha solo il desktop.
+
+1. Immagine `bioloom`: se corrisponde già, nulla. Altrimenti carica `immagini/bioloom-<versione>.tar` (se non è già
+   stato caricato nella stessa esecuzione) e, se ora l'impronta coincide, ha finito; altrimenti, se c'è
+   `docker/Dockerfile`, la ricostruisce (`compose build bioloom` con `BIOLOOM_VERSION` esportata; Podman
+   `podman build --build-arg BIOLOOM_VERSION`) e ricontrolla. Se alla fine non coincide avvisa, e l'azione esce con 1.
+   L'immagine sostituita resta senza nome.
+2. Immagine `bioloom-qmean`, solo se c'è già, se c'è il suo tar o se UniClust è configurato: carica il tar,
+   altrimenti (o se il caricamento fallisce) `compose --profile qmean build qmean`. Un fallimento è solo un avviso.
+3. Riavvio solo se un container in esecuzione usa un'immagine diversa da quella che ora ha il nome (`{{.Image}}` del
+   container contro `{{.Id}}` dell'immagine), così i calcoli non si interrompono se non è cambiato nulla: desktop
+   `compose up -d` con `.env.locale`, server come `bioloom.sh server`, Podman come `avvia`. Con BioLoom fermo e
+   un'immagine cambiata dice che verrà usata al prossimo avvio.
+
+**`prepara`** salva le immagini prima di copiare i file: se `bioloom:<versione>` non corrisponde al codice la aggiorna
+come al passo 1 (senza riavvio) e, se non ci riesce, si ferma prima di copiare, perché una copia portatile con immagine
+vecchia e codice nuovo non deve uscire. Crea `.env.locale` se manca, che serve alla costruzione con compose.
+
 ## Backend
 
 ### Pacchetti
@@ -194,15 +292,18 @@ una riesecuzione valida i parametri del manifest con lo stesso contratto della r
 ritardato dentro la funzione, perché le rotte importano a loro volta i servizi.
 
 Fuori dal backend: `frontend/` (vedi [Frontend](#frontend)); `docker/` con il `Dockerfile` dell'immagine, `entrypoint.sh`,
-il worker QMEAN (`docker/qmean/`: `qmean_worker.py`, `uniclust.py`, `run_qmean_wrapper.py`), l'immagine dei test
-(`docker/test/`) e i pacchetti con licenza (`docker/vendor/`); `launcher/` con gli avviatori, `compose.yml` e
-`server.env.example`; `scripts/test.sh`.
+`impronta.sh` (impronta del codice), il worker QMEAN (`docker/qmean/`: `qmean_worker.py`, `uniclust.py`,
+`run_qmean_wrapper.py`), l'immagine dei test (`docker/test/`) e i pacchetti con licenza (`docker/vendor/`); `launcher/`
+con gli avviatori, `impronta.ps1`, `compose.yml`, `server.env.example` e `VERSION` (vedi [Versione, impronta e
+aggiornamento delle immagini](#versione-impronta-e-aggiornamento-delle-immagini)); `scripts/test.sh` e
+`scripts/versione.sh`.
 
 Tutto questo sta in `programma/`. La cartella di BioLoom, quella che si copia sulla chiavetta, contiene solo ciò che
 serve all'utente: gli avviatori (`Avvia BioLoom.bat`/`.command`, `Arresta BioLoom.bat`/`.command`, `avvia-bioloom.sh`,
-che richiamano `programma/launcher/`), `LEGGIMI.txt`, il manuale `Guida/`, `data/` e `immagini/`; più `.env.locale` e
-`server.env`, scritti dall'avviatore. Gli avviatori calcolano due radici: `ROOT`/`$Root` = `programma/` (compose,
-Dockerfile, versione) e `BASE`/`$Base` = la cartella di BioLoom (dati, immagini, configurazione della macchina).
+che richiamano `programma/launcher/`), `LEGGIMI.txt`, `LICENSE` (MIT) e `THIRD_PARTY_NOTICES.md`, il manuale `Guida/`,
+`data/` e `immagini/`; più `.env.locale` e `server.env`, scritti dall'avviatore. Gli avviatori calcolano due radici:
+`ROOT`/`$Root` = `programma/` (compose, Dockerfile, versione) e `BASE`/`$Base` = la cartella di BioLoom (dati, immagini,
+configurazione della macchina).
 `compose.yml` costruisce l'immagine con contesto `programma/` (la `.dockerignore` è lì) e monta `../../data`.
 
 **Server con Podman senza compose** (RHEL 8, Podman 2.x senza root): `bioloom.sh server`, se c'è `podman` e manca
@@ -763,8 +864,36 @@ Servizio `services/licenses.py`.
     non viene modificata.
   - Una chiave nuova viene provata con MODELLER prima di essere salvata; nelle risposte è sempre mascherata.
 - **ProSA II 2003:** `LicenseDB` ha righe `programma scadenza MAC codice`. L'avviatore imposta quel MAC sul
-  container (`mac_address`), e l'interfaccia confronta il MAC richiesto con quello effettivo.
+  container (`mac_address`), e l'interfaccia confronta il MAC richiesto con quello effettivo. La licenza vale per un
+  solo computer e vieta di cambiarne la configurazione per aggirarla, mentre la cartella dati gira su più computer
+  (chiavetta, copia con `--con-licenze`): gli avviatori (`bioloom.sh`, `bioloom.ps1`, `bioloom-podman.sh`) applicano
+  il MAC un computer alla volta.
+  - **Identificativo del computer:** Windows `MachineGuid` di `HKLM\SOFTWARE\Microsoft\Cryptography` (PowerShell
+    `Get-ItemProperty`, poi la vista del registro a 64 bit, che serve a un PowerShell a 32 bit; Git Bash `reg query`);
+    macOS `IOPlatformUUID` (`ioreg -rd1 -c IOPlatformExpertDevice`); Linux `/etc/machine-id`, poi
+    `/var/lib/dbus/machine-id` (sotto WSL il `MachineGuid` di Windows con `reg.exe`). Stringa senza spazi ai lati e in
+    minuscolo; `id_computer` = primi 16 caratteri dell'SHA-256 esadecimale di `bioloom-computer:<stringa>` (UTF-8,
+    senza a capo): Git Bash, PowerShell e WSL sullo stesso Windows danno lo stesso valore. Senza identificativo nessun
+    controllo: il MAC si applica (stato `senza-id`, «computer non identificato»).
+  - **Legami:** `data/licenses/prosa/computer`, una riga `<mac> <id_computer>` per licenza (MAC `aa:bb:cc:dd:ee:ff`
+    minuscolo), fine riga LF, scritto su un file temporaneo e rinominato; le righe delle altre licenze restano. Permessi
+    0600 dagli avviatori bash; PowerShell non cambia le ACL, perché la cartella dati passa fra computer e utenti
+    diversi. Il file segue `data/licenses/` (copia portatile solo con `--con-licenze`).
+  - **Decisione**, quando l'avviatore applicherebbe il MAC: MAC senza legame → lo lega a questo computer e lo applica
+    (stato `attivata`); legato a questo computer → lo applica (`questo`); legato a un altro → non lo applica, e il
+    container prende il MAC che avrebbe senza licenza (quello locale salvato in `.env.locale` o uno nuovo `02:…`), con
+    il messaggio «ProSA: la licenza è attiva su un altro computer…». In modo interattivo chiede «Spostare la licenza
+    ProSA su questo computer? [s/N]»; `--sposta-prosa` / `-SpostaProsa` sposta senza chiedere; con sì riscrive il
+    legame e applica il MAC (`spostata`), altrimenti stato `altro`. La riga «ProSA:» del menu dice quale caso vale.
+  - **Server:** il MAC viene da `BIOLOOM_MAC` di `server.env`, e il controllo vale solo se coincide con quello del
+    `LicenseDB` nella cartella dati (`BIOLOOM_DATA_PATH`, relativa a `compose.yml` come per compose); con la licenza su
+    un altro computer il container prende `02:42:b1:00:00:01`, il predefinito di `compose.yml`. Sul server non si chiede
+    mai: serve `--sposta-prosa`. Con Podman senza root il MAC non si assegna, e non si controlla né registra nulla.
 - **PROCHECK:** licenza accademica senza chiave.
+
+Il codice di BioLoom ha licenza MIT (`LICENSE` nella cartella di BioLoom; `license = "MIT"` in `backend/pyproject.toml`,
+espressione SPDX che richiede setuptools 77 o successivo, e in `frontend/package.json`). I componenti di terzi delle
+immagini e dell'interfaccia, con le licenze e il sorgente del software GPL e LGPL, sono in `THIRD_PARTY_NOTICES.md`.
 
 ## Calcoli
 
@@ -3688,7 +3817,7 @@ analisi strutturali, la rifinitura e la mutagenesi non usano la rete; l'interfac
 
 | Suite | File | Test |
 |---|---|---|
-| backend, `backend/tests` (pytest) | 51 | 1318 nella suite predefinita (50 file), più i 4 di `test_remote.py` (marcatore `network`, esclusi da `addopts`: `pytest -m network`) |
+| backend, `backend/tests` (pytest) | 52 | 1327 nella suite predefinita (51 file), più i 4 di `test_remote.py` (marcatore `network`, esclusi da `addopts`: `pytest -m network`) |
 | frontend, `frontend/src/**/*.test.ts(x)` (vitest) | 86 | 737 |
 
 I test che richiedono MODELLER, PROCHECK, ProSA o gli strumenti dell'immagine di sviluppo (fpocket, PDB2PQR, APBS,
@@ -3702,7 +3831,11 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
 
 - `scripts/test.sh`: ruff, pytest nell'immagine con MODELLER reale, typecheck e vitest. La CI
   (`.github/workflows/ci.yml`) esegue gli stessi controlli in tre job: test rapidi in Python puro senza strumenti esterni,
-  frontend (typecheck, vitest, build) e immagine completa costruita con i test al suo interno.
+  frontend (typecheck, vitest, build) e immagine completa costruita con i test al suo interno. Il job backend comincia
+  con «Versione unica» (`scripts/versione.sh`: le copie devono coincidere con `launcher/VERSION`) e «Impronta del
+  codice» (`impronta.sh`, `impronta.sh` con `IMPRONTA_SENZA_PERL=1` e `Get-BioLoomImpronta` in pwsh devono dare
+  lo stesso valore su `programma/`); il job docker passa `BIOLOOM_VERSION` come build arg e, nel passo «Impronta
+  nell'immagine», controlla che `/app/IMPRONTA` sia l'impronta del codice da cui l'immagine è costruita.
 - **Immagine di sviluppo:** per provare strumenti nuovi senza toccare l'immagine dell'avviatore,
   `docker build -f docker/Dockerfile -t bioloom:dev .` e `BIOLOOM_BASE_IMAGE=bioloom:dev scripts/test.sh` (test in
   `bioloom-test:bioloom-dev`).
@@ -3773,6 +3906,14 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
   (`Sec-Fetch-Site`, `Origin` uguale all'Host o a `X-Forwarded-Host`, `null`, origini dello sviluppo solo fuori dal
   container), arresto da un altro sito rifiutato senza arrestare, intestazioni contro gli iframe, guardia più esterna
   della chiave d'accesso.
+- **Versione unica e impronta del codice** (`test_version.py`, 9; saltati senza `launcher/VERSION`, cioè con il backend
+  copiato da solo): `bioloom.__version__`, `pyproject.toml` (anche `license = "MIT"`), `package.json` e i due campi
+  del progetto in `package-lock.json` (con la licenza), `ARG` dei due Dockerfile, stadio `impronta` con
+  `COPY --from=impronta` e `LABEL bioloom.version`, i due predefiniti e il build arg di `compose.yml`,
+  `server.env.example` senza `BIOLOOM_VERSION`; la definizione dell'impronta riscritta in Python su una cartella
+  `programma/` sintetica con tutti i casi da includere ed escludere (nomi con spazi, ordine per byte, CR isolati, file
+  binari, `node_modules` annidati, prefissi simili come `docker/tested/` e `frontend/distribuzione.txt`) e
+  `impronta.sh` uguale a quella, con perl e solo in sh, sulla stessa cartella in CRLF.
 - **Strumenti esterni** (`test_engines_extra.py`, 10): parser di PROCHECK e ProSA tarati su output reali di 1UBQ,
   MMseqs2, QMEAN locale con worker simulato, strumenti mancanti come avvisi, verifica dell'installazione (anche fpocket,
   PDB2PQR + APBS e OpenMM: "ok" se ci sono, "non disponibile" altrimenti).

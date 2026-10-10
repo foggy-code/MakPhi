@@ -7,7 +7,7 @@ Guida di BioLoom: [1. Primo avvio](1%20-%20Primo%20avvio.md) · [2. Funzioni](2%
 | Cosa | Dove | Viaggia con la chiavetta? |
 |---|---|---|
 | Progetti, risultati dei job, libreria template, impostazioni, pdbaa e database MMseqs2 | `data/`, nella cartella di BioLoom | sì |
-| Chiavi di licenza (MODELLER, ProSA), `posta.env` con la password della posta, chiave d'accesso del server | `data/licenses/`, `data/access_key` | sì se BioLoom gira dalla chiavetta; la [copia portatile](5%20-%20Chiavetta%20e%20server.md#copia-portatile-chiavetta-usb) le include solo con `-ConLicenze` / `--con-licenze` |
+| Chiavi di licenza (MODELLER, ProSA), computer su cui è attiva la licenza ProSA (`licenses/prosa/computer`, [un computer alla volta](6%20-%20Licenze.md#prosa-un-computer-alla-volta)), `posta.env` con la password della posta, chiave d'accesso del server | `data/licenses/`, `data/access_key` | sì se BioLoom gira dalla chiavetta; la [copia portatile](5%20-%20Chiavetta%20e%20server.md#copia-portatile-chiavetta-usb) le include solo con `-ConLicenze` / `--con-licenze` |
 | Risposte dei servizi remoti e cache dei calcoli | `data/cache/` | sì |
 | Calcoli in corso e file temporanei | volume Docker `scratch`, veloce e svuotato a ogni avvio | no |
 | Indice veloce MMseqs2 (≈ 1,5 GB) | volume Docker `cache` di ogni computer | no, si ricrea da Impostazioni → Database |
@@ -34,7 +34,8 @@ Guida di BioLoom: [1. Primo avvio](1%20-%20Primo%20avvio.md) · [2. Funzioni](2%
   7 giorni (il PDB si aggiorna ogni settimana); le altre finché non cambiano il database locale, il programma o il
   contenuto delle strutture. In Ricerca, Allineamenti e Pipeline **Ricalcola ignorando la cache** rifà il calcolo; la
   cache si disattiva in Impostazioni → Spazio e file temporanei.
-- **Aggiornamenti:** quando una nuova versione di BioLoom aggiorna la struttura del database (`data/bioloom.db`), lo fa da
+- **Aggiornamenti** ([come si aggiorna BioLoom](1%20-%20Primo%20avvio.md#aggiornare-bioloom), senza toccare `data/`):
+  quando una nuova versione di BioLoom aggiorna la struttura del database (`data/bioloom.db`), lo fa da
   sola all'avvio dopo averne salvato una copia in `data/backups/` (una per aggiornamento; si può cancellare quando tutto
   funziona: BioLoom non lo fa da solo, e Impostazioni → Spazio e file temporanei mostra quanto occupano). Se
   l'aggiornamento non riesce, il database resta com'era e BioLoom lo dice all'avvio.

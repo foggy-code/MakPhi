@@ -7,7 +7,8 @@
 #   programma/scripts/test.sh lint            solo ruff
 #
 # Il backend gira in "bioloom-test:<base>", costruita sopra l'immagine locale "bioloom:<versione>"
-# (quella dell'avviatore; un'altra con BIOLOOM_BASE_IMAGE, es. un'immagine di sviluppo con strumenti nuovi)
+# (versione da programma/launcher/VERSION, come l'avviatore; un'altra con BIOLOOM_BASE_IMAGE, es. un'immagine di
+# sviluppo con strumenti nuovi)
 # con pytest e ruff; il codice del repository è montato, non copiato.
 # MODELLER: chiave da $MODELLER_KEY oppure da <cartella dati>/licenses/modeller.key
 # (cartella dati: $BIOLOOM_DATA_PATH, predefinita la cartella data accanto a programma/).
@@ -15,9 +16,17 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="$(head -n1 "$ROOT/launcher/VERSION" 2>/dev/null | tr -d '[:space:]')"
-VERSION="${VERSION:-4.1.0}"
-BASE_IMAGE="${BIOLOOM_BASE_IMAGE:-bioloom:$VERSION}"
+BASE_IMAGE="${BIOLOOM_BASE_IMAGE:-}"
+if [ -z "$BASE_IMAGE" ]; then
+  # la versione viene solo da programma/launcher/VERSION (programma/scripts/versione.sh), senza numeri di riserva
+  VERSION="$(head -n1 "$ROOT/launcher/VERSION" 2>/dev/null | tr -d '[:space:]')" || VERSION=""
+  if [ -z "$VERSION" ]; then
+    echo "Manca programma/launcher/VERSION (la versione di BioLoom): non so quale immagine bioloom:<versione> usare." >&2
+    echo "  Ripristina il file (es. git checkout -- programma/launcher/VERSION) oppure indica BIOLOOM_BASE_IMAGE." >&2
+    exit 2
+  fi
+  BASE_IMAGE="bioloom:$VERSION"
+fi
 # un'immagine di test per ogni immagine di base: più worktree con basi diverse non si sovrascrivono a vicenda
 TEST_IMAGE="${BIOLOOM_TEST_IMAGE:-bioloom-test:$(printf %s "$BASE_IMAGE" | tr -c 'A-Za-z0-9._-' '-')}"
 DATA_PATH="${BIOLOOM_DATA_PATH:-$ROOT/../data}"

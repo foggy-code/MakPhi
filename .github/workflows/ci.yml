@@ -1,11 +1,14 @@
 # Integrazione continua di BioLoom v4.
-# - backend: lint e test rapidi in Python puro (senza MODELLER né strumenti esterni: quei test vengono saltati)
+# - backend: versione unica (programma/scripts/versione.sh), impronta del codice uguale in sh e in PowerShell
+#   (docker/impronta.sh, launcher/impronta.ps1), lint e test rapidi in Python puro (senza MODELLER né strumenti
+#   esterni: quei test vengono saltati)
 # - frontend: typecheck, test e build dell'interfaccia
 # - docker: costruzione dell'immagine completa e test al suo interno, come programma/scripts/test.sh in locale; l'immagine ha
 #   fpocket, APBS, PDB2PQR, OpenMM e PDBFixer (versioni fissate nel Dockerfile e in programma/backend/requirements-tools.lock),
 #   quindi qui girano anche i test di tasche, elettrostatica e rifinitura, saltati nel job backend.
 #   PROCHECK e ProSA (pacchetti con licenza) non sono nel repository: l'immagine della CI ne è priva.
 #   La chiave di MODELLER, se configurata come secret MODELLER_KEY, abilita i test di MODELLER.
+#   L'impronta salvata nell'immagine (/app/IMPRONTA) deve essere quella del codice da cui è costruita.
 name: CI
 
 on:
@@ -29,6 +32,19 @@ jobs:
         working-directory: programma/backend
     steps:
       - uses: actions/checkout@v4
+      - name: Versione unica
+        working-directory: .
+        run: bash programma/scripts/versione.sh
+      - name: Impronta del codice (sh, sh senza perl, PowerShell)
+        working-directory: .
+        run: |
+          a="$(sh programma/docker/impronta.sh programma)"
+          b="$(IMPRONTA_SENZA_PERL=1 sh programma/docker/impronta.sh programma)"
+          c="$(pwsh -NoProfile -Command '. ./programma/launcher/impronta.ps1; Get-BioLoomImpronta ./programma')"
+          echo "sh:            $a"
+          echo "sh senza perl: $b"
+          echo "PowerShell:    $c"
+          test -n "$a" && test "$a" = "$b" && test "$a" = "$c"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -72,8 +88,16 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: bioloom:${{ steps.version.outputs.version }}
+          build-args: BIOLOOM_VERSION=${{ steps.version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Impronta nell'immagine
+        run: |
+          immagine="$(docker run --rm --entrypoint cat bioloom:${{ steps.version.outputs.version }} /app/IMPRONTA)"
+          codice="$(sh programma/docker/impronta.sh programma)"
+          echo "immagine: $immagine"
+          echo "codice:   $codice"
+          test -n "$codice" && test "$immagine" = "$codice"
       - name: Test nell'immagine
         env:
           MODELLER_KEY: ${{ secrets.MODELLER_KEY }}

@@ -10,14 +10,20 @@
 #   QMTL_PATH           cartella QMTL (facoltativa) → QMEANDisCo
 #   BIOLOOM_MAC         MAC del container (licenza ProSA II); l'avviatore lo legge da LicenseDB
 #   COMPOSE_PROFILES    "qmean" per avviare il servizio QMEAN locale
+# BIOLOOM_VERSION (versione delle immagini) la esporta l'avviatore leggendola da programma/launcher/VERSION; i valori
+# predefiniti qui sotto (per compose a mano) li tiene allineati programma/scripts/versione.sh.
 name: bioloom
 
 services:
   bioloom:
-    image: bioloom:${BIOLOOM_VERSION:-4.1.0}
+    image: bioloom:${BIOLOOM_VERSION:-4.2.0}
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      args:
+        # senza valore: quello di BIOLOOM_VERSION (ENV BIOLOOM_IMAGE_VERSION e LABEL bioloom.version dell'immagine);
+        # se non è impostata vale il predefinito del Dockerfile, uguale a quello di image
+        - BIOLOOM_VERSION
     platform: linux/amd64
     init: true
     ports:
@@ -47,7 +53,7 @@ services:
 
   qmean:
     profiles: ["qmean"]
-    image: bioloom-qmean:${BIOLOOM_VERSION:-4.1.0}
+    image: bioloom-qmean:${BIOLOOM_VERSION:-4.2.0}
     build:
       context: ../docker/qmean
     platform: linux/amd64

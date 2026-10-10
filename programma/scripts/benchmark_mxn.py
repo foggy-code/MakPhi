@@ -10,7 +10,7 @@ del cgroup vale per tutta la vita del container.
 Esempio completo (dalla cartella di BioLoom, Linux; chiave di MODELLER in data/licenses/modeller.key; la licenza ProSA,
 se c'è, si legge da /hostdata/licenses/prosa):
 
-    docker run --rm --init -e MODELLER_KEY="$(cat data/licenses/modeller.key)" -e PYTHONPATH=/src/backend       -v "$PWD/programma:/src:ro" -v "$PWD/data:/hostdata:ro" -v "$PWD/bench_out:/out"       --entrypoint sh bioloom:4.1.0 -c 'mkdir -p /scratch/tmp /scratch/home && exec python       /src/scripts/benchmark_mxn.py "$@"' sh --parallel 16 --sequences 8 --templates 6 --extended       --template-file /hostdata/templates/3IU0.pdb --template-file /hostdata/templates/1IU4.pdb       --sequence MYTRSK... --out /out/p16.json
+    docker run --rm --init -e MODELLER_KEY="$(cat data/licenses/modeller.key)" -e PYTHONPATH=/src/backend       -v "$PWD/programma:/src:ro" -v "$PWD/data:/hostdata:ro" -v "$PWD/bench_out:/out"       --entrypoint sh "bioloom:$(tr -d '[:space:]' < programma/launcher/VERSION)" -c 'mkdir -p /scratch/tmp /scratch/home && exec python       /src/scripts/benchmark_mxn.py "$@"' sh --parallel 16 --sequences 8 --templates 6 --extended       --template-file /hostdata/templates/3IU0.pdb --template-file /hostdata/templates/1IU4.pdb       --sequence MYTRSK... --out /out/p16.json
 
 Per una stima affidabile: prima `--parallel 1` (CPU per coppia su un core), poi il parallelismo previsto con almeno
 due coppie per corsia (`--sequences` × `--templates` ≥ 2 × `--parallel`). Nel risultato `main_process_cpu_per_pair_s`

@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from bioloom import __version__
 from bioloom.app import create_app
 from bioloom.config import Paths
 from bioloom.core import auth
@@ -310,7 +311,7 @@ def test_quality_package_content_manifest_and_checksums(client_with_ubq):
     m = json.loads(files["manifest.json"])
     assert m["format"] == repro.FORMAT and m["format_version"] == repro.FORMAT_VERSION
     assert repro.validate_manifest(m) is m
-    assert m["bioloom"]["version"] == "4.1.0" and m["job"]["id"] == job["id"] and m["job"]["kind"] == "quality"
+    assert m["bioloom"]["version"] == __version__ and m["job"]["id"] == job["id"] and m["job"]["kind"] == "quality"
     assert m["params"] == job["params"] and m["rerun"] == {"supported": True, "reason": None}
     assert m["seeds"]["note"].startswith("calcolo deterministico")
     assert set(m["settings"]["values"]) == set(service.RELEVANT_SETTINGS)
