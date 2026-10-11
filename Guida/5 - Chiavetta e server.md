@@ -217,13 +217,19 @@ ssh -N -L 8765:127.0.0.1:8765 utente@server
 - **Senza domande:** con `--no-menu` (`./avvia-bioloom.sh server --no-menu`, oppure `bioloom-podman.sh --no-menu`)
   l'avviatore non chiede nulla, per esempio negli script.
 - **File:** i file della cartella dati restano del tuo utente.
-- **Podman 2.x:** il suo filtro seccomp non conosce la chiamata `clone3`, con cui la glibc dell'immagine crea i thread,
-  e la rifiuta: BioLoom non partirebbe (nel log «OpenBLAS blas_thread_init: pthread_create failed… Operation not
-  permitted»). Con Podman più vecchio della versione 3 l'avviatore copia il profilo del sistema
-  (`/usr/share/containers/seccomp.json`) in `seccomp-podman.json`, accanto a `server.env`, cambiando solo `clone3`
-  perché risponda «non disponibile»: la glibc ripiega allora sulla chiamata vecchia, e il resto del filtro resta com'è.
-  La copia si rifà da sola se il profilo del sistema cambia; se il profilo del sistema manca, l'avviatore si ferma e
-  chiede di installare `containers-common`.
+- **Podman 2.x:** il suo filtro seccomp non conosce le chiamate di sistema più recenti e le rifiuta come «non
+  permesse», quindi i programmi dell'immagine non ripiegano su quelle vecchie: senza `clone3` nessun thread parte e
+  BioLoom non si avvia (nel log «OpenBLAS blas_thread_init: pthread_create failed… Operation not permitted»), senza
+  `faccessat2` il test `[ -x file ]` degli script fallisce (l'indice MMseqs2 si ferma con «/usr/bin/mmseqs-plain: No
+  such file or directory»). Con Podman più vecchio della versione 3 l'avviatore copia il profilo del sistema
+  (`/usr/share/containers/seccomp.json`) in `seccomp-podman.json`, accanto a `server.env`, e fa rispondere «non
+  disponibile» alle chiamate recenti che il profilo non nomina: restano negate, ma i programmi ripiegano, e il resto
+  del filtro resta com'è. La copia si rifà da sola se cambia il profilo del sistema o l'avviatore; se il profilo del
+  sistema manca, l'avviatore si ferma e chiede di installare `containers-common`. Con una libseccomp più vecchia della
+  2.5 (RHEL 8.3 ha la 2.4.3) `faccessat2` non si può correggere dal profilo, perché la libreria non la conosce: per
+  MMseqs2, l'unico programma di BioLoom che ne risente, l'avviatore monta allora al posto del dispatcher dell'immagine
+  `programma/launcher/mmseqs-dispatch.sh`, che non usa quel test. La soluzione completa è aggiornare Podman (versione 3
+  o successiva) e libseccomp: chiedilo all'amministratore del server.
 - **ProSA:** Podman senza root non può assegnare al container il MAC della licenza, quindi l'analisi prosegue senza
   ProSA (PROCHECK, DOPE e le altre misure restano) e l'avviatore non lega la licenza al server.
 - **Riavvio:** i container ripartono da soli se si fermano per errore. Senza linger, chiudendo SSH di solito restano
