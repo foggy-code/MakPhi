@@ -432,24 +432,24 @@ wait_healthy() {  # $1 indirizzo  $2 porta
   return 1
 }
 
-# Il profilo seccomp dei Podman 2.x non conosce clone3 e lo rifiuta con EPERM invece di ENOSYS: la glibc recente
-# dell'immagine non ripiega allora su clone e nessun thread parte (OpenBLAS: "pthread_create failed", avvio bloccato).
-# Con Podman < 3 i container usano una copia del profilo del server in cui clone3 risponde ENOSYS; il resto del
-# filtro resta com'è. La copia (seccomp-podman.json accanto a server.env) si rifà quando il profilo del server cambia.
+# Il profilo seccomp dei Podman 2.x non conosce le chiamate di sistema più recenti e le rifiuta con EPERM invece di
+# ENOSYS, quindi la glibc dell'immagine non ripiega su quelle vecchie: con clone3 nessun thread parte (OpenBLAS:
+# "pthread_create failed", avvio bloccato), con faccessat2 "[ -x file ]" fallisce anche su file eseguibili (il
+# dispatcher di mmseqs cerca allora mmseqs-plain, che non c'è). Con Podman < 3 i container usano una copia del
+# profilo del server in cui le chiamate recenti che il profilo non nomina rispondono ENOSYS: restano negate, ma i
+# programmi ripiegano. Il resto del filtro resta com'è. La copia (seccomp-podman.json accanto a server.env) si rifà
+# quando cambiano il profilo del server o questo script.
 SECCOMP_PY='
 import json, sys
+NUOVE = """clone3 faccessat2 fchmodat2 openat2 close_range epoll_pwait2 statx pidfd_open pidfd_send_signal pidfd_getfd
+process_madvise process_mrelease mount_setattr futex_waitv cachestat rseq memfd_secret set_mempolicy_home_node
+map_shadow_stack quotactl_fd landlock_create_ruleset landlock_add_rule landlock_restrict_self""".split()
 p = json.load(sys.stdin)
-rules = []
-for r in p.get("syscalls") or []:
-    names = r.get("names") or ([r["name"]] if r.get("name") else [])
-    if "clone3" in names:
-        r = dict(r)
-        r.pop("name", None)
-        r["names"] = [n for n in names if n != "clone3"]
-        if not r["names"]:
-            continue
-    rules.append(r)
-rules.insert(0, {"names": ["clone3"], "action": "SCMP_ACT_ERRNO", "errnoRet": 38})
+rules = p.get("syscalls") or []
+nominate = {n for r in rules for n in (r.get("names") or [r.get("name")])}
+mancanti = [n for n in NUOVE if n not in nominate]
+if mancanti:
+    rules.insert(0, {"names": mancanti, "action": "SCMP_ACT_ERRNO", "errnoRet": 38})
 p["syscalls"] = rules
 json.dump(p, sys.stdout, indent=1)
 '
@@ -462,7 +462,7 @@ seccomp_profile() {  # 0 e SECCOMP_FILE se serve il profilo su misura, 1 se Podm
   done
   [ -n "$src" ] || fail "Podman $pv: manca il profilo seccomp del sistema (/usr/share/containers/seccomp.json), da cui BioLoom ricava quello per i suoi container. Chiedi all'amministratore di installare containers-common."
   SECCOMP_FILE="$BASE/seccomp-podman.json"
-  if [ ! -s "$SECCOMP_FILE" ] || [ "$src" -nt "$SECCOMP_FILE" ]; then
+  if [ ! -s "$SECCOMP_FILE" ] || [ "$src" -nt "$SECCOMP_FILE" ] || [ "$ROOT/launcher/bioloom-podman.sh" -nt "$SECCOMP_FILE" ]; then
     # il Python dell'immagine c'è sempre; lo script non apre thread, quindi gira anche con il profilo vecchio
     "$PODMAN" run --rm -i --security-opt label=disable --health-cmd none --entrypoint python3 "bioloom:$VERSION" \
         -c "$SECCOMP_PY" < "$src" > "$SECCOMP_FILE.tmp" 2>/dev/null && [ -s "$SECCOMP_FILE.tmp" ] \
@@ -503,11 +503,12 @@ start() {
   fi
 
   local common=(-d --restart "$restart" --label "bioloom.cartella=$BASE")   # etichetta: vedi find_other
+  local old_seccomp=0
   if [ "$PODMAN" = podman ]; then
     # SELinux (RHEL): niente rietichettatura delle cartelle montate, che possono essere dischi condivisi.
     # Il controllo di salute di Podman 2.x passa da systemd: lo sostituisce l'attesa qui sotto.
     common+=(--security-opt label=disable --health-cmd none)
-    seccomp_profile && common+=(--security-opt "seccomp=$SECCOMP_FILE")
+    seccomp_profile && { common+=(--security-opt "seccomp=$SECCOMP_FILE"); old_seccomp=1; }
     if [ -x /usr/libexec/podman/catatonit ] || command -v catatonit >/dev/null 2>&1; then common+=(--init)
     else warn "catatonit assente: i container partono senza processo init."; fi
   else
@@ -516,6 +517,14 @@ start() {
 
   local app=("${common[@]}" --name bioloom -p "$bind:$port:8765" -v "$data:/data"
              -v bioloom_scratch:/scratch -v bioloom_cache:/cache)
+  if [ "$old_seccomp" = 1 ]; then
+    # faccessat2 non si aggiusta dal profilo (la libseccomp 2.4 non la conosce): il dispatcher di mmseqs dell'immagine
+    # la usa con "[ -x ]", e lo sostituisce mmseqs-dispatch.sh (vedi il file)
+    local dispatch="$ROOT/launcher/mmseqs-dispatch.sh"
+    [ -x "$dispatch" ] || chmod +x "$dispatch" 2>/dev/null
+    if [ -x "$dispatch" ]; then app+=(-v "$dispatch:/usr/lib/mmseqs2/simd-dispatch:ro")
+    else warn "programma/launcher/mmseqs-dispatch.sh manca o non è eseguibile: MMseqs2 potrebbe non funzionare."; fi
+  fi
   PROSA_STATE=""
   if [ "$ROOTLESS" = 1 ]; then
     # il root del container è l'utente del server: i file della cartella dati restano suoi
