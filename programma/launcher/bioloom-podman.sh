@@ -432,6 +432,46 @@ wait_healthy() {  # $1 indirizzo  $2 porta
   return 1
 }
 
+# Il profilo seccomp dei Podman 2.x non conosce clone3 e lo rifiuta con EPERM invece di ENOSYS: la glibc recente
+# dell'immagine non ripiega allora su clone e nessun thread parte (OpenBLAS: "pthread_create failed", avvio bloccato).
+# Con Podman < 3 i container usano una copia del profilo del server in cui clone3 risponde ENOSYS; il resto del
+# filtro resta com'è. La copia (seccomp-podman.json accanto a server.env) si rifà quando il profilo del server cambia.
+SECCOMP_PY='
+import json, sys
+p = json.load(sys.stdin)
+rules = []
+for r in p.get("syscalls") or []:
+    names = r.get("names") or ([r["name"]] if r.get("name") else [])
+    if "clone3" in names:
+        r = dict(r)
+        r.pop("name", None)
+        r["names"] = [n for n in names if n != "clone3"]
+        if not r["names"]:
+            continue
+    rules.append(r)
+rules.insert(0, {"names": ["clone3"], "action": "SCMP_ACT_ERRNO", "errnoRet": 38})
+p["syscalls"] = rules
+json.dump(p, sys.stdout, indent=1)
+'
+seccomp_profile() {  # 0 e SECCOMP_FILE se serve il profilo su misura, 1 se Podman non ne ha bisogno
+  local pv src="" f
+  pv="$("$PODMAN" --version 2>/dev/null | sed -n 's/.*version \([0-9][0-9]*\)\..*/\1/p')"
+  { [ -n "$pv" ] && [ "$pv" -lt 3 ]; } || return 1
+  for f in /usr/share/containers/seccomp.json /etc/containers/seccomp.json; do
+    [ -f "$f" ] && { src="$f"; break; }
+  done
+  [ -n "$src" ] || fail "Podman $pv: manca il profilo seccomp del sistema (/usr/share/containers/seccomp.json), da cui BioLoom ricava quello per i suoi container. Chiedi all'amministratore di installare containers-common."
+  SECCOMP_FILE="$BASE/seccomp-podman.json"
+  if [ ! -s "$SECCOMP_FILE" ] || [ "$src" -nt "$SECCOMP_FILE" ]; then
+    # il Python dell'immagine c'è sempre; lo script non apre thread, quindi gira anche con il profilo vecchio
+    "$PODMAN" run --rm -i --security-opt label=disable --health-cmd none --entrypoint python3 "bioloom:$VERSION" \
+        -c "$SECCOMP_PY" < "$src" > "$SECCOMP_FILE.tmp" 2>/dev/null && [ -s "$SECCOMP_FILE.tmp" ] \
+      && mv -f "$SECCOMP_FILE.tmp" "$SECCOMP_FILE" \
+      || { rm -f "$SECCOMP_FILE.tmp"; fail "Non riesco a preparare il profilo seccomp per Podman $pv da $src."; }
+  fi
+  return 0
+}
+
 start() {
   [ -f "$ENV_FILE" ] || { create_env; exit 0; }
   check_env_version
@@ -467,6 +507,7 @@ start() {
     # SELinux (RHEL): niente rietichettatura delle cartelle montate, che possono essere dischi condivisi.
     # Il controllo di salute di Podman 2.x passa da systemd: lo sostituisce l'attesa qui sotto.
     common+=(--security-opt label=disable --health-cmd none)
+    seccomp_profile && common+=(--security-opt "seccomp=$SECCOMP_FILE")
     if [ -x /usr/libexec/podman/catatonit ] || command -v catatonit >/dev/null 2>&1; then common+=(--init)
     else warn "catatonit assente: i container partono senza processo init."; fi
   else

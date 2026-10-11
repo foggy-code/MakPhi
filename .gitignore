@@ -2,6 +2,7 @@
 /data/
 /.env.locale
 /server.env
+/seccomp-podman.json
 immagini/*.tar
 
 # pacchetti con licenza (vedi programma/docker/vendor/README.md)
