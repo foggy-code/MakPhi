@@ -217,6 +217,13 @@ ssh -N -L 8765:127.0.0.1:8765 utente@server
 - **Senza domande:** con `--no-menu` (`./avvia-bioloom.sh server --no-menu`, oppure `bioloom-podman.sh --no-menu`)
   l'avviatore non chiede nulla, per esempio negli script.
 - **File:** i file della cartella dati restano del tuo utente.
+- **Podman 2.x:** il suo filtro seccomp non conosce la chiamata `clone3`, con cui la glibc dell'immagine crea i thread,
+  e la rifiuta: BioLoom non partirebbe (nel log «OpenBLAS blas_thread_init: pthread_create failed… Operation not
+  permitted»). Con Podman più vecchio della versione 3 l'avviatore copia il profilo del sistema
+  (`/usr/share/containers/seccomp.json`) in `seccomp-podman.json`, accanto a `server.env`, cambiando solo `clone3`
+  perché risponda «non disponibile»: la glibc ripiega allora sulla chiamata vecchia, e il resto del filtro resta com'è.
+  La copia si rifà da sola se il profilo del sistema cambia; se il profilo del sistema manca, l'avviatore si ferma e
+  chiede di installare `containers-common`.
 - **ProSA:** Podman senza root non può assegnare al container il MAC della licenza, quindi l'analisi prosegue senza
   ProSA (PROCHECK, DOPE e le altre misure restano) e l'avviatore non lega la licenza al server.
 - **Riavvio:** i container ripartono da soli se si fermano per errore. Senza linger, chiudendo SSH di solito restano
