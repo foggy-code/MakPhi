@@ -57,7 +57,7 @@ export default function Compare() {
       setB(withoutChain(linked.b));
       setChainB(linked.b.chain ?? "");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- linkKey riassume i parametri del link
   }, [linkKey]);
 
   // un job aperto senza strutture nel link (elenco dei job): le sue strutture diventano la scelta corrente
@@ -68,7 +68,7 @@ export default function Compare() {
     setChainA(fromJob[0].chain ?? "");
     setB(withoutChain(fromJob[1]));
     setChainB(fromJob[1].chain ?? "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- una volta per job aperto: fromJob deriva dai suoi parametri
   }, [job?.id]);
 
   const notStructural = job && job.kind === "align" && job.params?.mode !== "structural";

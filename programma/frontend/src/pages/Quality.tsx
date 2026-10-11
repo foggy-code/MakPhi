@@ -26,6 +26,7 @@ import { compareLink } from "../lib/compare";
 import { useProject, useToast } from "../lib/context";
 import { fmtNum } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
+import { httpsUrl } from "../lib/links";
 import type { AnalysisPanelMemory } from "../lib/interactions";
 import type { CoordinationLine } from "../lib/ligands";
 import {
@@ -61,7 +62,7 @@ function QmeanPanel({ source, onDone }: { source: StructureSource; onDone?: (job
   const done = job?.status === "completed";
   useEffect(() => {
     if (jobId && done) onDone?.(jobId); // il consenso si ricalcola includendo QMEAN
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- si avvisa una volta per job completato; onDone può cambiare a ogni disegno del genitore
   }, [jobId, done]);
   if (!settings || !dbs) return <p className="small text-2">Controllo della disponibilità di QMEAN…</p>;
   const useFallback = fallback ?? settings.qmean_fallback_remote;
@@ -85,6 +86,8 @@ function QmeanPanel({ source, onDone }: { source: StructureSource; onDone?: (job
     api.qmean({ project_id: projectId ?? undefined, source, fallback: settings.qmean_mode === "local" ? useFallback : undefined })
       .then((j) => setJobId(j.id)).catch(toast.error);
   const components = r ? Object.entries(r.components ?? {}) : [];
+  // rapporto di SWISS-MODEL: link solo per un indirizzo https (il valore arriva dal servizio esterno)
+  const reportUrl = httpsUrl(r?.url);
   return (
     <div className="stack-sm">
       {!jobId && (
@@ -117,7 +120,7 @@ function QmeanPanel({ source, onDone }: { source: StructureSource; onDone?: (job
               </>
             ) : undefined} />
           <Stat label={r.method === "QMEAN" ? "Media locale" : "QMEANDisCo"} value={fmtNum(r.qmeandisco, 3)}
-            note={r.url ? <a href={r.url} target="_blank" rel="noreferrer">rapporto completo</a> : r.uniclust ? `${r.uniclust}${r.uniclust_version ? ` (${r.uniclust_version})` : ""}` : undefined}
+            note={reportUrl ? <a href={reportUrl} target="_blank" rel="noreferrer">rapporto completo</a> : r.uniclust ? `${r.uniclust}${r.uniclust_version ? ` (${r.uniclust_version})` : ""}` : undefined}
             detail={<span>Qualità locale media da 0 a 1; per residuo sotto {fmtNum(QMEAN_LOCAL_THRESHOLD, 1)} qualità bassa attesa (profilo nella scheda «Profili per residuo»).</span>} />
         </div>
       )}
@@ -199,10 +202,12 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
   const reportSource = source ?? report.source;
 
   // Il consenso della rotta aggiunge GA341 di MODELLER, QMEAN calcolato qui e vale anche per i rapporti precedenti.
+  const refJob = consensusRef?.job;
+  const refModel = consensusRef?.model;
   useEffect(() => {
-    if (!consensusRef) return;
+    if (!refJob) return;
     let stop = false;
-    api.consensus(consensusRef.job, consensusRef.model, qmeanJob, predictJob)
+    api.consensus(refJob, refModel, qmeanJob, predictJob)
       .then((c) => {
         if (stop) return;
         setConsensus(c);
@@ -212,7 +217,7 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
     return () => {
       stop = true;
     };
-  }, [consensusRef?.job, consensusRef?.model, qmeanJob, predictJob]);
+  }, [refJob, refModel, qmeanJob, predictJob]);
 
   const options = useMemo(() => colorOptions(report, consensus), [report, consensus]);
   // un'opzione non (ancora) disponibile, es. QMEAN in attesa del consenso, ripiega sulla struttura secondaria

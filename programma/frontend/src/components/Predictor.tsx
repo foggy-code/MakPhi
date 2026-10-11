@@ -312,7 +312,7 @@ export function PredictionPanel({ source, label, residues, onResult }: {
   const completedId = done?.result?.plausibility ? done.id : null;
   useEffect(() => {
     onResult?.(completedId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- si avvisa solo il cambio di risultato; onResult può cambiare a ogni disegno del genitore
   }, [completedId]);
   return (
     <Card icon="compare" title="Confronto con una predizione" sub="controllo di plausibilità con ESMFold o AlphaFold DB"

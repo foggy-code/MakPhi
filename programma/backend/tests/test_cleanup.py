@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import stat
+import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -29,7 +30,7 @@ from bioloom.config import Paths
 from bioloom.core import auth, storage
 from bioloom.core import jobs as jobs_module
 from bioloom.core.container import build_core
-from bioloom.core.errors import Conflict, NotFound
+from bioloom.core.errors import AppError, Conflict, NotFound
 from bioloom.core.jobs import TOMBSTONE_PREFIX, Deleted
 from bioloom.services import housekeeping as housekeeping_module
 from bioloom.services import jobcleanup
@@ -270,6 +271,11 @@ def test_remove_tree_errors_never_escape_nor_lock_folders(tmp_path, monkeypatch)
     other.write_text("y")
     other.chmod(0o400)
     sub.chmod(0o755)
+    # su POSIX 0o755; su Windows i permessi di una cartella non si cambiano (st_mode resta 0o777): si confronta con
+    # quelli che ha davvero, così «un'apertura fallita non cambia i permessi» vale su entrambi
+    initial = stat.S_IMODE(sub.stat().st_mode)
+    if os.name == "posix":
+        assert initial == 0o755
     modes, calls = [], []
     error = (OSError, OSError(13, "accesso negato"), None)
 
@@ -286,12 +292,113 @@ def test_remove_tree_errors_never_escape_nor_lock_folders(tmp_path, monkeypatch)
     monkeypatch.setattr(storage, "shutil", SimpleNamespace(rmtree=failing_rmtree))
     monkeypatch.setattr(storage, "time", SimpleNamespace(sleep=lambda _s: None, monotonic=time.monotonic))
     assert storage.remove_tree(folder) is False  # niente TypeError da os.open(target) senza flag
-    assert len(calls) == 3 and modes == [0o755] * 3  # un'apertura fallita non cambia i permessi
+    assert len(calls) == 3 and modes == [initial] * 3  # un'apertura fallita non cambia i permessi
     assert not other.exists()  # il file sbloccato si è eliminato al secondo colpo
     assert stat.S_IMODE(sub.stat().st_mode) & 0o700 == 0o700  # cartella mai di sola scrittura
     assert (sub / "tenuto.txt").exists()
     monkeypatch.undo()
     assert storage.remove_tree(folder) is True
+
+
+JOB_ID = "0123456789abcdef"
+
+
+def _unsafe(base: Path, *parts: str) -> bool:
+    with pytest.raises(AppError) as info:
+        storage.safe_join(base, *parts)
+    return info.value.code == "unsafe_path"
+
+
+@pytest.mark.parametrize("parts", [(JOB_ID,), (JOB_ID, "sub", "job.log")], ids=["cartella", "annidato"])
+def test_safe_join_accepts_a_folder_being_deleted(tmp_path, parts):
+    """La cartella di un job si crea e si elimina in un altro thread (come lo scratch a fine job) mentre se ne calcola
+    il percorso: safe_join non deve mai rifiutare l'id valido. Su Windows Path.resolve() di una cartella in
+    eliminazione restituisce \\\\?\\C:\\... o C:\\$Extend\\$Deleted\\... (fuori dalla radice), anche per la cartella
+    madre di un file annidato: prima GET /api/jobs/{id} rispondeva 400 unsafe_path per un istante."""
+    base = tmp_path / "jobs"
+    base.mkdir()
+    folder = base / JOB_ID
+    expected = base.resolve().joinpath(*parts)
+    stop = threading.Event()
+
+    def churn():
+        while not stop.is_set():
+            (folder / "sub").mkdir(parents=True, exist_ok=True)
+            (folder / "sub" / "job.log").write_text("x")
+            shutil.rmtree(folder, ignore_errors=True)
+
+    thread = threading.Thread(target=churn, daemon=True)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:  # su Windows la risoluzione «fuori» arriva entro pochi millisecondi
+            assert storage.safe_join(base, *parts) == expected
+    finally:
+        stop.set()
+        thread.join(10)
+
+
+@pytest.mark.parametrize("parts", [
+    ("..",), ("..", "fuori"), ("sub", "..", "..", "fuori"), ("a/../../fuori",), (JOB_ID, "..", "..", "fuori"),
+], ids=["madre", "sorella", "risalita", "risalita-in-un-nome", "risalita-da-un-job"])
+def test_safe_join_rejects_paths_leaving_the_root(tmp_path, parts):
+    base = tmp_path / "jobs"
+    (base / JOB_ID).mkdir(parents=True)
+    assert _unsafe(base, *parts)
+    assert _unsafe(base, str(tmp_path / "fuori"))  # percorso assoluto fuori dalla radice
+    if sys.platform == "win32":
+        assert _unsafe(base, "..\\fuori") and _unsafe(base, str(tmp_path / "fuori").replace("\\", "/"))
+    assert storage.safe_join(base) == storage.safe_join(base, ".") == base.resolve()  # la radice stessa sì
+
+
+def test_safe_join_fallback_keeps_the_guarantees(tmp_path, monkeypatch):
+    """Il ripiego per le cartelle in eliminazione, provato su ogni sistema: Path.resolve() porta fuori dalla radice
+    tutto ciò che sta sotto la cartella del job (come \\\\?\\ o $Extend\\$Deleted su Windows). I nomi validi tornano
+    dentro la radice; '..', nomi di soli punti o spazi e madri fuori dalla radice restano rifiutati."""
+    base = tmp_path / "jobs"
+    (base / JOB_ID / "sub").mkdir(parents=True)
+    root = base.resolve()
+    folder, elsewhere = root / JOB_ID, tmp_path.resolve() / "$Deleted"
+    real_resolve = Path.resolve
+
+    def deleting(self, strict=False):
+        out = real_resolve(self, strict)
+        return elsewhere / out.relative_to(folder) if out == folder or folder in out.parents else out
+
+    monkeypatch.setattr(Path, "resolve", deleting)
+    assert storage.safe_join(base, JOB_ID) == folder
+    assert storage.safe_join(base, JOB_ID, "sub", "job.log") == folder / "sub" / "job.log"
+    assert storage.safe_join(base, f"{JOB_ID}/sub") == folder / "sub"
+    for parts in [(JOB_ID, "..", "..", "fuori"), (JOB_ID, "..."), (JOB_ID, "sub", " "), (JOB_ID, ".. ", "x"),
+                  (str(elsewhere / JOB_ID),)]:  # l'ultimo: percorso assoluto, nessuna madre dentro la radice
+        assert _unsafe(base, *parts), parts
+
+
+def _link_dir(kind: str, link: Path, target: Path) -> None:
+    if kind == "junction":
+        _winapi = pytest.importorskip("_winapi", reason="giunzioni solo su Windows")
+        _winapi.CreateJunction(str(target), str(link))
+        return
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:  # Windows senza modalità sviluppatore: WinError 1314
+        pytest.skip(f"link simbolici non disponibili: {exc}")
+
+
+@pytest.mark.parametrize("kind", ["symlink", "junction"])
+def test_safe_join_rejects_links_leaving_the_root(tmp_path, kind):
+    """Un link (o una giunzione di Windows, che os.path.islink non vede) verso fuori dalla radice resta rifiutato,
+    come ultimo nome o come cartella intermedia; uno che resta dentro la radice si segue."""
+    base, outside = tmp_path / "jobs", tmp_path / "fuori"
+    (base / "vera").mkdir(parents=True)
+    outside.mkdir()
+    (outside / "segreto.txt").write_text("x")
+    _link_dir(kind, base / "uscita", outside)
+    _link_dir(kind, base / "alias", base / "vera")
+    assert _unsafe(base, "uscita")
+    assert _unsafe(base, "uscita", "segreto.txt")
+    assert _unsafe(base, "uscita", "manca", "x.pdb")
+    assert storage.safe_join(base, "alias", "f.pdb") == base.resolve() / "vera" / "f.pdb"
 
 
 def test_remove_tree_single_file_never_raises(tmp_path, monkeypatch):

@@ -66,7 +66,7 @@ export function ComplexResults({ jobId, complex, selected, best, onView }: { job
     return () => {
       current = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- solo al cambio di modello; open cambia oggetto a ogni disegno
   }, [jobId, selected, best]);
   const loadingOther = selected !== best && other?.file !== selected;
   const assessment = selected === best ? complex.assessment : other?.file === selected ? other.assessment : null;
@@ -77,9 +77,8 @@ export function ComplexResults({ jobId, complex, selected, best, onView }: { job
   }, [assessment, pair, colorOn, center]);
   useEffect(() => {
     onView(view);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view]);
-  useEffect(() => () => onView(null), []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [view, onView]);
+  useEffect(() => () => onView(null), [onView]);
 
   const sym = complex.symmetry;
   const missing = missingAssessment(selected, best);

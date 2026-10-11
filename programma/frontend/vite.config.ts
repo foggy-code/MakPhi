@@ -17,6 +17,8 @@ export default defineConfig({
     },
   },
   // i fogli di stile si leggono nei test (`?raw`: regole per gli schermi stretti, contrasto delle tracce dell'Editor
-  // PIR); vitest altrimenti li dà vuoti
+  // PIR); vitest altrimenti li dà vuoti. Ambiente node (markup statico, funzioni); i test di interfaccia, che hanno
+  // bisogno di effetti, clic e tastiera, dichiarano `// @vitest-environment jsdom` in testa al file e usano
+  // @testing-library/react (risposte finte del server e visibilità della scheda in src/test/dom.ts)
   test: { environment: "node", css: { include: [/styles\.css/, /styles[\\/]pir\.css/] } },
 });

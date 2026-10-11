@@ -6,7 +6,7 @@
 .viewer3d:fullscreen { border: 0; border-radius: 0; }
 .viewer3d .overlay { max-width: calc(100% - 200px); }
 
-/* Il fondo del viewer è scuro in entrambi i temi: colori fissi chiari, non i token del tema chiaro. */
-.viewer3d .overlay .btn[aria-pressed="true"] { border-color: #3ddcf3; color: #3ddcf3; }
-.viewer3d > .empty { color: #cbd5e1; }
-.viewer3d > .viewer3d-error { color: #ff8a8a; }
+/* Il fondo del viewer segue il tema (--viewer-bg): colori dei token --viewer-* di styles.css, scelti per quel fondo. */
+.viewer3d .overlay .btn[aria-pressed="true"] { border-color: var(--viewer-accent); color: var(--viewer-accent); }
+.viewer3d > .empty { color: var(--viewer-muted); }
+.viewer3d > .viewer3d-error { color: var(--viewer-err); }

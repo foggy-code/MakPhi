@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AnalysisResult, ConservationResult, InterfacePair, InterfacesResult, ParsedFile } from "../api/types";
-import { colorFor, legendFor, NO_VALUE_COLOR } from "./colorscale";
+import { colorFor, CONTEXT_COLOR, legendFor, NO_VALUE_COLOR } from "./colorscale";
 import {
   analysisColoring, analysisColorOptions, chainFilterOptions, CONSERVATION_SCALE, conservationColoring, endLabel, endMatches, fastaFromParsed, filterRows,
   followedAnalysis, highlightFor, initialPanelState, interactionCounts, interactionRows, INTERFACE_SCALE, interfaceColoring, interfaceHighlight, msaRequest,
@@ -161,11 +161,11 @@ describe("colorazioni", () => {
   it("interfaccia: fasce di ΔSASA con la soglia di 1 Å² esclusa, come il backend", () => {
     const c = interfaceColoring(IFACE)!;
     const map = coloringMap(c);
-    expect(map.get("A:56")).toBe("#cbd5e1");
+    expect(map.get("A:56")).toBe(CONTEXT_COLOR);
     expect(map.get("A:62")).toBe("#facc15");
     expect(map.get("A:57")).toBe("#f97316");
     expect(map.get("A:60")).toBe("#b91c1c");
-    expect(colorFor(INTERFACE_SCALE, 1)).toBe("#cbd5e1");
+    expect(colorFor(INTERFACE_SCALE, 1)).toBe(CONTEXT_COLOR);
     expect(colorFor(INTERFACE_SCALE, 1.01)).toBe("#facc15");
     expect(describeResidue(c, { chain: "A", resnum: "57" })).toBe("ΔSASA 37,3 Å² · interfaccia");
     expect(describeResidue(c, { chain: "A", resnum: "56" })).toBe("ΔSASA 0,4 Å²");

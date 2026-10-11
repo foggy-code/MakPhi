@@ -7,7 +7,7 @@ import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
 import { SequencePicker, TemplatePicker } from "../components/Pickers";
 import { PirWorkspace, type PirSource, type PirWorkspaceState } from "../components/PirWorkspace";
-import { Card, Confirm, Empty, Modal, PageHead } from "../components/ui";
+import { Card, Confirm, Empty, Modal, PageHead, rowActivate } from "../components/ui";
 import { FormSection } from "../components/WorkflowParts";
 import { useProject, useToast } from "../lib/context";
 import { fileStem } from "../lib/files";
@@ -24,8 +24,10 @@ function GenerateDialog({ onClose, onDone }: { onClose: () => void; onDone: (pir
   useEffect(() => {
     if (job?.status !== "completed" || !job.result) return;
     for (const w of job.result.warnings ?? []) toast.push(w, "warn");
-    onDone(job.result.pir, templates, target.name || "target");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // template e bersaglio del job, non quelli del modulo: si possono cambiare mentre il job è in corso
+    const used = (job.params?.target as { name?: string } | null | undefined)?.name;
+    onDone(job.result.pir, job.result.templates.map((t) => ({ id: t.id, chains: t.chains })), used || target.name || "target");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- una volta, al completamento del job
   }, [job?.status]);
   const submit = async () => {
     try {
@@ -115,20 +117,18 @@ export default function PirEditor() {
       setName(d.name);
       open(d.content ?? "", d.meta ?? {}, false);
     }).catch(toast.error);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docId, projectId]);
+  }, [docId, projectId, toast]);
 
+  const fromJob = params.get("fromjob");
   useEffect(() => {
-    const from = params.get("fromjob");
-    if (!from) return;
-    api.job<Align2dResult>(from).then((j) => {
+    if (!fromJob) return;
+    api.job<Align2dResult>(fromJob).then((j) => {
       if (!j.result) return;
       for (const w of j.result.warnings ?? []) toast.push(w, "warn");
-      setName(`Allineamento MODELLER (job ${from.slice(0, 6)})`);
+      setName(`Allineamento MODELLER (job ${fromJob.slice(0, 6)})`);
       open(j.result.pir, { templates: j.result.templates.map((t) => ({ id: t.id, chains: t.chains })) }, true);
     }).catch(toast.error);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.get("fromjob")]);
+  }, [fromJob, toast]);
 
   /** Apre un file PIR così com'è; un allineamento in altro formato (FASTA, Clustal...) viene convertito in PIR. */
   const openFile = async (text: string, file: File) => {
@@ -200,7 +200,7 @@ export default function PirEditor() {
               <table className="table">
                 <tbody>
                   {docs.map((d) => (
-                    <tr key={d.id} className={`clickable ${d.id === docId ? "selected" : ""}`} onClick={() => setParams({ doc: d.id })}>
+                    <tr key={d.id} className={`clickable ${d.id === docId ? "selected" : ""}`} aria-current={d.id === docId || undefined} {...rowActivate(() => setParams({ doc: d.id }))}>
                       <td>
                         <b>{d.name}</b>
                         <div className="tiny text-2">{d.kind.toUpperCase()} · {relTime(d.updated_at)}{d.size ? ` · ${fmtBytes(d.size)}` : ""}</div>

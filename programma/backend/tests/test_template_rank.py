@@ -552,7 +552,11 @@ def test_local_search_with_stale_metadata_is_not_cached(client, monkeypatch, tmp
     exe = tmp_path / "blastp"
     exe.write_text("")
     monkeypatch.setattr(tools, "find", lambda key: str(exe) if key == "blastp" else None)
-    monkeypatch.setattr(JobContext, "run", lambda self, cmd, **kw: ProcessResult(0, BLAST_XML))
+    def fake_run(self, cmd, **kw):  # blastp scrive l'XML nel file indicato con -out
+        Path(cmd[cmd.index("-out") + 1]).write_text(BLAST_XML, encoding="utf-8")
+        return ProcessResult(0, "")
+
+    monkeypatch.setattr(JobContext, "run", fake_run)
     stale = {"flag": True}
 
     def fake_metadata(ids, check=None, log=None):

@@ -1,11 +1,12 @@
 import { useId, useMemo, useRef, useState, type MouseEvent as RMouseEvent } from "react";
 import type { ResidueRow } from "../../api/types";
-import { colorFor } from "../../lib/colorscale";
+import { drawColor } from "../../lib/colorscale";
 import type { ChartData } from "../../lib/exportImage";
 import { fmtNum } from "../../lib/format";
 import { RAMA_SHORT_LABEL, type RamaRegion } from "../../lib/ramachandran";
 import { describeResidue, hasMissing, type ResidueColoring } from "../../lib/residueColoring";
 import { residueName, sameResidue, SS3_LABEL } from "../../lib/residues";
+import { useDocumentTheme } from "../../lib/theme";
 import { niceTicks, svgPoint, useDomain, useZoomAxis, visibleIndices, type DomainState } from "../../lib/zoom";
 import { ChartFrame, ZoomBar } from "../ChartFrame";
 import { RefLine, useChartWidth, useFollowSelection, useTooltip, ZOOM_HINT } from "./common";
@@ -173,7 +174,7 @@ function ProfileSvg({ expanded, title, residues, values, ss, zoom, min, max, hei
       pen = true;
     }
     return d;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- axis e y derivano da W, H, min/max, dominio ed expanded, già nelle dipendenze
   }, [values, from, to, domain.lo, domain.hi, W, H, min, max, expanded]);
   const yTicks = niceTicks(min, max, expanded ? 8 : 4, [1, 2, 5, 10]);
   const digits = tickDigits(yTicks);
@@ -288,13 +289,15 @@ export function ResidueStrip({ residues, coloring, selected, onSelect, legend = 
   // residuo del suggerimento e celle con cui è stato scritto (con un'altra colorazione il testo va riscritto)
   const last = useRef<{ i: number; cells: unknown } | null>(null);
   const n = residues.length;
+  // colori del 3D nel tema corrente (nel chiaro le varianti dei colori troppo chiari, come il grigio di contesto)
+  const theme = useDocumentTheme();
   const cells = useMemo(() => {
     const byKey = new Map(coloring.values.map((v) => [`${v.chain}:${v.resnum}`, v]));
     return residues.map((r, i) => {
       const v = byKey.get(`${r.chain}:${r.resnum}`);
-      return <div key={`${r.chain}${r.resnum}`} data-i={i} style={{ background: v?.color ?? colorFor(coloring.scale, v?.value ?? null) }} />;
+      return <div key={`${r.chain}${r.resnum}`} data-i={i} style={{ background: drawColor(coloring.scale, v?.value ?? null, theme, v?.color) }} />;
     });
-  }, [residues, coloring]);
+  }, [residues, coloring, theme]);
   const selIndex = residues.findIndex((r) => sameResidue(selected, r));
   const indexOf = (e: RMouseEvent<HTMLDivElement>) => {
     const i = Number((e.target as HTMLElement).dataset?.i);

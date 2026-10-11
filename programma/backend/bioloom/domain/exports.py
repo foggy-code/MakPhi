@@ -13,13 +13,16 @@ SCHEMES = {
 
 
 def pymol_script(pdb_text: str, name: str, scheme: str = "ss") -> str:
+    """Script .pml con la struttura incorporata: PyMOL la riceve identica (barre rovesciate, virgolette, a capo e
+    caratteri non ASCII compresi). Il testo entra come letterale Python ASCII su una sola riga (ascii(), cioè repr()
+    con gli escape anche per i caratteri non ASCII): nessuna riga del file può chiudere il blocco `python` prima del
+    tempo né aggiungere comandi, e lo script resta ASCII qualunque codifica usi PyMOL per leggerlo."""
     clean = re.sub(r"[^A-Za-z0-9_]", "_", name)[:40] or "bioloom_model"
     color = SCHEMES.get(scheme, SCHEMES["ss"]).format(n=clean)
-    safe_pdb = pdb_text.replace('"""', "'''")
     return f"""# Sessione PyMOL generata da BioLoom v4
 # Apri con: pymol {clean}.pml
 python
-cmd.read_pdbstr(\"\"\"{safe_pdb}\"\"\", "{clean}")
+cmd.read_pdbstr({ascii(pdb_text)}, "{clean}")
 python end
 hide everything
 show cartoon, {clean}

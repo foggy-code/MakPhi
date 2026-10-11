@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
-import { hexToInt, legendFor, NO_VALUE_COLOR } from "../lib/colorscale";
+import { api, ApiError } from "../api/client";
+import { hexToInt, legendFor, NO_VALUE_COLOR, themedColor } from "../lib/colorscale";
 import { saveFile } from "../lib/exportImage";
 import { atomKey, coloringMap, describeResidue, hasMissing, type ResidueColoring, type ResidueRef } from "../lib/residueColoring";
+import { useDocumentTheme, viewerBackground, VIEWER_VIEW_STYLE, type Theme } from "../lib/theme";
 import { dataUriToBlob, viewerPngName } from "../lib/viewerImage";
 import { Icon } from "./Icon";
 import { Spinner } from "./ui";
@@ -73,8 +75,13 @@ interface ViewerColors {
   chains: Map<string, number>;
 }
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-function applyStyle(viewer: any, scheme: Scheme, highlight: { chain: string; resi: number }[], colors: ViewerColors | null, lines: ViewerLine[] = [], spheres: ViewerSphere[] = []) {
+/* eslint-disable @typescript-eslint/no-explicit-any -- 3Dmol non ha tipi TypeScript */
+/** Contorno del tema (solo nel chiaro): una copia, perché 3Dmol modifica l'oggetto che riceve. */
+function applyViewStyle(viewer: any, theme: Theme) {
+  if (typeof viewer.setViewStyle === "function") viewer.setViewStyle({ ...VIEWER_VIEW_STYLE[theme] });
+}
+
+function applyStyle(viewer: any, scheme: Scheme, highlight: { chain: string; resi: number }[], colors: ViewerColors | null, lines: ViewerLine[] = [], spheres: ViewerSphere[] = [], theme: Theme = "dark") {
   viewer.setStyle({}, {});
   let cartoon: any;
   if (colors) cartoon = { colorfunc: (atom: any) => colors.residues.get(atomKey(atom)) ?? colors.chains.get(atom.chain ?? "") ?? NO_VALUE_INT };
@@ -98,12 +105,13 @@ function applyStyle(viewer: any, scheme: Scheme, highlight: { chain: string; res
   for (const l of lines) {
     viewer.addCylinder({
       start: { x: l.start[0], y: l.start[1], z: l.start[2] }, end: { x: l.end[0], y: l.end[1], z: l.end[2] },
-      radius: 0.07, color: l.color, dashed: true, dashLength: 0.25, gapLength: 0.15, fromCap: 1, toCap: 1,
+      radius: 0.07, color: themedColor(l.color, theme), dashed: true, dashLength: 0.25, gapLength: 0.15, fromCap: 1, toCap: 1,
     });
-    if (l.marker) viewer.addSphere({ center: { x: l.end[0], y: l.end[1], z: l.end[2] }, radius: 0.28, color: l.color });
+    if (l.marker) viewer.addSphere({ center: { x: l.end[0], y: l.end[1], z: l.end[2] }, radius: 0.28, color: themedColor(l.color, theme) });
   }
+  // colori del tema al momento del disegno: il centro bianco delle tasche diventa scuro sul fondo chiaro
   for (const s of spheres) {
-    viewer.addSphere({ center: { x: s.center[0], y: s.center[1], z: s.center[2] }, radius: s.radius, color: s.color, opacity: s.opacity ?? 1 });
+    viewer.addSphere({ center: { x: s.center[0], y: s.center[1], z: s.center[2] }, radius: s.radius, color: themedColor(s.color, theme), opacity: s.opacity ?? 1 });
   }
   viewer.render();
 }
@@ -117,8 +125,8 @@ function centerOn(viewer: any, highlight: { chain: string; resi: number }[], zoo
 
 const residueOf = (atom: any): ResidueRef => ({ chain: atom.chain ?? "", resnum: `${atom.resi}${(atom.icode ?? "").trim()}` });
 
-/** Legenda sovrapposta al viewer (scala continua con tacche, oppure campioni). */
-function ViewerLegend({ coloring }: { coloring: ResidueColoring }) {
+/** Legenda sovrapposta al viewer (scala continua con tacche, oppure campioni con i colori disegnati nel tema). */
+function ViewerLegend({ coloring, theme }: { coloring: ResidueColoring; theme: Theme }) {
   const legend = legendFor(coloring.scale, coloring.title, hasMissing(coloring));
   return (
     <div className="legend3d">
@@ -133,9 +141,9 @@ function ViewerLegend({ coloring }: { coloring: ResidueColoring }) {
           </div>
         </div>
       ) : (
-        legend.items.map((it) => <span key={it.label} className="sw"><i style={{ background: it.color }} />{it.label}</span>)
+        legend.items.map((it) => <span key={it.label} className="sw"><i style={{ background: themedColor(it.color, theme) }} />{it.label}</span>)
       )}
-      {coloring.legendExtra?.map((it) => <span key={it.label} className="sw"><i style={{ background: it.color }} />{it.label}</span>)}
+      {coloring.legendExtra?.map((it) => <span key={it.label} className="sw"><i style={{ background: themedColor(it.color, theme) }} />{it.label}</span>)}
       {legend.noValue && <span className="sw"><i style={{ background: NO_VALUE_COLOR }} />senza valore</span>}
     </div>
   );
@@ -158,17 +166,22 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
   const [drawn, setDrawn] = useState(false);
   const [full, setFull] = useState<"native" | "css" | null>(null);
   const [pngFailed, setPngFailed] = useState(false);
+  // tema chiaro o scuro: sfondo della tela (--viewer-bg, anche per il PNG e l'immagine del report), colori dei residui e
+  // delle sfere adatti a quel fondo (nel chiaro le varianti di colorscale.ts, come il grigio di contesto più scuro) e,
+  // solo nel chiaro, il contorno scuro (VIEWER_VIEW_STYLE); WebGL non legge le variabili CSS
+  const theme = useDocumentTheme();
+  const background = useMemo(() => viewerBackground(theme), [theme]);
   const colors = useMemo((): ViewerColors | null => {
     if (!coloring) return null;
     const residues = new Map<string, number>();
-    coloringMap(coloring).forEach((hex, key) => residues.set(key, hexToInt(hex)));
-    const chains = new Map(Object.entries(coloring.chainColors ?? {}).map(([chain, hex]) => [chain, hexToInt(hex)] as [string, number]));
+    coloringMap(coloring, theme).forEach((hex, key) => residues.set(key, hexToInt(hex)));
+    const chains = new Map(Object.entries(coloring.chainColors ?? {}).map(([chain, hex]) => [chain, hexToInt(themedColor(hex, theme))] as [string, number]));
     return { residues, chains };
-  }, [coloring]);
+  }, [coloring, theme]);
   const interactive = !!coloring || !!onPickResidue;
   // i callback di 3Dmol leggono sempre i valori correnti
-  const live = useRef({ scheme, highlight, colors, coloring, onPickResidue, centerKey, interactive, lines, centerZoom, spheres });
-  live.current = { scheme, highlight, colors, coloring, onPickResidue, centerKey, interactive, lines, centerZoom, spheres };
+  const live = useRef({ scheme, highlight, colors, coloring, onPickResidue, centerKey, interactive, lines, centerZoom, spheres, background, theme });
+  live.current = { scheme, highlight, colors, coloring, onPickResidue, centerKey, interactive, lines, centerZoom, spheres, background, theme };
 
   // Immagine (PNG, report): solo con la struttura disegnata e nessun caricamento in corso (con un altro `url` il
   // viewer mostra ancora la struttura precedente finché il file nuovo non arriva) né errore.
@@ -224,7 +237,8 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
   };
 
   // Un file alla volta: cambiando modello la richiesta precedente si annulla e una risposta in ritardo non sostituisce
-  // quella nuova (il viewer, il PNG e l'immagine del report mostrerebbero la struttura sbagliata).
+  // quella nuova (il viewer, il PNG e l'immagine del report mostrerebbero la struttura sbagliata). La lettura passa dal
+  // client delle API: con la sessione scaduta (modalità server) torna la schermata di accesso, non «HTTP 401».
   useEffect(() => {
     setError(null);
     if (pdb) {
@@ -240,10 +254,12 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
     const ctrl = new AbortController();
     let stale = false;
     setLoading(true);
-    fetch(url, { signal: ctrl.signal })
-      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
+    api.fileText(url, ctrl.signal)
       .then((t) => { if (!stale) setText(t); })
-      .catch((e) => { if (!stale && e?.name !== "AbortError") setError(String(e)); })
+      .catch((e) => {
+        if (stale || e?.name === "AbortError") return;
+        setError(e instanceof ApiError ? `Struttura non disponibile: ${e.message}` : String(e));
+      })
       .finally(() => { if (!stale) setLoading(false); });
     return () => {
       stale = true;
@@ -261,13 +277,14 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
         if (cancelled || !host.current) return;
         const $3Dmol = mod.default?.createViewer ? mod.default : mod;
         if (!viewer.current) {
-          viewer.current = $3Dmol.createViewer(host.current, { backgroundColor: "#0b1120", antialias: true });
+          viewer.current = $3Dmol.createViewer(host.current, { backgroundColor: live.current.background, antialias: true });
+          applyViewStyle(viewer.current, live.current.theme);
         }
         const v = viewer.current;
         const cur = live.current;
         v.clear();
         v.addModel(text, format === "cif" ? "cif" : "pdb");
-        applyStyle(v, cur.scheme, cur.highlight, cur.colors, cur.lines, cur.spheres);
+        applyStyle(v, cur.scheme, cur.highlight, cur.colors, cur.lines, cur.spheres, cur.theme);
         enablePicking(v);
         v.zoomTo();
         if (cur.centerKey !== undefined) centerOn(v, cur.highlight, cur.centerZoom);
@@ -281,22 +298,30 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text, format]);
 
   useEffect(() => {
-    if (viewer.current && text) applyStyle(viewer.current, scheme, highlight, colors, lines, spheres);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scheme, JSON.stringify(highlight), colors, JSON.stringify(lines), JSON.stringify(spheres)]);
+    if (viewer.current && text) applyStyle(viewer.current, scheme, highlight, colors, lines, spheres, theme);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- evidenziazioni, linee e sfere confrontate per contenuto (JSON), non per oggetto
+  }, [scheme, JSON.stringify(highlight), colors, JSON.stringify(lines), JSON.stringify(spheres), theme]);
+
+  // cambio di tema: la tela WebGL prende il nuovo sfondo e il contorno del tema senza ricaricare la struttura
+  useEffect(() => {
+    const v = viewer.current;
+    if (!v) return;
+    applyViewStyle(v, theme);
+    if (typeof v.setBackgroundColor === "function") v.setBackgroundColor(background);
+    v.render?.();
+  }, [background, theme]);
 
   useEffect(() => {
     if (viewer.current && text) enablePicking(viewer.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- un testo nuovo ridisegna tutto nell'effetto precedente, compresa la selezione
   }, [interactive]);
 
   useEffect(() => {
     if (viewer.current && text && centerKey !== undefined) centerOn(viewer.current, highlight, centerZoom);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- si centra solo a una nuova richiesta (centerKey)
   }, [centerKey]);
 
   // Schermo intero: lo stato segue la Fullscreen API (anche l'uscita con Esc, gestita dal browser)
@@ -358,7 +383,7 @@ export function Viewer3D({ pdb, url, height = 420, scheme: initial = "ss", highl
         </div>
       )}
       {error && <div className="empty viewer3d-error" style={{ position: "absolute", inset: 0, placeContent: "center" }}>{error}</div>}
-      {text && coloring && <ViewerLegend coloring={coloring} />}
+      {text && coloring && <ViewerLegend coloring={coloring} theme={theme} />}
       {text && hover && <div className="hover3d">{hover}</div>}
       {text && (
         <div className="overlay">

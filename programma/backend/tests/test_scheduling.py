@@ -26,6 +26,8 @@ from bioloom.services.live import LiveService, _ListState
 from bioloom.services.pipeline import PipelineService
 from bioloom.services.templates import TemplateLibrary
 
+from .conftest import dispatcher_settled, until
+
 SLEEPER = ("import sys, time; t0 = time.time(); time.sleep(float(sys.argv[2])); "
            "open(sys.argv[1], 'w').write(f'{t0} {time.time()}')")
 # aspetta che compaia un file (cancello aperto dal test), con un limite di sicurezza
@@ -57,15 +59,6 @@ def wait(mgr, job_id, timeout=30):
             return job
         time.sleep(0.02)
     raise AssertionError(f"job non terminato entro {timeout} s: {mgr.get(job_id)}")
-
-
-def until(condition, timeout=20):
-    start = time.time()
-    while time.time() - start < timeout:
-        if condition():
-            return
-        time.sleep(0.01)
-    raise AssertionError("condizione non raggiunta in tempo")
 
 
 class FakeClock:
@@ -216,8 +209,8 @@ def test_budget_and_workers_follow_the_setting_without_restart(make_manager, tmp
     holder = mgr.submit("holder", {})["id"]
     until(lambda: mgr.budget.used == 1)
     quick = mgr.submit("quick", {})["id"]
+    # in attesa nella coda del budget (budget.waiting): con l'unico slot occupato il processo non può partire
     until(lambda: mgr.budget.waiting == 1)
-    time.sleep(0.3)
     assert not marker.exists() and mgr.get(quick)["status"] == "running"  # un solo slot: aspetta
     settings["value"] = UserSettings(max_workers=2)
     mgr.reconfigure()
@@ -246,7 +239,7 @@ def test_cpu_pool_follows_the_setting(make_manager):
     a = mgr.submit("model", {"n": "a"})["id"]
     until(lambda: mgr.get(a)["status"] == "running")
     b = mgr.submit("model", {"n": "b"})["id"]
-    time.sleep(0.2)
+    until(lambda: dispatcher_settled(mgr, "cpu"))  # coda riesaminata: nessun worker libero per b
     queued = mgr.with_eta(mgr.get(b))
     assert queued["status"] == "queued" and queued["queue_position"] == 1  # un solo job di calcolo alla volta
     settings["value"] = UserSettings(max_workers=2)
@@ -777,7 +770,8 @@ def test_queued_jobs_at_shutdown_are_marked_by_recover(tmp_path):
     queued = mgr.submit("model", {})["id"]
     mgr.shutdown()
     gate.set()
-    time.sleep(0.3)
+    # finito il job in corso, i worker escono: dopo non c'è più nessuno che possa avviare il job in coda
+    until(lambda: not any(t.is_alive() for pool in mgr._pools.values() for t in pool._threads))
     assert not ran  # la coda è chiusa: il job in coda non parte più
     other = JobManager(db, tmp_path / "jobs", 1, UserSettings)
     try:

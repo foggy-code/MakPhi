@@ -3,41 +3,60 @@
 #
 #   programma/scripts/test.sh                 lint + test del backend (nel container) + test del frontend
 #   programma/scripts/test.sh backend [args]  solo backend; gli argomenti vanno a pytest (es. -k pipeline -x)
-#   programma/scripts/test.sh frontend        solo frontend (typecheck + vitest)
-#   programma/scripts/test.sh lint            solo ruff
+#   programma/scripts/test.sh frontend        solo frontend (eslint + typecheck + vitest), senza Docker né VERSION
+#   programma/scripts/test.sh lint            solo ruff (nel container, come il backend)
 #
 # Il backend gira in "bioloom-test:<base>", costruita sopra l'immagine locale "bioloom:<versione>"
-# (quella dell'avviatore; un'altra con BIOLOOM_BASE_IMAGE, es. un'immagine di sviluppo con strumenti nuovi)
-# con pytest e ruff; il codice del repository è montato, non copiato.
+# (versione da programma/launcher/VERSION, come l'avviatore; un'altra con BIOLOOM_BASE_IMAGE, es. un'immagine di
+# sviluppo con strumenti nuovi)
+# con pytest, pytest-timeout e ruff (si ricostruisce quando cambia l'immagine di base o docker/test/Dockerfile);
+# il codice del repository è montato, non copiato.
 # MODELLER: chiave da $MODELLER_KEY oppure da <cartella dati>/licenses/modeller.key
 # (cartella dati: $BIOLOOM_DATA_PATH, predefinita la cartella data accanto a programma/).
 # Senza chiave i test di MODELLER vengono saltati.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="$(head -n1 "$ROOT/launcher/VERSION" 2>/dev/null | tr -d '[:space:]')"
-VERSION="${VERSION:-4.1.0}"
-BASE_IMAGE="${BIOLOOM_BASE_IMAGE:-bioloom:$VERSION}"
-# un'immagine di test per ogni immagine di base: più worktree con basi diverse non si sovrascrivono a vicenda
-TEST_IMAGE="${BIOLOOM_TEST_IMAGE:-bioloom-test:$(printf %s "$BASE_IMAGE" | tr -c 'A-Za-z0-9._-' '-')}"
+BASE_IMAGE=""; TEST_IMAGE=""   # le imposta ensure_image: servono solo ai comandi che usano l'immagine
 DATA_PATH="${BIOLOOM_DATA_PATH:-$ROOT/../data}"
 
 # Percorso per `docker -v` (su Windows con Git Bash serve la forma D:/...).
 host_path() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
 export MSYS_NO_PATHCONV=1
 
+resolve_images() {  # BASE_IMAGE e TEST_IMAGE; senza VERSION (e senza BIOLOOM_BASE_IMAGE) si ferma qui, ma solo per
+  # i comandi che usano l'immagine: "frontend" non ne ha bisogno
+  BASE_IMAGE="${BIOLOOM_BASE_IMAGE:-}"
+  if [ -z "$BASE_IMAGE" ]; then
+    # la versione viene solo da programma/launcher/VERSION (programma/scripts/versione.sh), senza numeri di riserva
+    local version
+    version="$(head -n1 "$ROOT/launcher/VERSION" 2>/dev/null | tr -d '[:space:]')" || version=""
+    if [ -z "$version" ]; then
+      echo "Manca programma/launcher/VERSION (la versione di BioLoom): non so quale immagine bioloom:<versione> usare." >&2
+      echo "  Ripristina il file (es. git checkout -- programma/launcher/VERSION) oppure indica BIOLOOM_BASE_IMAGE." >&2
+      exit 2
+    fi
+    BASE_IMAGE="bioloom:$version"
+  fi
+  # un'immagine di test per ogni immagine di base: più worktree con basi diverse non si sovrascrivono a vicenda
+  TEST_IMAGE="${BIOLOOM_TEST_IMAGE:-bioloom-test:$(printf %s "$BASE_IMAGE" | tr -c 'A-Za-z0-9._-' '-')}"
+}
+
 ensure_image() {
+  resolve_images
   if ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
     echo "Immagine $BASE_IMAGE assente: avvia BioLoom una volta (la costruisce) oppure" >&2
     echo "  docker compose -f programma/launcher/compose.yml build" >&2
     exit 2
   fi
-  local base_id stamp
+  local base_id want stamp
   base_id="$(docker image inspect -f '{{.Id}}' "$BASE_IMAGE")"
+  # etichetta: immagine di base e somma di docker/test/Dockerfile (senza CR: uguale da Windows e da Linux)
+  want="$base_id $(tr -d '\r' < "$ROOT/docker/test/Dockerfile" | cksum | awk '{ print $1 }')"
   stamp="$(docker image inspect -f '{{index .Config.Labels "bioloom.test.base"}}' "$TEST_IMAGE" 2>/dev/null || true)"
-  if [ "$stamp" != "$base_id" ]; then
+  if [ "$stamp" != "$want" ]; then
     echo "== costruzione di $TEST_IMAGE"
-    docker build -q --build-arg "BASE=$BASE_IMAGE" --label "bioloom.test.base=$base_id" \
+    docker build -q --build-arg "BASE=$BASE_IMAGE" --label "bioloom.test.base=$want" \
       -t "$TEST_IMAGE" "$(host_path "$ROOT/docker/test")" >/dev/null
   fi
 }
@@ -65,7 +84,13 @@ backend() {
 frontend() {
   echo "== frontend"
   cd "$ROOT/frontend"
-  [ -d node_modules ] || npm ci --no-audit --no-fund
+  # reinstalla anche quando package-lock.json è più recente dell'ultima installazione (npm 7+ riscrive
+  # node_modules/.package-lock.json a ogni installazione): una node_modules di prima può non avere eslint
+  if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+    echo "== npm ci (node_modules assente o più vecchia di package-lock.json)"
+    npm ci --no-audit --no-fund
+  fi
+  npm run --silent lint
   npm run --silent typecheck
   npm test --silent
 }

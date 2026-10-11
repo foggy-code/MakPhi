@@ -4,6 +4,10 @@
 - L'indice MMseqs2 si crea da pdbaa (`data/databases/pdbaa_mmseqs/`).
 - UniClust30 e QMTL restano sul disco esterno: li monta l'avviatore nel container `qmean`.
 I file intermedi (download, FASTA estratto, indici temporanei) stanno nello scratch del job.
+
+Aggiornamento di pdbaa, database MMseqs2 e indice locale si eseguono uno alla volta (risorsa esclusiva `PDBAA_FILES`):
+ognuno scrive una cartella che un altro legge per costruire la propria (pdbaa → pdbaa_mmseqs → indice locale). Le
+cartelle di lavoro accanto a quelle definitive (stesso disco, per lo scambio con un rename) hanno il nome del job.
 """
 
 from __future__ import annotations
@@ -11,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import tarfile
 import time
@@ -20,11 +25,16 @@ from typing import Callable, Optional
 import httpx
 
 from ..core.errors import AppError, ToolUnavailable
-from ..core.jobs import QMEAN_LOCAL, JobContext, JobManager
+from ..core.jobs import QMEAN_LOCAL, RESOURCE_STAGE, JobContext, JobManager
 from ..core.storage import dir_size, remove_tree
 from ..engines import qmean_local, remote, search, tools
 
 PDBAA_URL = "https://ftp.ncbi.nlm.nih.gov/blast/db/pdbaa.tar.gz"
+# Risorsa esclusiva (core/dispatch.py) dei job che scrivono pdbaa, pdbaa_mmseqs o l'indice locale, o li leggono per
+# costruirne un altro. Le risorse valgono dentro un pool (il dispatcher tiene le sue): i tre job stanno tutti in "io",
+# e i processi di calcolo che lanciano passano comunque dal budget di CPU condiviso (JobContext.run).
+PDBAA_FILES = "pdbaa_files"
+RESOURCE_STAGE[PDBAA_FILES] = "In coda: un altro job sta aggiornando pdbaa o il database MMseqs2"
 
 
 def _info(path: Path) -> dict:
@@ -38,9 +48,26 @@ def _info(path: Path) -> dict:
         return {"present": True, "size": None, "updated": None}
 
 
-def _swap_in(new_dir: Path, final_dir: Path) -> None:
+def _work_dir(final_dir: Path, stage: str, job_id: str) -> Path:
+    """Cartella di lavoro di un job accanto a `final_dir` (stesso disco): `<nome>.<stage>-<job>`."""
+    return final_dir.with_name(f"{final_dir.name}.{stage}-{job_id}")
+
+
+def _clear_leftovers(final_dir: Path) -> None:
+    """Toglie le cartelle di lavoro lasciate da un job interrotto (arresto, memoria esaurita), anche quelle a nome
+    fisso delle versioni precedenti (`<nome>.new`, `<nome>.old`). Si chiama tenendo `PDBAA_FILES`: nessun altro job
+    le sta usando."""
+    pattern = re.compile(rf"{re.escape(final_dir.name)}\.(new|old)(-[0-9a-f]+)?")
+    if not final_dir.parent.is_dir():
+        return
+    for path in final_dir.parent.iterdir():
+        if pattern.fullmatch(path.name) and path.is_dir():
+            remove_tree(path)
+
+
+def _swap_in(new_dir: Path, final_dir: Path, job_id: str) -> None:
     """Sostituisce `final_dir` con `new_dir` (stesso disco: operazione quasi atomica)."""
-    old = final_dir.with_name(final_dir.name + ".old")
+    old = _work_dir(final_dir, "old", job_id)
     remove_tree(old)
     if final_dir.exists():
         final_dir.rename(old)
@@ -55,9 +82,11 @@ class DatabaseService:
         self.dir = databases_dir
         self.local_cache = local_cache
         self.settings_provider = settings_provider
-        jobs.register("db_update_pdbaa", self.handle_update_pdbaa, pool="io")
-        jobs.register("db_build_mmseqs", self.handle_build_mmseqs)
-        jobs.register("db_index_mmseqs", self.handle_index_mmseqs)
+        # uno alla volta (PDBAA_FILES), nello stesso pool: con pool diversi l'esclusione non varrebbe
+        for kind, handler in (("db_update_pdbaa", self.handle_update_pdbaa),
+                              ("db_build_mmseqs", self.handle_build_mmseqs),
+                              ("db_index_mmseqs", self.handle_index_mmseqs)):
+            jobs.register(kind, handler, pool="io", resource=lambda _p: PDBAA_FILES)
         # conversioni e copie passano dalla stessa coda dei calcoli nel servizio QMEAN (una cosa alla volta):
         # in BioLoom restano in coda, invece di occupare un worker del pool "io" in attesa del servizio
         jobs.register("db_convert_uniclust", self.handle_convert_uniclust, pool="io",
@@ -123,19 +152,22 @@ class DatabaseService:
         if expected and expected[0] != md5.hexdigest():
             raise AppError("Il file scaricato è corrotto (MD5 diverso): riprova.", code="checksum")
         ctx.progress(0.75, "Estrazione del database")
-        new_dir = self.dir / "pdbaa.new"
-        remove_tree(new_dir)
+        _clear_leftovers(self.dir / "pdbaa")
+        new_dir = _work_dir(self.dir / "pdbaa", "new", ctx.job_id)
         new_dir.mkdir(parents=True)
-        with tarfile.open(archive) as tar:
-            for member in tar.getmembers():
-                if not member.isfile() or "/" in member.name or member.name.startswith("."):
-                    continue  # solo i file del database, senza percorsi
-                tar.extract(member, new_dir, filter="data")
-        archive.unlink(missing_ok=True)
-        if not (any(new_dir.glob("pdbaa*.pin")) or any(new_dir.glob("pdbaa*.pal"))):
+        try:
+            with tarfile.open(archive) as tar:
+                for member in tar.getmembers():
+                    if not member.isfile() or "/" in member.name or member.name.startswith("."):
+                        continue  # solo i file del database, senza percorsi
+                    tar.extract(member, new_dir, filter="data")
+            archive.unlink(missing_ok=True)
+            if not (any(new_dir.glob("pdbaa*.pin")) or any(new_dir.glob("pdbaa*.pal"))):
+                raise AppError("L'archivio scaricato non contiene un database pdbaa valido.")
+        except BaseException:  # un'estrazione a metà non resta nella cartella dati
             remove_tree(new_dir)
-            raise AppError("L'archivio scaricato non contiene un database pdbaa valido.")
-        _swap_in(new_dir, self.dir / "pdbaa")
+            raise
+        _swap_in(new_dir, self.dir / "pdbaa", ctx.job_id)
         ctx.log(f"pdbaa aggiornato ({dir_size(self.dir / 'pdbaa') >> 20} MB)")
         return {"database": "pdbaa", **_info(self.dir / "pdbaa")}
 
@@ -163,11 +195,15 @@ class DatabaseService:
         if res.returncode != 0:
             raise AppError(f"mmseqs createdb non riuscito: {res.output[-400:]}")
         fasta.unlink(missing_ok=True)
-        staged = self.dir / "pdbaa_mmseqs.new"
-        remove_tree(staged)
-        shutil.copytree(build, staged)
+        _clear_leftovers(self.dir / "pdbaa_mmseqs")
+        staged = _work_dir(self.dir / "pdbaa_mmseqs", "new", ctx.job_id)
+        try:
+            shutil.copytree(build, staged)
+        except BaseException:  # copia a metà (disco pieno): non resta nella cartella dati
+            remove_tree(staged)
+            raise
         remove_tree(build)
-        _swap_in(staged, self.dir / "pdbaa_mmseqs")
+        _swap_in(staged, self.dir / "pdbaa_mmseqs", ctx.job_id)
         result = {"database": "pdbaa_mmseqs", **_info(self.dir / "pdbaa_mmseqs")}
         if p.get("index", True):
             result["local_index"] = self._build_local_index(ctx, (0.6, 0.98))
@@ -185,18 +221,21 @@ class DatabaseService:
             raise ToolUnavailable("Serve prima il database MMseqs2 (Prepara MMseqs2).")
         ctx.progress(progress[0], "Copia del database MMseqs2 su questo computer")
         folder = self.local_cache / "mmseqs"
-        staged = self.local_cache / "mmseqs.new"
-        remove_tree(staged)
-        shutil.copytree(db.parent, staged)
-        ctx.progress((progress[0] + progress[1]) / 2, "Indice k-mer MMseqs2 (ricerche più veloci)")
-        # un thread per slot libero del budget di CPU condiviso (da 1 ai processori − 1)
-        res = ctx.run(lambda threads: [mmseqs, "createindex", str(staged / "pdbaa"), str(ctx.tmp_dir / "mmseqs_idx"),
-                                       "--threads", str(threads)],
-                      log_output=False, cpu=max(1, (os.cpu_count() or 2) - 1))
-        shutil.rmtree(ctx.tmp_dir / "mmseqs_idx", ignore_errors=True)
-        if res.returncode != 0:
+        _clear_leftovers(folder)
+        staged = _work_dir(folder, "new", ctx.job_id)
+        try:
+            shutil.copytree(db.parent, staged)
+            ctx.progress((progress[0] + progress[1]) / 2, "Indice k-mer MMseqs2 (ricerche più veloci)")
+            # un thread per slot libero del budget di CPU condiviso (da 1 ai processori − 1)
+            res = ctx.run(lambda threads: [mmseqs, "createindex", str(staged / "pdbaa"),
+                                           str(ctx.tmp_dir / "mmseqs_idx"), "--threads", str(threads)],
+                          log_output=False, cpu=max(1, (os.cpu_count() or 2) - 1))
+            shutil.rmtree(ctx.tmp_dir / "mmseqs_idx", ignore_errors=True)
+            if res.returncode != 0:
+                raise AppError(f"mmseqs createindex non riuscito: {res.output[-400:]}")
+        except BaseException:  # errore o annullamento: la copia a metà non resta nel volume locale
             remove_tree(staged)
-            raise AppError(f"mmseqs createindex non riuscito: {res.output[-400:]}")
+            raise
         (staged / "stamp.json").write_text(json.dumps(search.mmseqs_stamp(db)), encoding="utf-8")
-        _swap_in(staged, folder)
+        _swap_in(staged, folder, ctx.job_id)
         return {"size": dir_size(folder), "path": "volume locale"}

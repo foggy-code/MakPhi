@@ -3,9 +3,10 @@
 
 import type { ConsensusResult, QualityReport, ResidueRow } from "../api/types";
 import { PLDDT_BAND_LABEL, PLDDT_BAND_MIN, plddtBand } from "./alphafold";
-import { colorFor, fmtScaleValue, PALETTES, uniformStops, type BinnedScale, type CategoricalScale, type ColorScale, type ContinuousScale } from "./colorscale";
+import { CONTEXT_COLOR, drawColor, fmtScaleValue, ONE_METHOD_COLOR, PALETTES, uniformStops, type BinnedScale, type CategoricalScale, type ColorScale, type ContinuousScale } from "./colorscale";
 import { RAMA_SHORT_LABEL, type RamaRegion } from "./ramachandran";
 import { SS3_LABEL } from "./residues";
+import type { Theme } from "./theme";
 
 export type ColorBy = "ss" | "rama" | "clashes" | "dope" | "rsa" | "bfactor" | "plddt" | "qmean" | "consensus";
 
@@ -78,7 +79,7 @@ export const CLASH_SCALE: BinnedScale = {
   bins: [
     { gt: 1, color: "#dc2626", label: "2 o più clash" },
     { gt: 0, color: "#f59e0b", label: "1 clash" },
-    { color: "#cbd5e1", label: "Nessun clash" },
+    { color: CONTEXT_COLOR, label: "Nessun clash" },
   ],
   digits: 0,
 };
@@ -117,8 +118,8 @@ export const CONSENSUS_SCALE: BinnedScale = {
   bins: [
     { gt: 2, color: "#dc2626", label: "3 o più metodi" },
     { gt: 1, color: "#fb923c", label: "2 metodi" },
-    { gt: 0, color: "#fde047", label: "1 metodo" },
-    { color: "#e2e8f0", label: "Nessuna segnalazione" },
+    { gt: 0, color: ONE_METHOD_COLOR, label: "1 metodo" },
+    { color: CONTEXT_COLOR, label: "Nessuna segnalazione" },
   ],
   digits: 0,
 };
@@ -238,10 +239,11 @@ export function residueColoring(report: QualityReport, by: ColorBy, consensus?: 
   }
 }
 
-/** Colore di ogni residuo (chiave `residueKey`). */
-export function coloringMap(coloring: ResidueColoring): Map<string, string> {
+/** Colore di ogni residuo (chiave `residueKey`) per il tema (`drawColor`: nel chiaro le varianti dei colori fissi, delle
+ *  fasce e delle categorie troppo chiari per il fondo, come il grigio di contesto). */
+export function coloringMap(coloring: ResidueColoring, theme: Theme = "dark"): Map<string, string> {
   const out = new Map<string, string>();
-  coloring.values.forEach((v) => out.set(residueKey(v.chain, v.resnum), v.color ?? colorFor(coloring.scale, v.value)));
+  coloring.values.forEach((v) => out.set(residueKey(v.chain, v.resnum), drawColor(coloring.scale, v.value, theme, v.color)));
   return out;
 }
 

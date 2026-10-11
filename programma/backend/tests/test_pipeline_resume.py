@@ -11,7 +11,7 @@ import pytest
 
 from bioloom.core.errors import AppError, Conflict
 from bioloom.engines import search
-from tests.conftest import HUMAN_UB, YEAST_UB, wait_job
+from tests.conftest import HUMAN_UB, YEAST_UB, until, wait_job
 
 NAMES = ["a", "b", "c", "d", "e"]
 
@@ -70,15 +70,6 @@ def pipe(client, monkeypatch):
         return r.json()["id"]
 
     return client, core, fake, submit
-
-
-def until(condition, timeout: float = 20) -> None:
-    start = time.time()
-    while time.time() - start < timeout:
-        if condition():
-            return
-        time.sleep(0.02)
-    raise AssertionError("condizione non raggiunta in tempo")
 
 
 def items(client, job_id: str) -> dict:

@@ -189,7 +189,7 @@ export function PirWorkspace({ source, savedKey = 0, onState, title, right, empt
 
   const entries = useMemo(() => parsePir(content), [content]);
   const identities = useMemo(() => pirIdentities(entries), [entries]);
-  const templatesMeta = (meta.templates as TemplateRef[] | undefined) ?? [];
+  const templatesMeta = useMemo(() => (meta.templates as TemplateRef[] | undefined) ?? [], [meta.templates]);
   const mutationReport = useMemo(() => pirMutations(original, entries), [original, entries]);
   const mutated = useMemo(() => new Set(mutationReport.mutations.map((m) => `${m.row}:${m.column}`)), [mutationReport]);
 
@@ -217,7 +217,7 @@ export function PirWorkspace({ source, savedKey = 0, onState, title, right, empt
       clearTimeout(t);
       setSsLoading(false);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- si richiede solo quando cambiano residui, voci o template (ssKey), non i gap
   }, [ssKey, ssOn]);
   /**
    * Voce della risposta per ogni riga: per posizione se il codice coincide, altrimenti per codice (codici ripetuti: solo
@@ -389,7 +389,7 @@ export function PirWorkspace({ source, savedKey = 0, onState, title, right, empt
     load(source.text, source.meta);
     setMeta(source.meta ?? {});
     setDirty(!!source.dirty);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- solo per un allineamento nuovo (source.key)
   }, [source.key]);
   // salvato: il confronto riparte da qui e le modifiche non sono più in sospeso
   useEffect(() => {
@@ -397,12 +397,12 @@ export function PirWorkspace({ source, savedKey = 0, onState, title, right, empt
     setSavedContent(content);
     setMeta(metaToSave());
     setDirty(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- solo dopo un salvataggio riuscito (savedKey)
   }, [savedKey]);
   const metaOut = useMemo(metaToSave, [meta, mutationReport, entries, original]);
   useEffect(() => {
     onState?.({ content, meta: metaOut, dirty, valid: !!report?.valid });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- si avvisa solo il cambio di stato; onState può cambiare a ogni disegno del genitore
   }, [content, metaOut, dirty, report]);
 
   const panelCount = (p: Panel) => (p === "checks" ? issues.length : p === "subst" ? mutationReport.mutations.length : p === "notes" ? annotations.length : 0);

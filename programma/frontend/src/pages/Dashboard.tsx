@@ -7,7 +7,7 @@ import { LabelEditor } from "../components/Labels";
 import { Badge, Card, Disclosure, Empty, Progress, Stat, StatusBadge } from "../components/ui";
 import { useProject, useToast } from "../lib/context";
 import { fmtBytes, fmtEta, isActive, KIND_LABEL, relTime } from "../lib/format";
-import { useAsync, useInterval, useLiveJobList } from "../lib/hooks";
+import { useAsync, useLiveJobList, useVisibleInterval } from "../lib/hooks";
 import { flowProgress, greeting, jobCounts, kindBreakdown, nextFlowStep, plural, type JobCounts, type JobGroup } from "../lib/shellView";
 import { itemLabels } from "../lib/tags";
 
@@ -54,9 +54,9 @@ export default function Dashboard() {
   const { data: jobs, reload: reloadJobs, setData: setJobs } = useAsync<JobSummary[]>(() => api.jobs({ project_id: projectId ?? undefined, limit: JOB_LIMIT }), [projectId]);
   const [stats, setStats] = useState<SystemStats | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  // job del progetto dal flusso dell'elenco; CPU, memoria e disco restano periodici
+  // job del progetto dal flusso dell'elenco; CPU, memoria e disco restano periodici (fermi con la scheda nascosta)
   const live = useLiveJobList(jobs, setJobs, reloadJobs, (j) => !projectId || j.project_id === projectId);
-  useInterval(() => {
+  useVisibleInterval(() => {
     api.stats().then(setStats).catch(() => undefined);
     if (!live) reloadJobs();
   }, 5000);

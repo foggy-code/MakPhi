@@ -6,8 +6,9 @@ import { AssembliesCard } from "../components/AssembliesCard";
 import { SSStrip } from "../components/charts";
 import { Icon } from "../components/Icon";
 import { FavoriteStar, LabelEditor, LabelFilterSelect, TagChips } from "../components/Labels";
+import { useTemplateUpload } from "../components/TemplateUpload";
 import { Viewer3D } from "../components/Viewer3D";
-import { Alert, Badge, Card, Confirm, DetailGrid, Disclosure, DropZone, Empty, ExpandAll, ExpandButton, PageHead, Spinner, Stat, useExpanded } from "../components/ui";
+import { Alert, Badge, Card, Confirm, DetailGrid, Disclosure, DropZone, Empty, ExpandAll, ExpandButton, PageHead, rowActivate, Spinner, Stat, useExpanded } from "../components/ui";
 import { FormSection } from "../components/WorkflowParts";
 import {
   isAlphaFoldId, isUniProtAccession, normalizeAccession, PLDDT_BAND_LABEL, PLDDT_BAND_TONE, plddtLabel, plddtTone, predictorBadge, predictorTitle, type PlddtBand,
@@ -292,9 +293,11 @@ export default function Templates() {
   };
   const [pdbId, setPdbId] = useState("");
   const [format, setFormat] = useState("pdb");
-  const [busy, setBusy] = useState(false);
+  const [fetching, setFetching] = useState(false);
   const [accession, setAccession] = useState("");
   const [query, setQuery] = useState("");
+  // cresce a ogni sostituzione di un template: il dettaglio dello stesso id si ridisegna da capo
+  const [revision, setRevision] = useState(0);
   const open = useExpanded<string>();
   const accessionOk = isUniProtAccession(accession) || isAlphaFoldId(accession);
   const shown = list?.filter((t) => templateMatches(t, query)) ?? [];
@@ -303,7 +306,7 @@ export default function Templates() {
   }, [list, selected, setParams, labelKey]);
 
   const fetchPdb = async () => {
-    setBusy(true);
+    setFetching(true);
     try {
       const t = await api.fetchTemplate(pdbId.trim(), format);
       toast.push(t.cached ? `${t.id} era già in libreria` : `${t.id} scaricato (${t.format.toUpperCase()})`);
@@ -313,11 +316,11 @@ export default function Templates() {
     } catch (e) {
       toast.error(e);
     } finally {
-      setBusy(false);
+      setFetching(false);
     }
   };
   const fetchAlphaFold = async () => {
-    setBusy(true);
+    setFetching(true);
     try {
       const t = await api.fetchAlphaFold(normalizeAccession(accession));
       toast.push(t.cached ? `${t.id} era già in libreria` : `${t.id} scaricato da AlphaFold DB (${plddtLabel(t.plddt_mean)})`);
@@ -327,22 +330,17 @@ export default function Templates() {
     } catch (e) {
       toast.error(e);
     } finally {
-      setBusy(false);
+      setFetching(false);
     }
   };
-  const upload = async (file: File) => {
-    setBusy(true);
-    try {
-      const t = await api.uploadTemplate(file);
-      toast.push(`${t.id} caricato`);
-      reload();
-      selectTemplate(t.id);
-    } catch (e) {
-      toast.error(e);
-    } finally {
-      setBusy(false);
-    }
-  };
+  // file caricato: con lo stesso id di un template in libreria si chiede se sostituirlo (useTemplateUpload)
+  const { upload, busy: uploading, dialog: replaceDialog } = useTemplateUpload((t, replaced) => {
+    toast.push(replaced ? `${t.id} sostituito` : `${t.id} caricato`);
+    reload();
+    selectTemplate(t.id);
+    if (replaced) setRevision((r) => r + 1); // stesso id: il dettaglio rilegge il file nuovo
+  });
+  const busy = fetching || uploading;
   return (
     <div className="page">
       <PageHead title="Libreria template" lead="Strutture sperimentali, modelli predetti di AlphaFold DB o file personalizzati disponibili per tutti i progetti. Ogni template è analizzato: catene, residui mancanti, ligandi e struttura secondaria." />
@@ -399,7 +397,7 @@ export default function Templates() {
                       const isOpen = open.has(t.id);
                       return (
                         <Fragment key={t.id}>
-                          <tr className={`clickable ${t.id === selected ? "selected" : ""}${isOpen ? " row-open" : ""}`} onClick={() => selectTemplate(t.id)}>
+                          <tr className={`clickable ${t.id === selected ? "selected" : ""}${isOpen ? " row-open" : ""}`} aria-current={t.id === selected || undefined} {...rowActivate(() => selectTemplate(t.id))}>
                             <td><ExpandButton open={isOpen} onClick={() => open.toggle(t.id)} label={`dettagli di ${t.id}`} /></td>
                             <td>
                               <FavoriteStar type="template" id={t.id} value={!!t.favorite} onChange={patchLabels} size={13} />{" "}
@@ -432,7 +430,7 @@ export default function Templates() {
         </div>
         <div>
           {selected ? (
-            <TemplateDetail key={selected} id={selected} labels={itemLabels(list?.find((t) => t.id === selected))}
+            <TemplateDetail key={`${selected}:${revision}`} id={selected} labels={itemLabels(list?.find((t) => t.id === selected))}
               onDeleted={() => { setParams(labelKey ? { tag: labelKey } : {}); reload(); }} onAdded={(id) => { reload(); setParams({ id }); }} onLabels={patchLabels} />
           ) : (
             <Card>
@@ -441,6 +439,7 @@ export default function Templates() {
           )}
         </div>
       </div>
+      {replaceDialog}
     </div>
   );
 }

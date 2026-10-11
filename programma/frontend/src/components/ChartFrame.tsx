@@ -103,7 +103,7 @@ export function ChartFrame({ title, filename, subtitle, controls, legend, data, 
   // la scheda "Dati" lavora su una copia presa all'apertura: un clic su una riga (che ridisegna il genitore) non
   // ricostruisce né riordina tutto; dati passati come oggetto si seguono invece a ogni cambio
   const showTable = expanded && view === "data";
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- copia dei dati presa all'apertura della scheda (vedi sopra)
   const tableData = useMemo(() => (showTable ? getData() : null), [showTable, typeof data === "function" ? null : data]);
   const chartName = typeof title === "string" ? title : filename;
   const caption = (

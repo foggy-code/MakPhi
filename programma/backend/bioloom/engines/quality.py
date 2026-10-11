@@ -24,7 +24,7 @@ from typing import Optional
 
 from ..core import offload
 from ..core.errors import AppError, ToolUnavailable
-from ..core.jobs import JobCancelled, JobContext
+from ..core.jobs import JobCancelled, JobContext, default_env
 from ..core.parallel import Steps
 from ..domain import (clashes, consensus, grading, ligands, perresidue, plddt, qa_steps, ramachandran, secondary,
                       structure)
@@ -63,7 +63,8 @@ def _run(cmd: list[str], cwd: Path, ctx: Optional[JobContext], timeout: float) -
     if ctx is not None:
         result = ctx.run(cmd, cwd=cwd, log_output=False, timeout=timeout)
         return result.returncode, result.output
-    proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, errors="replace", timeout=timeout)
+    proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, errors="replace", timeout=timeout,
+                          env=default_env())  # come ctx.run: senza i segreti del server
     return proc.returncode, proc.stdout + proc.stderr
 
 

@@ -43,7 +43,7 @@ function useToolJob<R>(kind: ToolKind, source: StructureSource, initialJob?: str
   const { data: info } = useAsync<SystemInfo>(() => api.systemInfo(), []);
   useEffect(() => {
     onMemory?.({ sourceKey, jobId });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- si avvisa solo il cambio; onMemory può cambiare a ogni disegno del genitore
   }, [sourceKey, jobId]);
   useEffect(() => {
     if (initialJob) return;
@@ -56,7 +56,7 @@ function useToolJob<R>(kind: ToolKind, source: StructureSource, initialJob?: str
     return () => {
       stop = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- solo cambiando struttura (sourceKey riassume source); kind è fisso, memory si legge in quel momento
   }, [sourceKey, initialJob]);
   const result = job?.status === "completed" ? (job.result as R) : null;
   const running = !!summary && ["queued", "running", "cancelling"].includes(summary.status);

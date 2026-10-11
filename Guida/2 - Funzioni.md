@@ -29,7 +29,10 @@ va letto come un'indicazione.
 ## Template
 
 - **Motori di ricerca:** **RCSB** (predefinito), **NCBI BLAST**, **AlphaFold DB** (online); **BLAST+** e **MMseqs2** sul
-  database locale pdbaa, che si scarica e si indicizza da Impostazioni → Database.
+  database locale pdbaa, che si scarica e si indicizza da Impostazioni → Database. **Scarica/Aggiorna da NCBI**,
+  **Prepara MMseqs2** e **Crea indice veloce** girano uno alla volta, anche se li lancia più di un utente: chi arriva
+  dopo resta in coda («In coda: un altro job sta aggiornando pdbaa o il database MMseqs2»), e ogni database si
+  sostituisce solo a operazione finita.
 - **Punteggio 0–100** di ogni template (colonna **Punteggio**, ordinata per punteggio): media pesata di identità
   (confrontata con la zona crepuscolare di Rost, che dipende dalla lunghezza allineata), copertura del bersaglio,
   E-value, risoluzione (o pLDDT per i modelli predetti), R-free, metodo, lacune dell'allineamento e data. Fasce buona
@@ -51,8 +54,20 @@ va letto come un'indicazione.
 - **Libreria template:** download da RCSB e da AlphaFold DB, caricamento di file, catene, residui mancanti, ligandi
   classificati, struttura secondaria e 3D. Per le strutture del PDB elenca gli **assemblaggi biologici** dichiarati nel
   file: **Importa come template** crea `<ID>_ASM<n>` con le catene dell'assemblaggio (operatori di simmetria applicati).
-- **Ricerche già fatte:** una ricerca con gli stessi dati e parametri non si rifà (nota **dalla cache (data)**; vedi
-  [Dati e privacy](4%20-%20Dati%20e%20privacy.md)).
+- **Sostituire un template:** un file caricato prende l'id dal nome (`1UBQ.pdb` → 1UBQ). Se nella libreria c'è già un
+  template con quell'id, BioLoom non lo sostituisce da solo: chiede conferma, dicendo quanti job lo usano.
+  **Sostituisci** mette al suo posto il nuovo file, anche in un altro formato (.pdb o .cif), e ne rifà l'analisi: i
+  calcoli successivi useranno il nuovo file. **Annulla** lascia la libreria com'è. Se il nuovo file non è una struttura
+  leggibile, il vecchio template resta intatto. Vale per la pagina Libreria template e per **Da file** del selettore dei
+  template (Modellazione, Allineamenti, Pipeline, Editor PIR); i download da RCSB e da AlphaFold DB non sostituiscono mai
+  un template già presente.
+- **Template non in libreria:** nel selettore dei template (Modellazione, Allineamenti, Pipeline, Editor PIR) un codice
+  PDB, o un id `AF-…` dei risultati di AlphaFold DB, che la libreria non ha si scarica da solo da RCSB o da AlphaFold DB
+  se resta scelto per circa 0,6 secondi dopo che la libreria ha risposto di non averlo: un codice tolto subito non
+  scarica nulla.
+- **Ricerche già fatte:** una ricerca con gli stessi dati e parametri non si rifà (nota **dalla cache (data)**). La cache
+  ha uno spazio massimo, oltre il quale si eliminano le voci usate meno di recente (vedi
+  [Dati e privacy](4%20-%20Dati%20e%20privacy.md#dove-stanno-i-dati)).
 
 ## Allineamenti
 
@@ -219,8 +234,9 @@ struttura sperimentale), con US-align/TM-align o con il motore integrato.
 - **Metriche:** TM-score normalizzato su A e su B, RMSD, RMSD delle coppie entro 5 Å, **GDT-TS** e **GDT-HA**
   (percentuale dei Cα di A entro 1–8 Å e 0,5–4 Å) e **lDDT** sui Cα, che non usa sovrapposizioni.
 - **Per residuo:** nel 3D la struttura B è colorata per distanza dal residuo corrispondente (da 0 a 5 Å e oltre) o per
-  lDDT, A resta in grigio chiaro; il grafico mostra distanza e lDDT lungo la sequenza e la tabella elenca ogni coppia. Un
-  clic su grafico, tabella o tratto che devia evidenzia la coppia nel 3D, un clic nel 3D la seleziona.
+  lDDT, A resta grigia (grigio chiaro nel tema scuro, grigio ardesia scuro nel tema chiaro); il grafico mostra distanza e
+  lDDT lungo la sequenza e la tabella elenca ogni coppia. Un clic su grafico, tabella o tratto che devia evidenzia la
+  coppia nel 3D, un clic nel 3D la seleziona.
 - **Da dove si apre:** Modellazione (**Confronta…** di ogni modello), Qualità (**Confronta con …**), Allineamenti (**Apri
   in Confronto**), rifinitura, mutagenesi e confronto con una predizione. Le due strutture arrivano già scelte e il link
   resta stabile.
@@ -258,8 +274,9 @@ per ogni sequenza completata (cartella `report/`, senza vista 3D).
   stato, senza risultati né sequenze. L'indirizzo predefinito è l'email di contatto delle Impostazioni. Serve un server
   di posta, che non si imposta dall'interfaccia: lo configura chi gestisce BioLoom nel file `licenses/posta.env` della
   cartella dati ([Dati e privacy](4%20-%20Dati%20e%20privacy.md#avviso-per-email)) o, sul server, in `server.env`.
-  Impostazioni → Generale → **Notifiche email** ne mostra lo stato (mai la password) e ha **Invia email di prova**;
-  una ripresa della pipeline avvisa di nuovo alla sua fine. L'esito dell'invio è nel log del job.
+  Impostazioni → Generale → **Notifiche email** ne mostra lo stato (mai la password) e ha **Invia email di prova** (al
+  più una ogni 30 secondi e 5 all'ora); una ripresa della pipeline avvisa di nuovo alla sua fine. L'esito dell'invio è
+  nel log del job, anche quando un limite lo ferma ([Dati e privacy](4%20-%20Dati%20e%20privacy.md#avviso-per-email)).
 - **Ripresa:** una pipeline annullata, fallita o interrotta da un riavvio si riprende senza rifare le sequenze già
   modellate (**Riprendi**, oppure **Riprova solo i falliti**); una completata con sequenze fallite mostra **Riprova i
   falliti**.
@@ -330,7 +347,41 @@ per ogni sequenza completata (cartella `report/`, senza vista 3D).
   (minuscole, al più 32 caratteri; «Da Rivedere» diventa «da-rivedere»). Si aggiungono nel dettaglio dell'elemento (per il
   progetto attivo nella Panoramica); negli elenchi di job e template e nel dialogo **Progetti** si filtra per etichetta o
   per preferiti.
-- **Tema:** Scuro, Chiaro o **Sistema** (segue il sistema operativo), in fondo alla barra laterale.
+- **Tema:** Scuro, Chiaro o **Sistema** (segue il sistema operativo), in fondo alla barra laterale. Anche lo sfondo del
+  visualizzatore 3D segue il tema, senza ricaricare la struttura, e con lui il PNG della vista e l'immagine nel report.
+  Nel tema chiaro il 3D usa colori più scuri dove quelli pensati per il fondo scuro sparirebbero:
+  - i residui di contesto, in grigio nelle colorazioni per consenso, clash, interfaccia, tasche e scansione di alanina;
+  - la struttura A, il riferimento del Confronto, in grigio ardesia scuro;
+  - i centri delle tasche, sfere scure invece che bianche;
+  - «1 metodo» del consenso, in giallo oliva nel 3D, nelle legende, nella striscia per residuo e nel grafico del
+    consenso.
+
+  Sempre nel tema chiaro nastri, bastoncini e sfere hanno un contorno scuro sottile, che compare anche nel PNG e
+  nell'immagine del report, e i campioni e la barra della legenda del 3D hanno un bordo. Le scale continue (il bianco al
+  centro della scala blu-bianco-rosso, il giallo di viridis) e gli altri colori chiari, come l'arancio di «2 metodi» o
+  il giallo dei filamenti β, restano quelli di sempre, perché scurirli ne cambierebbe la lettura: li stacca dal fondo il
+  contorno. Se una vista resta poco leggibile, il tema scuro ha i colori pensati per il 3D, senza contorno.
 - **Tasti:** `?` (o **Tasti** nella barra laterale) elenca le scorciatoie: `g` e poi una lettera per le pagine principali
   (`g s` Sequenze, `g j` Job, `g q` Qualità…). Mentre scrivi in un campo valgono solo Ctrl K ed Esc.
+- **Tastiera senza mouse:** Tab raggiunge anche le righe delle tabelle che si scelgono con un clic (job, modelli,
+  documenti PIR, sequenze e risultati di UniProt, template della libreria…) e i riquadri in cui trascinare un file;
+  Invio o Spazio li attivano come il clic (in un riquadro aprono la scelta del file). Le notifiche hanno il pulsante
+  **×** (per i lettori di schermo «Chiudi la notifica»), raggiungibile con Tab.
+- **Notifiche:** si chiudono da sole dopo 4 secondi, 8 quelle d'errore, ma non mentre ci passi sopra con il mouse o
+  hanno il focus (per esempio sul pulsante **×**): quando li perdono si chiudono dopo il tempo che restava, almeno 2
+  secondi. Un clic sulla notifica o sul **×** la chiude subito.
+- **Copia negli appunti:** i pulsanti di copia (log del job, **Copia FASTA**, **Copia elenco** delle mutazioni, **Copia i
+  dettagli** di un errore) funzionano anche dove il browser non dà accesso diretto agli appunti, per esempio su un server
+  raggiunto in HTTP senza HTTPS. Se il browser non lo consente proprio, il pulsante mostra «Non copiato» e un avviso dice
+  «Copia negli appunti non riuscita: il browser non lo consente su questa pagina. Seleziona il testo e copialo con
+  Ctrl+C.»
+- **Scheda nascosta:** il contatore dei job attivi e le risorse della Panoramica (CPU, memoria, job) non si aggiornano
+  mentre la scheda del browser è nascosta, e si aggiornano subito quando torni.
 - **Schermi stretti:** la barra laterale si apre dal pulsante del menu (☰) in alto a sinistra.
+- **Errori dell'interfaccia:** se una pagina non si riesce a disegnare compare il messaggio d'errore, con **Ricarica la
+  pagina**, **Riprova** e **Copia i dettagli** (da allegare a una segnalazione), invece di una pagina bianca; i calcoli
+  in corso continuano sul server. Dopo un aggiornamento di BioLoom una scheda rimasta aperta con l'interfaccia vecchia si
+  ricarica da sola, al più una volta al minuto; se il browser blocca i dati dei siti non lo fa, e resta il pulsante.
+  Un errore interno del server mostra un codice al posto dei dettagli, che sono nel log
+  ([Errori interni](4%20-%20Dati%20e%20privacy.md#errori-interni)); in modalità server una sessione scaduta riporta alla
+  schermata della chiave d'accesso, anche dal visualizzatore 3D.

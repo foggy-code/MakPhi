@@ -36,7 +36,7 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []) {
       })
       .catch((e) => id === seq.current && setError(e instanceof ApiError ? e : new ApiError(String(e), 0, "error")))
       .finally(() => id === seq.current && setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- le dipendenze di fn le dichiara chi chiama useAsync
   }, deps);
   useEffect(() => {
     reload();
@@ -66,6 +66,29 @@ export function usePageVisible(): boolean {
     return () => document.removeEventListener("visibilitychange", update);
   }, []);
   return visible;
+}
+
+/**
+ * Come useInterval, ma fermo mentre la scheda è nascosta (niente richieste per una pagina che nessuno guarda): al ritorno
+ * `fn` parte subito, poi riprende ogni `ms`. `ms` null lo ferma anche con la scheda visibile.
+ */
+export function useVisibleInterval(fn: () => void, ms: number | null) {
+  const visible = usePageVisible();
+  const saved = useRef(fn);
+  saved.current = fn;
+  const missed = useRef(false); // la scheda è stata nascosta con il polling attivo: al ritorno si recupera subito
+  useEffect(() => {
+    if (ms === null) return;
+    if (!visible) {
+      missed.current = true;
+      return;
+    }
+    if (missed.current) {
+      missed.current = false;
+      saved.current();
+    }
+  }, [visible, ms]);
+  useInterval(fn, visible ? ms : null);
 }
 
 /** `fn` al massimo una volta ogni `ms` (l'ultima richiesta non si perde): ricariche guidate dagli eventi. */

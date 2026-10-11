@@ -8,7 +8,7 @@ import { App } from "./App";
 import { initialTheme } from "./lib/theme";
 
 // tema prima del primo render (scuro, chiaro o quello del sistema), senza lampi dell'altro tema
-let storage: Storage | null = null;
+let storage: Storage | null;
 try {
   storage = localStorage; // può non essere disponibile (dati del sito bloccati)
 } catch {

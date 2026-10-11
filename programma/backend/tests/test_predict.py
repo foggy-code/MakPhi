@@ -155,11 +155,13 @@ def test_client_retries_transient_errors(services):
     assert out["info"]["residues"] == 76 and len(services.esm_calls()) == 2
 
 
+# id brevi: con il PDB intero nell'id, PYTEST_CURRENT_TEST supera il limite di 32767 caratteri delle variabili
+# d'ambiente di Windows e il test va in errore prima di partire
 @pytest.mark.parametrize("body, reason", [
     ("<html><body>Service Unavailable</body></html>", "nessuna coordinata"),
     (ubq_prediction(value=lambda n: 0.0), "tutta a zero"),
     (ubq_prediction(value=lambda n: 150.0), "fuori dalla scala"),
-])
+], ids=["html", "plddt-zero", "plddt-fuori-scala"])
 def test_client_rejects_invalid_responses(services, body, reason):
     services.esm = [(200, body)]
     with pytest.raises(RemoteServiceError) as err:

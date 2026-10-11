@@ -12,7 +12,7 @@ from bioloom.config import UserSettings
 from bioloom.core.jobs import QMEAN_LOCAL, RESOURCE_STAGE
 from bioloom.engines import qmean_local, remote
 
-from .conftest import wait_job
+from .conftest import until, wait_job
 from .test_engines_extra import QMEAN_OUTPUT
 
 GIB = 1024 ** 3
@@ -358,15 +358,6 @@ class OneAtATimeWorker(Worker):
                     **QMEAN_OUTPUT, "bioloom_database": {"name": "UniRef30_2023_02", "version": "2023-02"}}})
             return httpx.Response(200, json={"status": "running"})
         return super().__call__(request)
-
-
-def until(condition, timeout: float = 20) -> None:
-    start = time.time()
-    while time.time() - start < timeout:
-        if condition():
-            return
-        time.sleep(0.02)
-    raise AssertionError("condizione non raggiunta in tempo")
 
 
 def test_local_qmean_runs_one_at_a_time_without_blocking_the_io_pool(client_with_ubq, worker):

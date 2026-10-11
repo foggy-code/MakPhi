@@ -25,12 +25,59 @@ def validate_identifier(value: str, name: str = "identificatore") -> str:
     return clean
 
 
+def _unsafe_path() -> AppError:
+    return AppError("Percorso non consentito.", code="unsafe_path")
+
+
+def _inside(path: Path, root: Path) -> bool:
+    return path == root or root in path.parents
+
+
+def _is_link(path: Path) -> bool:
+    """Link simbolico o, su Windows, punto di reparse (giunzioni comprese, che os.path.islink non vede). Un percorso
+    che non si legge (assente, in eliminazione) non è un link: come per Path.resolve, che lo lascia com'è."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
 def safe_join(base: Path, *parts: str) -> Path:
-    """Unisce i percorsi e verifica che il risultato resti dentro `base`."""
+    r"""Unisce i percorsi e verifica che il risultato resti dentro `base`.
+
+    Su Windows Path.resolve() di una cartella che un altro thread sta eliminando (lo scratch a fine job) restituisce
+    \\?\C:\... o \\?\C:\$Extend\$Deleted\..., fuori dalla radice anche per un id valido. Quando la risoluzione
+    completa esce dalla radice si risale fino alla prima cartella madre che si risolve dentro la radice e si
+    riaggiungono i nomi restanti così come sono: sono rifiutati comunque '..', '.', nomi vuoti o di soli punti e spazi,
+    link simbolici e giunzioni (che porterebbero fuori), madri fuori dalla radice e nomi che Windows riscriverebbe
+    (dispositivi come CON, punti o spazi finali). Su Linux un percorso esce dalla radice solo con '..', percorsi
+    assoluti o link: resta rifiutato come prima.
+    """
     root = Path(base).resolve()
-    target = root.joinpath(*parts).resolve()
-    if target != root and root not in target.parents:
-        raise AppError("Percorso non consentito.", code="unsafe_path")
+    joined = root.joinpath(*parts)
+    target = joined.resolve()
+    if _inside(target, root):
+        return target
+    names: list[str] = []
+    current, anchor = joined, root
+    while current != root:
+        if current == current.parent or not current.name.strip(". "):  # radice del disco, '', '.', '..', '...'
+            raise _unsafe_path()
+        names.append(current.name)
+        current = current.parent
+        if current != root:
+            resolved = current.resolve()
+            if _inside(resolved, root):
+                anchor = resolved
+                break
+    target = anchor
+    for name in reversed(names):
+        target = target / name
+        if _is_link(target):
+            raise _unsafe_path()
+    if not _inside(target, root) or Path(os.path.abspath(target)) != target:
+        raise _unsafe_path()
     return target
 
 

@@ -114,7 +114,7 @@ export function LabelEditor({ type, id, initial, onChange, compact = false }: { 
       alive = false;
     };
     // `initial` cambia oggetto a ogni disegno della pagina: conta solo il suo valore (initialKey)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- conta il valore di initial (initialKey), non l'oggetto
   }, [type, id, initialKey]);
   const update = (l: EntityLabels) => {
     setLabels(l);
@@ -161,7 +161,7 @@ export function LabelFilterSelect({ type, value, onChange, width = 170 }: { type
   const load = () => api.tags(type).then(setCounts).catch(() => setCounts([]));
   useEffect(() => {
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load dipende solo da type
   }, [type]);
   const options = filterOptions(counts, type);
   const current = filterValue(value);

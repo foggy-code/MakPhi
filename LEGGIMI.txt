@@ -1,15 +1,35 @@
 BioLoom v4 - copia portatile
 =============================
 
-Serve solo Docker (Docker Desktop su Windows e macOS, Docker Engine su Linux).
+Serve solo Docker (Docker Desktop su Windows e macOS, Docker Engine su Linux). Docker Desktop
+e' gratuito per uso personale, didattico e nelle aziende con meno di 250 dipendenti e meno di
+10 milioni di dollari di fatturato annuo; negli enti pubblici, anche piccoli, e nelle altre
+organizzazioni, se l'uso non e' didattico, verifica la licenza (https://www.docker.com/pricing/).
+Alternative con i comandi docker e docker compose, non provate con BioLoom: Rancher Desktop,
+Podman Desktop (con la compatibilita' Docker), Colima su macOS.
 
 AVVIO
   Windows   doppio clic su "Avvia BioLoom.bat"
   macOS     doppio clic su "Avvia BioLoom.command"
   Linux     ./avvia-bioloom.sh
 
-Si apre il browser su http://127.0.0.1:8765. Per chiudere: "Arresta BioLoom" oppure il tasto S
-nella finestra dell'avviatore.
+Si apre il browser su http://127.0.0.1:8765 (se la porta e' occupata, un'altra fino alla 8800;
+per sceglierla tu: Guida, "Primo avvio", Porta occupata). Per chiudere: "Arresta BioLoom" oppure
+il tasto S nella finestra dell'avviatore.
+
+Su un computer gira un BioLoom alla volta: se e' gia' acceso quello di un'altra cartella (per
+esempio la copia installata), l'avviatore chiede se arrestarlo prima di partire.
+
+Mac con processore Apple: i container girano in emulazione, piu' lenti. In Docker Desktop
+attiva Settings > General > "Use Rosetta for x86_64/amd64 emulation on Apple Silicon".
+ProSA potrebbe non funzionare.
+
+macOS: se il doppio clic e' bloccato (file scaricati da internet), la prima volta fai clic
+destro > Apri (da macOS 15: Impostazioni di Sistema > Privacy e sicurezza > Apri comunque),
+oppure nel Terminale, dalla cartella di BioLoom:
+    xattr -dr com.apple.quarantine .
+Se mancano i permessi:
+    chmod +x "Avvia BioLoom.command" "Arresta BioLoom.command" avvia-bioloom.sh programma/launcher/bioloom.sh
 
 CARTELLE
   Guida       manuale d'uso completo (primo avvio, funzioni, QMEAN, dati e privacy,
@@ -20,7 +40,8 @@ CARTELLE
 
 AL PRIMO AVVIO SU UN COMPUTER
   - le immagini Docker vengono caricate dalla cartella "immagini" (qualche minuto, senza internet);
-  - se non trovi la chiave MODELLER gia' inserita, aggiungila in Impostazioni > Licenze;
+  - la copia di solito non contiene le licenze: inserisci la chiave MODELLER (e il file
+    LicenseDB di ProSA, poi R nella finestra dell'avviatore) in Impostazioni > Licenze;
   - la ricerca MMseqs2 funziona subito; per renderla piu' veloce crea l'indice locale
     (Impostazioni > Database > Crea indice veloce).
 
@@ -37,6 +58,9 @@ QMEAN LOCALE
   basta, BioLoom lo segnala in Impostazioni > Database e spiega come aumentarla.
   Se il disco non c'e', puoi attivare il fallback su SWISS-MODEL in Impostazioni > Generale
   (invia il modello al servizio online: serve il tuo consenso e la tua email).
+  Se c'e', il file immagini/bioloom-qmean-<versione>.tar e' anche la copia di sicurezza
+  dell'immagine di QMEAN, che non si potrebbe piu' costruire se sparisse dal registro del SIB:
+  conservalo (Guida, "Chiavetta e server").
 
 FILE
   Sequenze, allineamenti, strutture, vincoli e licenze si possono caricare anche da file
@@ -50,6 +74,27 @@ DATI
   (con anteprima e conferma); Progetti (in alto) > cestino elimina un progetto con tutti i
   suoi job. I risultati dei job non si eliminano mai da soli.
 
+AGGIORNARE
+  Sostituisci programma, Guida, gli avviatori, README.md, LEGGIMI.txt, LICENSE e
+  THIRD_PARTY_NOTICES.md (e immagini, se la nuova versione ce l'ha); data resta com'e'. Se hai i pacchetti di PROCHECK e ProSA in
+  programma/docker/vendor, mettili da parte e rimettili nella nuova programma prima di avviare
+  (vedi il README in quella cartella): senza, un'immagine ricostruita non ha i due strumenti.
+  All'avvio l'avviatore si accorge se l'immagine Docker non corrisponde piu' al codice e
+  propone di aggiornarla (dalla cartella "immagini" oppure costruendola, con internet).
+  Si puo' anche aggiornare senza avviare, dalla cartella di BioLoom (Prompt dei comandi su
+  Windows, Terminale su macOS e Linux):
+    Windows         "Avvia BioLoom.bat" -Azione aggiorna
+    macOS, Linux    ./avvia-bioloom.sh aggiorna
+
 LICENZE
+  BioLoom e' software libero con licenza MIT (file LICENSE). I programmi di terze parti
+  contenuti nelle immagini Docker e nell'interfaccia hanno le loro licenze, elencate in
+  THIRD_PARTY_NOTICES.md.
   MODELLER, ProSA II e PROCHECK sono concessi con licenza accademica personale a chi li ha
   registrati: questa copia e' per uso personale e non va distribuita ad altri.
+  La copia portatile non contiene i pacchetti di PROCHECK e ProSA ne' (salvo l'opzione
+  --con-licenze / -ConLicenze) chiavi di licenza, password della posta e chiave d'accesso;
+  le immagini Docker pero' hanno i programmi gia' installati.
+  La licenza ProSA vale per un computer alla volta: l'avviatore la lega al primo computer
+  che la usa; su un altro computer chiede se spostarla (il primo la perde), altrimenti
+  serve una chiave per quel computer.

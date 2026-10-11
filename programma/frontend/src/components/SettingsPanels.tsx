@@ -398,6 +398,9 @@ export function ToolsPanel({ info, onRefresh }: { info: SystemInfo | null; onRef
 }
 
 // ---------------------------------------------------------------------------------------------- spazio
+/** Spazio massimo della cache dei calcoli (MB): limiti e predefinito di compute_cache_max_mb nel server. */
+const COMPUTE_CACHE_MB = { min: 100, max: 102400, default: 2048 };
+
 /**
  * Voci dell'occupazione: chiave del server, nome, dove si trova, colore nella barra della composizione (niente colori di
  * errore per voci normali; tutti almeno 3:1 sul pannello in entrambi i temi).
@@ -484,9 +487,13 @@ export function StoragePanel({ form, set, info }: { form: Settings; set: <K exte
             {/* quando un risultato viene riusato e come ricalcolare: sempre visibile accanto alla scelta */}
             <p className="small text-2">
               Un calcolo identico (stessa sequenza, parametri, database e programma) non viene rifatto: le ricerche online (RCSB, NCBI) valgono
-              7 giorni, le altre finché database e programmi non cambiano. Le voci si eliminano dopo 30 giorni; in Ricerca, Allineamenti e
-              Pipeline si può sempre ricalcolare.
+              7 giorni, le altre finché database e programmi non cambiano. Le voci si eliminano dopo 30 giorni, o prima se la cache supera lo
+              spazio massimo (le meno usate di recente); in Ricerca, Allineamenti e Pipeline si può sempre ricalcolare.
             </p>
+            <Field label="Spazio massimo della cache dei calcoli (MB)" hint={`Da ${COMPUTE_CACHE_MB.min} a ${COMPUTE_CACHE_MB.max} MB (100 GB); predefinito ${COMPUTE_CACHE_MB.default}. Oltre il limite si eliminano le voci usate meno di recente.`}>
+              <input className="input" type="number" min={COMPUTE_CACHE_MB.min} max={COMPUTE_CACHE_MB.max} value={form.compute_cache_max_mb}
+                onChange={(e) => set("compute_cache_max_mb", Number(e.target.value))} />
+            </Field>
             <Field label="Conservazione dei file caricati per l'analisi (giorni)" hint="0 = conserva sempre. I risultati dei job si eliminano solo a mano.">
               <input className="input" type="number" min={0} max={3650} value={form.uploads_retention_days} onChange={(e) => set("uploads_retention_days", Number(e.target.value))} />
             </Field>

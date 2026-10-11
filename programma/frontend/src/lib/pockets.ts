@@ -2,7 +2,7 @@
 // tabella. Logica pura; il risultato arriva già ordinato per druggability dal backend (domain/pockets.py).
 
 import type { Pocket, PocketsResult } from "../api/types";
-import type { CategoricalScale } from "./colorscale";
+import { CONTEXT_COLOR, MARKER_COLOR, type CategoricalScale } from "./colorscale";
 import { fmtNum } from "./format";
 import type { ResidueColoring, ResidueRef, ResidueValue } from "./residueColoring";
 import { resiNumber, residueKey } from "./residueColoring";
@@ -16,8 +16,10 @@ export const DRUGGABLE = 0.5;
 export const POCKET_COLORS = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999"];
 /** Tasche colorate insieme nella vista "tutte le tasche": le prime per druggability. */
 export const MAX_COLORED = 8;
-/** Residui fuori dalle tasche: grigio chiaro, così le tasche risaltano. */
-export const OUTSIDE_COLOR = "#e2e8f0";
+/** Residui fuori dalle tasche: il grigio di contesto (più scuro nel tema chiaro), così le tasche risaltano. */
+export const OUTSIDE_COLOR = CONTEXT_COLOR;
+/** Centro della tasca: bianco, ardesia quasi nera nel tema chiaro (il visualizzatore 3D disegna le sfere con `themedColor`). */
+export const CENTER_COLOR = MARKER_COLOR;
 /** Raggio delle sfere disegnate sui centri delle sfere alfa (Å): piccole, come lo script PyMOL di fpocket (scala 0,3),
  *  perché le sfere alfa vere (3,4–6,2 Å) coprirebbero la proteina. */
 export const SPHERE_DRAW_RADIUS = 0.45;
@@ -73,14 +75,14 @@ export function pocketColoring(result: PocketsResult | null | undefined, selecte
   };
 }
 
-/** Sfere da disegnare: per ogni tasca mostrata i centri delle sfere alfa (piccoli) e il centro della tasca (bianco). */
+/** Sfere da disegnare: per ogni tasca mostrata i centri delle sfere alfa (piccoli) e il centro della tasca (`CENTER_COLOR`). */
 export function pocketSpheres(result: PocketsResult | null | undefined, selected?: number | null): { center: [number, number, number]; radius: number; color: string; opacity: number }[] {
   if (!result) return [];
   const shown = selected != null ? result.pockets.filter((p) => p.id === selected) : result.pockets.slice(0, MAX_COLORED);
   const out: { center: [number, number, number]; radius: number; color: string; opacity: number }[] = [];
   for (const p of shown) {
     for (const s of p.spheres) out.push({ center: s.center, radius: SPHERE_DRAW_RADIUS, color: pocketColor(p.rank), opacity: 0.85 });
-    if (p.center) out.push({ center: p.center, radius: CENTER_DRAW_RADIUS, color: "#ffffff", opacity: 0.9 });
+    if (p.center) out.push({ center: p.center, radius: CENTER_DRAW_RADIUS, color: CENTER_COLOR, opacity: 0.9 });
   }
   return out;
 }

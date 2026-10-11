@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { api } from "../api/client";
+import { api, notifyAuthRequired } from "../api/client";
 import type { SystemInfo } from "../api/types";
 import { useProject, useToast } from "../lib/context";
-import { SYSTEM_CHANGED, useInterval, useJobsFeed } from "../lib/hooks";
+import { SYSTEM_CHANGED, useJobsFeed, useVisibleInterval } from "../lib/hooks";
 import { isMacPlatform, NAV_SHORTCUTS, PENDING_MS, shortcutFor } from "../lib/shortcuts";
 import { THEME_OPTIONS, useThemePreference } from "../lib/theme";
 import { GlobalSearch } from "./GlobalSearch";
@@ -101,6 +101,7 @@ export function Layout() {
   const [info, setInfo] = useState<SystemInfo | null>(null);
   const [newProject, setNewProject] = useState<string | null>(null);
   const [askShutdown, setAskShutdown] = useState(false);
+  const [askLogoutAll, setAskLogoutAll] = useState(false);
   const [offline, setOffline] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -132,7 +133,8 @@ export function Layout() {
     return () => window.removeEventListener(SYSTEM_CHANGED, load);
   }, []);
 
-  // contatore dei job attivi dal flusso dell'elenco; se il flusso cade, polling (che segnala anche il server fermo)
+  // contatore dei job attivi dal flusso dell'elenco; se il flusso cade, polling (che segnala anche il server fermo),
+  // fermo con la scheda nascosta e ripreso subito al ritorno
   const live = useJobsFeed((type, data) => {
     const count = (data as { active?: unknown } | null)?.active;
     if ((type === "ready" || type === "active") && typeof count === "number") {
@@ -140,7 +142,7 @@ export function Layout() {
       setOffline(false);
     }
   });
-  useInterval(() => {
+  useVisibleInterval(() => {
     api
       .jobs({ status: "queued,running,cancelling", limit: 100 })
       .then((j) => {
@@ -195,6 +197,12 @@ export function Layout() {
             {info?.runtime?.auth && (
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => api.logout().finally(() => window.location.reload())} title="Esci dalla sessione">
                 <Icon name="x" size={14} /> Disconnetti
+              </button>
+            )}
+            {info?.runtime?.auth && (
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAskLogoutAll(true)}
+                title="Chiude tutte le sessioni aperte con la chiave d'accesso, su ogni computer e browser (anche questa)">
+                <Icon name="shield" size={14} /> Esci da tutti i dispositivi
               </button>
             )}
             {info?.runtime?.allow_shutdown !== false && (
@@ -295,6 +303,22 @@ export function Layout() {
       {searchOpen && <GlobalSearch onClose={() => setSearchOpen(false)} />}
       {helpOpen && <ShortcutsHelp mac={MAC} onClose={() => setHelpOpen(false)} />}
       {projectsOpen && <ProjectsDialog onClose={() => setProjectsOpen(false)} />}
+      {askLogoutAll && (
+        <Confirm
+          text="Chiudere tutte le sessioni aperte con la chiave d'accesso, su ogni computer e browser, compresa questa? Chi usa BioLoom dovrà inserire di nuovo la chiave; i calcoli in corso continuano."
+          confirmLabel="Esci da tutti"
+          onCancel={() => setAskLogoutAll(false)}
+          onConfirm={() => {
+            setAskLogoutAll(false);
+            api.logoutAll()
+              .then(() => {
+                toast.push("Tutte le sessioni sono state chiuse: inserisci di nuovo la chiave d'accesso.", "info");
+                notifyAuthRequired(); // schermata di accesso (il cookie di questa scheda è già stato cancellato)
+              })
+              .catch(toast.error);
+          }}
+        />
+      )}
       {askShutdown && (
         <Confirm
           text={active > 0 ? `Ci sono ${active} job attivi: verranno interrotti. Arrestare BioLoom?` : "Arrestare BioLoom? Potrai riavviarlo con l'avviatore (Avvia BioLoom)."}

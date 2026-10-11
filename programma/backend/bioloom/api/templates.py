@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+import anyio.to_thread
 from fastapi import APIRouter, Depends, File, Form, Path, Query, UploadFile
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
@@ -45,9 +46,30 @@ def fetch_alphafold(body: AlphaFoldIn, core: Core = Depends(get_core)) -> dict:
 
 @router.post("/upload")
 async def upload_template(file: UploadFile = File(...), template_id: Optional[str] = Form(None),
+                          overwrite: bool = Form(False, description="true (o 1, on) = sostituisce il template con lo "
+                                                                    "stesso id, se c'è già"),
                           core: Core = Depends(get_core)) -> dict:
+    """Struttura caricata come template (id da `template_id` o dal nome del file), con `replaced` nella risposta.
+
+    Id già in libreria senza `overwrite`: 409 `template_exists` (in `details`: `id`, `jobs`, `projects`), libreria
+    invariata. Con `overwrite` il file si sostituisce solo se si legge: uno rovinato lascia intatto il template.
+    """
     data = await read_upload(file)
-    return core.library.save_upload(file.filename or "template.pdb", data, template_id)
+    name = file.filename or "template.pdb"
+    # lettura della struttura e analisi in un thread: il loop resta libero per le altre richieste
+    return await anyio.to_thread.run_sync(
+        lambda: core.library.save_upload(name, data, template_id, overwrite=overwrite,
+                                         usage=lambda tid: template_usage(core, tid)))
+
+
+def template_usage(core: Core, tid: str) -> tuple[int, int]:
+    """Job che citano il template nei parametri (`"id": "1UBQ"`, sorgente di un'analisi, template di una
+    modellazione o di una pipeline a template fissi) e loro progetti distinti. Le pipeline che lo scelgono dalla
+    ricerca non lo citano nei parametri e non si contano."""
+    escaped = tid.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    row = core.db.query_one("SELECT COUNT(*) AS jobs, COUNT(DISTINCT project_id) AS projects FROM jobs "
+                            "WHERE params LIKE ? ESCAPE '\\'", (f'%"{escaped}"%',)) or {}
+    return int(row.get("jobs") or 0), int(row.get("projects") or 0)
 
 
 @router.get("/{template_id}")

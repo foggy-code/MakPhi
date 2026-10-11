@@ -7,7 +7,7 @@ import type {
   AlaScanRequest, AlaScanResult, AlaScanRow, MappedVariant, MutateRequest, MutateResult, MutationClass, MutationDope,
   MutationEnergy, MutationHistoryItem, MutationSignalLevel, MutationSite, PreflightRequest, ScanMode, StructureSource, VariantMapping,
 } from "../api/types";
-import type { CategoricalScale } from "./colorscale";
+import { CONTEXT_COLOR, type CategoricalScale } from "./colorscale";
 import { compareLink } from "./compare";
 import { fmtNum, fmtSigned, STATUS_LABEL } from "./format";
 import { resiNumber, residueKey, type ResidueColoring, type ResidueValue } from "./residueColoring";
@@ -100,8 +100,8 @@ export const CLASS_TONE: Record<MutationClass, "err" | "warn" | "ok"> = { destab
 export const CLASS_COLOR: Record<MutationClass | "excluded", string> = {
   destabilizing: "#D55E00", uncertain: "#E69F00", neutral: "#009E73", excluded: "#999999",
 };
-/** Residui non scanditi: grigio chiaro, così i residui scanditi risaltano. */
-export const OUTSIDE_COLOR = "#e2e8f0";
+/** Residui non scanditi: il grigio di contesto (più scuro nel tema chiaro), così i residui scanditi risaltano. */
+export const OUTSIDE_COLOR = CONTEXT_COLOR;
 export const LEVEL_LABEL: Record<MutationSignalLevel, string> = { strong: "forte", moderate: "moderato", gain: "possibile guadagno", info: "informativo" };
 export const LEVEL_TONE: Record<MutationSignalLevel, "err" | "warn" | "info"> = { strong: "err", moderate: "warn", gain: "info", info: "info" };
 

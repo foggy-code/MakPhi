@@ -12,11 +12,23 @@ chi usa BioLoom sceglie solo se ricevere l'avviso e a quale indirizzo. La config
   programma/launcher/posta.env.example), accanto alle chiavi di licenza.
 Il file si rilegge a ogni uso: una modifica vale subito, senza riavviare. La password non esce mai dall'API.
 
-L'invio avviene in un thread, con due nuovi tentativi per gli errori temporanei; l'esito finisce nel log del job.
+L'invio avviene in un thread, con due nuovi tentativi per gli errori temporanei; l'esito finisce nel log del job (solo
+se il job esiste ancora: uno eliminato durante l'invio non si vede ricreare la cartella).
+
+Limiti di frequenza, contando ogni tentativo d'invio, riuscito o no (in locale come in modalità server):
+- email di prova: al massimo una ogni TEST_MIN_INTERVAL secondi e TEST_PER_HOUR all'ora per tutto il server; oltre,
+  errore 429 `rate_limited` con l'attesa;
+- avvisi di fine job: al massimo NOTICE_PER_RECIPIENT all'ora allo stesso indirizzo e NOTICE_PER_HOUR all'ora per tutto
+  il server; oltre, l'avviso non parte e il motivo finisce nel log del job (il job ormai è finito: nessun errore da
+  restituire). Un avviso costa poco a chi lo chiede (una pipeline annullata subito, o che fallisce subito, basta).
+Chi ha la chiave d'accesso non può usare il server di posta di BioLoom per mandare messaggi a raffica, né tenere
+occupati i thread del server con invii verso un server di posta che non risponde (fino a tre tentativi, oltre un
+minuto).
 """
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import smtplib
@@ -35,6 +47,12 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from ..core.errors import AppError
 
 SMTP_TIMEOUT = 30
+# Limite delle email di prova, per tutto il server: una ogni 30 s, cinque all'ora
+TEST_MIN_INTERVAL = 30.0
+TEST_PER_HOUR = 5
+# Limite degli avvisi di fine job, nell'ultima ora: allo stesso indirizzo e per tutto il server
+NOTICE_PER_RECIPIENT = 10
+NOTICE_PER_HOUR = 30
 # Attese prima dei nuovi tentativi (errori temporanei: connessione, risposte 4xx)
 RETRY_DELAYS = (10.0, 60.0)
 # Attesa massima della chiusura dell'esecuzione (file salvati, log chiuso) prima di scrivere l'esito nel log
@@ -161,6 +179,16 @@ class NotifyService:
         self._connect = sender_factory or _connect  # sostituibile nei test
         self.retry_delays = RETRY_DELAYS
         self.idle_wait = IDLE_WAIT
+        # email di prova: limiti (sostituibili nei test) e istanti dei tentativi dell'ultima ora
+        self.test_min_interval = TEST_MIN_INTERVAL
+        self.test_per_hour = TEST_PER_HOUR
+        self.clock: Callable[[], float] = time.monotonic
+        self._test_sent: list[float] = []
+        self._test_lock = threading.Lock()
+        # avvisi di fine job: limiti (sostituibili nei test) e (istante, destinatario) dei tentativi dell'ultima ora
+        self.notice_per_recipient = NOTICE_PER_RECIPIENT
+        self.notice_per_hour = NOTICE_PER_HOUR
+        self._notices: list[tuple[float, str]] = []
         jobs.on_finish(self.on_finish)
 
     # ------------------------------------------------------------------ configurazione
@@ -234,9 +262,50 @@ class NotifyService:
                     raise AppError(f"Invio dell'email non riuscito: {_reason(exc)}", code="notify_failed") from None
                 time.sleep(delays.pop(0))
 
+    def _reserve_test(self) -> None:
+        """Prenota un'email di prova entro i limiti di frequenza (TEST_MIN_INTERVAL, TEST_PER_HOUR), altrimenti
+        AppError 429 `rate_limited` con l'attesa. La prenotazione si registra subito, sotto il lock: richieste in
+        parallelo non passano insieme."""
+        with self._test_lock:
+            now = self.clock()
+            sent = [t for t in self._test_sent if now - t < 3600]
+            wait, reason = 0.0, ""
+            if sent and now - sent[-1] < self.test_min_interval:
+                wait = self.test_min_interval - (now - sent[-1])
+                reason = "È appena stata inviata un'email di prova"
+            if len(sent) >= self.test_per_hour:
+                hourly = 3600 - (now - sent[-self.test_per_hour])
+                if hourly > wait:
+                    wait = hourly
+                    reason = f"Limite di {self.test_per_hour} email di prova all'ora raggiunto"
+            if wait > 0:
+                self._test_sent = sent
+                raise AppError(f"{reason}: riprova tra {wait_text(wait)}.", code="rate_limited", status=429)
+            sent.append(now)
+            self._test_sent = sent
+
+    def _reserve_notice(self, to: str) -> Optional[str]:
+        """Prenota un avviso di fine job entro i limiti (NOTICE_PER_RECIPIENT allo stesso indirizzo, NOTICE_PER_HOUR
+        in tutto, nell'ultima ora); altrimenti il motivo, per il log del job. Sotto il lock, come per le email di
+        prova."""
+        key = to.strip().lower()
+        with self._test_lock:
+            now = self.clock()
+            recent = [(t, who) for t, who in self._notices if now - t < 3600]
+            self._notices = recent
+            if sum(1 for _t, who in recent if who == key) >= self.notice_per_recipient:
+                return f"limite di {self.notice_per_recipient} avvisi all'ora allo stesso indirizzo raggiunto"
+            if len(recent) >= self.notice_per_hour:
+                return f"limite di {self.notice_per_hour} avvisi all'ora per tutto il server raggiunto"
+            recent.append((now, key))
+            return None
+
     def send_test(self, to: str) -> dict:
         to = valid_email(to, "Destinatario")
         cfg, _ = self.config()
+        if not self.ready(cfg):
+            raise AppError("Server di posta non configurato.", code="notify_not_configured")
+        self._reserve_test()  # solo i tentativi d'invio veri contano nel limite
         lines = ["Questo è un messaggio di prova di BioLoom: il server di posta funziona.",
                  "", "Alla fine delle pipeline con l'avviso attivo arriverà un messaggio come questo, con l'esito e il "
                  "numero di elementi elaborati (mai i risultati).", "", f"Server: {cfg.host}:{cfg.port}"]
@@ -254,6 +323,11 @@ class NotifyService:
         to = str(params.get("notify_email") or "").strip()
         if not to or status not in STATUS_WORD:
             return
+        refused = self._reserve_notice(to)
+        if refused is not None:  # niente invio: solo il motivo nel log del job, appena si chiude
+            threading.Thread(target=self._log, args=(job_id, f"Email di avviso a {to} non inviata: {refused}."),
+                             name=f"notify-{job_id[:6]}", daemon=True).start()
+            return
         threading.Thread(target=self._notify, args=(job_id, status, to), name=f"notify-{job_id[:6]}",
                          daemon=True).start()
 
@@ -269,12 +343,13 @@ class NotifyService:
         self._log(job_id, note)
 
     def _log(self, job_id: str, note: str) -> None:
-        """Riga nel log del job, appena l'esecuzione si è chiusa (log del job chiuso dal JobManager)."""
+        """Riga nel log del job, appena l'esecuzione si è chiusa (log del job chiuso dal JobManager), solo se il job
+        esiste ancora: eliminato durante l'invio, niente cartella ricreata (JobManager.log_if_present)."""
         deadline = time.monotonic() + self.idle_wait
         while self.jobs.busy(job_id) and time.monotonic() < deadline:
             time.sleep(0.2)
         try:
-            self.jobs._log_now(job_id, note)
+            self.jobs.log_if_present(job_id, note)
         except Exception:
             pass
 
@@ -337,6 +412,14 @@ def _reason(exc: Exception) -> str:
     if isinstance(exc, (TimeoutError, ConnectionError, OSError)) and not isinstance(exc, smtplib.SMTPException):
         return f"server non raggiungibile ({type(exc).__name__}: {exc})"[:300]
     return f"{type(exc).__name__}: {exc}"[:300]
+
+
+def wait_text(seconds: float) -> str:
+    """Attesa in italiano, arrotondata per eccesso: "25 s", "12 min"."""
+    seconds = max(1, math.ceil(seconds))
+    if seconds < 90:
+        return f"{seconds} s"
+    return f"{math.ceil(seconds / 60)} min"
 
 
 def _when(iso: str) -> str:

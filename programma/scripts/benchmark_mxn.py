@@ -10,7 +10,7 @@ del cgroup vale per tutta la vita del container.
 Esempio completo (dalla cartella di BioLoom, Linux; chiave di MODELLER in data/licenses/modeller.key; la licenza ProSA,
 se c'è, si legge da /hostdata/licenses/prosa):
 
-    docker run --rm --init -e MODELLER_KEY="$(cat data/licenses/modeller.key)" -e PYTHONPATH=/src/backend       -v "$PWD/programma:/src:ro" -v "$PWD/data:/hostdata:ro" -v "$PWD/bench_out:/out"       --entrypoint sh bioloom:4.1.0 -c 'mkdir -p /scratch/tmp /scratch/home && exec python       /src/scripts/benchmark_mxn.py "$@"' sh --parallel 16 --sequences 8 --templates 6 --extended       --template-file /hostdata/templates/3IU0.pdb --template-file /hostdata/templates/1IU4.pdb       --sequence MYTRSK... --out /out/p16.json
+    docker run --rm --init -e MODELLER_KEY="$(cat data/licenses/modeller.key)" -e PYTHONPATH=/src/backend       -v "$PWD/programma:/src:ro" -v "$PWD/data:/hostdata:ro" -v "$PWD/bench_out:/out"       --entrypoint sh "bioloom:$(tr -d '[:space:]' < programma/launcher/VERSION)" -c 'mkdir -p /scratch/tmp /scratch/home && exec python       /src/scripts/benchmark_mxn.py "$@"' sh --parallel 16 --sequences 8 --templates 6 --extended       --template-file /hostdata/templates/3IU0.pdb --template-file /hostdata/templates/1IU4.pdb       --sequence MYTRSK... --out /out/p16.json
 
 Per una stima affidabile: prima `--parallel 1` (CPU per coppia su un core), poi il parallelismo previsto con almeno
 due coppie per corsia (`--sequences` × `--templates` ≥ 2 × `--parallel`). Nel risultato `main_process_cpu_per_pair_s`
@@ -123,7 +123,9 @@ def main() -> None:
     (data / "settings.json").write_text(json.dumps({"max_workers": a.parallel, "compute_cache": False,
                                                     "job_timeout_minutes": 240}))
     app = create_app(Paths(data, scratch_dir=root / "scratch", local_cache_dir=root / "lc"), frontend_dist=None)
-    with TestClient(app) as client:
+    # Host di loopback: senza accesso protetto l'Host "testserver" predefinito del TestClient sarebbe rifiutato
+    # (core/guard, protezione dal DNS rebinding)
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
         files = [Path(f) for f in a.template_file]
         templates = []
         for i in range(a.templates):

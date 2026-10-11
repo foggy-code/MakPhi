@@ -597,7 +597,7 @@ function ResultView({ jobId, compact = false, onStatus }: { jobId: string; compa
   const status = gone ? "gone" : summary?.status ?? "";
   useEffect(() => {
     if (status) onStatus?.(status);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- si avvisa solo il cambio di stato; onStatus può cambiare a ogni disegno del genitore
   }, [status]);
   if (!summary) return error ? <Alert tone="err">{gone ? "Job non trovato" : "Job non letto"}: {error}</Alert> : <Spinner />;
   if (job?.status !== "completed" || !job.result) return <JobPanel summary={summary} onCancel={cancel} compact={compact} />;
@@ -614,7 +614,7 @@ export function MutagenesisPanel({ source, memory, onMemory }: { source: Structu
   const { data: history, reload } = useAsync<MutationHistoryItem[]>(() => api.mutationHistory(source), [sourceKey, jobId]);
   useEffect(() => {
     onMemory?.({ sourceKey, jobId });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- si avvisa solo il cambio; onMemory può cambiare a ogni disegno del genitore
   }, [sourceKey, jobId]);
   const open = (id: string) => {
     setJobId(id);

@@ -76,7 +76,7 @@ export function useFollowSelection(zoom: DomainState, index: number) {
     if (index < 0 || full || (index >= domain.lo && index <= domain.hi)) return;
     const half = (domain.hi - domain.lo) / 2;
     set({ lo: index - half, hi: index + half });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- solo al cambio di selezione: spostare la vista a mano non la riporta indietro
   }, [index]);
 }
 

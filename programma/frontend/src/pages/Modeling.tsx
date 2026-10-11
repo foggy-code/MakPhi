@@ -24,7 +24,8 @@ import { PredictionPanel } from "../components/Predictor";
 import { Viewer3D, type Viewer3DHandle } from "../components/Viewer3D";
 import { ModelScores } from "../components/ModelScores";
 import {
-  Alert, Badge, Card, DetailGrid, Disclosure, Empty, ExpandAll, ExpandButton, Field, Grade, Modal, PageHead, Segmented, Stat, StatusBadge, useExpanded,
+  Alert, Badge, Card, DetailGrid, Disclosure, Empty, ExpandAll, ExpandButton, Field, Grade, Modal, PageHead, rowActivate, Segmented, Stat, StatusBadge,
+  useExpanded,
 } from "../components/ui";
 import { pirReference } from "../lib/alignConfidence";
 import { PlddtOption } from "../components/PlddtOption";
@@ -152,7 +153,9 @@ function ModelsTable({ jobId, models, selected, onSelect, templates, viewer, onR
             const isOpen = open.has(m.file);
             return (
               <Fragment key={m.file}>
-                <tr className={`clickable${m.file === selected ? " selected" : ""}${isOpen ? " row-open" : ""}`} onClick={() => !m.failure && onSelect(m.file)}>
+                {/* riga del modello: clic, oppure Tab e Invio/Spazio, lo mostra nel 3D (un modello fallito non si sceglie) */}
+                <tr className={`${m.failure ? "" : "clickable"}${m.file === selected ? " selected" : ""}${isOpen ? " row-open" : ""}`}
+                  aria-current={m.file === selected || undefined} {...(m.failure ? {} : rowActivate(() => onSelect(m.file)))}>
                   <td><ExpandButton open={isOpen} onClick={() => open.toggle(m.file)} label={`dettagli di ${m.file}`} /></td>
                   <td className="nowrap">
                     <b>{m.file}</b> {m.best && <Badge tone="ok">migliore</Badge>} {m.kind === "loop" && <Badge tone="accent">loop</Badge>}
@@ -449,7 +452,7 @@ export default function Modeling() {
       extended_quality: quality !== "none" && extended,
       ...(mode === "complex" && complexCheck.request ? { complex: complexCheck.request } : {}),
     };
-  }, [projectId, mode, target, templates, nModels, refinement, seed, loopOn, loopModels, loopRegions, restraints, plddtTrim, plddtMin, ligandsOn, ligandRefs, quality, extended, activeTemplates, complexState, complexCheck]);
+  }, [projectId, mode, target, nModels, refinement, seed, loopOn, loopModels, loopRegions, restraints, plddtTrim, plddtMin, ligandsOn, ligandRefs, quality, extended, activeTemplates, complexState, complexCheck]);
   // Controlli preventivi (F8a), compresi disordine e domini fuori dalla copertura (F5.5): accessione dalla sequenza del
   // progetto o dall'intestazione sp|ACC|…
   // nella modalità Complesso niente avvisi di copertura (una sequenza per catena): solo i controlli del corpo
@@ -472,22 +475,40 @@ export default function Modeling() {
       setComplexState(emptyComplex(cmplx));
     }
     if (seqText) setTarget({ name: params.get("name") || "target", sequence: seqText });
-    if (seqId && projectId) api.sequences(projectId).then((l: Sequence[]) => { const s = l.find((x) => x.id === seqId); if (s) setTarget({ name: s.name, sequence: s.sequence }); });
+    // una risposta arrivata dopo il cambio di progetto (o dopo l'uscita dalla pagina) non sostituisce la sequenza
+    let cancelled = false;
+    if (seqId && projectId) {
+      api.sequences(projectId)
+        .then((l: Sequence[]) => {
+          const s = l.find((x) => x.id === seqId);
+          if (s && !cancelled) setTarget({ name: s.name, sequence: s.sequence });
+        })
+        .catch((e) => {
+          if (!cancelled) toast.error(e);
+        });
+    }
     if (t.length) setTemplates(t.map((x) => { const [id, ch] = x.split(":"); return { id, chains: ch ? ch.split("") : [] }; }));
     if (params.get("lig") === "1") setLigandsOn(true); // esempi con HETATM e acque: riquadro dei ligandi aperto
     if (doc) {
       setMode("pir");
       setDocId(doc);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- link letto all'apertura e all'arrivo del progetto: rileggerlo a ogni cambio dell'URL annullerebbe le modifiche
   }, [projectId]);
 
   useEffect(() => {
     if (mode !== "pir" || !docId || !projectId) return;
+    let cancelled = false; // documento cambiato prima della risposta: i template restano quelli del documento nuovo
     api.document(projectId, docId).then((d) => {
       const tm = (d.meta?.templates as TemplateRef[] | undefined) ?? [];
-      if (tm.length) setTemplates(tm);
+      if (tm.length && !cancelled) setTemplates(tm);
     }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, [mode, docId, projectId]);
 
   const submit = async () => {

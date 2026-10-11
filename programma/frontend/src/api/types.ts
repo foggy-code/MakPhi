@@ -275,6 +275,8 @@ export interface Settings {
   uploads_retention_days: number;
   /** riusa i risultati di ricerche e allineamenti già calcolati (cache dei calcoli) */
   compute_cache: boolean;
+  /** spazio massimo della cache dei calcoli in MB (100–102400, predefinito 2048): oltre, si eliminano le voci usate meno di recente */
+  compute_cache_max_mb: number;
   /** F9.3: consenso all'invio delle sequenze al servizio ESMFold (spento per default) */
   esmfold_remote: boolean;
   /** F9.3: indirizzo del servizio ESMFold; vuoto = API pubblica di ESM Atlas */

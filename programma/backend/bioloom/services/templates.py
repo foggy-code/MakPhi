@@ -8,19 +8,26 @@ i metadati li segnano come modelli predetti (`predicted`), con versione, pLDDT m
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
 from ..core.errors import AppError, Conflict, NotFound, RemoteServiceError
-from ..core.storage import atomic_write_bytes, atomic_write_json, atomic_write_text, read_json, safe_join
+from ..core.storage import atomic_write_bytes, atomic_write_json, atomic_write_text, read_json, remove_tree, safe_join
 from ..domain import assembly as assembly_mod
 from ..domain import ligands, plddt, secondary, structure
 from ..engines import remote
 
 EXTENSIONS = {".pdb": "pdb", ".ent": "pdb", ".cif": "cif", ".mmcif": "cif"}
+OTHER_FORMAT = {"pdb": "cif", "cif": "pdb"}
+# Cartelle temporanee dei file in arrivo, dentro la libreria (stesso disco: il file entra con un rename). Il punto
+# iniziale le tiene fuori dall'indice della ricerca globale (l'elenco dei template conta solo i file); quelle rimaste da
+# un arresto si tolgono all'avvio.
+STAGING_PREFIX = ".upload-"
 # 3: ligandi con la classificazione di domain/ligands (le analisi in cache delle versioni precedenti si ricalcolano)
 # 4: acque candidate al trasferimento (domain/ligands.water_candidates)
 ANALYSIS_VERSION = 4
@@ -63,19 +70,41 @@ def assembly_template_id(template_id: str, assembly_id: str) -> str:
     return _clean_id(f"{template_id[:max(1, keep)]}_{digest}_{suffix}")[:MAX_ID]
 
 
+def exists_conflict(tid: str, jobs: int = 0, projects: int = 0) -> Conflict:
+    """409 `template_exists`: un caricamento con l'id di un template già in libreria, senza conferma della
+    sostituzione. `jobs` e `projects`: job che citano il template nei parametri e loro progetti, se noti."""
+    used = ""
+    if jobs:
+        used = f", usato da {jobs} job" + (f" in {projects} progett{'o' if projects == 1 else 'i'}" if projects else "")
+    return Conflict(f"Nella libreria c'è già un template {tid}{used}. Per sostituirlo conferma la sovrascrittura (i "
+                    f"calcoli successivi useranno il nuovo file); altrimenti scegli un altro identificativo.",
+                    code="template_exists", details={"id": tid, "jobs": jobs, "projects": projects})
+
+
 class TemplateLibrary:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
+        for leftover in self.root.glob(f"{STAGING_PREFIX}*"):  # file in arrivo lasciati da un arresto
+            remove_tree(leftover)
         self._lock = threading.Lock()
         # un download alla volta per modello AlphaFold: elementi di pipeline in parallelo con lo stesso template
         # aspettano il primo e poi lo trovano in libreria
         self._fetching: dict[str, threading.Lock] = {}
+        self._writing: dict[str, threading.Lock] = {}
         self._listeners: list[Callable[[str, str], None]] = []
 
     def _fetch_lock(self, tid: str) -> threading.Lock:
         with self._lock:
             return self._fetching.setdefault(tid, threading.Lock())
+
+    def _write_lock(self, tid: str) -> threading.Lock:
+        """Una scrittura alla volta per id, dal file in libreria ai suoi metadati (`_install` + `_register`): chi
+        installa per ultimo registra per ultimo, e una sostituzione con l'altro formato non toglie il file a chi lo sta
+        ancora registrando. Si prende per ultimo (dopo `_fetch_lock`, mai il contrario) e solo attorno alla scrittura,
+        non attorno ai download."""
+        with self._lock:
+            return self._writing.setdefault(tid, threading.Lock())
 
     # ----------------------------------------------------------------------------- notifiche (F8b)
     def subscribe(self, listener: Callable[[str, str], None]) -> None:
@@ -227,20 +256,22 @@ class TemplateLibrary:
             if self.exists(tid):  # accessione secondaria di un modello già in libreria
                 return {**self.describe(tid), "cached": True}
             text, fmt = remote.alphafold_download(entry, check=check, log=log)
-            other = safe_join(self.root, f"{tid}.{'cif' if fmt == 'pdb' else 'pdb'}")
-            dest = safe_join(self.root, f"{tid}.{fmt}")
-            other.unlink(missing_ok=True)
-            atomic_write_text(dest, text)
-            try:
-                structure.load_structure(dest, tid)
-            except AppError as exc:
-                dest.unlink(missing_ok=True)
-                raise RemoteServiceError(f"AlphaFold DB: il modello {tid} scaricato non è leggibile ({exc.message}).")
-            return {**self._register(tid, dest, source=SOURCE_ALPHAFOLD, alphafold=entry), "cached": False}
+            with self._write_lock(tid):
+                try:
+                    installed = self._install(tid, fmt, text.encode("utf-8"))
+                except AppError as exc:
+                    raise RemoteServiceError(f"AlphaFold DB: il modello {tid} scaricato non è leggibile "
+                                             f"({exc.message}).")
+                if installed is None:  # caricato dall'utente nel frattempo: il download non lo sostituisce
+                    return {**self.describe(tid), "cached": True}
+                dest = safe_join(self.root, f"{tid}.{fmt}")
+                return {**self._register(tid, dest, source=SOURCE_ALPHAFOLD, alphafold=entry), "cached": False}
         finally:
             lock.release()
 
     def fetch(self, pdb_id: str, fmt: str = "pdb") -> dict:
+        """Struttura di RCSB PDB nella libreria; già presente (anche caricata dall'utente con lo stesso id) si usa
+        quella, senza download e senza sostituirla."""
         pid = remote.validate_pdb_id(pdb_id)
         if self.exists(pid):
             return {**self.describe(pid), "cached": True}
@@ -253,11 +284,25 @@ class TemplateLibrary:
                 text = remote.rcsb_download(pid, fmt)
             else:
                 raise
-        dest = safe_join(self.root, f"{pid}.{fmt}")
-        atomic_write_text(dest, text)
-        return {**self._register(pid, dest, source="RCSB PDB"), "cached": False}
+        with self._write_lock(pid):
+            try:
+                installed = self._install(pid, fmt, text.encode("utf-8"))
+            except AppError as exc:
+                raise RemoteServiceError(f"RCSB PDB: la struttura {pid} scaricata non è leggibile ({exc.message}).")
+            if installed is None:  # arrivata nel frattempo (caricamento, altro job): il download non la sostituisce
+                return {**self.describe(pid), "cached": True}
+            return {**self._register(pid, safe_join(self.root, f"{pid}.{fmt}"), source="RCSB PDB"), "cached": False}
 
-    def save_upload(self, filename: str, data: bytes, template_id: Optional[str] = None) -> dict:
+    def save_upload(self, filename: str, data: bytes, template_id: Optional[str] = None, *, overwrite: bool = False,
+                    usage: Optional[Callable[[str], tuple[int, int]]] = None) -> dict:
+        """File caricato dall'utente come template `template_id` (senza: dal nome del file).
+
+        Un id già in libreria si sostituisce solo con `overwrite`; altrimenti `exists_conflict` (409
+        `template_exists`), subito, senza scrivere né leggere il file, con i job e i progetti che lo usano
+        (`usage(id)` → (job, progetti), se data). Il file si legge prima di entrare nella libreria (`_install`): uno
+        illeggibile non tocca il template con lo stesso id. Sostituito, metadati e analisi si rifanno dal nuovo file
+        (anche cambiando formato, .pdb ↔ .cif). Restituisce la descrizione del template e `replaced`.
+        """
         suffix = Path(filename or "").suffix.lower()
         if suffix not in EXTENSIONS:
             raise AppError("Formato non supportato: carica un file .pdb, .ent, .cif o .mmcif.")
@@ -265,25 +310,48 @@ class TemplateLibrary:
             raise AppError("Il file caricato è vuoto.")
         tid = normalize_id(template_id or Path(filename).stem)
         fmt = EXTENSIONS[suffix]
-        with self._lock:
-            for ext in (".pdb", ".cif"):
-                old = safe_join(self.root, f"{tid}{ext}")
-                if old.exists():
-                    old.unlink()
-            dest = safe_join(self.root, f"{tid}.{fmt}")
-            atomic_write_bytes(dest, data)
-        try:
-            structure.load_structure(dest, tid)
-        except AppError:
-            dest.unlink(missing_ok=True)
-            raise
-        return self._register(tid, dest, source="caricamento utente")
 
-    def save_text(self, template_id: str, text: str, source: str, fmt: str = "pdb") -> dict:
-        tid = normalize_id(template_id)
-        dest = safe_join(self.root, f"{tid}.{fmt}")
-        atomic_write_text(dest, text)
-        return self._register(tid, dest, source=source)
+        def conflict() -> Conflict:
+            return exists_conflict(tid, *(usage(tid) if usage else (0, 0)))
+
+        if not overwrite and self.exists(tid):
+            raise conflict()
+        with self._write_lock(tid):
+            replaced = self._install(tid, fmt, data, overwrite=overwrite)
+            if replaced is None:  # caricato da un'altra richiesta mentre questo file si leggeva
+                raise conflict()
+            try:
+                described = self._register(tid, safe_join(self.root, f"{tid}.{fmt}"), source="caricamento utente")
+            except BaseException:
+                # analisi non riuscita: i metadati del file sostituito non descrivono il nuovo (si rifanno alla
+                # lettura); sotto il lock per id sono di questa richiesta, non di una sostituzione arrivata dopo
+                self._meta_path(tid).unlink(missing_ok=True)
+                raise
+        return {**described, "replaced": replaced}
+
+    def _install(self, tid: str, fmt: str, data: bytes, *, overwrite: bool = False) -> Optional[bool]:
+        """Mette `data` nella libreria come `<tid>.<fmt>`, letto prima di entrarci.
+
+        Il file si scrive e si legge in una cartella temporanea della libreria (stesso disco), poi entra con un rename
+        atomico sotto il lock: un file illeggibile solleva l'errore di domain/structure e la libreria resta com'era.
+        Con un template `tid` già presente e senza `overwrite` non cambia nulla e restituisce None; altrimenti True se
+        ha sostituito un template, False se è nuovo. Il file con l'altro formato (.pdb ↔ .cif) si toglie solo dopo che
+        il nuovo è al suo posto: chi legge trova sempre il vecchio file o il nuovo, mai nessuno dei due.
+        """
+        staging = Path(tempfile.mkdtemp(prefix=STAGING_PREFIX, dir=self.root))
+        try:
+            staged = staging / f"{tid}.{fmt}"  # stesso nome del file definitivo: gli errori di lettura lo citano
+            atomic_write_bytes(staged, data)
+            structure.load_structure(staged, tid)
+            with self._lock:
+                replaced = self.exists(tid)
+                if replaced and not overwrite:
+                    return None
+                os.replace(staged, safe_join(self.root, f"{tid}.{fmt}"))
+                safe_join(self.root, f"{tid}.{OTHER_FORMAT[fmt]}").unlink(missing_ok=True)
+                return replaced
+        finally:
+            remove_tree(staging)
 
     def _register(self, tid: str, path: Path, source: str, alphafold: Optional[dict] = None,
                   extra: Optional[dict] = None) -> dict:
@@ -409,10 +477,12 @@ class TemplateLibrary:
             analysis = self.analyze(tid)
             text, chains = assembly_mod.pdb_text(model, info, chosen, source_id=tid, header=analysis["header"])
             dest = safe_join(self.root, f"{new_id}.pdb")
-            atomic_write_text(dest, text)  # un assemblaggio rigenerato (file d'origine cambiato) sostituisce il vecchio
             extra = {"assembly": {
                 "source_id": tid, "assembly_id": chosen.id, "details": chosen.details, "method": chosen.method,
                 "oligomeric_details": chosen.oligomeric_details, "oligomeric_count": chosen.oligomeric_count,
                 "chains": chains, "format": info.format, "source_sha256": fingerprint}}
-            described = self._register(new_id, dest, source=f"assemblaggio {chosen.id} di {tid}", extra=extra)
+            with self._write_lock(new_id):
+                # un assemblaggio rigenerato (file d'origine cambiato) sostituisce il vecchio
+                atomic_write_text(dest, text)
+                described = self._register(new_id, dest, source=f"assemblaggio {chosen.id} di {tid}", extra=extra)
         return {**described, "cached": False}

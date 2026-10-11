@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
+import anyio.to_thread
 from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi.responses import FileResponse
 
@@ -23,7 +24,8 @@ async def parse_sequence_file(file: UploadFile = File(...)) -> dict:
     """Legge sequenze o allineamenti (FASTA, PIR, Clustal, Stockholm, MSF, GenBank, EMBL, UniProt, PDB, mmCIF,
     testo semplice; anche compressi con gzip). Non salva nulla: restituisce i record riconosciuti."""
     data = await read_upload(file, limit=fileformats.MAX_BYTES)
-    return fileformats.parse_records(data, file.filename or "")
+    # decompressione e riconoscimento del formato in un thread: il loop resta libero per le altre richieste
+    return await anyio.to_thread.run_sync(fileformats.parse_records, data, file.filename or "")
 
 
 def store_structure(core: Core, filename: str, data: bytes) -> dict:
@@ -53,7 +55,8 @@ def store_structure(core: Core, filename: str, data: bytes) -> dict:
 async def upload_structure(file: UploadFile = File(...), core: Core = Depends(get_core)) -> dict:
     """Struttura caricata da file, utilizzabile ovunque serva una struttura (allineamento strutturale,
     raffinamento dei loop, qualità, QMEAN). Conservata secondo la pulizia automatica degli upload."""
-    return store_structure(core, file.filename or "", await read_upload(file))
+    data = await read_upload(file)
+    return await anyio.to_thread.run_sync(store_structure, core, file.filename or "", data)
 
 
 @router.get("/uploads/{name}")

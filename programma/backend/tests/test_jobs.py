@@ -9,6 +9,8 @@ from bioloom.core.db import Database
 from bioloom.core.errors import AppError, Conflict, NotFound
 from bioloom.core.jobs import JobManager
 
+from .conftest import until
+
 
 @pytest.fixture
 def manager(tmp_path):
@@ -63,8 +65,9 @@ def test_cancel_kills_subprocess(manager):
 
     manager.register("slow", handler)
     job = manager.submit("slow", {})
-    started.wait(5)
-    time.sleep(0.5)
+    assert started.wait(5)
+    # il processo è partito davvero (la sua prima riga è nel log): l'annullamento deve terminarlo
+    until(lambda: "via" in manager.read_log(job["id"])["text"])
     t0 = time.time()
     manager.cancel(job["id"])
     done = wait(manager, job["id"])
@@ -317,6 +320,16 @@ def test_delete_waits_for_a_resume_being_prepared(tmp_path):
             (final_dir / "items" / "azzerato.txt").write_text("preparazione")
 
         outcome = {}
+        # l'eliminazione deve fermarsi sull'attesa di `_idle` con la preparazione in corso (predicato falso)
+        waits: list[bool] = []
+        real_wait_for = mgr._idle.wait_for
+
+        def watched_wait_for(predicate, timeout=None):
+            if threading.current_thread().name == "elimina":
+                waits.append(predicate())  # chiamato con il lock preso: lo stato visto dall'eliminazione
+            return real_wait_for(predicate, timeout)
+
+        mgr._idle.wait_for = watched_wait_for
 
         def resume():
             try:
@@ -336,10 +349,11 @@ def test_delete_waits_for_a_resume_being_prepared(tmp_path):
         resumer.start()
         assert preparing.wait(5)
         assert mgr.cancel(job_id)["status"] == "cancelled"
-        deleter = threading.Thread(target=delete)
+        deleter = threading.Thread(target=delete, name="elimina")
         deleter.start()
-        time.sleep(0.3)
-        assert deleter.is_alive()  # in attesa della preparazione
+        until(lambda: waits)
+        # in attesa della preparazione: ha trovato il job in `_preparing` e resta fermo finché questa non finisce
+        assert waits == [False] and deleter.is_alive() and "delete" not in outcome
         go.set()
         resumer.join(20)
         deleter.join(20)

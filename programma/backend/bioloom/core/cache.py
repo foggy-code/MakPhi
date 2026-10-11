@@ -12,7 +12,13 @@ non deve rifare ricerche e allineamenti identici. Ogni voce è un file JSON in
   (query.fasta, output di MMseqs2 o di TM-align...): un risultato dalla cache ricrea gli stessi file del job;
 - **scadenza**: facoltativa, scelta da chi chiama per ogni operazione (i motori remoti dipendono dal PDB, che
   cambia ogni settimana). Le voci più vecchie di 30 giorni le elimina `services/housekeeping.py`, come le
-  risposte dei servizi remoti che stanno nella stessa cartella `cache`.
+  risposte dei servizi remoti che stanno nella stessa cartella `cache`;
+- **tetto**: impostazione `compute_cache_max_mb` (predefinito 2048 MB). Oltre il tetto si eliminano le voci usate meno
+  di recente (`prune`) finché la cache scende al 90% del tetto, così la pulizia successiva non arriva alla scrittura
+  dopo. "Usata" = scritta o letta con successo: la lettura aggiorna la data di ultimo accesso del file (atime), mai
+  quella di modifica, su cui conta la pulizia per età. La pulizia per tetto gira all'avvio e con la pulizia automatica
+  (housekeeping) e dopo le scritture, ma solo quando la stima dello spazio occupato (misurata una volta, poi
+  aggiornata a ogni scrittura) supera il tetto: nessuna scansione della cartella a ogni scrittura.
 
 Scritture atomiche (`core/storage`) e lettura tollerante: un file illeggibile, di un altro formato o scaduto
 è solo un mancato riscontro, mai un errore. Entrano in cache solo i calcoli riusciti e completi di job non
@@ -25,6 +31,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,14 +53,27 @@ CLOCK_TOLERANCE = 86400
 RESERVED_FILES = frozenset({"job.log", "params.json", "result.json"})
 CACHE_FIELDS = ("cached", "cached_at")
 
+# Tetto predefinito (impostazione `compute_cache_max_mb`, config.py) e livello a cui scende la cache dopo la pulizia
+DEFAULT_MAX_MB = 2048
+PRUNE_TARGET = 0.9
+MB = 1024 * 1024
+
 _OPERATION = re.compile(r"^[a-z][a-z0-9_]{0,40}$")
 _root: Optional[Path] = None
+# Byte occupati dalla cache configurata: misurati dalla prima pulizia per tetto (o al primo controllo), poi aggiornati a
+# ogni scrittura; None = da misurare. Una stima: le voci eliminate da altri (pulizia per età) la rendono più alta del
+# vero, e allora la pulizia per tetto arriva prima e la rimisura.
+_usage: Optional[int] = None
+_usage_lock = threading.Lock()
+_prune_lock = threading.Lock()  # una pulizia per tetto alla volta
 
 
 def configure(root: Optional[Path]) -> None:
     """Cartella della cache dei calcoli (`data/cache/compute`); None la disattiva."""
-    global _root
-    _root = Path(root) if root is not None else None
+    global _root, _usage
+    with _usage_lock:
+        _root = Path(root) if root is not None else None
+        _usage = None
 
 
 def root() -> Optional[Path]:
@@ -145,7 +165,18 @@ def lookup(operation: str, key: str, ttl: Optional[float] = None, now: Optional[
     age = (time.time() if now is None else now) - float(entry["created"])
     if age < -CLOCK_TOLERANCE or (ttl is not None and age > ttl):
         return None
+    _touch(path)
     return entry
+
+
+def _touch(path: Path) -> None:
+    """Segna la voce come appena usata per la pulizia per tetto: data di ultimo accesso adesso, data di modifica (età
+    della voce per la pulizia automatica) invariata. Un errore (file system in sola lettura) non conta."""
+    try:
+        st = os.stat(path)
+        os.utime(path, ns=(time.time_ns(), st.st_mtime_ns))
+    except OSError:
+        pass
 
 
 def store(operation: str, key: str, result: dict, files: Optional[dict[str, str]] = None) -> Optional[dict]:
@@ -158,8 +189,103 @@ def store(operation: str, key: str, result: dict, files: Optional[dict[str, str]
              "bioloom": __version__, "result": {k: v for k, v in result.items() if k not in CACHE_FIELDS},
              "files": files or {}}
     # compatto: la cartella dati può stare su una chiavetta
-    atomic_write_text(path, json.dumps(entry, ensure_ascii=False, separators=(",", ":")))
+    text = json.dumps(entry, ensure_ascii=False, separators=(",", ":"))
+    try:
+        previous = path.stat().st_size  # voce sostituita (ricalcolo ignorando la cache)
+    except OSError:
+        previous = 0
+    atomic_write_text(path, text)
+    _account(len(text.encode("utf-8")) - previous)
     return entry
+
+
+# ------------------------------------------------------------------------------------------ tetto (pulizia LRU)
+def _account(delta: int) -> None:
+    global _usage
+    with _usage_lock:
+        if _usage is not None:
+            _usage = max(0, _usage + delta)
+
+
+def max_bytes(settings: Any = None) -> int:
+    """Tetto della cache in byte dall'impostazione `compute_cache_max_mb` (predefinito se manca o non è valida)."""
+    value = getattr(settings, "compute_cache_max_mb", DEFAULT_MAX_MB) if settings is not None else DEFAULT_MAX_MB
+    try:
+        mb = int(value)
+    except (TypeError, ValueError):
+        mb = DEFAULT_MAX_MB
+    return max(1, mb) * MB
+
+
+def usage() -> Optional[int]:
+    """Byte occupati secondo la stima corrente (None se non ancora misurati)."""
+    with _usage_lock:
+        return _usage
+
+
+def _last_used(st: os.stat_result) -> float:
+    """Ultimo uso di una voce: la più recente fra scrittura (mtime) e lettura con successo (atime, `_touch`)."""
+    return max(st.st_atime, st.st_mtime)
+
+
+def prune(limit: int, folder: Optional[Path] = None) -> tuple[int, int]:
+    """Pulizia per tetto: se la cache supera `limit` byte elimina le voci usate meno di recente finché scende al 90% del
+    tetto (`PRUNE_TARGET`). Restituisce (voci eliminate, byte liberati).
+
+    `folder` = la cartella della cache (predefinita quella configurata). I file temporanei di scritture interrotte
+    contano nello spazio ma non si toccano (li elimina la pulizia automatica dopo un giorno); un file che non si
+    riesce a eliminare (in uso) resta e si riprova alla prossima. Una sola pulizia alla volta: se un'altra è in corso
+    non fa nulla. Per la cartella configurata aggiorna la stima dello spazio occupato.
+    """
+    global _usage
+    target_root = Path(folder) if folder is not None else _root
+    if target_root is None or not _prune_lock.acquire(blocking=False):
+        return 0, 0
+    try:
+        entries: list[tuple[float, int, Path]] = []
+        total = 0
+        for dirpath, _dirnames, filenames in os.walk(target_root):
+            for name in filenames:
+                full = Path(dirpath) / name
+                try:
+                    st = full.stat()
+                except OSError:
+                    continue
+                total += st.st_size
+                if name.endswith(".json") and not name.startswith("."):
+                    entries.append((_last_used(st), st.st_size, full))
+        removed = freed = 0
+        if total > limit:
+            goal = int(limit * PRUNE_TARGET)
+            entries.sort(key=lambda item: item[0])
+            for _used, size, full in entries:
+                if total <= goal:
+                    break
+                try:
+                    full.unlink()
+                except FileNotFoundError:
+                    total -= size  # eliminata nel frattempo (pulizia per età)
+                    continue
+                except OSError:
+                    continue
+                total -= size
+                removed += 1
+                freed += size
+        if _root is not None and target_root == _root:
+            with _usage_lock:
+                _usage = total
+        return removed, freed
+    finally:
+        _prune_lock.release()
+
+
+def enforce(limit: int) -> tuple[int, int]:
+    """Pulizia per tetto solo se serve: con lo spazio occupato ancora da misurare o stimato oltre `limit`. Da chiamare
+    dopo le scritture: di norma costa un confronto, la scansione della cartella solo oltre il tetto."""
+    current = usage()
+    if _root is None or (current is not None and current <= limit):
+        return 0, 0
+    return prune(limit)
 
 
 # ------------------------------------------------------------------------------------------ file del calcolo
@@ -259,6 +385,10 @@ def run_cached(ctx: Any, operation: str, descriptor: dict, compute: Callable[[],
             ctx.log("Risultato non salvato nella cache dei calcoli: file prodotti troppo grandi o non testuali.")
         else:
             store(operation, key, result, files)
+            removed, freed = enforce(max_bytes(getattr(ctx, "settings", None)))
+            if removed:
+                ctx.log(f"Cache dei calcoli oltre il tetto delle Impostazioni: eliminate {removed} voci usate meno di "
+                        f"recente ({freed / MB:.0f} MB).")
     except (OSError, TypeError, ValueError) as exc:
         ctx.log(f"Avviso: cache dei calcoli non aggiornata ({exc}).")
     return result

@@ -1,8 +1,8 @@
 """Licenze dei programmi esterni: chiave MODELLER, file LicenseDB di ProSA II, stato di PROCHECK.
 
-Le licenze stanno in `data/licenses/` (permessi 0600) e quindi viaggiano con la cartella dati:
-chiavetta, cartella del server o volume. Non entrano mai nell'immagine Docker né nelle risposte API
-(la chiave è sempre mascherata).
+Le licenze stanno in `data/licenses/` (permessi 0600) e quindi seguono la cartella dati del server o del volume;
+la copia portatile (avviatore, azione «prepara») le include solo con --con-licenze / -ConLicenze. Non entrano mai
+nell'immagine Docker né nelle risposte API (la chiave è sempre mascherata).
 
 - MODELLER: `modeller.key`, in alternativa la variabile d'ambiente MODELLER_KEY (server). La chiave
   viene passata ai sottoprocessi MODELLER con BIOLOOM_MODELLER_KEY e iniettata dal preambolo degli
@@ -21,17 +21,12 @@ from typing import Callable, Optional
 
 from ..core.errors import AppError
 from ..core.jobs import set_subprocess_env
+from ..core.sensitive import mask, redact  # stessa mascheratura in tutto il backend
 from ..core.storage import atomic_write_bytes
 from ..engines import tools
 
 _KEY = re.compile(r"^[A-Za-z0-9_\-]{4,64}$")
 _MAC_FIELD = re.compile(r"^[0-9A-Fa-f]{12}$")
-
-
-def mask(key: str) -> str:
-    if not key:
-        return ""
-    return key[:3] + "•" * max(3, len(key) - 5) + key[-2:] if len(key) > 6 else "•" * len(key)
 
 
 def format_mac(raw: str) -> str:
@@ -110,9 +105,9 @@ class LicenseService:
         with self._lock:
             probe = tools.detect_modeller(self.settings_provider().modeller_python, license_key=key)
             if not probe["available"]:
-                # MODELLER ripete la chiave nel messaggio d'errore: non va restituita in chiaro
-                attempts = [{**a, "error": (a.get("error") or "").replace(key, mask(key))}
-                            for a in probe.get("attempts", [])]
+                # MODELLER ripete la chiave nel messaggio d'errore: non va restituita in chiaro (la maschera già
+                # tools.detect_modeller; qui di nuovo, per sicurezza)
+                attempts = [{**a, "error": redact(a.get("error") or "", [key])} for a in probe.get("attempts", [])]
                 message = next((a["error"] for a in attempts if a["error"]), "")
                 raise AppError("MODELLER ha rifiutato la chiave: " + (message or "licenza non valida."),
                                code="invalid_license", status=422, details=attempts)
@@ -189,7 +184,7 @@ class LicenseService:
         if not info["available"]:
             message = next((a.get("error") for a in info.get("attempts", []) if a.get("error")), None)
             if message and key:
-                message = message.replace(key, mask(key))
+                message = redact(message, [key])
         return {
             "modeller": {
                 "configured": bool(key),

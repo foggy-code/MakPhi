@@ -15,6 +15,7 @@ import json
 import math
 import os
 import re
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -422,13 +423,7 @@ def search(ctx: JobContext, sequence: str, *, engine: str = "rcsb", evalue: floa
         else:
             query = ctx.path("query.fasta")
             query.write_text(f">query\n{sequence}\n", encoding="utf-8")
-            result = ctx.run([exe, "-query", str(query), "-db", str(db), "-evalue", str(evalue),
-                              "-max_target_seqs", str(max_hits), "-outfmt", "5"], env=default_env(), log_output=False)
-            if result.returncode != 0:
-                raise AppError(f"blastp è terminato con errore: {result.output[-500:]}")
-            start = result.output.find("<?xml")
-            hits = _hits_from_blast_xml(result.output[start:] if start >= 0 else result.output, len(sequence),
-                                        "local")
+            hits = _local_blast(ctx, exe, query, db, evalue=evalue, max_hits=max_hits, query_len=len(sequence))
         if engine not in ("rcsb", "alphafold") and hits:
             ctx.progress(0.9, "Metadati delle strutture (RCSB)")
             try:
@@ -471,6 +466,30 @@ def search(ctx: JobContext, sequence: str, *, engine: str = "rcsb", evalue: floa
     # punteggio e motivazioni calcolati dopo la cache: cambiare i pesi non richiede di invalidare le ricerche
     template_rank.rank_hits(result.get("hits") or [])
     return result
+
+
+def _local_blast(ctx: JobContext, exe: str, query: Path, db: Path, *, evalue: float, max_hits: int,
+                 query_len: int) -> list[dict]:
+    """blastp locale: l'XML dei risultati va in un file (`-out`) e si legge da lì. Dall'output del processo
+    `JobContext.run` conserva solo le ultime righe, e con molti risultati l'XML (decine di migliaia di righe) arrivava
+    troncato. Il file sta nella cartella temporanea del job (nome unico: gli elementi di una pipeline la condividono),
+    fuori dai risultati del job e dai file salvati nella cache, e si elimina appena letto."""
+    xml_path = ctx.tmp_dir / f"blastp-{uuid.uuid4().hex[:12]}.xml"
+    try:
+        result = ctx.run([exe, "-query", str(query), "-db", str(db), "-evalue", str(evalue),
+                          "-max_target_seqs", str(max_hits), "-outfmt", "5", "-out", str(xml_path)],
+                         env=default_env(), log_output=False)
+        if result.returncode != 0:
+            raise AppError(f"blastp è terminato con errore: {result.output[-500:]}")
+        try:
+            xml = xml_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise AppError(f"blastp non ha scritto il file dei risultati ({exc.strerror or exc}): "
+                           f"{result.output[-500:]}") from exc
+        start = xml.find("<?xml")
+        return _hits_from_blast_xml(xml[start:] if start > 0 else xml, query_len, "local")
+    finally:
+        xml_path.unlink(missing_ok=True)
 
 
 def _current_format(result: dict) -> bool:

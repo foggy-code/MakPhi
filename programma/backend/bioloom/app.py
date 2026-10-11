@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import secrets
 import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -20,19 +22,37 @@ from .api import reproducibility, structure_tools
 from .api import mutations as mutations_api
 from .api import predict as predict_api
 from .config import FRONTEND_DIST, Paths, default_paths
-from .core import auth
+from .core import auth, bodylimit, guard
 from .core.container import build_core
 from .core.errors import AppError
 
+DEV_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")  # interfaccia di sviluppo (npm run dev, Vite)
+
 
 def create_app(paths: Optional[Paths] = None, frontend_dist: Optional[Path] = FRONTEND_DIST,
-               dev_origins: tuple[str, ...] = ("http://localhost:5173", "http://127.0.0.1:5173"),
+               dev_origins: Optional[tuple[str, ...]] = None,
                auth_config: Optional[auth.AuthConfig] = None) -> FastAPI:
+    if dev_origins is None:
+        # Origini ammesse da CORS e dal controllo dell'origine (core/guard), solo fuori dal container (sviluppo). Nel
+        # container l'interfaccia è compilata e servita dalla stessa origine, e un npm run dev accanto passa dal proxy
+        # di Vite (stessa origine per il browser): lì lascerebbero solo leggere l'API e arrestare BioLoom a qualunque
+        # pagina sulla porta 5173.
+        dev_origins = () if os.environ.get("BIOLOOM_CONTAINER") == "1" else DEV_ORIGINS
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         resolved = paths or default_paths()
         resolved.ensure()  # la chiave generata va nella cartella dati
-        app.state.auth = auth_config or auth.load(resolved.data)
+        try:
+            app.state.auth = auth_config or auth.load(resolved.data)
+            # reverse proxy fidati per l'indirizzo del client nel freno ai tentativi (BIOLOOM_TRUSTED_PROXIES)
+            app.state.trusted_proxies = auth.trusted_proxies() if app.state.auth.enabled else ()
+        except auth.AccessKeyError as exc:  # l'avvio si ferma: il motivo ben visibile, non solo nel traceback
+            print(f"\n  ERRORE: {exc}\n", flush=True)
+            raise
+        if app.state.auth.enabled and app.state.auth.epoch_file is None:
+            app.state.auth.attach(resolved.data)  # configurazione passata da chi crea l'app (test): stessa epoca
+        app.state.allowed_hosts = guard.allowed_hosts()  # BIOLOOM_ALLOWED_HOSTS, letta all'avvio come BIOLOOM_AUTH
         app.state.core = build_core(resolved, server=app.state.auth.enabled)
         if app.state.auth.enabled and app.state.auth.generated:
             print(f"\n  Accesso protetto: chiave d'accesso generata in {resolved.data / 'access_key'}\n"
@@ -42,17 +62,28 @@ def create_app(paths: Optional[Paths] = None, frontend_dist: Optional[Path] = FR
 
     app = FastAPI(title="BioLoom v4", version=__version__, lifespan=lifespan,
                   description="Suite per la modellazione di proteine per omologia (MODELLER).")
+    app.state.login_limiter = auth.LoginLimiter()  # tentativi di accesso per indirizzo (api/auth.py)
+    # Corpo oltre il più grande caricamento legittimo: 413 prima che Starlette scriva il multipart su disco
+    # (core/bodylimit). Aggiunto per primo, quindi il più interno: richieste di altri siti (guardia) e senza chiave
+    # d'accesso si rifiutano prima, e nessuno dei due controlli legge il corpo; dentro CORS, così in sviluppo anche il
+    # 413 arriva leggibile all'interfaccia di Vite; e fra il `receive` contato e le rotte non resta nessun middleware.
+    app.add_middleware(bodylimit.BodyLimit, limit=bodylimit.request_limit())
     app.add_middleware(CORSMiddleware, allow_origins=list(dev_origins), allow_methods=["*"], allow_headers=["*"],
                        allow_credentials=True)
 
     @app.middleware("http")
     async def access_control(request: Request, call_next):
+        # cookie di sessione, o chiave come Bearer attraverso il freno ai tentativi (api/auth.authenticate): 401 o 429
         cfg = getattr(request.app.state, "auth", None)
-        if cfg is not None and not cfg.request_allowed(request.url.path, request.cookies.get(auth.COOKIE),
-                                                       request.headers.get("authorization")):
-            return JSONResponse(status_code=401, content={"error": {
-                "code": "auth_required", "message": "Accesso richiesto: inserisci la chiave d'accesso."}})
+        if cfg is not None and cfg.requires_auth(request.url.path):
+            denied = auth_api.access_denied(request, cfg)
+            if denied is not None:
+                return denied
         return await call_next(request)
+
+    # Host (DNS rebinding), origine (CSRF) e iframe (clickjacking), core/guard. In Starlette l'ultimo middleware
+    # aggiunto è il più esterno: le richieste di altri siti si rifiutano prima del controllo della chiave d'accesso.
+    app.add_middleware(guard.RequestGuard, dev_origins=dev_origins)
 
     @app.exception_handler(AppError)
     async def app_error(_request: Request, exc: AppError):
@@ -67,10 +98,16 @@ def create_app(paths: Optional[Paths] = None, frontend_dist: Optional[Path] = FR
                                                                 "details": details}})
 
     @app.exception_handler(Exception)
-    async def unexpected(_request: Request, exc: Exception):
-        traceback.print_exception(type(exc), exc, exc.__traceback__)
-        return JSONResponse(status_code=500, content={"error": {"code": "internal_error",
-                                                                "message": f"Errore interno: {exc}"}})
+    async def unexpected(request: Request, exc: Exception):
+        # Al client un messaggio generico con un codice; il dettaglio (che può contenere percorsi, parametri o pezzi di
+        # file) solo nel log, con lo stesso codice per ritrovarlo.
+        code = secrets.token_hex(4)
+        detail = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        print(f"[BioLoom] Errore interno (codice {code}) su {request.method} {request.url.path}:\n{detail}",
+              flush=True)
+        return JSONResponse(status_code=500, content={"error": {
+            "code": "internal_error",
+            "message": f"Errore interno (codice {code}): i dettagli sono nel log di BioLoom."}})
 
     for module in (auth_api, system, licenses, notify, databases, files, projects, bio, templates, jobs, compute):
         app.include_router(module.router)

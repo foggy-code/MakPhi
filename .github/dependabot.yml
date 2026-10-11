@@ -1,0 +1,69 @@
+# Aggiornamenti automatici delle dipendenze (Dependabot): una volta alla settimana, il lunedì mattina, con poche pull
+# request raggruppate. Ogni PR passa dalla CI (.github/workflows/ci.yml) come le altre.
+# - github-actions: le Actions di ci.yml sono fissate per SHA completo con il tag nel commento; Dependabot aggiorna
+#   SHA e commento insieme: versioni minori e correzioni in una PR, versioni principali (major) in un'altra, da
+#   controllare con le note di rilascio (cambiano input o versione di Node delle Actions).
+# - npm (programma/frontend): versioni minori e correzioni in una PR; le versioni principali (major) una per PR,
+#   perché di solito chiedono modifiche al codice o alla configurazione (ESLint, Vite, React).
+# - pip (programma/backend): requirements.txt e pyproject.toml hanno solo i limiti minimi (compatibilità, provata da
+#   Python 3.10); con increase-if-necessary Dependabot li tocca solo se una versione nuova ne resta fuori. Le versioni
+#   esatte dell'immagine stanno in requirements.lock e requirements-tools.lock, che Dependabot non legge (estensione
+#   .lock): si rigenerano a mano come scritto in testa a quei file.
+# - cooldown: una versione appena uscita si propone dopo qualche giorno (le versioni ritirate o compromesse di solito
+#   spariscono prima); gli aggiornamenti di sicurezza non aspettano.
+#
+# Immagini Docker: NON qui. I digest delle immagini di base (NODE_IMAGE e UBUNTU_IMAGE in programma/docker/Dockerfile,
+# il FROM di programma/docker/qmean/Dockerfile) e gli SHA-256 e i commit dei file scaricati nel Dockerfile si
+# aggiornano a mano, con la procedura in testa a programma/docker/Dockerfile (poi una costruzione completa e le versioni
+# nuove in THIRD_PARTY_NOTICES.md): sono riferimenti per solo digest, che Dependabot non saprebbe aggiornare.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Rome
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+    groups:
+      actions-minori:
+        update-types: [minor, patch]
+        patterns: ["*"]
+      actions-principali:
+        update-types: [major]
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /programma/frontend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Rome
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    groups:
+      npm-minori:
+        update-types: [minor, patch]
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: /programma/backend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Rome
+    open-pull-requests-limit: 3
+    versioning-strategy: increase-if-necessary
+    cooldown:
+      default-days: 7
+    groups:
+      pip-minori:
+        update-types: [minor, patch]
+        patterns: ["*"]

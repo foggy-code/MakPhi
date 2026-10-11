@@ -25,6 +25,7 @@ import threading
 from typing import Optional
 
 from .. import __version__
+from ..core.jobs import default_env
 from . import tools
 
 # opzione che stampa la versione ed espressione che la estrae (stdout + stderr)
@@ -83,7 +84,7 @@ def _probe(key: str, exe: str) -> Optional[str]:
             with tempfile.TemporaryDirectory(prefix="bioloom-version-") as cwd:
                 proc = subprocess.run([exe, *args], capture_output=True, text=True, errors="replace",
                                       timeout=PROBE_TIMEOUT, cwd=cwd, stdin=subprocess.DEVNULL,
-                                      creationflags=creationflags)
+                                      creationflags=creationflags, env=default_env())  # senza i segreti del server
             text = _ANSI.sub("", (proc.stdout or "") + "\n" + (proc.stderr or ""))
             match = re.search(pattern, text, re.MULTILINE)
             version = match.group(1) if match else None
