@@ -361,11 +361,16 @@ def test_other_rules():
 # ---------------------------------------------------------------------------------------------- modellazione
 def test_model_yeast_ubiquitin_on_1ubq_is_clean(client_with_ubq, env):
     """Il caso di riferimento non ha errori né avvisi: identità 96,05%, copertura 100%, nessun disordine; resta la
-    stima del tempo (5 modelli: circa 14 s come la misura)."""
-    out = run(client_with_ubq, "model", model_params())
+    stima del tempo (5 modelli in serie: circa 14 s come la misura; in parallelo un giro per worker)."""
+    out = run(client_with_ubq, "model", model_params(parallel=False))
     assert out["ok"] is True and out["counts"] == {"error": 0, "warning": 0, "info": 1}, out["checks"]
     assert codes(out) == ["estimated_time"]
     assert out["estimate"]["seconds"] == pytest.approx(13.89, rel=0.05)
+    client_with_ubq.put("/api/settings", json={"max_workers": 4})
+    par = run(client_with_ubq, "model", model_params())
+    assert par["estimate"]["seconds"] == pytest.approx(rules.modeling_seconds(76, 5, "fast", "best", True, 4, 4), abs=0.05)
+    assert "costruiti da 4 processi in parallelo" in par["estimate"]["detail"]
+    out = par
     cov = out["coverage"]
     assert cov["combined"]["coverage"] == 100.0
     [t] = cov["templates"]
@@ -522,10 +527,12 @@ def test_model_alphafold_trim(client, env):
 
 
 def test_model_timeout_risk(client_with_ubq, env):
-    client_with_ubq.put("/api/settings", json={"job_timeout_minutes": 1})
-    risky = run(client_with_ubq, "model", model_params(models=30))
+    client_with_ubq.put("/api/settings", json={"job_timeout_minutes": 1, "max_workers": 8})
+    risky = run(client_with_ubq, "model", model_params(models=30, parallel=False))
     assert by_code(risky, "timeout_risk")["level"] == "warning"
-    assert "timeout_risk" not in codes(run(client_with_ubq, "model", model_params(models=5)))
+    assert "timeout_risk" not in codes(run(client_with_ubq, "model", model_params(models=5, parallel=False)))
+    # in parallelo 30 modelli sono 4 giri di 8 worker: nessun rischio
+    assert "timeout_risk" not in codes(run(client_with_ubq, "model", model_params(models=30)))
 
 
 def test_model_disk_space(client_with_ubq, env):

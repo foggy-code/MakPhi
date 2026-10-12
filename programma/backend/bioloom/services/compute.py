@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import glob
 import shutil
 import threading
 from dataclasses import asdict
@@ -654,10 +655,20 @@ class ComputeService:
                     + (f"; simmetria sui C-alfa fra {', '.join('='.join(g) for g in multi['symmetry']['groups'])}, "
                        f"peso {opts.symmetry_weight:g}" if multi["symmetry"]["applied"] else ""))
         ctx.progress(0.15, "Costruzione dei modelli")
+        # modalità parallela con almeno 2 modelli: worker dagli slot liberi del budget di CPU, al massimo uno per modello
+        # (engines/modeller.PARALLEL_MODULE); nel risultato `options.parallel` dice quale modalità è stata usata
+        opts.parallel = opts.parallel and opts.models >= 2
         script = modeller.build_model_script([t["code"] for t in templates], target_code, opts, hetatm=transfer,
                                              symmetry=multi["groups"], chain_names=multi["names"],
-                                             water=water_pir is not None, alnfile=alnfile)
-        modeller.run_script(ctx, script, "model.py", workdir=workdir, progress_range=(0.15, 0.8))
+                                             water=water_pir is not None, alnfile=alnfile, parallel=opts.parallel)
+        files = None
+        if opts.parallel:
+            code = glob.escape(target_code)
+            files = [(f"{code}.B9999*.pdb", "Modello", opts.models)]
+            if opts.loop_refinement:
+                files.append((f"{code}.BL*.pdb", "Loop", opts.models * opts.loop_models))
+        modeller.run_script(ctx, script, "model.py", workdir=workdir, progress_range=(0.15, 0.8),
+                            workers=ctx.cpu_threads(opts.models) if opts.parallel else 0, progress_files=files)
         summary = modeller.read_models(workdir)
         models = []
         for m in summary.get("models", []):
@@ -706,6 +717,7 @@ class ComputeService:
             "alignment": (workdir / "alignment.ali").read_text(encoding="utf-8"),
             "alignment_report": sequences.validate_pir((workdir / "alignment.ali").read_text(encoding="utf-8")),
             "options": asdict(opts),
+            "modeller_workers": summary.get("workers") if opts.parallel else None,
             "models": models,
             "best_model": best["file"],
             "warnings": warnings,

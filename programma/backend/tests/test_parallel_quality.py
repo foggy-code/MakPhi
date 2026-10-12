@@ -399,7 +399,8 @@ def test_quality_all_in_parallel_matches_serial(client_with_ubq, monkeypatch):
         for report in reports.values():
             assert report["structure"].pop("method").startswith("THEORETICAL MODEL, MODELLER")
     assert par_reports == serial_reports
-    assert "3 in parallelo" in par_log and "in parallelo" not in serial_log.replace("passi in parallelo", "")
+    serial_log = serial_log.replace("passi in parallelo", "").replace("MODELLER in parallelo", "")
+    assert "3 in parallelo" in par_log and "in parallelo" not in serial_log
 
 
 # ------------------------------------------------------------------------------------------ template preparati

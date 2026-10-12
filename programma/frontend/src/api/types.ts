@@ -1014,6 +1014,8 @@ export interface ModelResult {
   models: ModelEntry[];
   best_model: string;
   warnings: string[];
+  /** worker della costruzione in parallelo dei modelli (null: costruzione seriale, oppure job precedenti) */
+  modeller_workers?: number | null;
   /** residui tolti dai template AlphaFold per pLDDT basso (somma su tutti i template) */
   plddt_removed?: number;
   /** solo con ligandi trasferiti: gruppi e verifica del modello migliore */

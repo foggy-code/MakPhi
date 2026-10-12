@@ -257,15 +257,18 @@ class PreflightService:
         if quality_mode != "none" and p.get("extended_quality"):
             self._optional_tools(out, procheck=True, prosa=True)
         if opts is not None and residues:
+            workers = self.settings.effective_workers()
+            lanes = rules.modeling_lanes(opts.models, workers, opts.parallel)
             est = rules.modeling_seconds(residues, opts.models, opts.refinement, quality_mode,
-                                         bool(p.get("extended_quality")), self.settings.effective_workers())
-            detail = (f"{residues} residui, {opts.models} {'modello' if opts.models == 1 else 'modelli'}, "
-                      f"raffinamento {rules.REFINEMENT_LABEL.get(opts.refinement, opts.refinement)}, qualità "
+                                         bool(p.get("extended_quality")), workers, lanes)
+            detail = (f"{residues} residui, {opts.models} {'modello' if opts.models == 1 else 'modelli'}"
+                      + (f" costruiti da {lanes} processi in parallelo" if lanes > 1 else "")
+                      + f", raffinamento {rules.REFINEMENT_LABEL.get(opts.refinement, opts.refinement)}, qualità "
                       + {"best": "sul migliore", "all": "su tutti i modelli", "none": "non calcolata"}[quality_mode])
             out["estimate"] = rules.estimate(est, detail=detail)
             checks += rules.runtime_checks(out["estimate"], what="La modellazione",
                                            process_seconds=rules.building_seconds(residues, opts.models,
-                                                                                  opts.refinement),
+                                                                                  opts.refinement, lanes),
                                            timeout_seconds=self.settings.job_timeout_minutes * 60)
             analysed = 0 if quality_mode == "none" else opts.models if quality_mode == "all" else 1
             self._disk(out, *rules.modeling_bytes(residues, opts.models, analysed))
