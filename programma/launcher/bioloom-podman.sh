@@ -288,7 +288,20 @@ create_env() {
   say "Controlla cartella dati, UniClust30 e porta, poi rilancia: $0 avvia"
 }
 
-remove_containers() { "$PODMAN" rm -f bioloom-qmean bioloom >/dev/null 2>&1 || true; }
+remove_containers() {  # ferma e rimuove i container, aspettando che il nome si liberi davvero: con Podman 2.2.1
+  # "rm -f" su un container ancora in arresto (BioLoom acceso, azione aggiorna) falliva in silenzio e il "run"
+  # successivo trovava il nome occupato, lasciando BioLoom spento
+  local name n
+  for name in bioloom-qmean bioloom; do
+    "$PODMAN" container inspect "$name" >/dev/null 2>&1 || continue
+    "$PODMAN" stop -t 30 "$name" >/dev/null 2>&1 || true
+    for n in 1 2 3 4 5 6 7 8 9 10; do
+      "$PODMAN" rm -f "$name" >/dev/null 2>&1 || true
+      "$PODMAN" container inspect "$name" >/dev/null 2>&1 || break
+      sleep 1
+    done
+  done
+}
 
 stop_containers() { "$PODMAN" stop -t 30 bioloom-qmean bioloom >/dev/null 2>&1; remove_containers; }
 
