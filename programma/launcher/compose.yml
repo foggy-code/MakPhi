@@ -67,6 +67,8 @@ services:
     environment:
       QMEAN_MAX_SECONDS: "${QMEAN_MAX_SECONDS:-14400}"
       QMEAN_HHBLITS_CPU: "${QMEAN_HHBLITS_CPU:-}"         # vuoto = i processori del container (max 8)
+      QMEAN_PARALLEL: "${QMEAN_PARALLEL:-1}"              # calcoli contemporanei (server con molta memoria)
+      QMEAN_PROFILE_CACHE_GB: "${QMEAN_PROFILE_CACHE_GB:-10}"   # profili HHblits riusati per sequenza; 0 = no
     volumes:
       - "${UNICLUST_PATH:-./vuoto}:/uniclust_src:ro"   # cartella con una o più versioni di UniClust30/UniRef30
       - "${QMTL_PATH:-qmtl_vuota}:/qmtl:ro"

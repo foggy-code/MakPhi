@@ -355,9 +355,11 @@ def _link(target, link):
     os.symlink(target, link)
 
 
-def prepare_view(db):
-    """Cartella con i nomi standard HH-suite 3 (collegamenti simbolici) e prefisso da passare a HHblits."""
-    folder = os.path.join(VIEWS, safe_id(db["id"]))
+def prepare_view(db, folder=None):
+    """Cartella con i nomi standard HH-suite 3 (collegamenti simbolici) e prefisso da passare a HHblits.
+    `folder`: cartella propria del calcolo (calcoli contemporanei: una vista condivisa ricreata da un calcolo che parte
+    toglierebbe i collegamenti sotto un HHblits in corso); senza, quella del database in VIEWS."""
+    folder = folder or os.path.join(VIEWS, safe_id(db["id"]))
     shutil.rmtree(folder, ignore_errors=True)
     os.makedirs(folder)
     base = os.path.join(folder, db["name"])

@@ -276,10 +276,12 @@ class ComputeService:
         jobs.register("loop", self.handle_loop)
         jobs.register("quality", self.handle_quality)
         jobs.register("qmean", self.handle_qmean, pool="io", resource=self._qmean_resource)
+        jobs.set_resource_capacity(QMEAN_LOCAL, qmean_local.slots)  # più calcoli insieme con QMEAN_PARALLEL
 
     def _qmean_resource(self, p: dict) -> Optional[str]:
-        """QMEAN locale: al massimo un calcolo alla volta (il servizio ha una coda sola e HHblits richiede molta
-        memoria). Gli altri restano in coda in BioLoom, senza occupare un worker del pool "io".
+        """QMEAN locale: al massimo tanti calcoli quanti posti dichiara il servizio (`qmean_local.slots`: uno, salvo
+        QMEAN_PARALLEL su un server con memoria per più HHblits). Gli altri restano in coda in BioLoom, senza
+        occupare un worker del pool "io".
 
         Nessuna risorsa per SWISS-MODEL e quando il servizio locale non c'è (l'avviatore non ha trovato UniClust30:
         `base_url` vuoto, una variabile d'ambiente letta senza I/O sotto il lock del dispatcher): il job fallisce

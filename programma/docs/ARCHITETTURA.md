@@ -2164,6 +2164,31 @@ QMEAN in `run_qmean_wrapper.py`); client in `engines/qmean_local.py`, job `qmean
     - Con memoria al limite ne usa 1: a parità di tempo, 4 thread avevano letto 190 GB contro 35.
     - `QMEAN_HHBLITS_CPU` fissa il numero.
     - Il risultato non cambia.
+    - Più di 8 non serve: sul server a 224 core (UniRef30_2023_02, 3PGK di 415 residui) un calcolo dura 141 s con 8
+      processori, 129 con 16, 134 con 32.
+  - **Calcoli contemporanei (`QMEAN_PARALLEL`):** il worker esegue fino a N calcoli insieme, uno per thread, con i
+    processori divisi fra loro (al massimo 8 ciascuno); `slots_for` scende a quanti HHblits entrano nel 90% della
+    memoria (il cs219 nella cache del sistema conta una volta). Copie locali e conversioni restano da sole (`Gate`: un
+    calcolo nuovo non sorpassa una copia in attesa). Ogni calcolo ha la sua vista del database nella propria cartella di
+    lavoro: la vista condivisa, ricreata da un calcolo che partiva, toglieva i collegamenti sotto un HHblits in corso
+    (`File exists` alla prima prova con 16 calcoli). Lo stato dichiara i posti (`slots`) e BioLoom li usa come
+    capacità della risorsa `QMEAN_LOCAL` del dispatcher (`set_resource_capacity`, letta senza I/O dall'ultimo stato:
+    1 finché il worker non è stato interrogato, poi i posti dichiarati). Misurato sullo stesso server, 3PGK ripetuta:
+
+    | Calcoli insieme | Totale | Per modello |
+    |---|---|---|
+    | 1 | 141 s | 141 s |
+    | 16 | 122 s | 7,6 s |
+    | 32 | 142 s | 4,4 s |
+    | 64 | 167 s | 2,6 s |
+
+    Con 16 calcoli la memoria usata è rimasta intorno a 20 GB: gli indici stanno nella cache del sistema, condivisa.
+  - **Profili riusati (`QMEAN_PROFILE_CACHE_GB`, predefinito 10):** HHblits dipende solo dalla sequenza. Il wrapper
+    avvolge `run_qmean._seqanno`: prima della ricerca copia `<md5 della sequenza>.a3m` dalla cartella del database in
+    `/cache/profiles` (il nome cambia se l'indice degli a3m cambia), dopo salva il profilo nuovo con una scrittura
+    atomica; `run_qmean.py` usa da sé un a3m già presente. Risultato identico (provato: stesso QMEAN4 Z-score), ricerca
+    saltata. La pulizia dopo ogni calcolo toglie i profili meno usati oltre il massimo (fino all'80%). Il worker riporta
+    `bioloom_profiles` (riusati, calcolati) e BioLoom lo scrive nel log.
   - **Risorse nell'uscita:** il worker riporta processori, giudizio sulla memoria (`ok` | `swap`) e secondi dell'intero
     calcolo (`bioloom_hhblits`). `engines/qmean_local.score` li porta nel risultato del job come `hhblits` e li scrive nel
     log («QMEAN locale concluso in … s nel worker»). Il campo è `null` con SWISS-MODEL e con un worker che non li riporta.

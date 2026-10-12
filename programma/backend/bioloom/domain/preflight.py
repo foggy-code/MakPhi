@@ -559,9 +559,13 @@ def qmean_checks(*, mode: str, status: Optional[dict], memory_problem: Optional[
     out.append(check("info", "qmean_local",
                      f"QMEAN locale{f' con {db}' if db else ''}: da qualche minuto a oltre mezz'ora per modello "
                      "(HHblits sul database)."))
+    slots = status.get("slots") or 1
     if status.get("busy") or status.get("queued"):
-        out.append(check("info", "qmean_busy", "Il servizio QMEAN locale sta eseguendo un altro calcolo: questo "
-                                               "resterà in coda (un calcolo alla volta)."))
+        out.append(check("info", "qmean_busy",
+                         "Il servizio QMEAN locale sta eseguendo un altro calcolo: questo resterà in coda (un calcolo "
+                         "alla volta)." if slots <= 1 else
+                         f"Il servizio QMEAN locale ha tutti i {slots} posti occupati: questo calcolo resterà in "
+                         "coda."))
     return out
 
 

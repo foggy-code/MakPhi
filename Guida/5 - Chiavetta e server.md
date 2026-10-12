@@ -289,9 +289,19 @@ fino a 50.000 sequenze. Per stimare tempi e spazio sul server prima di partire c
 - **Memoria:** HHblits deve tenere in memoria gli indici e l'intero cs219: circa 12 GB con UniRef30_2020_06.
   Con meno rilegge il cs219 di continuo e si fermerebbe a metà: BioLoom confronta prima la memoria del container
   `qmean` con quella richiesta dal database scelto e, se non basta, il job fallisce subito con il motivo (o passa al
-  fallback su SWISS-MODEL, se attivo). Un calcolo QMEAN locale alla volta: gli altri restano in coda.
-- **Processori:** con memoria sufficiente HHblits usa fino a 8 processori, con memoria al limite uno solo.
-  `QMEAN_HHBLITS_CPU` in `server.env` fissa il numero.
+  fallback su SWISS-MODEL, se attivo). Normalmente un calcolo QMEAN locale alla volta: gli altri restano in coda.
+- **Più calcoli insieme:** su un server con molta memoria `QMEAN_PARALLEL` in `server.env` fa valutare più modelli
+  contemporaneamente, ognuno con il suo HHblits; il servizio scende da solo a quanti ne entrano nella memoria e lo
+  scrive nel log all'avvio. Misurato su un server a 224 core con UniRef30_2023_02: un modello alla volta 141 s; 16
+  insieme 7,6 s per modello, 32 insieme 4,4 s, 64 insieme 2,6 s. Le pipeline con QMEAN automatico ne guadagnano in
+  proporzione; un valore intorno alla metà dei core lascia spazio alla modellazione.
+- **Processori:** con memoria sufficiente HHblits usa fino a 8 processori, divisi fra i calcoli contemporanei; con
+  memoria al limite uno solo. `QMEAN_HHBLITS_CPU` in `server.env` fissa il numero per ogni calcolo, ma oltre 8 non
+  accelera (misurato: 141 s con 8, 129 con 16, 134 con 32).
+- **Profili riusati:** il profilo HHblits di ogni sequenza si conserva nel volume `bioloom_qmean_cache` (fino a
+  `QMEAN_PROFILE_CACHE_GB`, predefinito 10 GB; prima si tolgono i meno usati). Un altro modello della stessa sequenza,
+  o lo stesso modello rivalutato, salta la ricerca su UniRef30 e ha lo stesso risultato in pochi secondi. Il profilo
+  vale solo per quella versione del database: aggiornando UniRef30 si ricalcola.
 - **Fallback su SWISS-MODEL:** va attivato esplicitamente in Impostazioni → Generale → QMEAN e servizi
   remoti, con il consenso all'invio e l'email. Se QMEAN locale non è raggiungibile o fallisce, il modello
   viene inviato a SWISS-MODEL e il risultato riporta il motivo. Su un server condiviso valuta se i modelli degli utenti

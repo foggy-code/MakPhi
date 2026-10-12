@@ -10,12 +10,14 @@ rete interna di Docker (nessuna porta pubblicata, nessun accesso al socket di Do
   GET    /jobs/<id>             stato, risultato (JSON di run_qmean.py) o errore
   DELETE /jobs/<id>             annulla (termina il processo)
 
-I database stanno in /uniclust_src (disco esterno, sola lettura; vedi uniclust.py). Un calcolo alla volta:
-HHblits su UniClust30 usa molta memoria e disco. Anche copie e conversioni passano dalla stessa coda, così
-non cambiano mai i file sotto un calcolo in corso. La cartella di lavoro di ogni calcolo viene eliminata
+I database stanno in /uniclust_src (disco esterno, sola lettura; vedi uniclust.py). Un calcolo alla volta, salvo
+QMEAN_PARALLEL su un server con memoria per più HHblits (slots_for). Anche copie e conversioni passano dalla stessa
+coda e da sole, così non cambiano mai i file sotto un calcolo in corso. I profili HHblits di ogni sequenza si
+conservano nel volume /cache (run_qmean_wrapper.py): una sequenza già vista non rifà la ricerca su UniRef30. La cartella di lavoro di ogni calcolo viene eliminata
 appena finisce; i risultati restano in memoria per RESULT_TTL secondi.
 """
 
+import hashlib
 import io
 import json
 import os
@@ -47,13 +49,114 @@ GB, MB = uniclust.GB, uniclust.MB
 # QMEAN_HHBLITS_CPU li fissa; altrimenti tutti (max 8) se la memoria basta, 1 se è al limite: con 4 thread e
 # il cs219 che non sta in memoria HHblits passava il 95% del tempo a rileggerlo (misurato su UniRef30_2020_06).
 CPU_FIXED = int(os.environ.get("QMEAN_HHBLITS_CPU") or 0)
-CPU_ALL = min(os.cpu_count() or 1, 8)
+CPU_COUNT = os.cpu_count() or 1
+CPU_ALL = min(CPU_COUNT, 8)
+# Calcoli QMEAN contemporanei (QMEAN_PARALLEL, predefinito 1: un PC ha memoria per uno solo). Ognuno è un HHblits con
+# la sua copia degli indici e del cs219 in memoria: il numero effettivo si ferma a quanti ne entrano (slots_for). Copie
+# locali e conversioni dei database restano esclusive: nessun calcolo mentre cambiano i file.
+PARALLEL = max(1, int(os.environ.get("QMEAN_PARALLEL") or 1))
+# Profili HHblits riusati per sequenza (run_qmean_wrapper.py): spazio massimo in GB, 0 = nessun riuso
+PROFILE_CACHE_GB = float(os.environ.get("QMEAN_PROFILE_CACHE_GB") or 10)
+PROFILES = os.path.join(uniclust.CACHE, "profiles")
 
 
-def hhblits_cpu(fit):
+def hhblits_cpu(fit, slots=1):
+    """Processori di un HHblits: QMEAN_HHBLITS_CPU se indicato; 1 con la memoria al limite; altrimenti tutti (max 8),
+    divisi fra i calcoli contemporanei."""
     if CPU_FIXED > 0:
         return CPU_FIXED
-    return CPU_ALL if fit in ("ok", None) else 1
+    if fit not in ("ok", None):
+        return 1
+    return CPU_ALL if slots <= 1 else max(1, min(CPU_ALL, CPU_COUNT // slots))
+
+
+def slots_for(db, mem):
+    """Calcoli contemporanei possibili con questo database: QMEAN_PARALLEL, non oltre quanti HHblits entrano nel 90%
+    della memoria (il cs219 nella cache del sistema è uno per tutti)."""
+    if PARALLEL <= 1 or not db or not mem:
+        return 1
+    need = uniclust.memory_needed(db)
+    shared = uniclust.memory_recommended(db) - need
+    if need <= 0:
+        return PARALLEL
+    return max(1, min(PARALLEL, int((mem["total"] * 0.9 - shared) // need)))
+
+
+class Gate:
+    """Calcoli QMEAN insieme fino a `slots`; copie e conversioni da sole (aspettano la fine dei calcoli in corso e
+    fermano i nuovi finché non tocca a loro)."""
+
+    def __init__(self, slots=1):
+        self.slots = max(1, slots)
+        self.running = 0
+        self.exclusive = False
+        self.waiting = 0
+        self._cond = threading.Condition()
+
+    def enter(self, exclusive):
+        with self._cond:
+            if exclusive:
+                self.waiting += 1
+                while self.exclusive or self.running:
+                    self._cond.wait()
+                self.waiting -= 1
+                self.exclusive = True
+            else:
+                while self.exclusive or self.waiting or self.running >= self.slots:
+                    self._cond.wait()
+                self.running += 1
+
+    def leave(self, exclusive):
+        with self._cond:
+            if exclusive:
+                self.exclusive = False
+            else:
+                self.running -= 1
+            self._cond.notify_all()
+
+
+_gate = Gate()
+_prune_lock = threading.Lock()
+
+
+def profile_folder(db):
+    """Cartella dei profili di questo database: cambia se il database sul disco cambia (dimensione o data dell'indice
+    degli a3m), così un profilo non sopravvive a un aggiornamento di UniRef30."""
+    index = db["a3m"][1]
+    try:
+        st = os.stat(index)
+        stamp = "%s:%d:%d" % (index, st.st_size, int(st.st_mtime))
+    except OSError:
+        stamp = index
+    return os.path.join(PROFILES, "%s-%s" % (uniclust.safe_id(db["id"]), hashlib.md5(stamp.encode()).hexdigest()[:12]))
+
+
+def prune_profiles(limit_bytes=None):
+    """Toglie i profili usati meno di recente finché lo spazio scende all'80% del massimo; le cartelle di database non
+    più presenti contano come le altre (si svuotano per prime se più vecchie). Restituisce i byte occupati."""
+    limit = PROFILE_CACHE_GB * GB if limit_bytes is None else limit_bytes
+    with _prune_lock:
+        files = []
+        for root, _dirs, names in os.walk(PROFILES):
+            for name in names:
+                path = os.path.join(root, name)
+                try:
+                    st = os.stat(path)
+                except OSError:
+                    continue
+                files.append((st.st_mtime, st.st_size, path))
+        total = sum(size for _t, size, _p in files)
+        if total <= limit:
+            return total
+        for _mtime, size, path in sorted(files):
+            if total <= limit * 0.8:
+                break
+            try:
+                os.remove(path)
+                total -= size
+            except OSError:
+                pass
+        return total
 MAX_BODY = 50 * 1024 * 1024
 
 _jobs = {}
@@ -145,10 +248,10 @@ def _run_qmean(job):
     fit = uniclust.memory_fit(db, mem)
     if fit == "insufficient":
         raise RuntimeError(uniclust.memory_message(db, mem))
-    cpu = hhblits_cpu(fit)
+    cpu = hhblits_cpu(fit, _gate.slots)
     workdir = tempfile.mkdtemp(prefix="qmean_")
     try:
-        prefix = uniclust.prepare_view(db)
+        prefix = uniclust.prepare_view(db, os.path.join(workdir, "uniclust_view"))
         model = os.path.join(workdir, "model.pdb")
         with io.open(model, "w", encoding="utf-8") as fh:
             fh.write(job["pdb"])
@@ -163,6 +266,8 @@ def _run_qmean(job):
             cmd += ["--seqres", seqres]
         # TMPDIR: anche le cartelle temporanee di run_qmean.py finiscono in workdir, eliminata sempre
         env = dict(os.environ, BIOLOOM_UNICLUST_PREFIX=prefix, BIOLOOM_HHBLITS_CPU=str(cpu), TMPDIR=workdir)
+        if PROFILE_CACHE_GB > 0:
+            env["BIOLOOM_PROFILE_CACHE"] = profile_folder(db)
         with _lock:
             job.update(method_used=method, database_used=uniclust.public(db), cpu=cpu)
         code, output = _run_process(job, cmd, workdir, env, MAX_SECONDS)
@@ -173,7 +278,15 @@ def _run_qmean(job):
         with io.open(out_path, encoding="utf-8") as fh:
             result = json.load(fh)
         result["bioloom_database"] = uniclust.public(db)
-        result["bioloom_hhblits"] = {"cpu": cpu, "memory": fit, "seconds": round(time.time() - job["started"])}
+        result["bioloom_hhblits"] = {"cpu": cpu, "memory": fit, "seconds": round(time.time() - job["started"]),
+                                     "parallel": _gate.slots}
+        try:  # profili riusati e calcolati (run_qmean_wrapper.py)
+            with io.open(os.path.join(workdir, "profile_cache.json"), encoding="utf-8") as fh:
+                result["bioloom_profiles"] = json.load(fh)
+        except (OSError, ValueError):
+            pass
+        if PROFILE_CACHE_GB > 0:
+            prune_profiles()
         return result, output[-4000:]
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
@@ -234,6 +347,19 @@ def _run(job_id):
     with _lock:
         job = _jobs.get(job_id)
         if job is None or job["status"] == "cancelled":
+            return
+        exclusive = job["type"] != "qmean"
+    _gate.enter(exclusive)
+    try:
+        _run_entered(job_id)
+    finally:
+        _gate.leave(exclusive)
+
+
+def _run_entered(job_id):
+    with _lock:
+        job = _jobs.get(job_id)
+        if job is None or job["status"] == "cancelled":  # annullato mentre aspettava il suo turno
             return
         job["status"] = "running"
         job["started"] = time.time()
@@ -316,11 +442,13 @@ class Handler(BaseHTTPRequestHandler):
             prefer = (query.get("prefer") or [""])[0] or None
             force = (query.get("refresh") or ["0"])[0] == "1"
             with _lock:
-                busy = any(j["status"] == "running" for j in _jobs.values())
+                running = sum(1 for j in _jobs.values() if j["status"] == "running")
                 waiting = sum(1 for j in _jobs.values() if j["status"] == "queued")
             payload = database_status(prefer, force=force)
-            payload.update(qmtl=qmtl_status(), busy=busy, queued=waiting,
-                           qmean_version=os.environ.get("VERSION_QMEAN"))
+            # busy: nessun posto libero per un altro calcolo (con un calcolo alla volta: uno in corso)
+            payload.update(qmtl=qmtl_status(), busy=running >= _gate.slots, running=running, queued=waiting,
+                           slots=_gate.slots, qmean_version=os.environ.get("VERSION_QMEAN"),
+                           profiles=profiles_status())
             self._send(200, payload)
             return
         if url.path.startswith("/jobs/"):
@@ -400,10 +528,26 @@ class Server(socketserver.ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
 
+def profiles_status():
+    """Profili HHblits salvati: numero, spazio occupato e massimo (byte)."""
+    count = size = 0
+    for root, _dirs, names in os.walk(PROFILES):
+        for name in names:
+            try:
+                size += os.path.getsize(os.path.join(root, name))
+                count += 1
+            except OSError:
+                pass
+    return {"enabled": PROFILE_CACHE_GB > 0, "count": count, "size": size, "limit": int(PROFILE_CACHE_GB * GB)}
+
+
 def main():
-    threading.Thread(target=_worker_loop, daemon=True).start()
     port = int(os.environ.get("QMEAN_WORKER_PORT", "8080"))
     status = database_status(force=True)
+    chosen = uniclust.choose(_scan.get()["databases"], None)
+    _gate.slots = slots_for(chosen, status.get("memory"))
+    for _ in range(max(PARALLEL, 1)):  # un thread per posto; i posti in più (memoria) aspettano al cancello
+        threading.Thread(target=_worker_loop, daemon=True).start()
     for db in status["databases"]:
         print("[qmean-worker] database %s (%s, %s, %s): %s, copia locale %s"
               % (db["name"], db["version"] or "versione ?", db["format"], db["filesystem"] or "fs ?", db["state"],
@@ -412,7 +556,11 @@ def main():
     print("[qmean-worker] QMTL: %s" % (qmtl_status()["version"] or "assente (metodo QMEAN)"), flush=True)
     mem = status.get("memory") or {}
     print("[qmean-worker] HHblits: %d processori, memoria %.1f GB + swap %.1f GB" % (
-        hhblits_cpu(status["uniclust"].get("memory")), mem.get("total", 0) / GB, mem.get("swap", 0) / GB), flush=True)
+        hhblits_cpu(status["uniclust"].get("memory"), _gate.slots), mem.get("total", 0) / GB,
+        mem.get("swap", 0) / GB), flush=True)
+    print("[qmean-worker] calcoli contemporanei: %d%s; profili riusati: %s" % (
+        _gate.slots, " (QMEAN_PARALLEL=%d, limitati dalla memoria)" % PARALLEL if _gate.slots < PARALLEL else "",
+        "fino a %s GB" % uniclust.num(PROFILE_CACHE_GB) if PROFILE_CACHE_GB > 0 else "no"), flush=True)
     if status["uniclust"].get("memory_message"):
         print("[qmean-worker] attenzione: " + status["uniclust"]["memory_message"], flush=True)
     Server(("0.0.0.0", port), Handler).serve_forever()

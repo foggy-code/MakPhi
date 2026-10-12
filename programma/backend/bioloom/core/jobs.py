@@ -104,9 +104,9 @@ IO_WORKERS = 8
 # Fase mostrata mentre un processo aspetta uno slot del budget di CPU (vedi JobContext.run)
 WAIT_STAGE = "In attesa di CPU libera"
 WAIT_SUFFIX = " · in attesa di CPU libera"
-# Risorse esclusive (core/dispatch.py): il servizio QMEAN locale esegue un calcolo alla volta
+# Risorse (core/dispatch.py): il servizio QMEAN locale esegue un calcolo alla volta, o i posti di QMEAN_PARALLEL
 QMEAN_LOCAL = "qmean_local"
-RESOURCE_STAGE = {QMEAN_LOCAL: "In coda: il servizio QMEAN locale sta eseguendo un altro calcolo"}
+RESOURCE_STAGE = {QMEAN_LOCAL: "In coda: il servizio QMEAN locale è occupato da altri calcoli"}
 
 _extra_env: dict[str, str] = {}
 
@@ -506,9 +506,12 @@ class JobManager:
         self._fixed_workers = workers
         self._handlers: dict[str, _Registration] = {}
         self.budget = CpuBudget(self.cpu_workers)
+        self._capacities: dict[str, Callable[[], int]] = {}  # posti delle risorse (`set_resource_capacity`)
         self._pools = {
-            "cpu": Dispatcher("cpu", self.cpu_workers, self._execute, on_blocked=self._blocked),
-            "io": Dispatcher("io", lambda: IO_WORKERS, self._execute, on_blocked=self._blocked),
+            "cpu": Dispatcher("cpu", self.cpu_workers, self._execute, on_blocked=self._blocked,
+                              resource_capacity=self._resource_slots),
+            "io": Dispatcher("io", lambda: IO_WORKERS, self._execute, on_blocked=self._blocked,
+                             resource_capacity=self._resource_slots),
         }
         self._lock = threading.RLock()
         self._cancel_events: dict[str, threading.Event] = {}
@@ -534,6 +537,17 @@ class JobManager:
         self._flusher.start()
 
     # ------------------------------------------------------------------ registrazione e avvio
+    def set_resource_capacity(self, resource: str, slots: Callable[[], int]) -> None:
+        """Posti di una risorsa (predefinito 1: esclusiva). `slots()` si legge a ogni scelta del dispatcher, sotto il
+        suo lock: niente I/O (es. il valore in cache di qmean_local.slots)."""
+        self._capacities[resource] = slots
+        for pool in self._pools.values():
+            pool.wake()
+
+    def _resource_slots(self, resource: str) -> int:
+        fn = self._capacities.get(resource)
+        return 1 if fn is None else fn()
+
     def register(self, kind: str, fn: Handler, pool: str = "cpu", eta: Optional[EtaEstimator] = None,
                  priority: Optional[int] = None, resource: Optional[ResourceFn] = None) -> None:
         """Registra l'handler di un tipo di job; `eta` sostituisce la stima dal progresso (es. la pipeline).
