@@ -105,6 +105,13 @@ COMPUTE_CACHE_MAX_MB = 2048
 COMPUTE_CACHE_MIN_MB = 100
 COMPUTE_CACHE_LIMIT_MB = 102400
 
+# Lunghezza massima della sequenza bersaglio (impostazione `max_sequence_length`, residui): predefinito, minimo e
+# massimo. Il massimo viene dal formato PDB, che numera i residui con 4 cifre (colonne 23-26): oltre 9999 i modelli
+# di MODELLER e i programmi di analisi che li leggono (mkdssp, PROCHECK, ProSA) non numerano più i residui.
+SEQUENCE_MAX_DEFAULT = 5000
+SEQUENCE_MAX_MIN = 100
+SEQUENCE_MAX_LIMIT = 9999
+
 
 def _url_like(value: str) -> bool:
     """Forma minima di un URL http(s) senza spazi; la verifica completa è in engines/remote.validate_esmfold_url."""
@@ -119,6 +126,9 @@ class UserSettings(BaseModel):
     modeller_python: str = Field("", description="Interprete Python con MODELLER; vuoto = rilevamento automatico")
     max_workers: int = Field(0, ge=0, le=256, description="Job di calcolo in parallelo; 0 = core-1")
     job_timeout_minutes: int = Field(120, ge=1, le=24 * 60)
+    max_sequence_length: int = Field(
+        SEQUENCE_MAX_DEFAULT, ge=SEQUENCE_MAX_MIN, le=SEQUENCE_MAX_LIMIT,
+        description="Residui al massimo della sequenza bersaglio (modellazione, ricerca, allineamento, disordine)")
     qmean_remote: bool = Field(False, description="Consente l'invio dei modelli a SWISS-MODEL per QMEAN")
     qmean_mode: Literal["local", "remote"] = Field(
         "local", description="Dove calcolare QMEAN: locale (UniClust30 sul disco esterno) o SWISS-MODEL")
@@ -182,6 +192,9 @@ class UserSettings(BaseModel):
         - Tetto della cache dei calcoli: le impostazioni precedenti non hanno `compute_cache_max_mb` e prendono il
           predefinito (2048 MB); un valore che non è un intero fra il minimo e il massimo (file modificato a mano)
           torna al predefinito invece di azzerare tutte le impostazioni.
+        - Lunghezza massima della sequenza: le impostazioni precedenti non hanno `max_sequence_length` e prendono il
+          predefinito (5000 residui, il limite fisso delle versioni precedenti); un valore non valido torna al
+          predefinito come il tetto della cache (`from_file`).
         """
         if isinstance(data, dict) and data.get("qmean_mode") == "auto":
             data = {**data, "qmean_mode": "local"}
@@ -198,13 +211,14 @@ class UserSettings(BaseModel):
 
     @classmethod
     def from_file(cls, raw: dict) -> "UserSettings":
-        """Impostazioni lette da settings.json: un tetto della cache non valido (scritto a mano) torna al predefinito,
-        come i valori strani di `_migrate`, invece di azzerare tutte le impostazioni."""
-        if isinstance(raw, dict) and "compute_cache_max_mb" in raw:
-            value = raw["compute_cache_max_mb"]
-            if isinstance(value, bool) or not isinstance(value, int) \
-                    or not COMPUTE_CACHE_MIN_MB <= value <= COMPUTE_CACHE_LIMIT_MB:
-                raw = {k: v for k, v in raw.items() if k != "compute_cache_max_mb"}
+        """Impostazioni lette da settings.json: un tetto della cache o una lunghezza massima non validi (scritti a
+        mano) tornano al predefinito, come i valori strani di `_migrate`, invece di azzerare tutte le impostazioni."""
+        for name, low, high in (("compute_cache_max_mb", COMPUTE_CACHE_MIN_MB, COMPUTE_CACHE_LIMIT_MB),
+                                ("max_sequence_length", SEQUENCE_MAX_MIN, SEQUENCE_MAX_LIMIT)):
+            if isinstance(raw, dict) and name in raw:
+                value = raw[name]
+                if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+                    raw = {k: v for k, v in raw.items() if k != name}
         return cls(**raw)
 
     def remote_qmean_allowed(self) -> bool:

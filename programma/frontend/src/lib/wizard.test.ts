@@ -45,6 +45,9 @@ describe("passo 1: sequenza", () => {
     expect(sequenceIssues({ sequence: YEAST_UB })).toEqual([]);
     expect(sequenceIssues({ sequence: "L".repeat(5000) })).toEqual([]);
     expect(sequenceIssues({ sequence: "L".repeat(5001) })[0]).toContain("5001 residui, massimo 5000");
+    // limite delle Impostazioni (max_sequence_length)
+    expect(sequenceIssues({ sequence: "L".repeat(5001) }, 8000)).toEqual([]);
+    expect(sequenceIssues({ sequence: "L".repeat(101) }, 100)[0]).toContain("101 residui, massimo 100");
     expect(sequenceIssues({ sequence: "ACGUACGUUUGACCAGUAGG" })[0]).toContain("acido nucleico");
     expect(cleanSequence(" mqif vk\n12*")).toBe("MQIFVK");
   });

@@ -44,7 +44,7 @@ from ..domain import ligands, sequences, template_rank
 from ..domain.report import alignment_identity
 from ..domain.sequences import SeqRecord
 from ..engines import quality, search
-from .compute import ComputeService, PreparedTemplates, model_remarks
+from .compute import ComputeService, PreparedTemplates, check_length, model_remarks
 from .reports import ReportService
 
 # Scelta dei template: "auto" = il migliore della ricerca, "fixed" = scelti dall'utente, "multi" = fino a
@@ -440,6 +440,7 @@ class PipelineService:
         mode = p.get("template_mode", "auto")
         cross = is_cross(p)
         try:
+            check_length(item["sequence"], ctx.settings.max_sequence_length)  # impostazione letta all'avvio dell'elemento
             if mode == "fixed":
                 templates = p.get("templates") or []
                 if cross:  # M × N: il template della coppia

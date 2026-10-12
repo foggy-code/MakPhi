@@ -263,6 +263,7 @@ export interface Settings {
   modeller_python: string;
   max_workers: number;
   job_timeout_minutes: number;
+  max_sequence_length: number;
   qmean_remote: boolean;
   qmean_mode: "local" | "remote";
   qmean_fallback_remote: boolean;

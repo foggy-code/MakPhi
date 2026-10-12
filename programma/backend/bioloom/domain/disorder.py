@@ -82,7 +82,8 @@ SEG_LOCUT = 2.2
 SEG_HICUT = 2.5
 SEG_MAXTRIM = 100  # accorciamento massimo del segmento nell'ottimizzazione, come `maxtrim` di seg
 
-# Come services/compute.MAX_SEQUENCE: la sequenza più lunga che BioLoom modella
+# Lunghezza massima predefinita, come config.SEQUENCE_MAX_DEFAULT; chi chiama passa quella delle Impostazioni
+# (`max_sequence_length`), la sequenza più lunga che BioLoom modella
 MAX_LENGTH = 5000
 
 # Domini di InterPro usati per la copertura: le voci di tipo "domain"; senza, le superfamiglie omologhe (domini
@@ -121,8 +122,8 @@ def _residue_terms(aa: str) -> Optional[tuple[float, float]]:
     return (kd + 4.5) / 9.0, charge
 
 
-def clean(sequence: str) -> str:
-    """Sequenza proteica validata (IUPAC esteso) e limitata a `MAX_LENGTH` residui; accetta anche un FASTA con una
+def clean(sequence: str, max_length: int = MAX_LENGTH) -> str:
+    """Sequenza proteica validata (IUPAC esteso) e limitata a `max_length` residui; accetta anche un FASTA con una
     sola sequenza (l'intestazione non entra nella sequenza)."""
     text = sequence or ""
     if text.lstrip().startswith(">"):
@@ -131,8 +132,8 @@ def clean(sequence: str) -> str:
             raise AppError("Indica una sola sequenza: il FASTA ne contiene più di una.", code="multiple_sequences")
         text = records[0].sequence if records else ""
     seq, _kind = sequences.validate_sequence(text, "protein")
-    if len(seq) > MAX_LENGTH:
-        raise AppError(f"Sequenza troppo lunga ({len(seq)} residui, massimo {MAX_LENGTH}).", code="sequence_too_long")
+    if len(seq) > max_length:
+        raise AppError(f"Sequenza troppo lunga ({len(seq)} residui, massimo {max_length}).", code="sequence_too_long")
     if sequences.detect_kind(seq) == "nucleic":  # FoldIndex e SEG (parametri per proteine) valgono per le proteine
         raise AppError("La sequenza sembra di un acido nucleico: disordine e bassa complessità si calcolano sulle "
                        "proteine.", code="not_protein")
@@ -336,14 +337,14 @@ def span_text(start: int, end: int) -> str:
     return str(start) if start == end else f"{start}–{end}"
 
 
-def predict(sequence: str, *, window: int = FOLDINDEX_WINDOW) -> dict:
+def predict(sequence: str, *, window: int = FOLDINDEX_WINDOW, max_length: int = MAX_LENGTH) -> dict:
     """Disordine (FoldIndex), regioni disordinate lunghe e regioni a bassa complessità (SEG) di una sequenza.
 
     Posizioni 1-based. `scores` segue la scala di FoldIndex (negativo = disordinato; in pratica tra −1,5 e +0,8);
     `fraction` è la frazione di residui nelle regioni disordinate lunghe, `below_fraction` quella dei residui con
     FoldIndex < 0 anche fuori dalle regioni.
     """
-    seq = clean(sequence)
+    seq = clean(sequence, max_length)
     n = len(seq)
     scores = foldindex(seq, window)
     regions = disordered_regions(scores)

@@ -703,6 +703,13 @@ Tutti i calcoli passano dal `JobManager` (priorità di ogni tipo nella [coda](#c
   [Tempo residuo e aggiornamenti in tempo reale](#tempo-residuo-e-aggiornamenti-in-tempo-reale));
 - annullamento immediato (i processi registrati vengono terminati) e timeout configurabile (`job_timeout_minutes`,
   predefinito 120);
+- lunghezza massima della sequenza bersaglio configurabile (`max_sequence_length`, «Lunghezza massima della sequenza
+  (residui)»: predefinito 5000, il limite fisso delle versioni precedenti, da 100 a 9999, `config.SEQUENCE_MAX_*`).
+  Il massimo viene dal formato PDB, che numera i residui con 4 cifre. Il valore in uso vale per ricerca, allineamento,
+  modellazione (`compute.check_length`, errore `sequence_too_long`), per ogni elemento della pipeline (fallisce con lo
+  stesso messaggio, gli altri proseguono), per i controlli prima dell'avvio e per disordine e copertura
+  (`disorder.clean(max_length=...)`); il wizard lo legge dalle Impostazioni. Tempi e memoria misurati sul server in
+  [Lunghezza della sequenza: tempi misurati](#lunghezza-della-sequenza-tempi-misurati);
 - al riavvio i job rimasti attivi vengono marcati come falliti (nessuno stato "fantasma"), con fase
   "Interrotto"; gli elementi di pipeline non conclusi diventano falliti con lo stesso motivo;
 - lo stato finale si scrive anche se il salvataggio dei file non riesce (disco dati pieno) o se la cartella di
@@ -1304,7 +1311,7 @@ segnali separati.
 
 | Rotta | Corpo | Risposta ed errori |
 |---|---|---|
-| `POST /api/bio/disorder` | `{"sequence"}`: testo o FASTA con una sola sequenza | punteggi (`scores`, scala di FoldIndex), `regions`, `fraction` (residui nelle regioni), `below_fraction`, `low_complexity`, `params`, `limits`. Nessuna rete. 400 `sequence_too_long` oltre 5000 residui (come la modellazione), `empty_sequence`, `not_protein`, `multiple_sequences`; 422 oltre 200 000 caratteri |
+| `POST /api/bio/disorder` | `{"sequence"}`: testo o FASTA con una sola sequenza | punteggi (`scores`, scala di FoldIndex), `regions`, `fraction` (residui nelle regioni), `below_fraction`, `low_complexity`, `params`, `limits`. Nessuna rete. 400 `sequence_too_long` oltre `max_sequence_length` residui (come la modellazione), `empty_sequence`, `not_protein`, `multiple_sequences`; 422 oltre 200 000 caratteri |
 | `POST /api/bio/coverage` | `sequence`, `accession`, `templates` [{id, chains}] (al massimo 10), `alignment` (PIR), `ranges` [{label, start, end}] (al massimo 500), `plddt_min` | `disorder`, `domains`, `domains_info` (fonte o motivo dell'assenza), `templates` (per template o intervallo: copertura, avvisi, domini, suggerimento; `error` se il template non c'è o non ha la catena, gli altri si valutano lo stesso), `combined` |
 
 **Consenso** (`consensus.disorder_signal`): FoldIndex per catena sulle lettere dei residui presenti nel file, nell'ordine
@@ -3205,7 +3212,7 @@ message, suggestion}` più `group: "coverage"` per gli avvisi di copertura e `te
 | `blast_missing`, `pdbaa_missing`, `mmseqs_missing`, `mmseqs_database_missing` | error | motore locale senza programma o database | |
 | `mmseqs_no_index`, `remote_ncbi`, `ncbi_email`, `alphafold_blast`, `remote_alphafold` | info | ricerca più lenta senza l'indice (12 s invece di 2,3); dati che vanno a NCBI o EBI | misure di MMseqs2 in [Flusso dei dati](#flusso-dei-dati-e-file-temporanei) |
 | `ncbi_many_searches` / `ncbi_parallel` | warning / info | pipeline con oltre 50 ricerche NCBI (motore NCBI, o AlphaFold DB senza accessione) / più ricerche NCBI insieme | linee guida di NCBI per l'interfaccia URL di BLAST: oltre 50 ricerche di sera o nel fine settimana, una richiesta ogni 10 s |
-| `pipeline_too_long` / `pipeline_alphafold`, `pipeline_disorder` | warning / info | sequenze oltre 5000 residui; sequenze con e senza accessione; sequenze con regioni disordinate lunghe (FoldIndex, fino a 500 000 residui in tutto) | |
+| `pipeline_too_long` / `pipeline_alphafold`, `pipeline_disorder` | warning / info | sequenze oltre `max_sequence_length` residui (falliranno); sequenze con e senza accessione; sequenze con regioni disordinate lunghe (FoldIndex, fino a 500 000 residui in tutto) | |
 | `rerun_not_reproducible`, `rerun_unsupported`, `package_*`, `rerun_tool_unavailable` / `rerun_version_bioloom`, `rerun_version_image`, `rerun_version_tool`, `rerun_version_library`, `rerun_tool_missing`, `rerun_platform` / `rerun_remote_input`, `package_note` | error / warning / info | riesecuzione (`kind: "rerun"`): calcolo che dipende da servizi remoti o non rieseguibile, pacchetto non valido o scaduto, parametri che la rotta di avvio rifiuterebbe, strumento obbligatorio assente / versioni diverse da quelle del pacchetto / input remoti con la data e note del pacchetto; più licenza MODELLER, PROCHECK e ProSA, durata del calcolo originale, spazio e coda come gli altri calcoli | versioni diverse: avvisi, mai errori (F9.4) |
 | `esmfold_remote_disabled` / `sequence_too_long`, `invalid_sequence`, `accession_required`, `invalid_chain`, `predict_input_required` | error | predizione (F9.3): ESMFold senza il consenso all'invio; la stessa validazione della rotta `POST /api/predict` (sequenza oltre 400 residui o con lettere non standard, accessione mancante per AlphaFold DB, catena assente) | il consenso è un esito a sé, con il suggerimento |
 | `remote_esmfold`, `esmfold_cached`, `remote_alphafold`, `alphafold_in_library`, `predict_no_compare` | info | la sequenza andrà al servizio (rete); predizione già in cache (nessuna richiesta); a EBI va solo l'accessione, o il modello è già in libreria; nessuna struttura da confrontare | nessuna richiesta remota dai controlli: la cache si legge dal disco |
@@ -3259,7 +3266,7 @@ la logica dei passi è in `lib/wizard.ts` (pura, testata).
 
 | Passo | Contenuto | Per andare avanti |
 |---|---|---|
-| 1 Sequenza | incollata, dal progetto, da file o da UniProt (accessione); anteprima di disordine, bassa complessità e domini (`/api/bio/coverage`); «Aggiungi al progetto» | sequenza proteica di 1–5000 residui |
+| 1 Sequenza | incollata, dal progetto, da file o da UniProt (accessione); anteprima di disordine, bassa complessità e domini (`/api/bio/coverage`); «Aggiungi al progetto» | sequenza proteica di 1–`max_sequence_length` residui (Impostazioni, predefinito 5000) |
 | 2 Template | motore consigliato (`engineChoices`: RCSB, oppure il motore locale delle Impostazioni se è pronto) con le alternative spiegate e la disponibilità; risultati per punteggio, consigliati preselezionati una volta per ricerca; suggerimento di un altro motore se non ci sono template o il migliore è in zona crepuscolare | almeno un template, una catena per voce PDB |
 | 3 Allineamento | job `align2d` sui template scelti; «Apri nell'Editor PIR» (`/pir?fromjob=`) oppure un documento PIR del progetto (con i template del documento) | allineamento completato o documento scelto |
 | 4 Opzioni | 5 modelli (esempio di base del tutorial di MODELLER), raffinamento Rapido (le impostazioni predefinite di MODELLER; Standard ha la dinamica più lunga `refine.fast`, circa 1,4 volte il tempo, misurato), analisi estesa se PROCHECK o ProSA sono utilizzabili, ligandi se la scelta predefinita trasferisce qualcosa, ritaglio pLDDT a 70 con un template AlphaFold; ogni opzione con la spiegazione (`optionNotes`); i predefiniti si ricalcolano finché l'utente non cambia nulla | controlli preventivi senza errori |
@@ -4011,6 +4018,28 @@ proteina globulare, nessuno fra le catene): il tempo cresce in proporzione ai re
 | altro (PROCHECK, log, allineamento, script) | 2714 KiB | 3344 KiB |
 | **risultati** | **3103 KiB** | **4861 KiB** |
 | intermedi di MODELLER (scratch, "Conserva file intermedi") | 855 KiB | 3168 KiB |
+
+### Lunghezza della sequenza: tempi misurati
+
+Misure del 2026-10-12 sul server christopher (Podman, 224 core) con `scripts/benchmark_lunghezza.py`, una lunghezza
+per container: 1 modello con raffinamento `fast`, qualità estesa e QMEAN locale (UniRef30_2023_02) sul modello. Il
+template è sintetico (catena di 3IU0 ripetuta e affiancata su una griglia), il bersaglio è la sua sequenza con il 5 % di
+mutazioni: i tempi misurano la lunghezza, non la difficoltà del bersaglio. ProSA senza licenza valida (Podman senza
+root), quindi quasi gratis.
+
+| Residui | Modello + qualità | QMEAN | Memoria di BioLoom (RSS) |
+|---|---|---|---|
+| 500 | 50 s | 2,0 min | 156 MB |
+| 1000 | 2,2 min | 2,4 min | 187 MB |
+| 2000 | 7,4 min | 3,2 min | 255 MB |
+| 3500 | 24 min | 5,0 min | 470 MB |
+| 5000 | 55 min | 6,6 min | 801 MB |
+
+- Il tempo di MODELLER cresce circa come L^1,7 (raddoppiare la lunghezza costa circa tre volte il tempo); l'analisi
+  di qualità resta sotto i 2 minuti fino a 5000 residui (DOPE è il passo più lungo); HHblits in QMEAN occupa ~16,5 GB
+  indipendentemente dalla lunghezza.
+- 7500 e 9999 residui non sono stati misurati (prove interrotte): il massimo 9999 dell'impostazione viene dal formato
+  PDB e non è verificato con i programmi di analisi.
 
 ## Frontend
 

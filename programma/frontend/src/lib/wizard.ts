@@ -19,7 +19,8 @@ export const STEPS: { step: WizardStep; title: string; hint: string }[] = [
   { step: 6, title: "Risultati", hint: "Modello migliore, voto e consenso" },
 ];
 
-/** Come services/compute.MAX_SEQUENCE: la sequenza più lunga che BioLoom modella. */
+/** Lunghezza massima predefinita della sequenza (config.SEQUENCE_MAX_DEFAULT): vale finché non arrivano le Impostazioni,
+ * che hanno quella in uso (`max_sequence_length`). */
 export const MAX_LENGTH = 5000;
 /** Template al massimo per modello (services/compute._template_specs). */
 export const MAX_TEMPLATES = 10;
@@ -83,11 +84,11 @@ export function looksNucleic(sequence: string): boolean {
 }
 
 /** Perché la sequenza non si può usare (nessun motivo = pronta). */
-export function sequenceIssues(target: { sequence: string }): string[] {
+export function sequenceIssues(target: { sequence: string }, maxLength = MAX_LENGTH): string[] {
   const seq = cleanSequence(target.sequence);
   if (!seq) return ["Inserisci la sequenza bersaglio."];
   const out: string[] = [];
-  if (seq.length > MAX_LENGTH) out.push(`Sequenza troppo lunga (${seq.length} residui, massimo ${MAX_LENGTH}): modella un dominio alla volta.`);
+  if (seq.length > maxLength) out.push(`Sequenza troppo lunga (${seq.length} residui, massimo ${maxLength}): modella un dominio alla volta, oppure alza il limite nelle Impostazioni.`);
   if (looksNucleic(seq)) out.push("La sequenza sembra di un acido nucleico: serve la sequenza della proteina.");
   return out;
 }
@@ -300,8 +301,8 @@ export function missingModelJob(hasSummary: boolean, error: string | null | unde
 }
 
 /** Il passo più avanzato che si può aprire con lo stato attuale. */
-export function reachable(state: WizardState, done: JobsDone): WizardStep {
-  if (sequenceIssues(state.target).length) return 1;
+export function reachable(state: WizardState, done: JobsDone, maxLength = MAX_LENGTH): WizardStep {
+  if (sequenceIssues(state.target, maxLength).length) return 1;
   if (templatesIssues(state.templates).length) return 2;
   if (!(done.align || state.pirDoc)) return 3;
   if (optionsIssues(state.options).length || !state.modelJob) return 4;

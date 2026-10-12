@@ -33,7 +33,7 @@ from ..engines import modeller, qmean_local, remote, search, tools
 from ..engines import refine as refine_engine
 from .analysis import AnalysisService
 from .mutations import MutationService
-from .compute import MAX_SEQUENCE, _apply_ligand_options, _record, _template_specs, complex_templates
+from .compute import _apply_ligand_options, _record, _template_specs, complex_templates
 from .coverage import CoverageService
 from .pipeline import effective_parallel, is_cross
 from .templates import normalize_id
@@ -230,7 +230,7 @@ class PreflightService:
             residues, target_seq = self._pir(out, alignment, len(p.get("templates") or []))
         elif target.get("sequence"):
             try:
-                record = _record(target)
+                record = _record(target, self.settings.max_sequence_length)
                 residues, target_seq = len(record.sequence), record.sequence
             except AppError as exc:
                 checks.append(rules.invalid(exc.code, exc.message))
@@ -291,9 +291,9 @@ class PreflightService:
                                                               f"selezionati {n_templates}."))
         target = next((e for e in entries if e.kind == "sequence"), None)
         letters = "".join(c for c in (target.sequence if target else "") if c.isalpha())
-        if len(letters) > MAX_SEQUENCE:
+        if len(letters) > self.settings.max_sequence_length:
             out["checks"].append(rules.invalid("sequence_too_long", f"Sequenza troppo lunga ({len(letters)} residui, "
-                                                                    f"massimo {MAX_SEQUENCE})."))
+                                                                    f"massimo {self.settings.max_sequence_length})."))
         return len(letters), target.sequence if target else ""
 
     def _coverage(self, out: dict, *, target_seq: str, alignment: Optional[str], specs: list, context: dict,
@@ -309,7 +309,8 @@ class PreflightService:
         service = CoverageService(self.library)
         result = service.check(sequence="" if alignment else target_seq, accession=accession,
                                templates=[] if alignment else [{"id": s.id, "chains": s.chains} for s in specs],
-                               alignment=alignment, plddt_min=plddt_min)
+                               alignment=alignment, plddt_min=plddt_min,
+                               max_length=self.settings.max_sequence_length)
         out["coverage"] = result
         combined = result.get("combined")
         out["checks"] += rules.coverage_checks(combined)
@@ -346,7 +347,7 @@ class PreflightService:
 
     def _align2d(self, p: dict, context: dict, out: dict) -> None:
         try:
-            _record(p.get("target") or {})
+            _record(p.get("target") or {}, self.settings.max_sequence_length)
         except AppError as exc:
             out["checks"].append(rules.invalid(exc.code, exc.message))
         self._templates(out, p.get("templates") or [])  # align2d li scarica come la modellazione
@@ -378,11 +379,12 @@ class PreflightService:
         mode = p.get("template_mode") or "auto"
         engine = p.get("engine") or "rcsb"
         items = len(records)
-        too_long = [r.name for r in records if len(r.sequence) > MAX_SEQUENCE]
+        limit = self.settings.max_sequence_length
+        too_long = [r.name for r in records if len(r.sequence) > limit]
         if too_long:
             checks.append(rules.check(
                 "warning", "pipeline_too_long",
-                f"{len(too_long)} {'sequenza supera' if len(too_long) == 1 else 'sequenze superano'} i {MAX_SEQUENCE} "
+                f"{len(too_long)} {'sequenza supera' if len(too_long) == 1 else 'sequenze superano'} i {limit} "
                 f"residui e {'fallirà' if len(too_long) == 1 else 'falliranno'}: {', '.join(too_long[:5])}"
                 + ("…" if len(too_long) > 5 else "") + ".", "Dividile in domini o toglile dal multi-FASTA."))
         search_time = None
@@ -497,7 +499,7 @@ class PreflightService:
     # ------------------------------------------------------------------------------ ricerca e analisi
     def _search(self, p: dict, context: dict, out: dict) -> None:
         try:
-            _record(p.get("query") or {})
+            _record(p.get("query") or {}, self.settings.max_sequence_length)
         except AppError as exc:
             out["checks"].append(rules.invalid(exc.code, exc.message))
         engine = p.get("engine") or "rcsb"

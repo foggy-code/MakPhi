@@ -19,6 +19,11 @@ const TABS: { value: Tab; label: string }[] = [
   { value: "storage", label: "Spazio e file temporanei" },
 ];
 
+/** Lunghezza massima della sequenza: limiti e predefinito di max_sequence_length nel server (config.SEQUENCE_MAX_*). */
+const SEQUENCE_MAX = { min: 100, max: 9999, default: 5000 };
+const SEQUENCE_MAX_HINT = `Da ${SEQUENCE_MAX.min} a ${SEQUENCE_MAX.max} (il formato PDB numera i residui con 4 cifre); predefinito ${SEQUENCE_MAX.default}. `
+  + "Vale per modellazione, ricerca, allineamento, pipeline e disordine. Tempo e memoria crescono più che in proporzione con la lunghezza.";
+
 export default function SettingsPage() {
   const toast = useToast();
   const [params, setParams] = useSearchParams();
@@ -128,6 +133,10 @@ export default function SettingsPage() {
                     </Field>
                     <Field label="Timeout per processo (minuti)" hint="MODELLER e strumenti esterni">
                       <input className="input" type="number" min={1} max={1440} value={form.job_timeout_minutes} onChange={(e) => set("job_timeout_minutes", Number(e.target.value))} />
+                    </Field>
+                    <Field label="Lunghezza massima della sequenza (residui)" hint={SEQUENCE_MAX_HINT}>
+                      <input className="input" type="number" min={SEQUENCE_MAX.min} max={SEQUENCE_MAX.max} value={form.max_sequence_length}
+                        onChange={(e) => set("max_sequence_length", Number(e.target.value))} />
                     </Field>
                     <Field label="Motore di ricerca predefinito">
                       <select className="input" value={form.default_search_engine} onChange={(e) => set("default_search_engine", e.target.value as Settings["default_search_engine"])}>
