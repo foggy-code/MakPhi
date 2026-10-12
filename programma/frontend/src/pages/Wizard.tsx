@@ -30,7 +30,7 @@ import { parsePir } from "../lib/pir";
 import { RANK_BAND_TONE, rankTone, rankTooltip } from "../lib/templateRank";
 import {
   accessionFor, accessionValid, align2dRequest, applyUrl, cleanSequence, encodeWizardParams, engineChoices, fillFromJobs, hitRole, initialState,
-  isChosen, MAX_TEMPLATES, missingModelJob, modelRequest, nextEngineHint, optionNotes, optionsIssues, preflightFor, preselect, rankedHits, reachable,
+  isChosen, MAX_LENGTH, MAX_TEMPLATES, missingModelJob, modelRequest, nextEngineHint, optionNotes, optionsIssues, preflightFor, preselect, rankedHits, reachable,
   reasonedOptions, restoreState, resultSummary, searchRequest, sequenceIssues, STEPS, templatesIssues, toggleTemplate, withAccession,
   withAlignJob, withModelJob, withOptions, withPirDoc, withSearchJob, withTarget, withTemplates, type OptionContext, type Refinement, type WizardState,
   type WizardStep,
@@ -109,6 +109,9 @@ export default function Wizard() {
   const [params, setParams] = useSearchParams();
   // libreria dei template: dice quali sono predetti (ritaglio pLDDT) nel riepilogo e nelle opzioni
   const { data: library } = useAsync<TemplateItem[]>(() => api.templates(), []);
+  // lunghezza massima della sequenza delle Impostazioni (finché non arriva, quella predefinita)
+  const { data: limits } = useAsync<Settings | null>(() => api.settings().catch(() => null), []);
+  const maxLength = limits?.max_sequence_length ?? MAX_LENGTH;
   const draftKey = `bioloom.wizard.${projectId ?? "-"}`;
   const [state, setState] = useState<WizardState>(() => restoreState(params, readDraft(draftKey)));
   const stateRef = useRef(state);
@@ -163,7 +166,7 @@ export default function Wizard() {
   };
   const loaded = (!state.alignJob || !!align.job || !!align.error) && (!state.modelJob || !!model.job || !!model.error);
   const modelMissing = missingModelJob(!!model.summary, model.error, model.gone);
-  const max = reachable(state, done);
+  const max = reachable(state, done, maxLength);
   const step: WizardStep = loaded ? (Math.min(state.step, max) as WizardStep) : state.step;
   // modellazione finita mentre si guarda l'avanzamento: ai risultati. Solo se il job era in corso: tornando al passo
   // 5 con il browser (indietro) a job già concluso si resta lì, altrimenti «indietro» non uscirebbe mai dal passo 6
@@ -196,7 +199,7 @@ export default function Wizard() {
       <Stepper state={state} step={step} max={max} onGo={(s) => go(s)} />
       {step > 1 && <WizardSummary state={state} library={library} />}
       {!loaded && <p className="small text-2 row" style={{ gap: 6 }}><Spinner /> Ripresa della procedura…</p>}
-      {step === 1 && <SequenceStep state={state} update={update} onNext={() => go(2)} />}
+      {step === 1 && <SequenceStep state={state} update={update} maxLength={maxLength} onNext={() => go(2)} />}
       {step === 2 && <TemplateStep state={state} update={update} search={search} projectId={projectId} onNext={() => go(3)} />}
       {step === 3 && <AlignmentStep state={state} update={update} align={align} projectId={projectId} onNext={() => go(4)} />}
       {step === 4 && (
@@ -240,13 +243,13 @@ type Update = (fn: (s: WizardState) => WizardState) => void;
 type JobHook<R> = ReturnType<typeof useJob<R>>;
 
 // ---------------------------------------------------------------------------------- 1. sequenza
-function SequenceStep({ state, update, onNext }: { state: WizardState; update: Update; onNext: () => void }) {
+function SequenceStep({ state, update, maxLength, onNext }: { state: WizardState; update: Update; maxLength: number; onNext: () => void }) {
   const { projectId } = useProject();
   const toast = useToast();
   const { data: projectSeqs, reload } = useAsync<Sequence[]>(() => (projectId ? api.sequences(projectId) : Promise.resolve([])), [projectId]);
   const [uniprot, setUniprot] = useState("");
   const [busy, setBusy] = useState(false);
-  const issues = sequenceIssues(state.target);
+  const issues = sequenceIssues(state.target, maxLength);
   const sequence = cleanSequence(state.target.sequence);
   const accessionOk = accessionValid(state.accession);
   const preview = useCoverageCheck(!issues.length && accessionOk ? { sequence, accession: state.accession || null } : null);

@@ -24,7 +24,6 @@ from ..engines import align, modeller, qmean_local, quality, remote, search
 from ..engines.modeller import TemplateSpec
 from .templates import TemplateLibrary, normalize_id
 
-MAX_SEQUENCE = 5000
 # Qualità "all": modelli dello stesso job analizzati insieme (non oltre i job paralleli delle Impostazioni). Ogni
 # analisi lancia fino a 4 processi brevi (DOPE, mkdssp, PROCHECK, ProSA): con 3 analisi un computer a 4 core resta
 # occupato senza code lunghe (misure in ARCHITETTURA.md, "Prestazioni"); i processi li governa comunque il budget di
@@ -100,10 +99,16 @@ class PreparedTemplates:
         return copy.deepcopy(info), reused
 
 
-def _record(raw: dict, default: str = "TARGET") -> SeqRecord:
+def check_length(seq: str, max_length: int) -> None:
+    """Sequenza bersaglio entro la lunghezza massima (impostazione `max_sequence_length`)."""
+    if len(seq) > max_length:
+        raise AppError(f"Sequenza troppo lunga ({len(seq)} residui, massimo {max_length}: si cambia nelle "
+                       "Impostazioni).", code="sequence_too_long")
+
+
+def _record(raw: dict, max_length: int, default: str = "TARGET") -> SeqRecord:
     seq, _kind = sequences.validate_sequence(raw.get("sequence", ""), "protein", raw.get("name") or "sequenza")
-    if len(seq) > MAX_SEQUENCE:
-        raise AppError(f"Sequenza troppo lunga ({len(seq)} residui, massimo {MAX_SEQUENCE}).")
+    check_length(seq, max_length)
     return SeqRecord(sequences.sanitize_code(raw.get("name"), default=default), seq)
 
 
@@ -323,7 +328,7 @@ class ComputeService:
 
     # ------------------------------------------------------------------------------ ricerca
     def handle_search(self, ctx: JobContext, p: dict) -> dict:
-        rec = _record(p.get("query", {}), default="query")
+        rec = _record(p.get("query", {}), ctx.settings.max_sequence_length, default="query")
         result = search.search(ctx, rec.sequence, engine=p.get("engine", "rcsb"),
                                evalue=float(p.get("evalue", 10.0)), max_hits=int(p.get("max_hits", 50)),
                                databases_dir=self.databases_dir, taxid=str(p.get("taxid", "")).strip(),
@@ -943,7 +948,7 @@ class ComputeService:
                     "warnings": [], "pap": "",
                     "chains": [{"template_chain": c.template_chain, "name": c.name, "length": len(c.sequence),
                                 "same_as": c.same_as} for c in target_complex["chains"]]}
-        target = _record(p.get("target") or {})
+        target = _record(p.get("target") or {}, ctx.settings.max_sequence_length)
         modeller.modeller_python(ctx)
         templates = self._prepare_templates(ctx, _template_specs(p.get("templates", [])), ctx.workdir)
         pir, warnings = self._run_alignment(ctx, target, templates, ctx.workdir, (0.1, 0.9))
@@ -959,7 +964,7 @@ class ComputeService:
                 if (ctx.workdir / "alignment.pap").exists() else ""}
 
     def handle_model(self, ctx: JobContext, p: dict) -> dict:
-        target = _record(p["target"]) if p.get("target") and p["target"].get("sequence") else None
+        target = _record(p["target"], ctx.settings.max_sequence_length) if p.get("target") and p["target"].get("sequence") else None
         return self.run_modeling(ctx, target=target, templates_raw=p.get("templates", []),
                                  alignment=p.get("alignment") or None, options_raw=p.get("options", {}),
                                  quality_mode=p.get("quality", "best"),

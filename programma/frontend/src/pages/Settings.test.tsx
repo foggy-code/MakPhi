@@ -11,7 +11,7 @@ import SettingsPage from "./Settings";
 // Impostazioni: interprete di MODELLER bloccato in modalità server (come l'indirizzo di ESMFold) e spazio massimo
 // della cache dei calcoli.
 const SETTINGS: Settings = {
-  contact_email: "", modeller_python: "/opt/python/bin/python3", max_workers: 0, job_timeout_minutes: 120, qmean_remote: false,
+  contact_email: "", modeller_python: "/opt/python/bin/python3", max_workers: 0, job_timeout_minutes: 120, max_sequence_length: 5000, qmean_remote: false,
   qmean_mode: "remote", qmean_fallback_remote: false, qmean_uniclust: "", qmean_timeout_minutes: 60, default_search_engine: "rcsb",
   keep_intermediates: false, procheck_plots: "all", uploads_retention_days: 7, compute_cache: true, compute_cache_max_mb: 2048,
   esmfold_remote: false, esmfold_url: "",
@@ -76,5 +76,21 @@ describe("spazio massimo della cache dei calcoli", () => {
     await userEvent.click(screen.getByRole("button", { name: /Salva/ }));
     const put = calls.find((c) => c.method === "PUT" && c.url === "/api/settings");
     expect(JSON.parse(String(put?.init.body)).compute_cache_max_mb).toBe(4096);
+  });
+});
+
+describe("lunghezza massima della sequenza", () => {
+  it("campo in residui (100–9999) fra le impostazioni di esecuzione, salvato con le altre", async () => {
+    const { calls } = server({ container: true, auth: false });
+    renderSettings("/settings");
+    const field = await screen.findByLabelText(/Lunghezza massima della sequenza/) as HTMLInputElement;
+    expect(field.value).toBe("5000");
+    expect(field.min).toBe("100");
+    expect(field.max).toBe("9999");
+    await userEvent.clear(field);
+    await userEvent.type(field, "8000");
+    await userEvent.click(screen.getByRole("button", { name: /Salva/ }));
+    const put = calls.find((c) => c.method === "PUT" && c.url === "/api/settings");
+    expect(JSON.parse(String(put?.init.body)).max_sequence_length).toBe(8000);
   });
 });

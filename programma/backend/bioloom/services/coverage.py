@@ -172,7 +172,7 @@ class CoverageService:
     # ------------------------------------------------------------------------------ verifica completa
     def check(self, *, sequence: str = "", accession: Optional[str] = None, templates: Optional[list[dict]] = None,
               alignment: Optional[str] = None, ranges: Optional[list[dict]] = None,
-              plddt_min: Optional[float] = None) -> dict:
+              plddt_min: Optional[float] = None, max_length: int = disorder.MAX_LENGTH) -> dict:
         templates, ranges = templates or [], ranges or []
         if len(templates) > MAX_TEMPLATES:
             raise AppError(f"Massimo {MAX_TEMPLATES} template per verifica.")
@@ -188,8 +188,8 @@ class CoverageService:
             sets.extend(pir_sets)
         else:
             target = sequence
-        target = disorder.clean(target)
-        prediction = disorder.predict(target)
+        target = disorder.clean(target, max_length)
+        prediction = disorder.predict(target, max_length=max_length)
         domains, domains_info = self.domains(accession, target)
         if not alignment:
             for t in templates:

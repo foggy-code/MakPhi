@@ -50,10 +50,10 @@ class DisorderIn(BaseModel):
 
 
 @router.post("/bio/disorder")
-def predict_disorder(body: DisorderIn) -> dict:
+def predict_disorder(body: DisorderIn, core: Core = Depends(get_core)) -> dict:
     """Disordine per residuo (FoldIndex), regioni disordinate lunghe e regioni a bassa complessità (SEG) dalla sola
-    sequenza proteica (al massimo 5000 residui). Nessun servizio remoto."""
-    return disorder.predict(body.sequence)
+    sequenza proteica (al massimo i residui dell'impostazione `max_sequence_length`). Nessun servizio remoto."""
+    return disorder.predict(body.sequence, max_length=core.settings.get().max_sequence_length)
 
 
 class TemplateIn(BaseModel):
@@ -85,7 +85,8 @@ def coverage_check(body: CoverageIn, core: Core = Depends(get_core)) -> dict:
     libreria (`templates`, insieme), da un PIR (`alignment`) o da intervalli del bersaglio (`ranges`, uno per uno)."""
     return CoverageService(core.library).check(
         sequence=body.sequence, accession=body.accession, templates=[t.model_dump() for t in body.templates],
-        alignment=body.alignment, ranges=[r.model_dump() for r in body.ranges], plddt_min=body.plddt_min)
+        alignment=body.alignment, ranges=[r.model_dump() for r in body.ranges], plddt_min=body.plddt_min,
+        max_length=core.settings.get().max_sequence_length)
 
 
 @router.post("/sequences/parse-fasta")

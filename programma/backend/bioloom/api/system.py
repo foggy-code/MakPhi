@@ -131,6 +131,7 @@ class SettingsUpdate(BaseModel):
     modeller_python: str | None = None
     max_workers: int | None = None
     job_timeout_minutes: int | None = None
+    max_sequence_length: int | None = None  # residui al massimo della sequenza bersaglio
     qmean_remote: bool | None = None
     qmean_mode: str | None = None
     qmean_fallback_remote: bool | None = None
@@ -150,6 +151,7 @@ class SettingsUpdate(BaseModel):
 SETTING_LABELS = {
     "contact_email": "Email di contatto", "modeller_python": "Interprete Python con MODELLER",
     "max_workers": "Job di calcolo in parallelo", "job_timeout_minutes": "Timeout per processo (minuti)",
+    "max_sequence_length": "Lunghezza massima della sequenza (residui)",
     "qmean_mode": "Dove calcolare QMEAN", "qmean_uniclust": "Versione di UniClust30/UniRef30",
     "qmean_timeout_minutes": "Tempo massimo per un calcolo QMEAN locale (minuti)",
     "default_search_engine": "Motore di ricerca predefinito",
