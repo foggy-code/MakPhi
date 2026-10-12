@@ -36,6 +36,7 @@ import { andList, GRADE_RULE, missingAnalyses, qmeanTone } from "../lib/qualityV
 import {
   colorOptions, isPlddt, QMEAN_LOCAL_THRESHOLD, regionResidues, residueColoring, resiNumber, type ColorBy, type ColorOption, type ResidueRef,
 } from "../lib/residueColoring";
+import { followedJob } from "../lib/predict";
 import { qmeanRoute } from "../lib/status";
 import type { ToolJobMemory } from "../lib/toolJobs";
 import "../styles/quality.css";
@@ -54,12 +55,18 @@ function structureUrl(source: StructureSource | undefined): string | null {
 function QmeanPanel({ source, onDone }: { source: StructureSource; onDone?: (jobId: string) => void }) {
   const { projectId } = useProject();
   const toast = useToast();
-  const [jobId, setJobId] = useState<string | null>(null);
+  // segue il QMEAN già calcolato o in corso sulla struttura (anche quello automatico di modellazione e pipeline)
+  const key = `${source.type}|${source.id ?? ""}|${source.job_id ?? ""}|${source.file ?? ""}`;
+  const { data: latest } = useAsync(() => api.latestQmean(source).catch(() => null), [key]);
+  const [started, setStarted] = useState<{ key: string; job: string } | null>(null);
+  const jobId = followedJob(started?.key === key ? started.job : null, latest);
   const { data: settings } = useAsync<Settings>(() => api.settings(), []);
   const { data: dbs } = useAsync<DatabaseStatus>(() => api.databases(), []);
   const { job, summary, cancel } = useJob<QmeanResult>(jobId);
   const [fallback, setFallback] = useState<boolean | null>(null);
   const done = job?.status === "completed";
+  const ended = job?.status === "failed" || job?.status === "cancelled"; // si può riprovare
+  const auto = job?.id === jobId && job?.params?.auto === true;
   useEffect(() => {
     if (jobId && done) onDone?.(jobId); // il consenso si ricalcola includendo QMEAN
     // eslint-disable-next-line react-hooks/exhaustive-deps -- si avvisa una volta per job completato; onDone può cambiare a ogni disegno del genitore
@@ -74,7 +81,7 @@ function QmeanPanel({ source, onDone }: { source: StructureSource; onDone?: (job
       Se QMEAN locale non è disponibile o non riesce, usa SWISS-MODEL (il modello lascia il computer)
     </label>
   );
-  if (!route.source && !jobId) {
+  if (!route.source && (!jobId || ended)) {
     return (
       <div className="stack-sm">
         <p className="small text-2">{route.hint}</p>
@@ -84,13 +91,13 @@ function QmeanPanel({ source, onDone }: { source: StructureSource; onDone?: (job
   }
   const run = () =>
     api.qmean({ project_id: projectId ?? undefined, source, fallback: settings.qmean_mode === "local" ? useFallback : undefined })
-      .then((j) => setJobId(j.id)).catch(toast.error);
+      .then((j) => setStarted({ key, job: j.id })).catch(toast.error);
   const components = r ? Object.entries(r.components ?? {}) : [];
   // rapporto di SWISS-MODEL: link solo per un indirizzo https (il valore arriva dal servizio esterno)
   const reportUrl = httpsUrl(r?.url);
   return (
     <div className="stack-sm">
-      {!jobId && (
+      {(!jobId || ended) && (
         <>
           <div className="row">
             <button type="button" className="btn btn-sm" onClick={run}>
@@ -102,6 +109,7 @@ function QmeanPanel({ source, onDone }: { source: StructureSource; onDone?: (job
         </>
       )}
       {jobId && !r && <JobPanel summary={summary} onCancel={cancel} compact />}
+      {auto && <p className="small text-2">QMEAN avviato in automatico alla fine del calcolo che ha prodotto il modello.</p>}
       {r?.fallback && <Alert tone="warn">QMEAN locale non riuscito ({r.fallback.reason}): calcolato su SWISS-MODEL.</Alert>}
       {r && (
         <div className="grid grid-3">

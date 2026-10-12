@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from ..core.container import Core
 from ..core.errors import AppError
+from ..services.structure_tools import StructureToolsService
 from .deps import get_core, read_upload
 
 router = APIRouter(prefix="/api", tags=["Calcoli"])
@@ -93,6 +94,7 @@ class ModelIn(BaseModel):
     options: dict = {}
     quality: Literal["best", "all", "none"] = "best"
     extended_quality: bool = False
+    qmean: bool = Field(False, description="QMEAN sul modello migliore, accodato a modellazione completata")
     complex: Optional[ComplexIn] = Field(None, description="Modalità Complesso: un template, una sequenza per catena")
 
 
@@ -142,6 +144,8 @@ class PipelineIn(BaseModel):
     options: dict = {"models": 3, "refinement": "fast"}
     quality: bool = True
     extended_quality: bool = False
+    qmean: bool = Field(False, description="QMEAN sul modello migliore di ogni sequenza, accodato a pipeline "
+                                           "completata")
     parallel: int = Field(2, ge=1, le=256)
     notify_email: str = Field("", max_length=254, description="Indirizzo a cui inviare un avviso alla fine (senza "
                                                                "risultati); vuoto = nessun avviso")
@@ -255,6 +259,16 @@ def submit_qmean(body: QmeanIn, core: Core = Depends(get_core)) -> dict:
     core.compute.resolve_structure(body.source.model_dump())
     return core.jobs.submit("qmean", body.model_dump(), project_id=_project(core, body.project_id),
                             title=f"QMEAN · {_label(body.source)}")
+
+
+@router.get("/qmean/latest")
+def latest_qmean(type: Literal["template", "job", "upload"] = Query(..., description="Tipo della sorgente"),
+                 id: Optional[str] = Query(None, max_length=200), job_id: Optional[str] = Query(None, max_length=64),
+                 file: Optional[str] = Query(None, max_length=500), core: Core = Depends(get_core)) -> dict:
+    """QMEAN completato più recente sulla struttura (null se non ce n'è uno) e quello in coda o in corso, come
+    `/api/analysis/latest`: la pagina Qualità ritrova anche i QMEAN automatici di modellazione e pipeline."""
+    source = {"type": type, "id": id, "job_id": job_id, "file": file}
+    return StructureToolsService(core.jobs, core.compute).lookup("qmean", source)
 
 
 @router.post("/pipeline")

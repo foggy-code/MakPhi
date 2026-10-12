@@ -1400,6 +1400,8 @@ export interface PipelineRequest {
   options?: Record<string, unknown>;
   quality?: boolean;
   extended_quality?: boolean;
+  /** QMEAN sul modello migliore di ogni sequenza, accodato a pipeline completata */
+  qmean?: boolean;
   parallel?: number;
   /** indirizzo per l'avviso via email alla fine (senza risultati); vuoto = nessun avviso */
   notify_email?: string;

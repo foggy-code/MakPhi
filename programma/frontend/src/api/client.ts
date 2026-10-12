@@ -352,7 +352,7 @@ export const api = {
     post<JobSummary>("/api/align2d", body),
   /** `options.hetatm` + `options.ligands`: ligandi, cofattori e metalli da trasferire (elenco = solo quei gruppi);
    *  `complex` + `options.symmetry`: bersaglio a più catene su un solo template (F5.3) */
-  model: (body: { project_id?: string; target?: { name: string; sequence: string } | null; alignment?: string | null; templates: TemplateRef[]; options: Record<string, unknown> & { hetatm?: boolean; ligands?: LigandRef[]; symmetry?: boolean; symmetry_weight?: number }; quality: string; extended_quality?: boolean; complex?: ComplexRequest | null }) =>
+  model: (body: { project_id?: string; target?: { name: string; sequence: string } | null; alignment?: string | null; templates: TemplateRef[]; options: Record<string, unknown> & { hetatm?: boolean; ligands?: LigandRef[]; symmetry?: boolean; symmetry_weight?: number }; quality: string; extended_quality?: boolean; qmean?: boolean; complex?: ComplexRequest | null }) =>
     post<JobSummary>("/api/model", body),
   loop: (body: { project_id?: string; source: StructureSource; chain: string; start: number; end: number; models: number; level: string }) =>
     post<JobSummary>("/api/model/loop", body),
@@ -369,6 +369,12 @@ export const api = {
   },
   qmean: (body: { project_id?: string; source: StructureSource; mode?: "local" | "remote"; fallback?: boolean; database?: string }) =>
     post<JobSummary>("/api/qmean", body),
+  /** QMEAN completato più recente sulla struttura (anche quello automatico di modellazione e pipeline), e quello in coda o in corso */
+  latestQmean: (source: StructureSource) => {
+    const params = new URLSearchParams({ type: source.type });
+    for (const key of ["id", "job_id", "file"] as const) if (source[key]) params.set(key, String(source[key]));
+    return get<LatestToolJob>(`/api/qmean/latest?${params}`);
+  },
   pipeline: (body: PipelineRequest) => post<JobSummary>("/api/pipeline", body),
   /** `sequence`, `template` (indici) e `best` valgono per le pipeline M × N */
   pipelineItems: (id: string, q: { page: number; size: number; status?: string; sort?: string; direction?: string; q?: string; sequence?: number; template?: number; best?: boolean }) => {
