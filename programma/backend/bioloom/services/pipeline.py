@@ -25,6 +25,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import sqlite3
 import threading
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
@@ -32,6 +33,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
+from ..core import cache
 from ..core import eta as eta_estimate
 from ..core.db import Database, encode_json, now_iso
 from ..core.errors import AppError, Conflict, NotFound
@@ -685,16 +687,49 @@ class PipelineService:
         params = self._params(job_id)
         if is_cross(params):
             return _write_csv(CROSS_FIELDS, self._metric_rows(job_id, rows, params, None))
+        qmean = self._qmean_by_file(job_id)
         buf = io.StringIO()
         fields = ["idx", "name", "length", "status", "template", "template_source", "identity", "coverage", "evalue",
                   "twilight", "dope", "zdope", "ga341", "grade", "grade_score", "rama_favored", "clashscore",
-                  "best_model", "error"]
+                  *QMEAN_FIELDS, "best_model", "error"]
         writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         for r in rows:
-            r = {**r, "zdope": (r.get("metrics") or {}).get("zdope")}
+            r = {**r, "zdope": (r.get("metrics") or {}).get("zdope"),
+                 **(_qmean_columns(qmean.get(r.get("best_model") or "")) if r.get("status") == "completed" else {})}
             writer.writerow({k: _csv_safe(r.get(k)) for k in fields})
         return buf.getvalue()
+
+    def _qmean_by_file(self, job_id: str) -> dict[str, dict]:
+        """Risultati QMEAN dei modelli della pipeline, per file: job `qmean` completati su un file del job (QMEAN
+        automatico o lanciato dalla pagina Qualità), il più recente per ogni file. Si tengono solo quelli che riguardano
+        il file attuale (stessa impronta): una ripresa che rielabora un elemento scrive un modello nuovo con lo stesso
+        nome, e il QMEAN di quello vecchio non vale più."""
+        where = "FROM jobs WHERE kind='qmean' AND status='completed'"
+        try:
+            rows = self.db.query(f"SELECT json_extract(params, '$.source.file') AS file, result {where} AND "
+                                 "json_extract(params, '$.source.job_id')=? ORDER BY finished_at, rowid", (job_id,))
+        except sqlite3.OperationalError:  # SQLite senza funzioni JSON: parametri interi
+            rows = []
+            for r in self.db.query(f"SELECT params, result {where} ORDER BY finished_at, rowid"):
+                source = (r.get("params") or {}).get("source") or {}
+                if source.get("job_id") == job_id:
+                    rows.append({"file": source.get("file"), "result": r.get("result")})
+        found: dict[str, dict] = {}
+        for r in rows:
+            if r.get("file") and isinstance(r.get("result"), dict):
+                found[str(r["file"])] = r["result"]  # in ordine di fine: resta il più recente
+        out: dict[str, dict] = {}
+        for file, result in found.items():
+            fingerprint = result.get("source_sha256")
+            if fingerprint:
+                try:
+                    if cache.content_hash(self.jobs.file_path(job_id, file)) != fingerprint:
+                        continue
+                except (AppError, OSError):
+                    continue
+            out[file] = result
+        return out
 
     def export_zip(self, job_id: str, dest: Path) -> None:
         """Scrive l'archivio su file (nello scratch): una pipeline di migliaia di modelli non passa dalla RAM.
@@ -746,11 +781,12 @@ class PipelineService:
         return cons.get("score"), cons.get("band")
 
     def _metric_rows(self, job_id: str, rows: list[dict], params: dict, files: Optional[dict[int, str]]) -> list[dict]:
-        return _metric_rows(rows, params, files, lambda r: self._consensus(job_id, r))
+        return _metric_rows(rows, params, files, lambda r: self._consensus(job_id, r), self._qmean_by_file(job_id))
 
     def _export_cross_zip(self, job: dict, rows: list[dict], dest: Path) -> None:
-        """ZIP di una pipeline M × N: una cartella per template, `template/<template>/`, con modello, report e
-        rapporto di qualità (se l'analisi era richiesta) di ogni coppia, tutti chiamati `<sequenza>__<template>`;
+        """ZIP di una pipeline M × N: una cartella per template e, dentro, una per sequenza,
+        `template/<template>/<sequenza>/`, con modello, report e rapporto di qualità (se l'analisi era richiesta) della
+        coppia, tutti chiamati `<sequenza>__<template>`;
         `metriche.csv` (una riga per coppia con tutte le metriche di MODELLER, del template e dell'analisi di qualità,
         e il percorso del modello nell'archivio), `migliori.csv` (una riga per sequenza, con le stesse metriche del
         modello migliore) e `parametri.json`. Report generati uno alla volta."""
@@ -766,9 +802,10 @@ class PipelineService:
                     model = self.jobs.file_path(job_id, r["best_model"])
                 except NotFound:
                     continue
-                _s, t = pair_of(r["idx"], params)
+                s, t = pair_of(r["idx"], params)
                 label = names["templates"][t] if t < len(names["templates"]) else pair_names(r["name"])[1]
-                base = f"template/{label}/{r['name']}"
+                sequence = names["sequences"][s] if s < len(names["sequences"]) else pair_names(r["name"])[0]
+                base = f"template/{label}/{sequence}/{r['name']}"
                 zf.write(model, f"{base}.pdb")
                 files[int(r["idx"])] = f"{base}.pdb"
                 quality_file = Path(str(model) + ".quality.json")
@@ -793,7 +830,13 @@ class PipelineService:
 CROSS_FIELDS = ["idx", "sequence", "template", "template_id", "length", "status", "best_in_sequence", "file",
                 "identity", "coverage", "twilight", "dope", "zdope", "ga341", "molpdf", "grade", "grade_score",
                 "rama_favored", "rama_outliers", "clashscore", "helix_pct", "strand_pct", "residues",
-                "consensus_score", "consensus_band", "prosa_z", "procheck_core", "procheck_g_overall", "error"]
+                "consensus_score", "consensus_band", "prosa_z", "procheck_core", "procheck_g_overall",
+                "qmean4_z", "qmean4", "qmean6_z", "qmean_local_mean", "qmean_interaction_z", "qmean_cbeta_z",
+                "qmean_packing_z", "qmean_torsion_z", "qmean_ss_agreement_z", "qmean_acc_agreement_z", "qmean_method",
+                "qmean_source", "error"]
+# QMEAN (job qmean sul modello, automatico o dalla pagina Qualità): punteggi globali e componenti (Z-score)
+QMEAN_FIELDS = CROSS_FIELDS[CROSS_FIELDS.index("qmean4_z"):CROSS_FIELDS.index("error")]
+QMEAN_COMPONENTS = ("interaction", "cbeta", "packing", "torsion", "ss_agreement", "acc_agreement")
 # metriche dell'analisi di qualità salvate nell'elemento (quality.summary_metrics, nelle metriche della riga)
 QUALITY_FIELDS = ("rama_outliers", "helix_pct", "strand_pct", "residues", "prosa_z", "procheck_core",
                   "procheck_g_overall")
@@ -803,16 +846,32 @@ BEST_FIELDS = ["sequence", "best_template", "template_id", "completed", "templat
                                                      "best_in_sequence", "file", "error")]]
 
 
+def _qmean_columns(result: Optional[dict]) -> dict:
+    """Colonne QMEAN di un risultato di job qmean: QMEAN4 (Z-score e punteggio 0-1), QMEAN6 Z-score, media dei punteggi
+    locali (QMEANDisCo o QMEAN), Z-score delle componenti, metodo e servizio; vuote senza QMEAN."""
+    if not isinstance(result, dict):
+        return {}
+    components = result.get("components") if isinstance(result.get("components"), dict) else {}
+    source = result.get("source")
+    return {"qmean4_z": result.get("qmean4_z"), "qmean4": result.get("qmean4"), "qmean6_z": result.get("qmean6_z"),
+            "qmean_local_mean": result.get("qmeandisco"),
+            **{f"qmean_{k}_z": components.get(f"{k}_z_score") for k in QMEAN_COMPONENTS},
+            "qmean_method": result.get("method"),
+            "qmean_source": {"local": "locale", "swissmodel": "SWISS-MODEL"}.get(source, source)}
+
+
 def _metric_rows(rows: list[dict], params: dict, files: Optional[dict[int, str]],
-                 consensus_of: Callable[[dict], tuple]) -> list[dict]:
-    """Una riga di metriche per coppia: MODELLER, template, analisi di qualità e consenso (dal rapporto di qualità)."""
+                 consensus_of: Callable[[dict], tuple], qmean: Optional[dict[str, dict]] = None) -> list[dict]:
+    """Una riga di metriche per coppia: MODELLER, template, analisi di qualità, consenso (dal rapporto di qualità) e
+    QMEAN (`qmean`: risultati per file del modello)."""
     names = pair_axes(params)
     out = []
     for r in rows:
         _with_pair(r, params, names)
         metrics = r.get("metrics") if isinstance(r.get("metrics"), dict) else {}
         score, band = consensus_of(r) if r.get("status") == "completed" else (None, None)
-        out.append({**r, "sequence": r["pair"]["sequence"], "template": r["pair"]["template"],
+        scores = _qmean_columns((qmean or {}).get(r.get("best_model") or "")) if r.get("status") == "completed" else {}
+        out.append({**r, **scores, "sequence": r["pair"]["sequence"], "template": r["pair"]["template"],
                     "template_id": r["pair"]["template_id"], "zdope": metrics.get("zdope"),
                     "molpdf": metrics.get("molpdf"), **{k: metrics.get(k) for k in QUALITY_FIELDS},
                     "consensus_score": score, "consensus_band": band,
@@ -1002,6 +1061,12 @@ Legenda delle colonne principali
 - grade: voto BioLoom A-D (Ramachandran, clashscore, zDOPE)
 - rama_favored: % di residui in regioni favorite del grafico di Ramachandran
 - clashscore: contatti sterici gravi ogni 1000 atomi (approssimato, atomi pesanti)
+- qmean4_z: QMEAN4 Z-score (da -4 in su: qualità paragonabile a strutture sperimentali); qmean4: punteggio 0-1;
+  qmean6_z: QMEAN6 Z-score; qmean_local_mean: media dei punteggi locali (0-1)
+- qmean_interaction_z, qmean_cbeta_z, qmean_packing_z, qmean_torsion_z, qmean_ss_agreement_z, qmean_acc_agreement_z:
+  Z-score delle componenti di QMEAN (interazioni, C-beta, impaccamento, torsioni, accordo con struttura secondaria e
+  accessibilità predette); qmean_method: QMEAN o QMEANDisCo; qmean_source: locale o SWISS-MODEL
+  Le colonne QMEAN sono piene solo per i modelli valutati (QMEAN automatico o dalla pagina Qualità).
 """
 
 README_CROSS_ZIP = """BioLoom v4 - esportazione pipeline sequenze x template
@@ -1011,7 +1076,7 @@ Ogni file si chiama <sequenza>__<template>: il nome dice da solo a quale coppia 
 anche fuori dalla sua cartella; nel PDB la riga "REMARK 999 BIOLOOM PIPELINE SEQUENCE ... TEMPLATE ..."
 ripete la coppia.
 
-template/<template>/     una cartella per template, con i modelli di tutte le sequenze su quel template:
+template/<template>/<sequenza>/   una cartella per template e, dentro, una per sequenza, con i file della coppia:
   <seq>__<tpl>.pdb       miglior modello (DOPE minimo) della coppia
   <seq>__<tpl>.html      report HTML della coppia (autonomo, stampabile in PDF)
   <seq>__<tpl>.quality.json  rapporto di qualità della coppia (se l'analisi era richiesta)
@@ -1035,4 +1100,11 @@ Legenda delle colonne principali
 - clashscore: contatti sterici gravi ogni 1000 atomi; helix_pct / strand_pct: struttura secondaria (%)
 - consensus_score / consensus_band: consenso fra i metodi (0-100) e fascia (buona, intermedia, scarsa)
 - prosa_z, procheck_core, procheck_g_overall: ProSA II e PROCHECK, solo con l'analisi estesa
+- qmean4_z: QMEAN4 Z-score (da -4 in su: qualità paragonabile a strutture sperimentali); qmean4: punteggio 0-1;
+  qmean6_z: QMEAN6 Z-score; qmean_local_mean: media dei punteggi locali (0-1)
+- qmean_interaction_z, qmean_cbeta_z, qmean_packing_z, qmean_torsion_z, qmean_ss_agreement_z, qmean_acc_agreement_z:
+  Z-score delle componenti di QMEAN (interazioni, C-beta, impaccamento, torsioni, accordo con struttura secondaria e
+  accessibilità predette); qmean_method: QMEAN o QMEANDisCo; qmean_source: locale o SWISS-MODEL
+  Le colonne QMEAN sono piene solo per i modelli valutati (QMEAN automatico: il migliore di ogni sequenza; oppure
+  calcolato dalla pagina Qualità); vuote per gli altri.
 """
