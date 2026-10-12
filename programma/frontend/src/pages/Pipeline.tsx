@@ -283,6 +283,7 @@ export default function Pipeline() {
   const [refinement, setRefinement] = useState("fast");
   const [quality, setQuality] = useState(true);
   const [extended, setExtended] = useState(false);
+  const [qmeanOn, setQmeanOn] = useState(false);
   // avviso per email alla fine (server di posta in Impostazioni → Notifiche email)
   const { data: notifyStatus } = useAsync(() => api.notify(), []);
   const { data: settings } = useAsync(() => api.settings(), []);
@@ -338,10 +339,11 @@ export default function Pipeline() {
     options: { models, refinement, plddt_trim: plddtTrim, plddt_min: plddtMin },
     quality,
     extended_quality: quality && extended,
+    qmean: qmeanOn,
     parallel,
     notify_email: notifyOn ? notifyEmail.trim() : "",
     use_cache: !recompute,
-  }), [projectId, name, fasta, mode, maxTemplates, templates, combination, engine, evalue, twFilter, twIdentity, twCoverage, models, refinement, plddtTrim, plddtMin, quality, extended, parallel, notifyOn, notifyEmail, recompute]);
+  }), [projectId, name, fasta, mode, maxTemplates, templates, combination, engine, evalue, twFilter, twIdentity, twCoverage, models, refinement, plddtTrim, plddtMin, quality, extended, qmeanOn, parallel, notifyOn, notifyEmail, recompute]);
   const preflight = usePreflight(useMemo(() => pipelinePreflight(body, count), [body, count]), 800);
 
   const submit = async () => {
@@ -469,6 +471,7 @@ export default function Pipeline() {
                 {predictedPossible && <PlddtOption enabled={plddtTrim} threshold={plddtMin} onEnabled={setPlddtTrim} onThreshold={setPlddtMin} />}
                 <label className="check"><input type="checkbox" checked={quality} onChange={(e) => setQuality(e.target.checked)} /> {cross ? "Analisi di qualità del modello di ogni coppia" : "Analisi di qualità del modello migliore"}</label>
                 {quality && <label className="check"><input type="checkbox" checked={extended} onChange={(e) => setExtended(e.target.checked)} /> Includi PROCHECK e ProSA II (qualche secondo in più per sequenza)</label>}
+                <label className="check"><input type="checkbox" checked={qmeanOn} onChange={(e) => setQmeanOn(e.target.checked)} /> Calcola QMEAN sul modello migliore di ogni sequenza alla fine (un job per modello; in locale uno alla volta, da qualche minuto a oltre mezz'ora ciascuno)</label>
                 <NotifyOption status={notifyStatus ?? null} enabled={notify} email={notifyEmail} onEnabled={setNotify} onEmail={setNotifyEmail} />
               </FormSection>
               {/* controlli preventivi: licenza, motore e database, tempi e limiti dei servizi, spazio */}

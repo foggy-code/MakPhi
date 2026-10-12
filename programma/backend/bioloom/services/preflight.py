@@ -271,6 +271,8 @@ class PreflightService:
             self._disk(out, *rules.modeling_bytes(residues, opts.models, analysed))
             checks += rules.single_model_checks(opts.models)
             checks += rules.identical_models_checks(opts.models, opts.refinement)
+        if p.get("qmean"):
+            self._auto_qmean(out, None)
         self._queue(out)
 
     def _pir(self, out: dict, text: str, n_templates: int) -> tuple[int, str]:
@@ -428,7 +430,19 @@ class PreflightService:
         self._disk(out, sum(r for r, _s in per_item), sum(largest))
         checks += rules.identical_models_checks(opts.models, opts.refinement)
         self._guard(out, "disordine delle sequenze", lambda: self._pipeline_disorder(out, records))
+        if p.get("qmean"):
+            self._auto_qmean(out, items)  # M × N: il migliore di ogni sequenza, come senza coppie
         self._queue(out)
+
+    def _auto_qmean(self, out: dict, sequences: Optional[int]) -> None:
+        """QMEAN automatico (services/autoqmean.py): un job `qmean` per modello migliore, accodato a calcolo finito.
+        `sequences`: sequenze della pipeline, None per la modellazione."""
+        what = ("A modellazione completata QMEAN partirà da solo sul modello migliore" if sequences is None else
+                f"A pipeline completata QMEAN partirà da solo sul modello migliore di ogni sequenza (fino a "
+                f"{sequences} {'calcolo' if sequences == 1 else 'calcoli'})")
+        out["checks"].append(rules.check(
+            "info", "qmean_auto", what + ": i calcoli locali vanno uno alla volta, dopo il calcolo principale."))
+        self._guard(out, "QMEAN", lambda: self._qmean_route(out, {}))
 
     @staticmethod
     def _pipeline_disorder(out: dict, records: list) -> None:
@@ -459,6 +473,11 @@ class PreflightService:
             self.core.compute.resolve_structure(p.get("source") or {})
         except AppError as exc:
             out["checks"].append(rules.invalid(exc.code, exc.message))
+        self._qmean_route(out, p)
+
+    def _qmean_route(self, out: dict, p: dict) -> None:
+        """Dove calcolare QMEAN (locale o SWISS-MODEL, con il fallback); anche per il QMEAN automatico di modellazione
+        e pipeline, con `p` vuoto: valgono le Impostazioni."""
         settings = self.settings
         mode = p.get("mode") or settings.qmean_mode
         mode = "local" if mode == "auto" else mode  # richieste della versione precedente, come handle_qmean

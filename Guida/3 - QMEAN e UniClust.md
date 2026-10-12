@@ -30,6 +30,13 @@ esterno.
 - **Fallback facoltativo su SWISS-MODEL:** se QMEAN locale non è disponibile (disco scollegato) o non riesce, il modello
   può essere inviato a SWISS-MODEL. Si attiva in Impostazioni → Generale oppure per il singolo calcolo, e richiede il
   consenso all'invio e la tua email. Il risultato dice sempre dove è stato calcolato e perché.
+- **QMEAN automatico:** in Modellazione e in Pipeline la casella «Calcola QMEAN sul modello migliore alla fine» accoda
+  un calcolo QMEAN a lavoro completato: sul modello migliore, oppure, nella pipeline, sul migliore di ogni sequenza (un
+  job per modello, M × N compresa). Valgono le Impostazioni (locale o SWISS-MODEL, fallback); i controlli prima
+  dell'avvio dicono se QMEAN potrà partire. Se alla fine non può (disco scollegato, invio non consentito) non si accoda
+  nulla e il motivo è nel log del job. La pagina Qualità e il report del modello mostrano da soli il QMEAN già
+  calcolato; un modello che ha già QMEAN non ne riceve un secondo, anche riprendendo la pipeline. Con migliaia di
+  sequenze e QMEAN locale conta i tempi: da qualche minuto a oltre mezz'ora per modello, uno alla volta.
 - **Copia di sicurezza dell'immagine:** l'immagine di QMEAN si costruisce da quella ufficiale, scaricata dal registro
   del SIB: se sparisse da lì, non si potrebbe più costruire. Conserva il file `bioloom-qmean-<versione>.tar` della copia
   portatile

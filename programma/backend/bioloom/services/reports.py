@@ -98,9 +98,12 @@ class ReportService:
               image_png: Optional[bytes] = None, predict_job: Optional[str] = None) -> tuple[str, str]:
         """(HTML del report, nome del file da scaricare). `model` per i job model, loop e pipeline; nessun modello
         per un'analisi di qualità. `image_png`: byte già verificati da `report.decode_png`. `predict_job`: confronto
-        con una predizione da includere (senza: il più recente sulla stessa struttura, se c'è)."""
+        con una predizione da includere (senza: il più recente sulla stessa struttura, se c'è). Lo stesso per
+        `qmean_job`, che comprende i QMEAN automatici di modellazione e pipeline."""
         job = self.jobs.get(job_id)
         kind = job["kind"]
+        if not qmean_job and (model or kind == "quality"):
+            qmean_job = self._latest_qmean(job, _rel(model) if model else None)
         if not model and kind == "alascan":  # scansione di alanina (F9.2): tabella della struttura scandita
             data, stem = self._alascan_data(job)
         elif not model:
@@ -222,6 +225,29 @@ class ReportService:
         if quality is None:
             return None, None
         return consensus.compute(quality, modeller=metrics), None
+
+    def _latest_qmean(self, job: dict, model: Optional[str]) -> Optional[str]:
+        """QMEAN completato più recente sulla struttura del report, se il consenso può includerlo (rapporto di qualità
+        presente, stessa struttura, stesso contenuto); altrimenti None, senza far fallire il report."""
+        source = ({"type": "job", "job_id": job["id"], "file": model} if model
+                  else (job.get("params") or {}).get("source"))
+        if not isinstance(source, dict):
+            return None
+        try:
+            if model:
+                quality = read_json(self.jobs.file_path(job["id"], f"{model}.quality.json"))
+            else:
+                quality = job.get("result") if job["status"] == "completed" else None
+            if not isinstance(quality, dict):
+                return None
+            path, _label = self.compute.resolve_structure(source)
+            found = StructureToolsService(self.jobs, self.compute).latest("qmean", source, cache.content_hash(path))
+            if found is None:
+                return None
+            self.compute._qmean_result(found["id"], source, quality.get("source_sha256"))
+        except (AppError, OSError):
+            return None
+        return found["id"]
 
     def _qmean_info(self, qmean_job: str) -> Optional[dict]:
         result = self.jobs.get(qmean_job).get("result")

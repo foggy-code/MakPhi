@@ -378,6 +378,7 @@ export default function Modeling() {
   const [refinement, setRefinement] = useState("fast");
   const [quality, setQuality] = useState<"best" | "all" | "none">("best");
   const [extended, setExtended] = useState(true);
+  const [qmeanOn, setQmeanOn] = useState(false);
   const [loopOn, setLoopOn] = useState(false);
   const [loopModels, setLoopModels] = useState(4);
   const [loopRegions, setLoopRegions] = useState("");
@@ -450,9 +451,10 @@ export default function Modeling() {
       options,
       quality,
       extended_quality: quality !== "none" && extended,
+      qmean: qmeanOn,
       ...(mode === "complex" && complexCheck.request ? { complex: complexCheck.request } : {}),
     };
-  }, [projectId, mode, target, nModels, refinement, seed, loopOn, loopModels, loopRegions, restraints, plddtTrim, plddtMin, ligandsOn, ligandRefs, quality, extended, activeTemplates, complexState, complexCheck]);
+  }, [projectId, mode, target, nModels, refinement, seed, loopOn, loopModels, loopRegions, restraints, plddtTrim, plddtMin, ligandsOn, ligandRefs, quality, extended, qmeanOn, activeTemplates, complexState, complexCheck]);
   // Controlli preventivi (F8a), compresi disordine e domini fuori dalla copertura (F5.5): accessione dalla sequenza del
   // progetto o dall'intestazione sp|ACC|…
   // nella modalità Complesso niente avvisi di copertura (una sequenza per catena): solo i controlli del corpo
@@ -612,6 +614,7 @@ export default function Modeling() {
               {quality !== "none" && (
                 <label className="check"><input type="checkbox" checked={extended} onChange={(e) => setExtended(e.target.checked)} /> Includi PROCHECK e ProSA II nell'analisi</label>
               )}
+              <label className="check"><input type="checkbox" checked={qmeanOn} onChange={(e) => setQmeanOn(e.target.checked)} /> Calcola QMEAN sul modello migliore alla fine (job separato, come da Impostazioni: locale o SWISS-MODEL)</label>
               <Field label="Raffinamento" hint={REFINEMENT.find((r) => r.value === refinement)?.note}>
                 <Segmented label="Raffinamento" value={refinement} onChange={setRefinement} options={REFINEMENT.map((r) => ({ value: r.value, label: r.label }))} />
               </Field>

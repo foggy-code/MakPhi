@@ -140,7 +140,8 @@ locale rispetto al bersaglio e segnala la zona crepuscolare (sotto il 25%) e i r
 ## Qualità
 
 - **Metriche:** Ramachandran, clashscore, struttura secondaria (DSSP), superficie accessibile, profilo DOPE,
-  **PROCHECK**, **ProSA II** e, su richiesta, **QMEAN** ([locale o SWISS-MODEL](3%20-%20QMEAN%20e%20UniClust.md)). Una
+  **PROCHECK**, **ProSA II** e, su richiesta o in automatico a fine modellazione e pipeline, **QMEAN**
+  ([locale o SWISS-MODEL](3%20-%20QMEAN%20e%20UniClust.md)). Una
   struttura qualunque si analizza caricandone il file; dalla Modellazione l'analisi gira sul modello migliore o su tutti.
 - **Voto A–D** da outlier di Ramachandran, clashscore e zDOPE.
 - **Consenso tra i metodi:** voto BioLoom, z-DOPE, GA341, QMEAN, ProSA e PROCHECK, quando disponibili, sono portati su

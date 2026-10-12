@@ -9,6 +9,7 @@ from typing import Any
 from ..config import Paths, SettingsStore
 from ..engines import remote, search, tools
 from ..services.analysis import AnalysisService
+from ..services.autoqmean import AutoQmean
 from ..services.compute import ComputeService
 from ..services.databases import DatabaseService
 from ..services.globalsearch import GlobalSearch
@@ -106,6 +107,7 @@ def build_core(paths: Paths, *, server: bool = False) -> Core:
     MutationService(jobs, compute).register()  # job "mutate" e "alascan" (F9.2)
     PredictService(jobs, compute).register()  # job "predict" (F9.3)
     pipeline = PipelineService(db, jobs, compute)
+    AutoQmean(jobs)  # QMEAN accodato a modellazione o pipeline completata, se il job lo chiede
     databases = DatabaseService(jobs, paths.databases, paths.local_cache, settings.get)
     SelfTestService(jobs, paths.databases)
     projects.ensure_default()
