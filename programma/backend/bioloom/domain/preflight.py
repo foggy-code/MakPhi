@@ -57,6 +57,7 @@ T_ALIGN = 0.34  # script di allineamento (align2d)
 T_STARTUP = 0.26  # avvio di MODELLER e lettura dell'allineamento
 T_RESTRAINTS = 0.46  # restrizioni: modello 1 (2,75 s) meno un modello successivo (2,29 s)
 T_MODEL = 2.29  # ogni modello, raffinamento "fast"
+T_WORKERS = 2.0  # avvio dei worker della modalità parallela di MODELLER (processi e connessioni)
 T_QUALITY = 1.22  # analisi di qualità di un modello (DOPE, mkdssp, PROCHECK, ProSA in parallelo)
 T_QUALITY_BASIC = 1.23  # analisi di un elemento di pipeline (senza PROCHECK e ProSA)
 QUALITY_MODELS_PARALLEL = 3  # come services/compute.QUALITY_MODELS_PARALLEL
@@ -357,11 +358,11 @@ def optional_tool_checks(requested: dict[str, bool], usable: dict[str, Optional[
 
 # ---------------------------------------------------------------------------------------------- tempi
 def modeling_seconds(residues: int, models: int, refinement: str = "fast", quality: str = "best",
-                     extended: bool = True, workers: int = 1) -> float:
-    """Tempo stimato di un job model (secondi): template, allineamento, costruzione dei modelli, analisi di qualità."""
+                     extended: bool = True, workers: int = 1, lanes: int = 1) -> float:
+    """Tempo stimato di un job model (secondi): template, allineamento, costruzione dei modelli, analisi di qualità.
+    `lanes`: worker della costruzione in parallelo (`building_seconds`)."""
     scale = max(1, int(residues)) / REFERENCE_RESIDUES
-    factor = REFINEMENT_FACTOR.get(refinement, 1.0)
-    build = T_STARTUP + scale * (T_RESTRAINTS + max(1, int(models)) * T_MODEL * factor)
+    build = building_seconds(residues, models, refinement, lanes)
     per_quality = scale * (T_QUALITY if extended else T_QUALITY_BASIC)
     if quality == "all":
         lanes = max(1, min(QUALITY_MODELS_PARALLEL, int(workers), int(models)))
@@ -373,10 +374,23 @@ def modeling_seconds(residues: int, models: int, refinement: str = "fast", quali
     return T_PREPARE + T_ALIGN * max(1.0, scale) + build + analysis
 
 
-def building_seconds(residues: int, models: int, refinement: str = "fast") -> float:
-    """Tempo del solo processo di costruzione dei modelli (model.py): è quello che il timeout dei processi limita."""
+def building_seconds(residues: int, models: int, refinement: str = "fast", lanes: int = 1) -> float:
+    """Tempo del solo processo di costruzione dei modelli (model.py): è quello che il timeout dei processi limita.
+    `lanes` > 1: modelli costruiti da altrettanti worker (modalità parallela), più l'avvio dei worker."""
     scale = max(1, int(residues)) / REFERENCE_RESIDUES
-    return T_STARTUP + scale * (T_RESTRAINTS + max(1, int(models)) * T_MODEL * REFINEMENT_FACTOR.get(refinement, 1.0))
+    models = max(1, int(models))
+    lanes = max(1, min(int(lanes), models))
+    rounds = math.ceil(models / lanes)
+    return (T_STARTUP + (T_WORKERS if lanes > 1 else 0.0)
+            + scale * (T_RESTRAINTS + rounds * T_MODEL * REFINEMENT_FACTOR.get(refinement, 1.0)))
+
+
+def modeling_lanes(models: int, workers: int, parallel: bool = True) -> int:
+    """Worker della costruzione in parallelo di un job model: uno per modello, non oltre i job di calcolo in
+    parallelo delle Impostazioni (gli slot del budget di CPU); 1 con un solo modello o in modalità seriale."""
+    if not parallel or int(models) < 2:
+        return 1
+    return max(1, min(int(models), int(workers)))
 
 
 MODELING_BASIS = ("Stima dai tempi misurati su un portatile a 4 CPU logiche (Intel i3-1115G4, ubiquitina di 76 "

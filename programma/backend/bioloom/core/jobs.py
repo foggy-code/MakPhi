@@ -75,10 +75,11 @@ UNDO_ATTEMPTS = 3  # tentativi del rinomino inverso quando un'eliminazione non v
 _RESUMED = "Il job è stato ripreso nel frattempo: annullalo prima di eliminarlo."
 _NO_LONGER_MATCHES = "Il job non corrisponde più ai criteri della pulizia."
 
-# File intermedi di MODELLER (restrizioni, schedule, traiettorie, violazioni, modelli iniziali) e copie
-# temporanee delle analisi: non vengono salvati tra i risultati di un job riuscito.
+# File intermedi di MODELLER (restrizioni, schedule, traiettorie, violazioni, modelli iniziali, file e log dei worker
+# della modalità parallela, che lo script ricrea) e copie temporanee delle analisi: non vengono salvati tra i risultati
+# di un job riuscito.
 INTERMEDIATE_PATTERNS = ("*.rsr", "*.lrsr", "*.sch", "*.ini", "*.D[0-9]*", "*.V[0-9]*", "*.DL[0-9]*",
-                         "*.IL[0-9]*", "dope_input.pdb")
+                         "*.IL[0-9]*", "dope_input.pdb", "*.worker[0-9]*", "bioloom_model.py", "bioloom_worker.py")
 
 # Priorità di esecuzione per tipo di job (numero più basso = parte prima), nella coda di ciascun pool e nel
 # budget di CPU: i calcoli interattivi brevi, che l'utente sta aspettando davanti allo schermo, prima della

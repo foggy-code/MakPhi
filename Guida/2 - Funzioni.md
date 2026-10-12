@@ -93,6 +93,12 @@ locale rispetto al bersaglio e segnala la zona crepuscolare (sotto il 25%) e i r
   (DOPE-loop), analisi di qualità sul modello migliore o **Su tutti i modelli**. Dopo la modellazione **Raffina un loop**
   ricostruisce un tratto di un modello; il riquadro **Raffinamento dei loop e rifinitura energetica** lo fa per qualunque
   struttura.
+- **Modelli in parallelo:** con 2 o più modelli MODELLER li costruisce in più processi insieme, uno per modello, fino ai
+  core liberi (**Job di calcolo in parallelo** delle Impostazioni, condivisi con gli altri calcoli e con gli elementi
+  delle pipeline). Su un server a molti core un job da 16 modelli dura quanto uno da un modello solo (misurato: 344 s in
+  serie, 28 s in parallelo); su un portatile il guadagno è piccolo. Con lo stesso seme i modelli sono gli stessi con
+  qualunque numero di processi, ma diversi da quelli della costruzione in serie dei job delle versioni precedenti: la
+  riesecuzione di un pacchetto usa la modalità del job originale. Il risultato dice quanti processi ha usato.
 - **Più template:** MODELLER allinea i template fra loro; se così un template finisce spostato rispetto al bersaglio,
   BioLoom usa l'allineamento di ciascun template sul bersaglio e lo scrive nel log. Quando non può (template a più
   catene o con ligandi) lo segnala fra gli avvisi del risultato e del report: l'allineamento si corregge nell'Editor PIR.

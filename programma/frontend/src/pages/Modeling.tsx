@@ -278,6 +278,11 @@ function Results({ jobId, result, kind }: { jobId: string; result: ModelResult |
   return (
     <div className="stack">
       {full?.warnings?.map((w, i) => <Alert key={i} tone="warn">{w}</Alert>)}
+      {full?.modeller_workers != null && (
+        <p className="small text-2">
+          Modelli costruiti in parallelo da {full.modeller_workers === 1 ? "un processo" : `${full.modeller_workers} processi`} MODELLER (stesso seme, stessi modelli con qualunque numero di processi).
+        </p>
+      )}
       {best && q && (
         <div className="grid grid-4">
           <Stat label="Voto del modello migliore" tone={gTone === "muted" ? undefined : gTone}

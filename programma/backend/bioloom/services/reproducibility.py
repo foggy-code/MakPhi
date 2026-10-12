@@ -576,8 +576,12 @@ class ReproducibilityService:
             options = result.get("options") if isinstance(result.get("options"), dict) else {}
             raw = params.get("options") if isinstance(params.get("options"), dict) else {}
             seed = options.get("seed", raw.get("seed", modeller.ModelOptions().seed))
-            return {"modeller_rand_seed": seed, "note": "Environ(rand_seed=…) di MODELLER: stesso seme, stessa "
-                                                        "versione e stesso processore danno gli stessi modelli."}
+            # modalità parallela (engines/modeller.PARALLEL_MODULE): assente nei job delle versioni precedenti, seriali
+            parallel = bool(options.get("parallel", False))
+            return {"modeller_rand_seed": seed, "modeller_parallel": parallel,
+                    "note": "Environ(rand_seed=…) di MODELLER: stesso seme, stessa versione e stesso processore danno "
+                            "gli stessi modelli" + (", con qualunque numero di worker della modalità parallela (che "
+                                                    "dà modelli diversi da quella seriale)." if parallel else ".")}
         if kind == "loop":
             return {"modeller_rand_seed": modeller.ModelOptions().seed,
                     "note": "seme predefinito di MODELLER (Environ() senza rand_seed)."}
@@ -976,7 +980,12 @@ class ReproducibilityService:
             elif kind == "align2d" and not (params.get("target") or {}).get("sequence"):
                 raise AppError("Indica la sequenza bersaglio.")
             if kind == "model":
-                modeller.parse_options(params.get("options") or {})
+                # stessa modalità del job originale (seriale nei pacchetti senza l'informazione: versioni precedenti)
+                options = dict(params.get("options") or {})
+                if "parallel" not in options:
+                    options["parallel"] = bool((pkg.manifest.get("seeds") or {}).get("modeller_parallel", False))
+                    params["options"] = options
+                modeller.parse_options(options)
         except AppError as exc:
             raise AppError(f"Parametri del pacchetto non validi: {exc.message}", code="package_params_invalid")
         return params

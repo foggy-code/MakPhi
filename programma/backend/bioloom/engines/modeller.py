@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from ..core.errors import AppError, ToolUnavailable
-from ..core.jobs import JobContext, default_env
+from ..core.jobs import JobContext, default_env, output_secrets
+from ..core.sensitive import redactor
 from ..core.storage import atomic_write_text, read_json
 from ..domain import ligands as ligands_mod
 from ..domain import plddt, sequences, structure
@@ -53,6 +55,46 @@ REFINEMENT_SCRIPT = {
                  "a.repeat_optimization = 2"],
 }
 LOOP_LEVELS = {"very_fast": "refine.very_fast", "fast": "refine.fast", "slow": "refine.slow"}
+# Modalità parallela di AutoModel (`use_parallel_job`, modeller.parallel): i modelli di un job si costruiscono in più
+# processi worker sulla stessa macchina, dopo le restrizioni (calcolate una volta dal processo principale). Misurato su
+# un server a 224 core (3PGK, 415 residui, raffinamento fast): 8 modelli da 173 s a 28 s con 8 worker, 16 modelli da 344
+# s a 28 s con 16. Il risultato non dipende dal numero di worker (stesso seme, stessi modelli con 1, 2 o N worker), ma a
+# parità di seme è diverso da quello seriale: la modalità si registra nel risultato (`options.parallel`) e la
+# riesecuzione di un pacchetto la rispetta.
+# - La classe BioLoomModel sta in un modulo (PARALLEL_MODULE) che i worker importano.
+# - I worker sono processi a parte, avviati con PARALLEL_WORKER: stesso preambolo della licenza dello script principale
+#   (che lascia la chiave nell'ambiente per loro) e, se il worker non parte o si interrompe con un errore, termina il
+#   processo principale, che altrimenti aspetterebbe il worker fino al timeout del job.
+# - I marcatori dei worker vanno nei loro log (`model.workerN`): l'avanzamento si legge dai file dei modelli scritti.
+PARALLEL_MODULE = "bioloom_model.py"
+PARALLEL_WORKER = "bioloom_worker.py"
+_WORKER_BODY = """import os as _w_os, signal as _w_signal, sys as _w_sys, traceback as _w_tb
+_w_sys.path.insert(0, _w_os.getcwd())
+
+
+def _w_fail():
+    print("{marker} worker-failed", flush=True)
+    _w_master = int(_w_os.environ.get("BIOLOOM_MODELLER_MASTER", "0") or 0)
+    if _w_master:
+        try:
+            _w_os.kill(_w_master, _w_signal.SIGTERM)
+        except OSError:
+            pass
+
+
+try:
+    from modeller.parallel.modworker import main as _w_main
+    _w_main()
+except SystemExit as _w_exc:
+    if _w_exc.code not in (None, 0):
+        _w_fail()
+    raise
+except BaseException:
+    _w_tb.print_exc()
+    _w_sys.stdout.flush()
+    _w_fail()
+    raise
+"""
 # Gruppo eteroatomico nelle opzioni: catena (anche di più caratteri nei mmCIF), numero con codice di inserzione,
 # nome del componente chimico (fino a 5 caratteri nei mmCIF)
 _LIGAND_CHAIN = re.compile(r"^[A-Za-z0-9]{1,4}$")
@@ -110,6 +152,8 @@ class ModelOptions:
     # standard, domain/complexes.symmetry_groups) e loro peso
     symmetry: bool = False
     symmetry_weight: float = 1.0
+    # Costruzione dei modelli in parallelo (PARALLEL_MODULE), con almeno 2 modelli; nel risultato il valore usato
+    parallel: bool = True
 
 
 def modeller_python(ctx: JobContext) -> str:
@@ -392,7 +436,7 @@ def build_complex_alignment_script(template: dict, target_code: str) -> str:
 def build_model_script(knowns: list[str], target_code: str, opts: ModelOptions,
                        hetatm: Optional[bool] = None, symmetry: Optional[list[list[int]]] = None,
                        chain_names: Optional[list[str]] = None, water: bool = False,
-                       alnfile: str = "alignment.ali") -> str:
+                       alnfile: str = "alignment.ali", parallel: bool = False) -> str:
     """Script di AutoModel/DOPELoopModel. `hetatm`: MODELLER legge i gruppi HETATM dei template (quelli scritti nelle
     copie preparate, con le colonne '.' nel PIR); None = come l'opzione `hetatm`. `water`: legge anche le acque delle
     copie preparate (solo quelle scelte), con le colonne 'w' del PIR `alnfile` (`ligands.modeller_pir`).
@@ -400,7 +444,10 @@ def build_model_script(knowns: list[str], target_code: str, opts: ModelOptions,
     Bersaglio a più catene (F5.3): `symmetry` = gruppi di indici di catene con la stessa sequenza (ogni catena vincolata
     alla prima del gruppo: `restraints.symmetry` sui C-alfa dei residui standard, peso `opts.symmetry_weight`, come
     nell'esempio del manuale di MODELLER); `chain_names` = nomi delle catene del modello (quelli del template), con i
-    residui di ogni catena numerati da 1 (`rename_segments` in `special_patches`)."""
+    residui di ogni catena numerati da 1 (`rename_segments` in `special_patches`).
+
+    `parallel`: modelli costruiti da worker in processi separati (PARALLEL_MODULE); il numero di worker è il primo
+    argomento dello script (`run_script(workers=...)`, 1 se manca) e il risultato non ne dipende."""
     base = "DOPELoopModel" if opts.loop_refinement else "AutoModel"
     body = [f"class BioLoomModel({base}):", "    _done = 0", "    _loops_done = 0"]
     if chain_names:
@@ -443,9 +490,13 @@ def build_model_script(knowns: list[str], target_code: str, opts: ModelOptions,
             f"        mark('loop %d/{opts.models * opts.loop_models}' % BioLoomModel._loops_done)",
         ]
     knowns_tuple = "(" + ", ".join(repr(k) for k in knowns) + ("," if len(knowns) == 1 else "") + ")"
-    lines = [_header(), *body, "",
-             f"env = Environ(rand_seed={int(opts.seed)})",
-             "env.io.atom_files_directory = ['.']"]
+    if parallel:
+        lines = [_header(), *_parallel_setup("\n".join([_header(), *body]) + "\n")]
+    else:
+        lines = [_header(), *body]
+    lines += ["",
+              f"env = Environ(rand_seed={int(opts.seed)})",
+              "env.io.atom_files_directory = ['.']"]
     if (opts.hetatm if hetatm is None else hetatm):
         lines.append("env.io.hetatm = True")
     if water:
@@ -456,6 +507,8 @@ def build_model_script(knowns: list[str], target_code: str, opts: ModelOptions,
         "a.starting_model = 1",
         f"a.ending_model = {int(opts.models)}",
     ]
+    if parallel:
+        lines.append("a.use_parallel_job(job)")
     lines += REFINEMENT_SCRIPT.get(opts.refinement, REFINEMENT_SCRIPT["fast"])
     if opts.loop_refinement:
         lines += ["a.loop.starting_model = 1", f"a.loop.ending_model = {int(opts.loop_models)}",
@@ -473,10 +526,37 @@ def build_model_script(knowns: list[str], target_code: str, opts: ModelOptions,
         "out = {'models': [_clean(o) for o in a.outputs]}",
         "if hasattr(a, 'loop') and getattr(a.loop, 'outputs', None):",
         "    out['loop_models'] = [_clean(o) for o in a.loop.outputs]",
+        *(["out['workers'] = _bl_workers"] if parallel else []),
         "json.dump(out, open('models.json', 'w'), indent=1)",
         "mark('stage Modellazione completata')",
     ]
     return "\n".join(lines) + "\n"
+
+
+def _parallel_setup(module: str) -> list[str]:
+    """Righe dello script principale in modalità parallela: scrive il modulo della classe e l'avvio dei worker, passa
+    loro la licenza e il proprio pid, crea il Job con i worker indicati dal primo argomento."""
+    worker = tools.LICENSE_PREAMBLE + _WORKER_BODY.replace("{marker}", MARKER)
+    return [
+        "import os",
+        "_bl_workers = max(1, int(sys.argv[1])) if len(sys.argv) > 1 else 1",
+        f"with open({PARALLEL_MODULE!r}, 'w') as _fh:",
+        f"    _fh.write({module!r})",
+        f"with open({PARALLEL_WORKER!r}, 'w') as _fh:",
+        f"    _fh.write({worker!r})",
+        "# i worker sono processi a parte: ricevono la licenza (tolta dall'ambiente dal preambolo) e il pid da terminare",
+        "# se non riescono a lavorare",
+        "if globals().get('_bl_key'):",
+        "    os.environ['BIOLOOM_MODELLER_KEY'] = _bl_key",
+        "os.environ['BIOLOOM_MODELLER_MASTER'] = str(os.getpid())",
+        "sys.path.insert(0, os.getcwd())",
+        "from bioloom_model import BioLoomModel",
+        "from modeller.parallel import Job, LocalWorker",
+        f"job = Job(modeller_path=sys.executable + ' ' + {PARALLEL_WORKER!r})",
+        "for _ in range(_bl_workers):",
+        "    job.append(LocalWorker())",
+        "mark('workers %d' % _bl_workers)",
+    ]
 
 
 def build_loop_script(model_file: str, code: str, start: str, end: str, loop_models: int, level: str) -> str:
@@ -554,6 +634,7 @@ def parse_options(raw: dict) -> ModelOptions:
         raise AppError("La soglia pLDDT deve essere compresa tra 0 e 100 (predefinita 70).")
     opts.ligands = _parse_ligands(raw.get("ligands"))
     opts.symmetry = bool(raw.get("symmetry", False))
+    opts.parallel = bool(raw.get("parallel", True))
     try:
         weight = raw.get("symmetry_weight")
         opts.symmetry_weight = 1.0 if weight is None else float(weight)
@@ -623,8 +704,14 @@ def _parse_ligands(raw) -> Optional[list[dict]]:
 # --------------------------------------------------------------------------------- esecuzione
 def run_script(ctx: JobContext, script: str, name: str, *, workdir: Optional[Path] = None,
                args: Optional[list[str]] = None, progress_total: int = 0,
-               progress_range: tuple[float, float] = (0.0, 1.0)) -> str:
-    """Scrive ed esegue uno script MODELLER; aggiorna il progresso leggendo i marcatori @@BIOLOOM."""
+               progress_range: tuple[float, float] = (0.0, 1.0), workers: int = 0,
+               progress_files: Optional[list[tuple[str, str, int]]] = None) -> str:
+    """Scrive ed esegue uno script MODELLER; aggiorna il progresso leggendo i marcatori @@BIOLOOM.
+
+    `workers` > 0 (modalità parallela, `build_model_script(parallel=True)`): lo script riceve come ultimo argomento il
+    numero di worker, da 1 a `workers` secondo gli slot liberi del budget di CPU (uno per worker). I marcatori dei
+    worker non arrivano qui: l'avanzamento si legge dai file dei modelli, `progress_files` = [(glob nella cartella,
+    etichetta, totale)], e un worker che non riesce a lavorare termina lo script (il suo log si aggiunge all'errore)."""
     workdir = workdir or ctx.workdir
     script_path = workdir / name
     # la chiave di licenza gestita da BioLoom arriva dall'ambiente, mai scritta nello script
@@ -646,13 +733,62 @@ def run_script(ctx: JobContext, script: str, name: str, *, workdir: Optional[Pat
                 done, total = int(m.group(2)), int(m.group(3))
                 label = "Modello" if m.group(1) == "model" else "Loop"
                 ctx.progress(lo + (hi - lo) * done / max(total, 1), f"{label} {done} di {total} completato")
+            elif text.startswith("workers "):
+                n = text.split()[1]
+                ctx.log(f"MODELLER in parallelo: {'un processo' if n == '1' else n + ' processi'} per i modelli")
 
-    result = ctx.run([python, name, *(args or [])], cwd=workdir, env=default_env(), timeout=timeout,
-                     on_line=on_line)
+    stop = threading.Event()
+    watcher = None
+    if workers and progress_files:
+        def watch() -> None:  # avanzamento dai file dei modelli scritti dai worker
+            seen = -1
+            while not stop.wait(1.0):
+                counts = [(label, len(list(workdir.glob(pattern))), total) for pattern, label, total in progress_files]
+                done = sum(c for _label, c, _total in counts)
+                if done == seen:
+                    continue
+                seen = done
+                total = sum(t for _label, _c, t in counts)
+                label, c, t = next(((lb, c, t) for lb, c, t in reversed(counts) if c), counts[0])
+                ctx.progress(lo + (hi - lo) * min(done, total) / max(total, 1), f"{label} {c} di {t} completat"
+                             + ("i" if c != 1 else "o"))
+
+        watcher = threading.Thread(target=watch, name=f"modeller-progress-{ctx.job_id[:6]}", daemon=True)
+        watcher.start()
+    base = [python, name, *(args or [])]
+    try:
+        if workers:
+            result = ctx.run(lambda n: [*base, str(n)], cwd=workdir, env=default_env(), timeout=timeout,
+                             on_line=on_line, cpu=int(workers))
+        else:
+            result = ctx.run(base, cwd=workdir, env=default_env(), timeout=timeout, on_line=on_line)
+    finally:
+        stop.set()
+        if watcher is not None:
+            watcher.join(timeout=5)
     if result.returncode != 0:
         tail = "\n".join(result.output.strip().splitlines()[-12:])
+        failed = _failed_worker_log(workdir, Path(name).stem) if workers else None
+        if failed:
+            tail = f"{tail}\nErrore in un worker di MODELLER ({failed[0]}):\n{failed[1]}"
         raise AppError(f"MODELLER è terminato con errore (codice {result.returncode}).\n{tail}", code="modeller_error")
     return result.output
+
+
+def _failed_worker_log(workdir: Path, stem: str) -> Optional[tuple[str, str]]:
+    """(nome, ultime righe) del log del primo worker che ha segnalato un errore (`worker-failed`), con la chiave di
+    licenza mascherata come nell'output dei processi; None se nessuno."""
+    hide = redactor(output_secrets(default_env()))
+    for path in sorted(workdir.glob(f"{stem}.worker*")):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if f"{MARKER} worker-failed" not in text:
+            continue
+        body = "\n".join([ln for ln in text.strip().splitlines() if not ln.startswith(MARKER)][-12:])
+        return path.name, hide(body) if hide is not None else body
+    return None
 
 
 def read_models(workdir: Path) -> dict:

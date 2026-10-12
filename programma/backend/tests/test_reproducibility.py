@@ -663,6 +663,7 @@ def test_model_package_and_rerun_with_the_same_seed(client_with_ubq):
     files = _members(data)
     m = json.loads(files["manifest.json"])
     assert m["seeds"]["modeller_rand_seed"] == -8123
+    assert m["seeds"]["modeller_parallel"] is True and done["result"]["options"]["parallel"] is True
     assert m["environment"]["tools"]["modeller"]["version"]
     assert {"inputs/library/1UBQ.pdb", "inputs/library/1UBQ.meta.json", "inputs/templates/1UBQ_A.pdb",
             "inputs/alignment.ali", "inputs/sequences.fasta", "scripts/model.py", "scripts/align.py",
@@ -689,6 +690,15 @@ def test_model_package_and_rerun_with_the_same_seed(client_with_ubq):
 
     changed = _rerun(c, _rebuild(data, manifest=other_seed))["result"]
     assert changed["verdict"] == "diverso"
+
+    # pacchetto di una versione precedente (senza la modalità): riesecuzione seriale, quindi modelli diversi da
+    # quelli costruiti in parallelo
+    def older(manifest):
+        manifest["seeds"].pop("modeller_parallel")
+
+    serial = _rerun(c, _rebuild(data, manifest=older))
+    assert serial["result"]["verdict"] == "diverso"
+    assert "MODELLER in parallelo" not in c.get(f"/api/jobs/{serial['id']}/log").json()["text"]
     moved = [s for s in changed["structures"] if s["path"].endswith(".pdb") and "yeast_ub.B9999" in s["path"]]
     assert moved and all(s["coordinates"]["rmsd"] > repro.COORD_TOLERANCE for s in moved)
     assert any(not row["within"] for section in changed["metrics"][1:] for row in section["rows"])
