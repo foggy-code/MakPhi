@@ -276,6 +276,13 @@ per ogni sequenza completata (cartella `report/`, senza vista 3D).
   min rimanenti»). Fino a 50.000 sequenze per pipeline; **In parallelo** arriva fino ai **Job di calcolo in parallelo**
   delle Impostazioni (al massimo 256). L'output dei programmi (MODELLER, PROCHECK…) di ogni elemento è nel file
   `programmi.log` della sua cartella, tra i file del job; il log del job riporta i passi di BioLoom.
+- **Archivio ZIP:** nella pipeline sequenze × template i file stanno in `template/<template>/<sequenza>/` (modello,
+  report e rapporto di qualità di ogni coppia), con `metriche.csv` (una riga per coppia) e `migliori.csv` (una per
+  sequenza); nelle altre pipeline in `modelli/`, `qualita/` e `report/`, con `riepilogo.csv`. Tutti i CSV hanno anche
+  QMEAN: QMEAN4 (Z-score e punteggio), QMEAN6, media locale e Z-score delle componenti (interazioni, C-beta,
+  impaccamento, torsioni, accordo con struttura secondaria e accessibilità), metodo e servizio. Le colonne sono piene per
+  i modelli valutati con QMEAN (automatico o dalla pagina Qualità) e vuote per gli altri; un QMEAN calcolato su un
+  modello poi rifatto da una ripresa non viene riportato.
 - **Avviso per email:** con **Avvisami per email alla fine** (pagina Pipeline, sotto l'analisi di qualità) arriva un
   messaggio quando la pipeline finisce, completata, fallita o annullata: titolo, esito, durata e numero di elementi per
   stato, senza risultati né sequenze. L'indirizzo predefinito è l'email di contatto delle Impostazioni. Serve un server
