@@ -99,7 +99,7 @@ def test_local_uses_the_chosen_database_version(client_with_ubq, worker, swissmo
     assert done["status"] == "completed", done["error"]
     assert done["result"]["source"] == "local" and done["result"]["uniclust"] == "UniRef30_2023_02"
     # risorse del calcolo nel worker: nell'uscita del job e nel log
-    assert done["result"]["hhblits"] == {"cpu": 4, "memory": "ok", "seconds": 312}
+    assert done["result"]["hhblits"] == {"cpu": 4, "memory": "ok", "seconds": 312, "parallel": None}
     log = client_with_ubq.get(f"/api/jobs/{done['id']}/log").text
     assert "QMEAN locale concluso in 312 s nel worker (HHblits su 4 processori, memoria ok)" in log
     posted = next(body for method, path, _q, body in w.requests if method == "POST" and path == "/jobs")
@@ -210,11 +210,11 @@ class LowMemoryWorker(Worker):
 
 def test_hhblits_resources_are_optional_and_validated():
     assert qmean_local._hhblits(None) is None  # worker di una versione precedente
-    assert qmean_local._hhblits({"cpu": 8, "memory": "swap", "seconds": 4000.0}) == {
-        "cpu": 8, "memory": "swap", "seconds": 4000}
+    assert qmean_local._hhblits({"cpu": 8, "memory": "swap", "seconds": 4000.0, "parallel": 4}) == {
+        "cpu": 8, "memory": "swap", "seconds": 4000, "parallel": 4}
     assert qmean_local._hhblits({"cpu": "tanti", "memory": "insufficient", "seconds": -1, "x": 1}) == {
-        "cpu": None, "memory": None, "seconds": None}
-    assert qmean_local._hhblits({"cpu": True}) == {"cpu": None, "memory": None, "seconds": None}
+        "cpu": None, "memory": None, "seconds": None, "parallel": None}
+    assert qmean_local._hhblits({"cpu": True}) == {"cpu": None, "memory": None, "seconds": None, "parallel": None}
 
 
 def test_insufficient_memory_is_reported_and_uses_the_fallback(client_with_ubq, worker, swissmodel):

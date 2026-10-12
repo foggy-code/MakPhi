@@ -26,7 +26,11 @@ esterno.
     predefinito è metà della RAM).
   - **macOS:** Docker Desktop → Settings → Resources.
 - **Un calcolo alla volta:** gli altri QMEAN locali aspettano in coda ("2° in coda") senza fermare gli altri job; un
-  calcolo che ripiega su SWISS-MODEL libera subito il servizio locale.
+  calcolo che ripiega su SWISS-MODEL libera subito il servizio locale. Su un server con molta memoria se ne possono
+  eseguire di più insieme (`QMEAN_PARALLEL`, [Chiavetta e server](5%20-%20Chiavetta%20e%20server.md)).
+- **Profili riusati:** la ricerca HHblits dipende solo dalla sequenza: il suo profilo si conserva e un altro modello
+  della stessa proteina (o lo stesso rivalutato) salta la ricerca, con lo stesso risultato in pochi secondi. Il log del
+  calcolo lo dice.
 - **Fallback facoltativo su SWISS-MODEL:** se QMEAN locale non è disponibile (disco scollegato) o non riesce, il modello
   può essere inviato a SWISS-MODEL. Si attiva in Impostazioni → Generale oppure per il singolo calcolo, e richiede il
   consenso all'invio e la tua email. Il risultato dice sempre dove è stato calcolato e perché.

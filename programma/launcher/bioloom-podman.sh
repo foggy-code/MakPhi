@@ -561,7 +561,8 @@ start() {
   if [ -n "$uniclust" ]; then
     local qm=("${common[@]}" --name bioloom-qmean --network container:bioloom
               -v "$uniclust:/uniclust_src:ro" -v bioloom_qmean_cache:/cache
-              -e "QMEAN_MAX_SECONDS=$(val QMEAN_MAX_SECONDS 14400)" -e "QMEAN_HHBLITS_CPU=$(val QMEAN_HHBLITS_CPU)")
+              -e "QMEAN_MAX_SECONDS=$(val QMEAN_MAX_SECONDS 14400)" -e "QMEAN_HHBLITS_CPU=$(val QMEAN_HHBLITS_CPU)"
+              -e "QMEAN_PARALLEL=$(val QMEAN_PARALLEL 1)" -e "QMEAN_PROFILE_CACHE_GB=$(val QMEAN_PROFILE_CACHE_GB 10)")
     if [ -n "$qmtl" ]; then qm+=(-v "$qmtl:/qmtl:ro"); else qm+=(-v bioloom_qmtl_vuota:/qmtl:ro); fi
     "$PODMAN" run "${qm[@]}" "bioloom-qmean:$VERSION" >/dev/null || fail "$PODMAN non è riuscito ad avviare QMEAN."
   fi

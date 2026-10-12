@@ -12,7 +12,8 @@ creato prima (FIFO, anche per un job ripreso).
   aspetta da prima (ha atteso di meno, quindi non è invecchiato di più).
 - **Risorse esclusive:** un job può dichiarare una risorsa (es. il servizio QMEAN locale, un calcolo alla
   volta). Finché un altro job la tiene resta in coda, con la sua posizione, e il worker passa al successivo:
-  il pool non si blocca per gli altri job. La risorsa si calcola al momento della scelta (le Impostazioni
+  il pool non si blocca per gli altri job. Una risorsa può avere più posti (`resource_capacity`, es. QMEAN locale
+  con più calcoli contemporanei sul server): il job aspetta solo quando sono tutti occupati. La risorsa si calcola al momento della scelta (le Impostazioni
   possono cambiare mentre il job aspetta) e si tiene fino alla chiusura dell'esecuzione, salvo che il job la
   restituisca prima con `release`, passato all'esecuzione (QMEAN: finita la parte locale, prima del fallback remoto).
 - **Capacità dinamica:** i job contemporanei del pool si rileggono a ogni scelta (il pool "cpu" segue i job di
@@ -72,9 +73,11 @@ class _Entry:
 class Dispatcher:
     def __init__(self, name: str, capacity: Callable[[], int], run: Callable[[str, Callable[[], None]], None],
                  on_blocked: Optional[Callable[[str, str], None]] = None, *, aging: float = AGING_SECONDS,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+                 clock: Callable[[], float] = time.monotonic,
+                 resource_capacity: Optional[Callable[[str], int]] = None) -> None:
         """`run(job_id, release)` esegue il job; con `release()` il job restituisce la sua risorsa esclusiva prima
-        di finire (una volta sola: dopo non fa nulla). `aging` e `clock` servono ai test dell'invecchiamento."""
+        di finire (una volta sola: dopo non fa nulla). `aging` e `clock` servono ai test dell'invecchiamento.
+        `resource_capacity(nome)`: posti della risorsa (1 se manca); letto a ogni scelta, senza I/O (sotto il lock)."""
         self.name = name
         self._capacity = capacity
         self._run = run
@@ -83,7 +86,8 @@ class Dispatcher:
         self._clock = clock
         self._cond = threading.Condition()
         self._queued: dict[str, _Entry] = {}  # voce di ogni job in coda
-        self._held: set[str] = set()
+        self._resource_capacity = resource_capacity
+        self._held: dict[str, int] = {}  # posti occupati di ogni risorsa
         self._busy = 0
         self._threads: list[threading.Thread] = []
         self._seq = itertools.count()
@@ -167,7 +171,7 @@ class Dispatcher:
                     resource = entry.resource()
                 except Exception:  # impostazioni non leggibili: nessuna esclusione
                     resource = None
-            if resource is not None and resource in self._held:
+            if resource is not None and self._held.get(resource, 0) >= self._slots(resource):
                 if not entry.blocked:
                     entry.blocked = True
                     blocked.append((entry.job_id, resource))
@@ -175,16 +179,28 @@ class Dispatcher:
             entry.held = resource
             del self._queued[entry.job_id]
             if resource is not None:
-                self._held.add(resource)
+                self._held[resource] = self._held.get(resource, 0) + 1
             return entry, blocked
         return None, blocked
+
+    def _slots(self, resource: str) -> int:
+        if self._resource_capacity is None:
+            return 1
+        try:
+            return max(1, int(self._resource_capacity(resource)))
+        except Exception:  # come la risorsa illeggibile: il valore prudente
+            return 1
 
     def _release(self, entry: _Entry) -> None:
         """Restituisce la risorsa esclusiva del job, una volta sola. `held` torna None: la chiusura dell'esecuzione
         (o una seconda chiamata) non libera la stessa risorsa presa nel frattempo da un altro job."""
         with self._cond:
             if entry.held is not None:
-                self._held.discard(entry.held)
+                left = self._held.get(entry.held, 0) - 1
+                if left > 0:
+                    self._held[entry.held] = left
+                else:
+                    self._held.pop(entry.held, None)
                 entry.held = None
                 self._cond.notify_all()
 

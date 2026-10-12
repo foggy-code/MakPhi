@@ -30,6 +30,8 @@ STATUS_TTL = 15.0
 NOT_RUNNING = ("QMEAN locale non attivo: collega il disco con UniClust30/UniRef30 e avvia (o riavvia) BioLoom "
                "dall'avviatore, che attiva il servizio quando trova il database.")
 _status_cache: dict = {"at": 0.0, "key": None, "value": None}
+# calcoli contemporanei del worker (QMEAN_PARALLEL, `slots` nel suo stato): ultimo valore letto, per il dispatcher
+_slots = {"value": 1}
 
 GIB = 1024 ** 3  # unità binarie, come il worker e l'interfaccia ("GB")
 # Memoria da assegnare a Docker perché HHblits finisca in tempi ragionevoli, misurata (Guida, docs/ARCHITETTURA.md):
@@ -125,6 +127,13 @@ def _client() -> httpx.Client:
     return httpx.Client(base_url=base_url(), timeout=httpx.Timeout(20.0, connect=3.0))
 
 
+def slots() -> int:
+    """Calcoli QMEAN locali contemporanei (posti della risorsa QMEAN_LOCAL): l'ultimo valore dichiarato dal worker,
+    senza I/O (si legge sotto il lock del dispatcher); 1 finché il worker non è stato interrogato. Lo stato si rilegge
+    all'inizio di ogni calcolo (`score`), quindi dopo il primo i posti in più si usano."""
+    return max(1, int(_slots["value"])) if base_url() else 1
+
+
 def status(prefer: str = "", force: bool = False) -> dict:
     """Stato del worker e dei database trovati (cache di 15 s).
 
@@ -163,7 +172,10 @@ def status(prefer: str = "", force: bool = False) -> dict:
                  "memory": data.get("memory"),
                  "memory_required": _requirement(uniclust, data.get("memory")) if valid else None,
                  "busy": data.get("busy"), "queued": data.get("queued"), "qmean_version": data.get("qmean_version"),
+                 "slots": _count(data.get("slots")) or 1, "running": _count(data.get("running")),
+                 "profiles": data.get("profiles") if isinstance(data.get("profiles"), dict) else None,
                  "message": message}
+        _slots["value"] = value["slots"]
     except (httpx.HTTPError, ValueError):
         value = {"configured": True, "reachable": False, "available": False, "message": NOT_RUNNING,
                  "databases": [], "archives": [], "unsupported": [], "local_orphans": []}
@@ -231,6 +243,14 @@ def score(pdb_text: str, ctx: JobContext, *, method: str = "auto", seqres: str =
     if hhblits and hhblits["seconds"] is not None:
         ctx.log(f"QMEAN locale concluso in {hhblits['seconds']} s nel worker (HHblits su "
                 f"{hhblits['cpu'] or '?'} processori, memoria {hhblits['memory'] or 'non nota'})")
+    profiles = result.get("bioloom_profiles")
+    if hhblits is not None and isinstance(profiles, dict):
+        hhblits["profiles_reused"] = _count(profiles.get("reused"))
+        hhblits["profiles_computed"] = _count(profiles.get("computed"))
+        if hhblits["profiles_reused"]:
+            ctx.log(f"Profilo HHblits riusato per {hhblits['profiles_reused']} "
+                    f"{'sequenza' if hhblits['profiles_reused'] == 1 else 'sequenze'} già valutate con lo stesso "
+                    "database: ricerca su UniRef30 saltata, stesso risultato")
     return {**normalize_qmean(result), "source": "local",
             "uniclust": used.get("name") or chosen.get("prefix"), "uniclust_version": used.get("version"),
             "qmtl": (info.get("qmtl") or {}).get("version"), "hhblits": hhblits}
@@ -243,12 +263,14 @@ def _hhblits(raw) -> Optional[dict]:
     if not isinstance(raw, dict):
         return None
 
-    def count(value) -> Optional[int]:
-        return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0 else None
-
     memory = raw.get("memory")
-    return {"cpu": count(raw.get("cpu")), "memory": memory if memory in ("ok", "swap") else None,
-            "seconds": count(raw.get("seconds"))}
+    return {"cpu": _count(raw.get("cpu")), "memory": memory if memory in ("ok", "swap") else None,
+            "seconds": _count(raw.get("seconds")), "parallel": _count(raw.get("parallel"))}
+
+
+def _count(value) -> Optional[int]:
+    """Numero intero non negativo dal worker, None per valori di tipo inatteso."""
+    return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0 else None
 
 
 def convert(database: str, ctx: JobContext, *, sleep: Callable[[float], None] = time.sleep) -> dict:

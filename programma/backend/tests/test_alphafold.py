@@ -721,7 +721,7 @@ def test_isolated_fragments_are_removed_after_the_threshold(tmp_path):
     ctx = Ctx()
     library = TemplateLibrary(tmp_path / "templates")
     library.save_upload("AF-P0CG48-F1.pdb", src.read_bytes())
-    service = ComputeService(SimpleNamespace(register=lambda *a, **k: None), library, tmp_path / "u", tmp_path / "d")
+    service = ComputeService(SimpleNamespace(register=lambda *a, **k: None, set_resource_capacity=lambda *a: None), library, tmp_path / "u", tmp_path / "d")
     [t] = service._prepare_templates(ctx, [modeller.TemplateSpec("AF-P0CG48-F1", ["A"])], tmp_path / "w", plddt_min=70)
     assert ("rimossi 20 residui con pLDDT < 70 e 4 in frammenti isolati di meno di 5 residui (11–27:A, 34–40:A), "
             "restano 52 di 76") in ctx.logs[-1]
@@ -764,7 +764,7 @@ class Ctx:
 @pytest.fixture
 def service(tmp_path, afdb):
     library = TemplateLibrary(tmp_path / "templates")
-    jobs = SimpleNamespace(register=lambda *a, **k: None)
+    jobs = SimpleNamespace(register=lambda *a, **k: None, set_resource_capacity=lambda *a: None)
     return ComputeService(jobs, library, tmp_path / "uploads", tmp_path / "databases")
 
 
