@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { AssemblySummary, ComplexAssessment, InterfaceComparison, InterfacePair } from "../api/types";
 import { coloringMap } from "./residueColoring";
 import {
-  assemblyChainLabel, assemblyImportable, assemblyLabel, CHAIN_COLORS, cleanSequence, comparisonHighlight, complexColoring, complexRequest, complexTemplateRefs,
-  emptyComplex, MAX_COMPLEX_RESIDUES, oligomerLabel, parseResidueLabel, resolvedSequence, rowsForChains, splitPirChains, symmetryOptions,
+  assemblyChainLabel, assemblyComposition, assemblyImportable, assemblyLabel, CHAIN_COLORS, cleanSequence, comparisonHighlight, complexColoring, complexRequest, complexTemplateRefs,
+  compositionLabel, emptyComplex, MAX_COMPLEX_RESIDUES, oligomerLabel, parseResidueLabel, resolvedSequence, rowsForChains, splitPirChains, stoichiometry, symmetryOptions,
   type ComplexRow, type ComplexState,
 } from "./complex";
 import { parsePir } from "./pir";
@@ -170,6 +170,28 @@ describe("assemblaggi", () => {
     expect(oligomerLabel("", 3)).toBe("3 catene proteiche");
     expect(oligomerLabel("MONOMERIC", 1)).toBe("monomero");
     expect(assemblyLabel({ ...dimerAssembly, details: "software_defined_assembly", method: "PISA" })).toMatch(/dal programma \(PISA\)$/);
+  });
+
+  it("composizione: omo/etero, stechiometria e assemblaggi dalle entità del file", () => {
+    expect(compositionLabel("monomer", 1)).toBe("monomero");
+    expect(compositionLabel("homo", 2)).toBe("omo-dimero");
+    expect(compositionLabel("hetero", 4)).toBe("etero-tetramero");
+    expect(compositionLabel("homo", 24)).toBe("omo-oligomero di 24 catene");
+    expect(stoichiometry([1, 2])).toBe("A2B");
+    expect(stoichiometry([1])).toBe("A");
+    const homo = { kind: "monomer" as const, chains: 1, stoichiometry: "A", source: "file" as const, entities: [{ name: "UBQ", chains: ["A"], length: 76 }] };
+    // dimero generato per simmetria da una sola catena del file: omo-dimero
+    expect(assemblyComposition(dimerAssembly, homo)).toEqual({ kind: "homo", chains: 2, stoichiometry: "A2" });
+    const hetero = { kind: "hetero" as const, chains: 2, stoichiometry: "AB", source: "file" as const,
+      entities: [{ name: "X", chains: ["A"], length: 70 }, { name: "Y", chains: ["B"], length: 80 }] };
+    const ab = { ...dimerAssembly, chains: [
+      { chain: "A", source: "A", operator: "1", identity: true, protein: true },
+      { chain: "B", source: "B", operator: "1", identity: true, protein: true },
+    ] };
+    expect(assemblyComposition(ab, hetero)).toEqual({ kind: "hetero", chains: 2, stoichiometry: "AB" });
+    // catena d'origine sconosciuta o composizione assente: nessuna indicazione
+    expect(assemblyComposition(ab, homo)).toBeNull();
+    expect(assemblyComposition(ab, undefined)).toBeNull();
   });
 
   it("da importare solo se costruibile, con almeno due catene e non la sola identità", () => {

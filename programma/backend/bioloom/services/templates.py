@@ -19,7 +19,7 @@ from typing import Callable, Optional
 from ..core.errors import AppError, Conflict, NotFound, RemoteServiceError
 from ..core.storage import atomic_write_bytes, atomic_write_json, atomic_write_text, read_json, remove_tree, safe_join
 from ..domain import assembly as assembly_mod
-from ..domain import ligands, plddt, secondary, structure
+from ..domain import composition, ligands, plddt, secondary, structure
 from ..engines import remote
 
 EXTENSIONS = {".pdb": "pdb", ".ent": "pdb", ".cif": "cif", ".mmcif": "cif"}
@@ -30,7 +30,8 @@ OTHER_FORMAT = {"pdb": "cif", "cif": "pdb"}
 STAGING_PREFIX = ".upload-"
 # 3: ligandi con la classificazione di domain/ligands (le analisi in cache delle versioni precedenti si ricalcolano)
 # 4: acque candidate al trasferimento (domain/ligands.water_candidates)
-ANALYSIS_VERSION = 4
+# 5: entità dichiarate nel file e composizione delle catene (domain/composition: monomero, omo- o etero-oligomero)
+ANALYSIS_VERSION = 5
 SOURCE_ALPHAFOLD = "alphafold"
 PREDICTED_NOTE = "modello predetto, non struttura sperimentale"
 PREDICTED_METHOD = "Modello predetto (AlphaFold)"
@@ -425,6 +426,7 @@ class TemplateLibrary:
             # acque legate alla struttura (acque catalitiche e strutturali), da scegliere una per una
             "waters": ligands.water_candidates(model),
             "models": len(st),
+            "composition": composition.describe(chains, header.get("entities"), header.get("seqres")),
         }
         atomic_write_json(cache_path, {"mtime": mtime, "version": ANALYSIS_VERSION, "data": data})
         return data

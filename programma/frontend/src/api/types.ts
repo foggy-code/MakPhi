@@ -555,6 +555,24 @@ export interface ChainSummary {
   missing?: number;
 }
 
+/** Catene della stessa proteina (un'entità): dal file o raggruppate per sequenza. */
+export interface CompositionEntity {
+  name: string;
+  chains: string[];
+  length: number;
+}
+
+/** Monomero, omo- o etero-oligomero delle catene del file (non per forza l'assemblaggio biologico). */
+export interface ChainComposition {
+  kind: "monomer" | "homo" | "hetero" | "none";
+  chains: number;
+  /** come in RCSB: A2, A2B2, AB */
+  stoichiometry: string;
+  /** "file": entità dichiarate nel file; "sequence": catene raggruppate per sequenza (identità ≥ 95%) */
+  source: "file" | "sequence" | "";
+  entities: CompositionEntity[];
+}
+
 export interface TemplateAnalysis {
   id: string;
   format: string;
@@ -565,8 +583,12 @@ export interface TemplateAnalysis {
     missing_residues: { resname: string; chain: string; resnum: string }[];
     seqres: Record<string, string>;
     secondary_structure: { type: string; chain: string; start: number; end: number }[];
+    /** molecole dichiarate nel file (COMPND del PDB, _entity_poly del mmCIF); assenti nelle analisi in cache precedenti */
+    entities?: { name: string; chains: string[] }[];
   };
   chains: ChainSummary[];
+  /** composizione delle catene proteiche (domain/composition.py); assente nelle analisi in cache precedenti */
+  composition?: ChainComposition;
   /** gruppi eteroatomici non d'acqua con la classificazione (domain/ligands.candidates) */
   ligands: HeteroGroup[];
   /** acque legate alla struttura (domain/ligands.water_candidates); assenti nelle analisi in cache precedenti */
