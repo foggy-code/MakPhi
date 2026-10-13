@@ -104,11 +104,14 @@ def parse_header(text: str) -> dict:
     missing: list[dict] = []
     seqres: dict[str, list[str]] = {}
     ss: list[dict] = []
+    compnd: list[str] = []
     in_465 = False
     for line in text.splitlines():
         rec = line[:6]
         if rec == "TITLE ":
             title_parts.append(line[10:].strip())
+        elif rec == "COMPND":
+            compnd.append(line[10:80].strip())
         elif rec == "EXPDTA":
             method = line[10:].strip()
         elif line.startswith("REMARK   2 RESOLUTION."):
@@ -149,7 +152,25 @@ def parse_header(text: str) -> dict:
         "missing_residues": missing,
         "seqres": {c: "".join(three_to_one(r) for r in names) for c, names in seqres.items()},
         "secondary_structure": ss,
+        "entities": _compnd_entities(" ".join(compnd)),
     }
+
+
+def _compnd_entities(text: str) -> list[dict]:
+    """Molecole del record COMPND: `MOL_ID: 1; MOLECULE: …; CHAIN: A, B; …` → [{name, chains}]."""
+    entities: list[dict] = []
+    for field in text.split(";"):
+        key, sep, value = field.partition(":")
+        if not sep:
+            continue
+        key, value = key.strip().upper(), " ".join(value.split())
+        if key == "MOL_ID":
+            entities.append({"name": "", "chains": []})
+        elif entities and key == "MOLECULE":
+            entities[-1]["name"] = value
+        elif entities and key == "CHAIN":
+            entities[-1]["chains"] = [c.strip() for c in value.split(",") if c.strip() and c.strip() != "NULL"]
+    return [e for e in entities if e["chains"]]
 
 
 def parse_cif_header(path: Path) -> dict:
@@ -160,7 +181,7 @@ def parse_cif_header(path: Path) -> dict:
         data = MMCIF2Dict(str(path))
     except Exception:
         return {"title": "", "method": "", "resolution": None, "missing_residues": [], "seqres": {},
-                "secondary_structure": []}
+                "secondary_structure": [], "entities": []}
 
     def first(key: str) -> str:
         value = data.get(key)
@@ -192,8 +213,16 @@ def parse_cif_header(path: Path) -> dict:
         for chain in str(strands).split(","):
             if chain.strip() and chain.strip() not in ("?", "."):
                 seqres[chain.strip()] = "".join(str(seq).split()).upper()
+    # entità polimeriche con le catene dell'autore e il nome (_entity.pdbx_description)
+    names = dict(zip(values("_entity.id"), values("_entity.pdbx_description")))
+    entities = []
+    for eid, strands in zip(values("_entity_poly.entity_id"), values("_entity_poly.pdbx_strand_id")):
+        chains_of = [c.strip() for c in str(strands).split(",") if c.strip() and c.strip() not in ("?", ".")]
+        if chains_of:
+            name = names.get(eid, "")
+            entities.append({"name": "" if name in ("?", ".") else name, "chains": chains_of})
     return {"title": first("_struct.title"), "method": first("_exptl.method"), "resolution": resolution,
-            "missing_residues": missing, "seqres": seqres, "secondary_structure": []}
+            "missing_residues": missing, "seqres": seqres, "secondary_structure": [], "entities": entities}
 
 
 class _Selector:

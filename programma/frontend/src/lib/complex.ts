@@ -7,7 +7,7 @@
 // interfacce sono etichette "A57" (catena di un carattere + numero, anche con codice di inserzione: "A52A").
 
 import type {
-  AssemblyChain, AssemblySummary, ChainSummary, ComplexAssessment, ComplexRequest, InterfaceComparison, InterfaceStatus, TemplateRef,
+  AssemblyChain, AssemblySummary, ChainComposition, ChainSummary, ComplexAssessment, ComplexRequest, InterfaceComparison, InterfaceStatus, TemplateRef,
 } from "../api/types";
 import type { CategoricalScale } from "./colorscale";
 import { fmtNum } from "./format";
@@ -278,6 +278,44 @@ export function oligomerLabel(details: string, proteinChains: number): string {
   if (OLIGOMER[key]) return OLIGOMER[key];
   if (key) return key;
   return proteinChains === 1 ? "monomero" : `${proteinChains} catene proteiche`;
+}
+
+const OLIGOMER_BY_COUNT = ["", "monomero", "dimero", "trimero", "tetramero", "pentamero", "esamero", "eptamero", "ottamero", "nonamero", "decamero", "", "dodecamero"];
+
+/** "monomero", "omo-dimero", "etero-tetramero"; oltre i nomi noti "omo-oligomero di 24 catene". */
+export function compositionLabel(kind: ChainComposition["kind"], chains: number): string {
+  if (kind === "none") return "nessuna catena proteica";
+  if (kind === "monomer" || chains === 1) return "monomero";
+  const prefix = kind === "homo" ? "omo" : "etero";
+  const name = OLIGOMER_BY_COUNT[chains];
+  return name ? `${prefix}-${name}` : `${prefix}-oligomero di ${chains} catene`;
+}
+
+/** Stechiometria come in RCSB (A2B2, AB): entità in ordine di copie decrescenti. */
+export function stoichiometry(counts: number[]): string {
+  const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const sorted = [...counts].sort((x, y) => y - x);
+  if (sorted.length > letters.length) return `${sorted.length} entità`;
+  return sorted.map((n, i) => `${letters[i]}${n > 1 ? n : ""}`).join("");
+}
+
+/**
+ * Composizione di un assemblaggio dalle entità delle catene del file: ogni catena proteica generata conta per l'entità
+ * della catena d'origine. null se manca la composizione del file o una catena d'origine non vi compare.
+ */
+export function assemblyComposition(a: AssemblySummary, comp: ChainComposition | undefined): { kind: ChainComposition["kind"]; chains: number; stoichiometry: string } | null {
+  if (!comp || !comp.entities.length) return null;
+  const entityOf = new Map<string, number>();
+  comp.entities.forEach((e, i) => e.chains.forEach((c) => entityOf.set(c, i)));
+  const counts = new Map<number, number>();
+  for (const c of a.chains.filter((x) => x.protein)) {
+    const e = entityOf.get(c.source);
+    if (e === undefined) return null;
+    counts.set(e, (counts.get(e) ?? 0) + 1);
+  }
+  const n = [...counts.values()].reduce((x, y) => x + y, 0);
+  if (!n) return null;
+  return { kind: n === 1 ? "monomer" : counts.size === 1 ? "homo" : "hetero", chains: n, stoichiometry: stoichiometry([...counts.values()]) };
 }
 
 /** Catena di un assemblaggio: "B = A con l'operatore 2" (`short`: "B=A·2"); solo il nome se è la catena del file così

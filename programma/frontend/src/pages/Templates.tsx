@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { ChainSummary, EntityLabels, TemplateAnalysis, TemplateItem } from "../api/types";
+import type { ChainComposition, ChainSummary, EntityLabels, TemplateAnalysis, TemplateItem } from "../api/types";
 import { AssembliesCard } from "../components/AssembliesCard";
 import { SSStrip } from "../components/charts";
 import { Icon } from "../components/Icon";
@@ -13,6 +13,7 @@ import { FormSection } from "../components/WorkflowParts";
 import {
   isAlphaFoldId, isUniProtAccession, normalizeAccession, PLDDT_BAND_LABEL, PLDDT_BAND_TONE, plddtLabel, plddtTone, predictorBadge, predictorTitle, type PlddtBand,
 } from "../lib/alphafold";
+import { compositionLabel } from "../lib/complex";
 import { useToast } from "../lib/context";
 import { fmtBytes, fmtDate, fmtInt, fmtNum, relTime } from "../lib/format";
 import { useAsync } from "../lib/hooks";
@@ -22,7 +23,7 @@ import { numberedSequence, residueRanges, resolutionNote, resolutionTone, ssPart
 
 /** colonne delle tabelle con righe espandibili (riga di dettaglio) */
 const LIBRARY_COLUMNS = 3;
-const CHAIN_COLUMNS = 7;
+const CHAIN_COLUMNS = 8;
 
 /** Avviso e dettagli di un modello predetto (AlphaFold): versione, intervallo UniProt, fasce di pLDDT. */
 function PredictedNote({ meta }: { meta: TemplateItem }) {
@@ -52,6 +53,28 @@ function PredictedNote({ meta }: { meta: TemplateItem }) {
         </span>
       </div>
     </Alert>
+  );
+}
+
+/** Monomero, omo- o etero-oligomero delle catene del file, con le entità (catene della stessa proteina). */
+function CompositionSummary({ comp, assemblies }: { comp: ChainComposition; assemblies: boolean }) {
+  const origin = comp.source === "file" ? "entità dichiarate nel file (COMPND / _entity_poly)" : "catene raggruppate per sequenza (identità ≥ 95%)";
+  return (
+    <div className="stack-sm" style={{ marginBottom: 10 }}>
+      <div className="row" style={{ flexWrap: "wrap" }}>
+        <Badge tone={comp.kind === "hetero" ? "warn" : "accent"}>{compositionLabel(comp.kind, comp.chains)}</Badge>
+        {comp.chains > 1 && <span className="mono" title="Stechiometria come in RCSB: una lettera per proteina, il numero di copie">{comp.stoichiometry}</span>}
+        <span className="small text-2">{origin}</span>
+      </div>
+      {comp.chains > 1 && (
+        <div className="small stack-sm">
+          {comp.entities.map((e, i) => (
+            <span key={i}>Entità {i + 1}{e.name ? ` · ${e.name}` : ""}: catene {e.chains.join(", ")} ({fmtInt(e.length)} residui)</span>
+          ))}
+        </div>
+      )}
+      {assemblies && <span className="small text-2">Sono le catene del file (per i cristalli l'unità asimmetrica): lo stato biologico è nella card Assemblaggi biologici.</span>}
+    </div>
   );
 }
 
@@ -93,6 +116,9 @@ function TemplateDetail({ id, labels, onDeleted, onAdded, onLabels }: { id: stri
   const resolution = a.header.resolution;
   const allOpen = a.chains.length > 0 && a.chains.every((c) => open.has(c.chain));
   const helices = a.header.secondary_structure.filter((s) => s.type === "helix").length;
+  const comp = a.composition;
+  const entityOf = new Map<string, number>();
+  comp?.entities.forEach((e, i) => e.chains.forEach((ch) => entityOf.set(ch, i + 1)));
   return (
     <div className="stack">
       {predicted && <PredictedNote meta={a.meta} />}
@@ -135,6 +161,7 @@ function TemplateDetail({ id, labels, onDeleted, onAdded, onLabels }: { id: stri
               { label: "Aggiunto", value: a.meta.added_at ? `${fmtDate(a.meta.added_at)} (${relTime(a.meta.added_at)})` : "—" },
               { label: "Modelli nel file", value: a.models },
               { label: "Catene", value: a.chains.map((c) => c.chain).join(", ") || "—" },
+              { label: "Composizione", value: comp && comp.kind !== "none" ? `${compositionLabel(comp.kind, comp.chains)}${comp.chains > 1 ? ` (${comp.stoichiometry})` : ""}` : "—" },
               { label: "Atomi pesanti", value: fmtInt(a.stats.heavy_atoms) },
               { label: "Struttura secondaria dichiarata", value: a.header.secondary_structure.length ? `${helices} eliche · ${a.header.secondary_structure.length - helices} filamenti` : "—" },
               { label: "SEQRES", value: Object.keys(a.header.seqres).length ? Object.entries(a.header.seqres).map(([ch, s]) => `${ch}: ${s.length}`).join(" · ") : "—" },
@@ -147,12 +174,13 @@ function TemplateDetail({ id, labels, onDeleted, onAdded, onLabels }: { id: stri
         right={a.chains.length > 1 && (
           <ExpandAll noun="catene" allOpen={allOpen} onExpand={() => open.expandAll(a.chains.map((c) => c.chain))} onCollapse={open.collapseAll} />
         )}>
+        {comp && comp.kind !== "none" && <CompositionSummary comp={comp} assemblies={!predicted} />}
         <div className="table-wrap">
           <table className="table">
             <thead>
               <tr>
                 <th style={{ width: 34 }} aria-label="Dettagli" />
-                <th>Catena</th><th className="num">Residui</th><th>Numerazione</th><th>Struttura secondaria (DSSP)</th><th className="num">Mancanti</th><th className="num">Interruzioni</th>
+                <th>Catena</th><th title="Catene con lo stesso numero: stessa proteina">Entità</th><th className="num">Residui</th><th>Numerazione</th><th>Struttura secondaria (DSSP)</th><th className="num">Mancanti</th><th className="num">Interruzioni</th>
               </tr>
             </thead>
             <tbody>
@@ -163,6 +191,7 @@ function TemplateDetail({ id, labels, onDeleted, onAdded, onLabels }: { id: stri
                     <tr className={`clickable${isOpen ? " row-open" : ""}`} onClick={() => open.toggle(c.chain)}>
                       <td><ExpandButton open={isOpen} onClick={() => open.toggle(c.chain)} label={`dettagli della catena ${c.chain}`} /></td>
                       <td><b>{c.chain}</b></td>
+                      <td>{entityOf.get(c.chain) ?? "—"}</td>
                       <td className="num">{c.residues}</td>
                       <td className="nowrap">{c.first}–{c.last}</td>
                       <td style={{ minWidth: 220 }}>{c.ss ? <SSStrip ss3={c.ss} /> : "—"}</td>
@@ -184,7 +213,7 @@ function TemplateDetail({ id, labels, onDeleted, onAdded, onLabels }: { id: stri
           Le interruzioni (distanza C–N &gt; 2 Å) e i residui mancanti diventano gap nell'allineamento: MODELLER li ricostruisce come loop.
         </p>
       </Card>
-      {!predicted && <AssembliesCard meta={a.meta} onImported={onAdded} />}
+      {!predicted && <AssembliesCard meta={a.meta} composition={comp} onImported={onAdded} />}
       {groups.length > 0 && (
         <Card title="Ligandi ed eteroatomi" icon="flask" sub="Trasferibili nel modello (Modellazione → Trasferisci ligandi, cofattori, metalli e acque)">
           <div className="table-wrap">

@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { AssemblyChain, AssemblyList, AssemblySummary, TemplateItem } from "../api/types";
-import { assemblyChainLabel, assemblyImportable, oligomerLabel } from "../lib/complex";
+import type { AssemblyChain, AssemblyList, AssemblySummary, ChainComposition, TemplateItem } from "../api/types";
+import { assemblyChainLabel, assemblyComposition, assemblyImportable, compositionLabel, oligomerLabel } from "../lib/complex";
 import { useToast } from "../lib/context";
 import { useAsync } from "../lib/hooks";
 import { Icon } from "./Icon";
@@ -34,12 +34,18 @@ function ChainChips({ chains }: { chains: AssemblyChain[] }) {
 }
 
 /** Un assemblaggio dichiarato nel file: stato oligomerico, origine, generatori, catene e importazione. */
-function AssemblyItem({ a, busy, onImport }: { a: AssemblySummary; busy: string; onImport: (id: string) => void }) {
+function AssemblyItem({ a, composition, busy, onImport }: { a: AssemblySummary; composition?: ChainComposition; busy: string; onImport: (id: string) => void }) {
+  const comp = assemblyComposition(a, composition);
   return (
     <div className="card flat stack-sm" style={{ padding: "10px 12px" }}>
       <div className="row" style={{ flexWrap: "wrap" }}>
         <b>Assemblaggio {a.id}</b>
         <Badge tone="accent">{oligomerLabel(a.oligomeric_details, a.protein_chains)}</Badge>
+        {comp && comp.chains > 1 && (
+          <Badge tone={comp.kind === "hetero" ? "warn" : "info"} title="Dalle entità delle catene d'origine (card Catene); stechiometria come in RCSB">
+            {compositionLabel(comp.kind, comp.chains)} · {comp.stoichiometry}
+          </Badge>
+        )}
         {a.identity_only && <Badge tone="info" title="Solo l'operatore identità: le catene sono quelle del file">come nel file</Badge>}
         <span className="small text-2">{originLabel(a.details, a.method)}</span>
         {assemblyImportable(a) && (
@@ -65,7 +71,7 @@ function AssemblyItem({ a, busy, onImport }: { a: AssemblySummary; busy: string;
  * importazione come nuovo template `<ID>_ASM<n>` (coordinate generate con gli operatori di simmetria del file). Per un
  * template che è già un assemblaggio mostra da dove viene.
  */
-export function AssembliesCard({ meta, onImported }: { meta: TemplateItem; onImported: (id: string) => void }) {
+export function AssembliesCard({ meta, composition, onImported }: { meta: TemplateItem; composition?: ChainComposition; onImported: (id: string) => void }) {
   const toast = useToast();
   const navigate = useNavigate();
   const { data, loading, error } = useAsync<AssemblyList>(() => api.templateAssemblies(meta.id), [meta.id]);
@@ -100,7 +106,7 @@ export function AssembliesCard({ meta, onImported }: { meta: TemplateItem; onImp
     <Card icon="layers" title="Assemblaggi biologici" sub={data.format === "mmcif" ? "pdbx_struct_assembly del mmCIF" : "REMARK 350 del file PDB"}>
       {!data.assemblies.length ? <p className="small text-2">{data.note}</p> : (
         <div className="stack-sm">
-          {data.assemblies.map((a) => <AssemblyItem key={a.id} a={a} busy={busy} onImport={importOne} />)}
+          {data.assemblies.map((a) => <AssemblyItem key={a.id} a={a} composition={composition} busy={busy} onImport={importOne} />)}
         </div>
       )}
       <p className="small text-2" style={{ marginTop: 10 }}>

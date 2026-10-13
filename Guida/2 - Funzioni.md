@@ -54,6 +54,13 @@ va letto come un'indicazione.
 - **Libreria template:** download da RCSB e da AlphaFold DB, caricamento di file, catene, residui mancanti, ligandi
   classificati, struttura secondaria e 3D. Per le strutture del PDB elenca gli **assemblaggi biologici** dichiarati nel
   file: **Importa come template** crea `<ID>_ASM<n>` con le catene dell'assemblaggio (operatori di simmetria applicati).
+- **Omo- o etero-oligomero:** la card **Catene** dice se le catene del file formano un monomero, un omo-oligomero o un
+  etero-oligomero, con la stechiometria come in RCSB (A2 = due copie della stessa proteina, A2B2 = due proteine, due
+  copie ciascuna) e la colonna **Entità** (stesso numero = stessa proteina). Le entità vengono dal file (COMPND del PDB,
+  `_entity_poly` del mmCIF); se il file non le dichiara, le catene si raggruppano per sequenza (SEQRES se c'è, identità
+  ≥ 95%, così residui mancanti o una mutazione non separano due copie). Sono le catene del file, cioè l'unità
+  asimmetrica dei cristalli: ogni assemblaggio biologico ha il suo badge (per esempio "omo-dimero · A2" per un
+  dimero generato per simmetria da una sola catena).
 - **Sostituire un template:** un file caricato prende l'id dal nome (`1UBQ.pdb` → 1UBQ). Se nella libreria c'è già un
   template con quell'id, BioLoom non lo sostituisce da solo: chiede conferma, dicendo quanti job lo usano.
   **Sostituisci** mette al suo posto il nuovo file, anche in un altro formato (.pdb o .cif), e ne rifà l'analisi: i
