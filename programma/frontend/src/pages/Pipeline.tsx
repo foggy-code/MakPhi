@@ -19,7 +19,7 @@ import { StackBar } from "../components/charts";
 import { Alert, Badge, BarCell, Card, DetailGrid, Disclosure, Empty, ExpandAll, ExpandButton, Field, Grade, PageHead, Segmented, StatusBadge, useExpanded } from "../components/ui";
 import { hasPredictedTemplate, pipelineFastaName, PLDDT_DEFAULT } from "../lib/alphafold";
 import { useProject, useToast } from "../lib/context";
-import { fmtDate, fmtDuration, fmtEvalue, fmtNum, isActive, relTime, searchCacheHitsLabel, STATUS_LABEL } from "../lib/format";
+import { fmtBytes, fmtDate, fmtDuration, fmtEvalue, fmtNum, isActive, relTime, searchCacheHitsLabel, STATUS_LABEL } from "../lib/format";
 import { recordsToFasta } from "../lib/files";
 import { isEmail } from "../lib/notify";
 import { useAsync, useInterval, useJob, useJobsFeed, useLiveJobList, useThrottled } from "../lib/hooks";
@@ -89,6 +89,8 @@ function ItemDetail({ item: it }: { item: PipelineItem }) {
 const ITEM_COLUMNS = 12;
 /** template al massimo in un solo modello (services/compute._template_specs) */
 const MAX_COMBINED_TEMPLATES = 10;
+/** oltre questi caratteri (~2 MB) il FASTA non si mostra nel campo di testo: solo il riepilogo */
+const BIG_FASTA_CHARS = 2_000_000;
 
 function Items({ jobId, running, completed, cacheHits }: { jobId: string; running: boolean; completed: boolean; cacheHits?: number }) {
   const [page, setPage] = useState(1);
@@ -123,6 +125,7 @@ function Items({ jobId, running, completed, cacheHits }: { jobId: string; runnin
   const counts = data.counts;
   const indices = data.items.map((it) => it.idx);
   const pairs = data.pairs;
+  const sequenceCount = pairs?.sequence_count ?? pairs?.sequences.length ?? 0;
   const label = (it: PipelineItem) => (it.pair ? `${it.pair.sequence} × ${it.pair.template}` : it.name);
   const totalItems = Object.values(counts).reduce((a, b) => a + b, 0);
   return (
@@ -147,7 +150,7 @@ function Items({ jobId, running, completed, cacheHits }: { jobId: string; runnin
         <AutoQmeanNotice jobId={jobId} completed={completed} what="Lo ZIP" />
         {parts.length > 0 && (
           <StackBar parts={parts} title={pairs ? "Stato delle coppie" : "Stato delle sequenze"}
-            subtitle={pairs ? `${plural(pairs.sequences.length, "sequenza", "sequenze")} × ${pairs.templates.length} template = ${plural(totalItems, "modello", "modelli")}` : `${plural(data.total, "sequenza", "sequenze")} della pipeline`}
+            subtitle={pairs ? `${plural(sequenceCount, "sequenza", "sequenze")} ×${pairs.templates.length} template = ${plural(totalItems, "modello", "modelli")}` : `${plural(data.total, "sequenza", "sequenze")} della pipeline`}
             filename={`pipeline_${jobId.slice(0, 8)}_stati`} />
         )}
         {pairs && (
@@ -174,10 +177,15 @@ function Items({ jobId, running, completed, cacheHits }: { jobId: string; runnin
         </div>
         {pairs && (
           <div className="row small" style={{ gap: 10, flexWrap: "wrap" }}>
-            <select className="input input-sm" style={{ width: 200 }} value={seqFilter} aria-label="Filtro per sequenza" onChange={(e) => { setSeqFilter(e.target.value); setPage(1); }}>
-              <option value="">Tutte le sequenze ({pairs.sequences.length})</option>
-              {pairs.sequences.map((n, i) => <option key={n} value={i}>{n}</option>)}
-            </select>
+            {/* con migliaia di sequenze il server non ne manda i nomi: si filtra con la ricerca per nome */}
+            {pairs.sequences.length > 0 ? (
+              <select className="input input-sm" style={{ width: 200 }} value={seqFilter} aria-label="Filtro per sequenza" onChange={(e) => { setSeqFilter(e.target.value); setPage(1); }}>
+                <option value="">Tutte le sequenze ({pairs.sequences.length})</option>
+                {pairs.sequences.map((n, i) => <option key={n} value={i}>{n}</option>)}
+              </select>
+            ) : (
+              <span className="text-2">{plural(sequenceCount, "sequenza", "sequenze")}: per una sola, cercala per nome</span>
+            )}
             <select className="input input-sm" style={{ width: 200 }} value={tplFilter} aria-label="Filtro per template" onChange={(e) => { setTplFilter(e.target.value); setPage(1); }}>
               <option value="">Tutti i template ({pairs.templates.length})</option>
               {pairs.templates.map((t, i) => <option key={t} value={i}>{t}</option>)}
@@ -306,7 +314,8 @@ export default function Pipeline() {
   // stato delle pipeline recenti dal flusso dell'elenco (anche quelle avviate da un'altra scheda)
   useLiveJobList(recent, setRecent, reloadRecent, (j) => j.kind === "pipeline" && (!projectId || j.project_id === projectId));
   const { job, summary, log, cancel, resume } = useJob<PipelineResult>(jobId, { withLog: true });
-  const count = (fasta.match(/^>/gm) ?? []).length;
+  // con decine di MB di FASTA il conteggio non si rifà a ogni modifica degli altri campi
+  const count = useMemo(() => (fasta.match(/^>/gm) ?? []).length, [fasta]);
   const cross = mode === "fixed" && combination === "each";
   // un modello con tutti i template: al massimo 10 (MODELLER); un modello per template: nessun limite
   const tooManyCombined = mode === "fixed" && !cross && templates.length > MAX_COMBINED_TEMPLATES;
@@ -370,7 +379,15 @@ export default function Pipeline() {
               <FormSection title="Sequenze" hint={plural(count, "sequenza", "sequenze")}>
                 <Field label="Nome"><input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Es. chinasi famiglia X" /></Field>
                 <Field label="Sequenze (multi-FASTA)">
-                  <textarea className="input" rows={8} value={fasta} onChange={(e) => setFasta(e.target.value)} placeholder={">seq1\nMKT...\n>seq2\nMAS..."} />
+                  {fasta.length > BIG_FASTA_CHARS ? (
+                    // decine di MB in un campo modificabile bloccherebbero la pagina: si mostra solo il riepilogo
+                    <div className="row small" style={{ gap: 10, flexWrap: "wrap" }}>
+                      <span><b>{plural(count, "sequenza", "sequenze")}</b> caricate ({fmtBytes(fasta.length)}): il testo non si mostra, per non rallentare la pagina.</span>
+                      <button type="button" className="btn btn-sm" onClick={() => setFasta("")}><Icon name="x" size={13} /> Svuota</button>
+                    </div>
+                  ) : (
+                    <textarea className="input" rows={8} value={fasta} onChange={(e) => setFasta(e.target.value)} placeholder={">seq1\nMKT...\n>seq2\nMAS..."} />
+                  )}
                 </Field>
                 <div className="row">
                   {!!projectSeqs?.length && (

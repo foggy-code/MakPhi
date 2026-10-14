@@ -19,9 +19,12 @@ from typing import Optional
 from ..core.errors import AppError
 from . import sequences
 
-MAX_BYTES = 20 * 1024 * 1024
-MAX_UNCOMPRESSED = 200 * 1024 * 1024
-MAX_RECORDS = 5000
+# Un file di sequenze per una pipeline da server: 100.000 sequenze di qualche centinaio di residui sono ~50 MB in FASTA
+# e più del doppio in GenBank/EMBL; oltre, il file si comprime (.gz) fino a MAX_UNCOMPRESSED.
+MAX_BYTES = 200 * 1024 * 1024
+MAX_UNCOMPRESSED = 1024 * 1024 * 1024
+# Sequenze lette da un file: quante ne accetta una pipeline (services/pipeline.MAX_SEQUENCES)
+MAX_RECORDS = 100_000
 
 FORMAT_LABELS = {
     "fasta": "FASTA", "pir": "PIR (MODELLER)", "clustal": "Clustal", "stockholm": "Stockholm", "msf": "MSF",

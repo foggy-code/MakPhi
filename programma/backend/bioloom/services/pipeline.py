@@ -40,7 +40,7 @@ from ..core.errors import AppError, Conflict, NotFound
 from ..core.events import ITEM
 from ..core.jobs import REQUEUABLE, JobCancelled, JobContext, JobManager, requeue_error
 from ..core.storage import remove_tree, safe_join
-from ..domain import ligands, sequences, template_rank
+from ..domain import fileformats, ligands, sequences, template_rank
 from ..domain.report import alignment_identity
 from ..domain.sequences import SeqRecord
 from ..engines import quality, search
@@ -61,8 +61,9 @@ RESUME_WHERE = {
     "incomplete": "status NOT IN ('completed','filtered')",
     "failed": "status='failed'",
 }
-# Sequenze per pipeline: abbastanza per un lavoro da server (es. 20.000 sequenze × 6 template), con margine
-MAX_SEQUENCES = 50_000
+# Sequenze per pipeline: abbastanza per un lavoro da server (es. 50.000 sequenze × 6 template), con margine; le stesse
+# che si leggono da un file
+MAX_SEQUENCES = fileformats.MAX_RECORDS
 # Elementi elaborati insieme da una pipeline: il tetto vero sono i job di calcolo in parallelo delle Impostazioni
 MAX_PARALLEL = 256
 # Output dei programmi esterni di un elemento, nella sua cartella (JobContext.sub, output_log)
@@ -81,6 +82,9 @@ RESET_ITEM = ("status='pending', stage='', template=NULL, template_source=NULL, 
 PROCESSED_ITEM = ("completed", "filtered", "failed")
 # Elementi che l'esecuzione in corso deve ancora concludere: in attesa o in lavorazione.
 OPEN_ITEM = ("pending", "running", "searching", "modeling")
+ETA_SAMPLES = 1000  # elementi conclusi più recenti da cui si stima la durata tipica (tempo residuo)
+PAIRS_LISTED = 1000  # M × N: oltre queste sequenze le pagine degli elementi non ne elencano i nomi (filtro per nome)
+FASTA_SHOWN = 20_000  # caratteri del FASTA nelle risposte dell'API sul job (`public_job`)
 SORTABLE = {"idx", "name", "status", "identity", "coverage", "dope", "ga341", "grade_score", "rama_favored",
             "clashscore", "template"}
 ITEM_COLUMNS = ("idx, name, length(sequence) AS length, status, stage, template, template_source, identity, "
@@ -236,24 +240,22 @@ class PipelineService:
         corsia) nell'esecuzione corrente, cioè avviati dopo il suo inizio (`started_at` del job, riscritto a
         ogni ripresa): dopo una ripresa gli elementi conclusi in precedenza, con durate di un'altra sessione,
         restano fuori. Rimanenti = in attesa o in lavorazione; per questi ultimi si toglie il tempo già speso.
-        Una query sulla chiave primaria degli elementi, solo per pipeline in esecuzione.
+        Durata tipica dagli ultimi ETA_SAMPLES elementi conclusi: con centinaia di migliaia di elementi leggerli tutti a
+        ogni elenco dei job costerebbe secondi. Query sull'indice degli elementi per stato, solo per pipeline in
+        esecuzione.
         """
         started = job.get("started_at")
         if not started:
             return None
-        rows = self.db.query(
-            "SELECT status, started_at, finished_at FROM pipeline_items WHERE job_id=? AND "
-            f"(status IN ({','.join('?' * len(OPEN_ITEM))}) OR "
-            f"(status IN ({','.join('?' * len(PROCESSED_ITEM))}) AND started_at >= ?))",
-            (job["id"], *OPEN_ITEM, *PROCESSED_ITEM, started))
-        durations, running, remaining = [], [], 0
-        for row in rows:
-            if row["status"] in PROCESSED_ITEM:
-                durations.append(eta_estimate.seconds_between(row["started_at"], row["finished_at"]))
-            else:
-                remaining += 1
-                if row["status"] != "pending":
-                    running.append(eta_estimate.seconds_between(row["started_at"], now))
+        open_marks, done_marks = ",".join("?" * len(OPEN_ITEM)), ",".join("?" * len(PROCESSED_ITEM))
+        remaining = int(self.db.scalar(
+            f"SELECT COUNT(*) FROM pipeline_items WHERE job_id=? AND status IN ({open_marks})", (job["id"], *OPEN_ITEM)))
+        running = [eta_estimate.seconds_between(r["started_at"], now) for r in self.db.query(
+            f"SELECT started_at FROM pipeline_items WHERE job_id=? AND status IN ({open_marks}) AND status<>'pending'",
+            (job["id"], *OPEN_ITEM))]
+        durations = [eta_estimate.seconds_between(r["started_at"], r["finished_at"]) for r in self.db.query(
+            f"SELECT started_at, finished_at FROM pipeline_items WHERE job_id=? AND status IN ({done_marks}) AND "
+            "started_at >= ? ORDER BY finished_at DESC LIMIT ?", (job["id"], *PROCESSED_ITEM, started, ETA_SAMPLES))]
         parallel = effective_parallel(self._params(job["id"]), self.jobs.settings_provider().effective_workers())
         return eta_estimate.pipeline_eta(durations, remaining, parallel, running)
 
@@ -286,9 +288,10 @@ class PipelineService:
     # ------------------------------------------------------------------------------ esecuzione
     def handle(self, ctx: JobContext, p: dict) -> dict:
         # Solo gli elementi in attesa: in una ripresa gli altri sono già conclusi (o esclusi dall'ambito
-        # scelto) e restano come sono. Una pipeline nuova ha tutti gli elementi in attesa.
-        items = self.db.query("SELECT idx, name, sequence FROM pipeline_items WHERE job_id=? AND status='pending' "
-                              "ORDER BY idx", (ctx.job_id,))
+        # scelto) e restano come sono. Una pipeline nuova ha tutti gli elementi in attesa. Solo gli indici: nome e
+        # sequenza si leggono quando l'elemento parte (con centinaia di migliaia di elementi, centinaia di MB).
+        items = [int(r["idx"]) for r in self.db.query(
+            "SELECT idx FROM pipeline_items WHERE job_id=? AND status='pending' ORDER BY idx", (ctx.job_id,))]
         total = int(self.db.scalar("SELECT COUNT(*) FROM pipeline_items WHERE job_id=?", (ctx.job_id,)))
         already = int(self.db.scalar(
             f"SELECT COUNT(*) FROM pipeline_items WHERE job_id=? AND status IN ({','.join('?' * len(PROCESSED_ITEM))})",
@@ -323,21 +326,50 @@ class PipelineService:
                 done["n"] += 1
                 ctx.progress(done["n"] / max(total, 1), f"{done['n']} di {total} {noun} {done_word}")
 
-        def work(item: dict) -> None:
+        def work(idx: int) -> None:
+            item = self.db.query_one("SELECT idx, name, sequence FROM pipeline_items WHERE job_id=? AND idx=?",
+                                     (ctx.job_id, idx))
+            if item is None:  # job eliminato nel frattempo
+                return
             try:
                 self._process_item(ctx, p, item, prepared)
             except JobCancelled:
-                self._update(ctx.job_id, item["idx"], status="cancelled", stage="Annullato",
-                             finished_at=now_iso())
+                self._update(ctx.job_id, idx, status="cancelled", stage="Annullato", finished_at=now_iso())
             finally:
                 finished_one()
             if cross and not ctx.cancelled:
-                self._close_sequences(ctx, p, closing, [pair_of(item["idx"], p)[0]])
+                self._close_sequences(ctx, p, closing, [pair_of(idx, p)[0]])
 
         ctx.progress(already / max(total, 1), f"{already} di {total} {noun} {done_word}")
+        # al più `window` elementi affidati al pool alla volta (invece di uno per elemento subito): memoria costante
+        # e, all'annullamento, nessun elemento in più da avviare
+        window = 2 * parallel
+        slots = threading.BoundedSemaphore(window)
+        errors: list[BaseException] = []
+
+        def release(future) -> None:
+            if not future.cancelled() and future.exception() is not None:
+                errors.append(future.exception())
+            slots.release()
+
         try:
             with ThreadPoolExecutor(max_workers=parallel, thread_name_prefix=f"pipeline-{ctx.job_id[:6]}") as pool:
-                list(pool.map(work, items))
+                for idx in items:
+                    slots.acquire()
+                    if ctx.cancelled or errors:
+                        slots.release()
+                        break
+                    pool.submit(work, idx).add_done_callback(release)
+                for _ in range(window):  # attesa degli elementi in corso
+                    slots.acquire()
+                for _ in range(window):
+                    slots.release()
+                if errors:
+                    raise errors[0]
+                if ctx.cancelled:  # elementi mai avviati: annullati con un solo aggiornamento
+                    self.db.execute("UPDATE pipeline_items SET status='cancelled', stage='Annullato', finished_at=? "
+                                    "WHERE job_id=? AND status='pending'", (now_iso(), ctx.job_id))
+                    self.jobs.events.publish(ctx.job_id, ITEM, None)
                 if cross and not ctx.cancelled:
                     # sequenze non chiuse in questa esecuzione (ripresa che non le tocca, chiusura interrotta): il
                     # migliore si ricalcola
@@ -349,9 +381,8 @@ class PipelineService:
         ctx.check()
         counts = {row["status"]: row["n"] for row in self.db.query(
             "SELECT status, COUNT(*) AS n FROM pipeline_items WHERE job_id=? GROUP BY status", (ctx.job_id,))}
-        cache_hits = sum(1 for row in self.db.query("SELECT metrics FROM pipeline_items WHERE job_id=?",
-                                                    (ctx.job_id,))
-                         if isinstance(row["metrics"], dict) and row["metrics"].get("search_cached_at"))
+        cache_hits = int(self.db.scalar("SELECT COUNT(*) FROM pipeline_items WHERE job_id=? AND metrics LIKE ?",
+                                        (ctx.job_id, '%"search_cached_at": "%')))
         if cache_hits:
             ctx.log(f"{cache_hits} " + ("ricerca di template riusata" if cache_hits == 1 else
                                         "ricerche di template riusate") + " dalla cache dei calcoli")
@@ -643,7 +674,11 @@ class PipelineService:
             names = pair_axes(params)
             for r in rows:
                 _with_pair(r, params, names)
-            out["pairs"] = names
+            # i nomi di tutte le sequenze (per il filtro) solo se sono poche: con decine di migliaia peserebbero MB a
+            # ogni pagina, e si cerca per nome
+            count = len(names["sequences"])
+            out["pairs"] = {**names, "sequences": names["sequences"] if count <= PAIRS_LISTED else [],
+                            "sequence_count": count}
         return out
 
     def item(self, job_id: str, idx: int) -> dict:
@@ -658,9 +693,13 @@ class PipelineService:
 
     MATRIX_FIELDS = ("status", "dope", "ga341", "identity", "coverage", "grade", "grade_score", "best_model")
 
-    def matrix(self, job_id: str) -> dict:
+    def matrix(self, job_id: str, *, page: Optional[int] = None, size: int = 50) -> dict:
         """Pipeline M × N: matrice sequenze × template con esito e metriche di ogni coppia (zDOPE, DOPE, GA341,
-        molpdf, identità, copertura, voto) e il migliore di ogni sequenza. Errore per le altre pipeline."""
+        molpdf, identità, copertura, voto) e il migliore di ogni sequenza. Errore per le altre pipeline.
+
+        Con `page`: solo le righe (sequenze) di quella pagina, da `size`, più `page`, `pages`, `start` e
+        `sequence_count`; con decine di migliaia di sequenze la matrice intera pesa decine di MB. In ogni caso
+        `summary`: coppie per esito, sequenze con il migliore scelto, vittorie di ogni template, su tutta la matrice."""
         job = self.jobs.get(job_id, include_result=False)
         params = self._params(job_id)
         if job["kind"] != "pipeline" or not is_cross(params):
@@ -668,18 +707,41 @@ class PipelineService:
                            code="matrix_unsupported")
         names = pair_axes(params)
         n = len(names["templates"])
-        cells: list[list[Optional[dict]]] = [[None] * n for _ in names["sequences"]]
+        count = len(names["sequences"])
+        first, last, extra = 0, count, {}
+        if page is not None:
+            size = max(1, min(int(size), 500))
+            pages = max(1, (count + size - 1) // size)
+            page = max(1, min(int(page), pages))
+            first, last = (page - 1) * size, min(count, page * size)
+            names = {**names, "sequences": names["sequences"][first:last]}
+            extra = {"page": page, "pages": pages, "size": size, "start": first, "sequence_count": count}
+        cells: list[list[Optional[dict]]] = [[None] * n for _ in range(last - first)]
         rows = self.db.query("SELECT idx, status, dope, ga341, identity, coverage, grade, grade_score, best_model, "
-                             "metrics, error FROM pipeline_items WHERE job_id=? ORDER BY idx", (job_id,))
+                             "metrics, error FROM pipeline_items WHERE job_id=? AND idx>=? AND idx<? ORDER BY idx",
+                             (job_id, first * n, last * n))
         for r in rows:
             s, t = pair_of(r["idx"], params)
-            if s >= len(cells) or t >= n:
+            if not first <= s < last or t >= n:
                 continue
             metrics = r["metrics"] if isinstance(r.get("metrics"), dict) else {}
-            cells[s][t] = {"idx": r["idx"], **{k: r.get(k) for k in self.MATRIX_FIELDS},
-                           "zdope": metrics.get("zdope"), "molpdf": metrics.get("molpdf"),
-                           "best": bool(metrics.get("best_in_sequence")), "error": r.get("error")}
-        return {**names, "cells": cells}
+            cells[s - first][t] = {"idx": r["idx"], **{k: r.get(k) for k in self.MATRIX_FIELDS},
+                                   "zdope": metrics.get("zdope"), "molpdf": metrics.get("molpdf"),
+                                   "best": bool(metrics.get("best_in_sequence")), "error": r.get("error")}
+        return {**names, "cells": cells, **extra, "summary": self._matrix_summary(job_id, n)}
+
+    def _matrix_summary(self, job_id: str, n: int) -> dict:
+        """Riepilogo di tutta la matrice M × N: coppie per esito (indice per stato), sequenze con il migliore scelto e
+        quante volte ogni template è il migliore."""
+        counts = {r["status"]: int(r["n"]) for r in self.db.query(
+            "SELECT status, COUNT(*) AS n FROM pipeline_items WHERE job_id=? GROUP BY status", (job_id,))}
+        wins = [0] * n
+        for r in self.db.query("SELECT idx FROM pipeline_items WHERE job_id=? AND status='completed' AND metrics LIKE ?",
+                               (job_id, '%"best_in_sequence": true%')):
+            wins[int(r["idx"]) % max(1, n)] += 1
+        return {"pairs": sum(counts.values()), "completed": counts.get("completed", 0),
+                "failed": counts.get("failed", 0), "open": sum(counts.get(s, 0) for s in OPEN_ITEM),
+                "closed": sum(wins), "wins": wins}
 
     def export_csv(self, job_id: str) -> str:
         """Tabella di tutti gli elementi. Pipeline M × N: la tabella delle metriche (una riga per coppia, come
@@ -937,6 +999,26 @@ def _tpls(n: int) -> str:
 
 def _models(n: int) -> str:
     return f"{n} modello" if n == 1 else f"{n} modelli"
+
+
+def public_job(job: dict) -> dict:
+    """Job di una pipeline per le risposte dell'API: nei parametri l'inizio del FASTA (`fasta_truncated`,
+    `fasta_bytes`) e il numero di sequenze (`sequence_count`) al posto del loro elenco. Con 100.000 sequenze il FASTA
+    è ~50 MB, e la pagina chiede il job di continuo. Il job nel database, lo ZIP (parametri.json) e i pacchetti di
+    riproducibilità hanno i parametri interi. Restituisce il job, modificato solo se serve."""
+    params = job.get("params")
+    if job.get("kind") != "pipeline" or not isinstance(params, dict):
+        return job
+    fasta, listed = str(params.get("fasta") or ""), params.get("sequences")
+    if len(fasta) <= FASTA_SHOWN and not (isinstance(listed, list) and len(listed) > PAIRS_LISTED):
+        return job
+    slim = {**params}
+    if len(fasta) > FASTA_SHOWN:
+        slim.update(fasta=fasta[:FASTA_SHOWN], fasta_truncated=True, fasta_bytes=len(fasta.encode("utf-8")))
+    if isinstance(listed, list) and len(listed) > PAIRS_LISTED:
+        slim.pop("sequences")
+        slim["sequence_count"] = len(listed)
+    return {**job, "params": slim}
 
 
 def is_cross(params: dict) -> bool:

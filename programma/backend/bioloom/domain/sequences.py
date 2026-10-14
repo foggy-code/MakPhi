@@ -29,10 +29,16 @@ class SeqRecord:
                 "length": len(self.sequence)}
 
 
+_NOT_LETTER = re.compile(r"[^A-Z]")
+_NOT_LETTER_OR_GAP = re.compile(r"[^A-Z.\-]")
+
+
 def clean_sequence(text: str, keep_gaps: bool = False) -> str:
     """Rimuove spazi, numeri, asterischi finali; restituisce maiuscolo."""
-    allowed_extra = "-." if keep_gaps else ""
     out = re.sub(r"[\s\d*]", "", text or "").upper()
+    if out.isascii():  # il caso comune, con un'espressione regolare: decine di migliaia di sequenze in una pipeline
+        return (_NOT_LETTER_OR_GAP if keep_gaps else _NOT_LETTER).sub("", out)
+    allowed_extra = "-." if keep_gaps else ""
     return "".join(ch for ch in out if ch.isalpha() or ch in allowed_extra)
 
 
@@ -60,18 +66,26 @@ def parse_fasta(text: str, default_name: str = "seq") -> list[SeqRecord]:
 
 
 def detect_kind(sequence: str) -> str:
-    letters = [c for c in sequence.upper() if c.isalpha()]
+    upper = sequence.upper()
+    if upper.isascii():  # conteggi in C invece che carattere per carattere
+        letters = len(_NOT_LETTER.sub("", upper))
+        nucleic_core = sum(upper.count(c) for c in "ACGTUN")
+    else:
+        alpha = [c for c in upper if c.isalpha()]
+        letters, nucleic_core = len(alpha), sum(1 for c in alpha if c in "ACGTUN")
     if not letters:
         return "protein"
-    nucleic_core = sum(1 for c in letters if c in "ACGTUN")
-    return "nucleic" if nucleic_core / len(letters) >= 0.9 else "protein"
+    return "nucleic" if nucleic_core / letters >= 0.9 else "protein"
 
 
 def invalid_positions(sequence: str, kind: str = "protein", allow_gaps: bool = False) -> list[dict]:
     alphabet = PROTEIN_EXTENDED if kind == "protein" else NUCLEIC
     if allow_gaps:
         alphabet = alphabet | GAPS
-    return [{"position": i + 1, "char": c} for i, c in enumerate(sequence.upper()) if c not in alphabet]
+    upper = sequence.upper()
+    if set(upper) <= alphabet:  # il caso comune: nessun carattere da cercare
+        return []
+    return [{"position": i + 1, "char": c} for i, c in enumerate(upper) if c not in alphabet]
 
 
 def validate_sequence(sequence: str, kind: str = "auto", name: str = "sequenza") -> tuple[str, str]:

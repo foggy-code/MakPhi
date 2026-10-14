@@ -107,7 +107,8 @@ def test_every_sequence_is_modelled_on_every_template(cross):
     # 2 × 3 coppie, una chiamata di MODELLER per coppia con un solo template, bersaglio con il nome della sequenza
     assert sorted(fake.calls) == sorted((n, [t["id"]]) for n in NAMES for t in TEMPLATES)
     page = client.get(f"/api/pipeline/{job_id}/items?size=100").json()
-    assert page["pairs"] == {"sequences": NAMES, "templates": LABELS, "template_ids": ["T1", "T2", "T3"]}
+    assert page["pairs"] == {"sequences": NAMES, "templates": LABELS, "template_ids": ["T1", "T2", "T3"],
+                             "sequence_count": 2}
     rows = page["items"]
     assert [r["name"] for r in rows] == [f"{n}__{label}" for n in NAMES for label in LABELS]
     assert [(r["pair"]["sequence"], r["pair"]["template"], r["template"]) for r in rows] == [

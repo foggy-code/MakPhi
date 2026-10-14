@@ -15,14 +15,14 @@ describe("identificativi nei percorsi", () => {
     await api.document("p#1", "d/1");
     await api.deleteSequence("p1", "s/1");
     await api.cancelJob("j?1");
-    await api.pipelineMatrix("j/1");
+    await api.pipelineMatrix("j/1", 2, 50);
     expect(calls.map((c) => c.url)).toEqual([
       "/api/jobs/a%2Fb%3Fc",
       "/api/projects/p%201/sequences",
       "/api/projects/p%231/documents/d%2F1",
       "/api/projects/p1/sequences/s%2F1",
       "/api/jobs/j%3F1/cancel",
-      "/api/pipeline/j%2F1/matrix",
+      "/api/pipeline/j%2F1/matrix?page=2&size=50",
     ]);
     expect(api.jobFileUrl("j/1", "models/m 1.pdb", true)).toBe("/api/jobs/j%2F1/files/models/m%201.pdb?download=true");
     expect(api.archiveUrl("abc123")).toBe("/api/jobs/abc123/archive"); // gli id normali restano uguali

@@ -10,7 +10,7 @@ Ogni campo che riceve dati accetta anche un file:
 
 | Dati | Formati accettati | Dove |
 |---|---|---|
-| Sequenze | FASTA, GenBank (con le traduzioni delle CDS), EMBL, UniProt, PIR, Clustal, Stockholm, MSF, PDB/mmCIF (una sequenza per catena), testo semplice; anche compressi `.gz`, in UTF-8, UTF-16 o Windows-1252; fino a 20 MB | Sequenze, Ricerca, Allineamenti, Modellazione, Pipeline |
+| Sequenze | FASTA, GenBank (con le traduzioni delle CDS), EMBL, UniProt, PIR, Clustal, Stockholm, MSF, PDB/mmCIF (una sequenza per catena), testo semplice; anche compressi `.gz`, in UTF-8, UTF-16 o Windows-1252; fino a 200 MB (1 GB decompresso) e 100.000 sequenze | Sequenze, Ricerca, Allineamenti, Modellazione, Pipeline |
 | Allineamenti | PIR, oppure FASTA allineato, Clustal, Stockholm (convertiti in PIR) | Editor PIR e Modellazione |
 | Strutture | `.pdb`, `.ent`, `.cif`, `.mmcif`, fino a 50 MB | Qualità, Confronto, Allineamenti strutturali, loop e rifinitura, Libreria template |
 | Vincoli di modellazione | testo, una riga per vincolo: `helix 10:A 20:A`, `strand 30:A 35:A`, `distance CA:10:A CA:50:A 8.0 0.5`; esportabili nello stesso formato | Modellazione |
@@ -280,7 +280,10 @@ per ogni sequenza completata (cartella `report/`, senza vista 3D).
   ricerca del template, modellazione e qualità, con template da ricerca automatica, **Più template complementari** (da 2
   a 5, predefinito 3, scelti con la regola dei consigliati) oppure fissi. Filtro della zona crepuscolare, tabella dei
   risultati, CSV e ZIP; avanzamento, log e tabella si aggiornano in tempo reale con la stima del tempo residuo («circa 3
-  min rimanenti»). Fino a 50.000 sequenze per pipeline; **In parallelo** arriva fino ai **Job di calcolo in parallelo**
+  min rimanenti»). Fino a 100.000 sequenze per pipeline, anche da un solo file con **Carica da file** (un FASTA così
+  grande non si mostra nel campo di testo: la pagina indica numero di sequenze e dimensione, con **Svuota**). Nella
+  pipeline sequenze × template, oltre 1000 sequenze il filtro per sequenza lascia il posto alla ricerca per nome e la
+  matrice si sfoglia a pagine di 50 sequenze; **In parallelo** arriva fino ai **Job di calcolo in parallelo**
   delle Impostazioni (al massimo 256). L'output dei programmi (MODELLER, PROCHECK…) di ogni elemento è nel file
   `programmi.log` della sua cartella, tra i file del job; il log del job riporta i passi di BioLoom.
 - **Archivio ZIP:** nella pipeline sequenze × template i file stanno in `template/<template>/<sequenza>/` (modello,

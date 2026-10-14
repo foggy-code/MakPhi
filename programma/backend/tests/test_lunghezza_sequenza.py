@@ -56,7 +56,7 @@ def test_model_job_uses_the_setting(client_with_ubq):
     assert job["status"] == "failed" and "Sequenza troppo lunga (101 residui, massimo 100" in job["error"]
 
 
-def test_preflight_uses_the_setting(client_with_ubq, env):
+def test_preflight_uses_the_setting(client_with_ubq, env):  # noqa: F811 (fixture)
     long = "MKVLE" * 1200  # 6000 residui: oltre il predefinito
     assert "sequence_too_long" in codes(run(client_with_ubq, "model", model_params(long)), "error")
     client_with_ubq.put("/api/settings", json={"max_sequence_length": 6000})
@@ -67,7 +67,7 @@ def test_preflight_uses_the_setting(client_with_ubq, env):
     assert "sequence_too_long" in codes(search, "error")
 
 
-def test_pipeline_warns_and_fails_items_over_the_setting(client_with_ubq, env):
+def test_pipeline_warns_and_fails_items_over_the_setting(client_with_ubq, env):  # noqa: F811 (fixture)
     client_with_ubq.put("/api/settings", json={"max_sequence_length": 100})
     fasta = f">lunga\n{'A' * 101}\n"
     out = run(client_with_ubq, "pipeline", pipeline_params(fasta))

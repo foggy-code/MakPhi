@@ -100,6 +100,10 @@ CREATE TABLE IF NOT EXISTS pipeline_items (
     finished_at TEXT,
     PRIMARY KEY (job_id, idx)
 );
+-- conteggi per stato e tempo residuo di pipeline con centinaia di migliaia di elementi, senza leggere le righe (con
+-- le sequenze). Un indice non cambia i dati: sta nello schema di base, creato anche sui database esistenti all'avvio,
+-- senza alzare la versione (una versione precedente di BioLoom apre ancora il file).
+CREATE INDEX IF NOT EXISTS idx_pipeline_items_status ON pipeline_items(job_id, status, finished_at, started_at);
 """
 
 

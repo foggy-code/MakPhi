@@ -7,7 +7,7 @@ import type { JobItemsEvent, PipelineMatrix as Matrix, PipelineMatrixCell } from
 import { textOn } from "./charts";
 import { fmtNum } from "../lib/format";
 import { useAsync, useInterval, useJobsFeed, useThrottled } from "../lib/hooks";
-import { availableMetrics, BAD, cellColor, cellStatusText, cellValue, GOOD, MATRIX_METRICS, matrixPage, matrixSummary, MID, type MatrixMetric } from "../lib/pipelineMatrix";
+import { availableMetrics, BAD, cellColor, cellStatusText, cellValue, GOOD, MATRIX_METRICS, MID, type MatrixMetric } from "../lib/pipelineMatrix";
 import { plural } from "../lib/shellView";
 
 const ROWS_PER_PAGE = 50;
@@ -22,8 +22,10 @@ export function PipelineMatrix({ jobId, running, onOpen }: {
   /** coppia completata scelta: modello da aprire nel 3D */
   onOpen: (cell: PipelineMatrixCell, sequence: string, template: string) => void;
 }) {
-  const { data, reload } = useAsync<Matrix>(() => api.pipelineMatrix(jobId), [jobId]);
-  const big = (data?.sequences.length ?? 0) > LIVE_SEQUENCES;
+  const [page, setPage] = useState(1);
+  const { data, reload } = useAsync<Matrix>(() => api.pipelineMatrix(jobId, page, ROWS_PER_PAGE), [jobId, page]);
+  const sequenceCount = data?.sequence_count ?? data?.sequences.length ?? 0;
+  const big = sequenceCount > LIVE_SEQUENCES;
   const refresh = useThrottled(reload, big ? BIG_REFRESH_MS : 1500);
   const live = useJobsFeed((type, event) => {
     if (type === "items" ? (event as JobItemsEvent | null)?.job_id === jobId : type === "ready" || type === "resync") refresh();
@@ -35,14 +37,16 @@ export function PipelineMatrix({ jobId, running, onOpen }: {
     wasRunning.current = running;
   }, [running, reload]);
   const [metric, setMetric] = useState<MatrixMetric>("zdope");
-  const [page, setPage] = useState(1);
   const metrics = useMemo(() => (data ? availableMetrics(data) : []), [data]);
-  const summary = useMemo(() => (data ? matrixSummary(data) : null), [data]);
-  if (!data || !summary) return null;
+  if (!data) return null;
+  const summary = data.summary;
   const shown = metrics.includes(metric) ? metric : (metrics[0] ?? "zdope");
   const def = MATRIX_METRICS[shown];
-  const rows = data.sequences.map((name, s) => ({ name, s, cells: data.cells[s] ?? [] }));
-  const view = matrixPage(rows, page, ROWS_PER_PAGE);
+  const start = data.start ?? 0;
+  const view = {
+    rows: data.sequences.map((name, i) => ({ name, s: start + i, cells: data.cells[i] ?? [] })),
+    page: data.page ?? 1, pages: data.pages ?? 1, start,
+  };
   return (
     <div className="stack-sm">
       <div className="row small" style={{ gap: 12, flexWrap: "wrap" }}>
@@ -106,7 +110,7 @@ export function PipelineMatrix({ jobId, running, onOpen }: {
           {plural(summary.completed, "coppia completata", "coppie completate")} su {summary.pairs}
           {summary.failed ? ` · ${plural(summary.failed, "fallita", "fallite")}` : ""}
           {summary.open ? ` · ${summary.open} in attesa o in corso` : ""}
-          {` · migliore scelto per ${summary.closed} di ${plural(data.sequences.length, "sequenza", "sequenze")}`}
+          {` · migliore scelto per ${summary.closed} di ${plural(sequenceCount, "sequenza", "sequenze")}`}
         </span>
         {view.pages > 1 && (
           <div className="right row">
