@@ -386,7 +386,8 @@ export const api = {
     return get<PipelinePage>(`/api/pipeline/${enc(id)}/items?${params}`);
   },
   pipelineItem: (id: string, idx: number) => get<PipelineItem & { sequence: string }>(`/api/pipeline/${enc(id)}/items/${idx}`),
-  pipelineMatrix: (id: string) => get<PipelineMatrix>(`/api/pipeline/${enc(id)}/matrix`),
+  /** una pagina di sequenze della matrice M × N, con il riepilogo di tutta la matrice */
+  pipelineMatrix: (id: string, page: number, size: number) => get<PipelineMatrix>(`/api/pipeline/${enc(id)}/matrix?page=${page}&size=${size}`),
   pipelineCsvUrl: (id: string) => `/api/pipeline/${enc(id)}/export.csv`,
   pipelineZipUrl: (id: string) => `/api/pipeline/${enc(id)}/export.zip`,
 

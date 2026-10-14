@@ -1,7 +1,7 @@
 """Pipeline grandi (server): limiti, processi di appoggio dell'analisi di qualità, log dei programmi per elemento,
 parametri in cache ed elenco dei file limitato.
 
-- limite di 50.000 sequenze per pipeline e parallelismo fino ai job delle Impostazioni (non più 8);
+- limite di 100.000 sequenze per pipeline e parallelismo fino ai job delle Impostazioni (non più 8);
 - `core/offload` + `domain/qa_steps`: con il pool attivo (processi veri, avviati con "spawn") l'analisi dà lo stesso
   rapporto della versione in serie; con un pool che fallisce i passi si rifanno in casa, con lo stesso rapporto;
 - `JobContext.sub(output_log=...)`: l'output dei programmi va nel file e non nel log del job;
@@ -26,10 +26,10 @@ from .test_parallel_quality import log_text, manager, run_job  # noqa: F401 (fix
 
 
 # ------------------------------------------------------------------------------------------ limiti
-def test_pipeline_accepts_up_to_50000_sequences():
+def test_pipeline_accepts_up_to_100000_sequences():
     many = "".join(f">s{i}\nMKV\n" for i in range(pipeline_service.MAX_SEQUENCES))
-    assert len(pipeline_service.PipelineService._records({"fasta": many})) == 50_000
-    with pytest.raises(AppError, match="Massimo 50.000 sequenze"):
+    assert len(pipeline_service.PipelineService._records({"fasta": many})) == 100_000
+    with pytest.raises(AppError, match="Massimo 100.000 sequenze"):
         pipeline_service.PipelineService._records({"fasta": many + ">oltre\nMKV\n"})
 
 

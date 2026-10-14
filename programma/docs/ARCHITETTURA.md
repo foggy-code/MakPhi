@@ -1469,7 +1469,7 @@ ricerca e poi `select_complementary`; `run_modeling` riceve tutti i template sce
 
 **Pipeline, sequenze × template** (`template_mode: "fixed"`, `fixed_combination: "each"`; predefinito `"combined"`,
 un modello per sequenza con tutti i template, al massimo 10): ogni sequenza si modella su ogni template, uno alla volta.
-M sequenze e N template danno M × N elementi; nessun limite su N (resta quello di 50.000 sequenze per pipeline,
+M sequenze e N template danno M × N elementi; nessun limite su N (resta quello di 100.000 sequenze per pipeline,
 `pipeline.MAX_SEQUENCES`).
 
 - **Pipeline grandi** (decine di migliaia di elementi, su un server):
@@ -1482,7 +1482,27 @@ M sequenze e N template danno M × N elementi; nessun limite su N (resta quello 
   - il dettaglio di un job (`GET /api/jobs/{id}`) elenca al massimo 2000 file, fermando la visita delle cartelle
     (`files_truncated: true`); tutti i file restano nell'archivio e nell'esportazione;
   - la matrice sequenze × template con oltre 2000 sequenze si rilegge al più una volta al minuto mentre la pipeline
-    gira.
+    gira;
+  - fino a 100.000 sequenze per pipeline (`pipeline.MAX_SEQUENCES` = `fileformats.MAX_RECORDS`: le stesse che si
+    leggono da un file, fino a 200 MB, 1 GB decompresso). Misure con 100.000 × 3 = 300.000 elementi su un PC a 4
+    thread: avvio 7–8 s (picco ~1,1 GB, una volta), annullamento 0,4 s, pagina degli elementi, matrice, elenco dei
+    job e tempo residuo sotto il mezzo secondo, CSV 9–10 s;
+  - l'esecuzione legge solo gli indici degli elementi in attesa e nome e sequenza quando ciascuno parte, e affida al
+    pool al più 2 × parallelo elementi alla volta (`PipelineService.handle`): memoria costante e, all'annullamento,
+    gli elementi mai avviati diventano annullati con un solo UPDATE;
+  - indice `idx_pipeline_items_status` (job, stato, fine, inizio) nello schema di base (creato anche sui database
+    esistenti, senza alzare la versione): conteggi per stato e tempo residuo, che stima la durata tipica dagli ultimi
+    1000 elementi conclusi (`ETA_SAMPLES`), senza leggere le righe con le sequenze;
+  - `GET /api/jobs/{id}`, l'avvio e la ripresa restituiscono i parametri di una pipeline grande con i primi 20.000
+    caratteri del FASTA (`fasta_truncated`, `fasta_bytes`) e il numero di sequenze (`sequence_count`) al posto del loro
+    elenco (`pipeline.public_job`); database, `parametri.json` dello ZIP e pacchetti hanno i parametri interi;
+  - le pagine degli elementi M × N elencano i nomi delle sequenze (filtro) solo fino a 1000 (`PAIRS_LISTED`), sempre
+    con `sequence_count`; oltre, si cerca per nome;
+  - `GET /api/pipeline/{id}/matrix?page=&size=` dà una pagina di sequenze, con il riepilogo di tutta la matrice
+    (`summary`: coppie per esito, sequenze chiuse, vittorie dei template) calcolato in SQL; senza `page`, la matrice
+    intera;
+  - nella pagina Pipeline un FASTA oltre ~2 MB non si mostra nel campo di testo (solo numero di sequenze, dimensione e
+    «Svuota»).
 - **Elementi:** uno per coppia, in ordine di sequenza: `idx` = sequenza × N + template (`pipeline.pair_of`), nome
   `<sequenza>__<template>` (cartella `items/<idx>_<sequenza>__<template>/`), `template` = id del template. L'etichetta
   del template è id e catene sanificati (`1UBQ_A`, `template_labels`, salvate in `params.template_labels`). Nessuna
@@ -4344,8 +4364,8 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     `..`, percorsi assoluti o link, che il ripiego rifiuta: le garanzie sono quelle di prima;
   - **limite:** se è la radice stessa a essere in eliminazione, si risolve ancora nella forma strana; il risultato resta
     confinato lì dentro e il file non esiste, quindi la risposta è 404 invece di 400.
-- **Upload:** limitati (50 MB, `BIOLOOM_MAX_UPLOAD_MB`; 20 MB per i file di sequenze e allineamenti, 200 MB
-  decompressi; 256 MB per un pacchetto di riproducibilità; 64 kB per `LicenseDB`) e validati come strutture prima
+- **Upload:** limitati (50 MB, `BIOLOOM_MAX_UPLOAD_MB`; 200 MB per i file di sequenze e allineamenti, 1 GB
+  decompressi, al più 100.000 sequenze lette; 256 MB per un pacchetto di riproducibilità; 64 kB per `LicenseDB`) e validati come strutture prima
   dell'uso. Oltre il limite dell'endpoint `read_upload` risponde 413 `too_large` («File troppo grande: massimo N MB.»;
   prima il codice era `bad_request`). Gli archivi pdbaa si estraggono con filtro `data` e solo file senza percorso.
 - **Limite del corpo** (`core/bodylimit.BodyLimit`, middleware ASGI puro come `core/guard`): i limiti degli endpoint
@@ -4992,7 +5012,8 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
   modellata su ogni template fisso, ogni coppia analizzata e il migliore scelto per zDOPE, migliore segnato ma non
   analizzato senza qualità, ZIP con una cartella per template, coppia fallita e ripresa che rifà la scelta, validazione,
   matrice solo per le pipeline incrociate.
-- **Pipeline grandi** (`test_large_pipeline.py`, 14): fino a 50.000 sequenze, parallelismo dalle Impostazioni oltre 8
+- **Pipeline grandi** (`test_large_pipeline.py`, 14; `test_pipeline_scala.py`: file e pipeline da 100.000 sequenze,
+  pulizia delle sequenze, annullamento, matrice a pagine, risposte senza il FASTA intero): fino a 100.000 sequenze, parallelismo dalle Impostazioni oltre 8
   (fino a 256), processi di appoggio dell'analisi (`core/offload` e `domain/qa_steps`: stesso rapporto della versione nel
   processo principale, ripiego sul processo principale se il pool fallisce, risultati parziali completati), output dei
   programmi in `programmi.log` dell'elemento e non nel log del job, parametri letti una volta, elenco dei file limitato.

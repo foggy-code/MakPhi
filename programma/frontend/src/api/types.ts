@@ -1373,9 +1373,23 @@ export interface PipelinePair {
 
 /** Nomi delle righe (sequenze) e delle colonne (template) di una pipeline M × N. */
 export interface PipelinePairs {
+  /** pagine degli elementi: vuoto oltre 1000 sequenze (si cerca per nome); il numero è `sequence_count` */
   sequences: string[];
   templates: string[];
   template_ids: string[];
+  sequence_count?: number;
+}
+
+/** Riepilogo di tutta la matrice M × N, calcolato dal server. */
+export interface PipelineMatrixSummary {
+  pairs: number;
+  completed: number;
+  failed: number;
+  open: number;
+  /** sequenze con il migliore già scelto (tutte le coppie concluse) */
+  closed: number;
+  /** quante volte ogni template è il migliore di una sequenza, nell'ordine delle colonne */
+  wins: number[];
 }
 
 /** Cella della matrice M × N (GET /api/pipeline/{id}/matrix); null = coppia non (ancora) creata. */
@@ -1395,8 +1409,15 @@ export interface PipelineMatrixCell {
   error: string | null;
 }
 
+/** Matrice M × N (GET /api/pipeline/{id}/matrix): con `page`, solo le sequenze di quella pagina. */
 export interface PipelineMatrix extends PipelinePairs {
   cells: (PipelineMatrixCell | null)[][];
+  summary: PipelineMatrixSummary;
+  page?: number;
+  pages?: number;
+  size?: number;
+  /** indice della prima sequenza della pagina */
+  start?: number;
 }
 
 /** Uso dei template fissi: un modello con tutti i template, oppure uno per ogni coppia sequenza × template. */
@@ -1407,7 +1428,6 @@ export type PipelineTemplateChoice = Pick<SuggestedTemplate, "template_id" | "ro
 
 export type TemplateMode = "auto" | "fixed" | "multi";
 
-/** Corpo di POST /api/pipeline (api/compute.PipelineIn). */
 /** QMEAN automatico di una modellazione o pipeline (GET /api/jobs/{id}/qmean-auto) */
 export interface AutoQmeanStatus {
   /** il job ha chiesto QMEAN automatico */
@@ -1421,6 +1441,7 @@ export interface AutoQmeanStatus {
   done: number;
 }
 
+/** Corpo di POST /api/pipeline (api/compute.PipelineIn). */
 export interface PipelineRequest {
   project_id?: string;
   name?: string;

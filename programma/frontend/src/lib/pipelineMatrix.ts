@@ -1,5 +1,5 @@
 // Pipeline M × N (ogni sequenza su ogni template): metriche della matrice sequenze × template, colori delle celle e
-// riepilogo per sequenza. Logica pura, usata da components/PipelineMatrix.tsx.
+// testo delle celle. Logica pura, usata da components/PipelineMatrix.tsx; pagine e riepilogo li calcola il server.
 import type { PipelineMatrix, PipelineMatrixCell } from "../api/types";
 import { colorFor, mixColors, type ContinuousScale } from "./colorscale";
 
@@ -78,43 +78,7 @@ export function cellColor(row: (PipelineMatrixCell | null)[], cell: PipelineMatr
   return t <= 0.5 ? mixColors(GOOD, MID, t * 2) : mixColors(MID, BAD, (t - 0.5) * 2);
 }
 
-export interface MatrixSummary {
-  pairs: number;
-  completed: number;
-  failed: number;
-  open: number;
-  /** sequenze con il migliore già scelto (tutte le coppie concluse) */
-  closed: number;
-  /** quante volte ogni template è il migliore di una sequenza, nell'ordine delle colonne */
-  wins: number[];
-}
-
 const OPEN_STATUSES = new Set(["pending", "running", "searching", "modeling"]);
-
-export function matrixSummary(matrix: PipelineMatrix): MatrixSummary {
-  const wins = matrix.templates.map(() => 0);
-  let pairs = 0;
-  let completed = 0;
-  let failed = 0;
-  let open = 0;
-  let closed = 0;
-  for (const row of matrix.cells) {
-    let best = false;
-    row.forEach((c, t) => {
-      if (!c) return;
-      pairs += 1;
-      if (c.status === "completed") completed += 1;
-      else if (c.status === "failed") failed += 1;
-      else if (OPEN_STATUSES.has(c.status)) open += 1;
-      if (c.best) {
-        best = true;
-        wins[t] += 1;
-      }
-    });
-    if (best) closed += 1;
-  }
-  return { pairs, completed, failed, open, closed, wins };
-}
 
 /** Testo di una cella senza valore: stato della coppia (in attesa, in corso, fallita…). */
 export function cellStatusText(cell: PipelineMatrixCell | null): string {
@@ -124,12 +88,4 @@ export function cellStatusText(cell: PipelineMatrixCell | null): string {
   if (cell.status === "pending") return "in attesa";
   if (OPEN_STATUSES.has(cell.status)) return "in corso";
   return "—";
-}
-
-/** Righe della pagina (le matrici con migliaia di sequenze si sfogliano a pagine). */
-export function matrixPage<T>(rows: T[], page: number, size: number): { rows: T[]; page: number; pages: number; start: number } {
-  const pages = Math.max(1, Math.ceil(rows.length / size));
-  const current = Math.min(Math.max(1, page), pages);
-  const start = (current - 1) * size;
-  return { rows: rows.slice(start, start + size), page: current, pages, start };
 }

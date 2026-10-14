@@ -31,6 +31,7 @@ from ..core.errors import AppError
 from ..core.storage import read_json
 from ..domain import exports, report
 from ..services.jobcleanup import DEFAULT_SECONDS, MAX_AGE_DAYS, MAX_SECONDS, MIN_SECONDS
+from ..services.pipeline import public_job
 from ..services.reports import ReportService
 from .deps import get_core
 
@@ -141,7 +142,7 @@ def get_job(job_id: str, core: Core = Depends(get_core)) -> dict:
     job["files"] = files[:JOB_FILES_SHOWN]
     job["files_truncated"] = len(files) > JOB_FILES_SHOWN  # elenco parziale: tutti i file sono nell'archivio
     job.update(core.pipeline.resume_state(job))  # resumable, resumable_items (solo le pipeline si riprendono)
-    return job
+    return public_job(job)
 
 
 @router.get("/{job_id}/status")
@@ -173,7 +174,7 @@ def cancel_job(job_id: str, core: Core = Depends(get_core)) -> dict:
 def resume_job(job_id: str, body: Optional[ResumeIn] = None, core: Core = Depends(get_core)) -> dict:
     """Riprende una pipeline fallita, annullata o completata con elementi falliti: rielabora solo gli elementi
     non conclusi (o i falliti)."""
-    return core.jobs.with_eta(core.pipeline.resume(job_id, (body or ResumeIn()).scope))
+    return public_job(core.jobs.with_eta(core.pipeline.resume(job_id, (body or ResumeIn()).scope)))
 
 
 @router.delete("/{job_id}")

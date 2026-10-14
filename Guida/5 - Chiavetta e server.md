@@ -272,7 +272,8 @@ Esecuzione i **Job di calcolo in parallelo** pari ai core fisici del server (fin
 **In parallelo** allo stesso numero. Con l'analisi estesa, imposta **Grafici PostScript di PROCHECK** su «Solo il
 Ramachandran» o «Nessuno»: con tutti i grafici 26.532 sequenze × 6 template occupano circa 630 GB, senza circa
 150 GB. Da 8 job in parallelo BioLoom esegue i calcoli Python dell'analisi di qualità in processi di appoggio (uno ogni 4 job, 60–100 MB ciascuno), così i core restano tutti occupati. Una pipeline accetta
-fino a 50.000 sequenze. Per stimare tempi e spazio sul server prima di partire c'è il benchmark
+fino a 100.000 sequenze (anche da un solo file). La lunghezza massima di una sequenza si sceglie in **Impostazioni →
+Esecuzione** (da 100 a 9999 residui, predefinito 5000): oltre 9999 il formato PDB non numera più i residui. Per stimare tempi e spazio sul server prima di partire c'è il benchmark
 `programma/scripts/benchmark_mxn.py` (istruzioni nel file).
 
 ### QMEAN locale e fallback

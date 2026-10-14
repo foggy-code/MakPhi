@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from ..core.container import Core
 from ..core.errors import AppError
+from ..services.pipeline import public_job
 from ..services.structure_tools import StructureToolsService
 from .deps import get_core, read_upload
 
@@ -279,7 +280,7 @@ def submit_pipeline(body: PipelineIn, core: Core = Depends(get_core)) -> dict:
     params = body.model_dump()
     if params["notify_email"].strip():  # server di posta configurato e indirizzo valido, prima della coda
         params["notify_email"] = core.notify.check_recipient(params["notify_email"])
-    return core.pipeline.submit(params, _project(core, body.project_id))
+    return public_job(core.pipeline.submit(params, _project(core, body.project_id)))
 
 
 @router.get("/pipeline/{job_id}/items")
@@ -293,9 +294,13 @@ def pipeline_items(job_id: str, page: int = 1, size: int = 25, status: Optional[
 
 
 @router.get("/pipeline/{job_id}/matrix")
-def pipeline_matrix(job_id: str, core: Core = Depends(get_core)) -> dict:
-    """Pipeline M × N: matrice sequenze × template con le metriche di ogni coppia."""
-    return core.pipeline.matrix(job_id)
+def pipeline_matrix(job_id: str, page: Optional[int] = Query(None, ge=1, description="Pagina di sequenze; vuoto = "
+                                                                                 "tutta la matrice"),
+                    size: int = Query(50, ge=1, le=500, description="Sequenze per pagina"),
+                    core: Core = Depends(get_core)) -> dict:
+    """Pipeline M × N: matrice sequenze × template con le metriche di ogni coppia, intera o una pagina di sequenze,
+    con il riepilogo di tutta la matrice (`summary`)."""
+    return core.pipeline.matrix(job_id, page=page, size=size)
 
 
 @router.get("/pipeline/{job_id}/items/{idx}")
