@@ -586,9 +586,9 @@ def test_pipeline_zip_contains_one_report_per_completed_item(client_with_ubq, mo
     calls = []
     original = reports_service.ReportService.pipeline_item
 
-    def spy(self, job_row, row):
+    def spy(self, job_row, row, **kwargs):
         calls.append(row["name"])
-        return original(self, job_row, row)
+        return original(self, job_row, row, **kwargs)
 
     monkeypatch.setattr(reports_service.ReportService, "pipeline_item", spy)
     r = c.get(f"/api/pipeline/{job['id']}/export.zip")

@@ -4,6 +4,7 @@ import type {
   AnalysisRequest,
   AssemblyList,
   AuthStatus,
+  AutoQmeanStatus,
   CleanupPreview,
   CleanupRequest,
   CleanupRun,
@@ -334,6 +335,8 @@ export const api = {
   report: (id: string, model: string | null, body: ReportRequest = {}, qmeanJob?: string | null, predictJob?: string | null): Promise<ReportFile> =>
     requestFile(api.reportUrl(id, model, qmeanJob, predictJob), body, reportFallbackName(model, id)),
   archiveUrl: (id: string) => `/api/jobs/${enc(id)}/archive`,
+  /** QMEAN automatico di una modellazione o pipeline: ancora da attendere? quanti finiti? */
+  autoQmean: (id: string) => get<AutoQmeanStatus>(`/api/jobs/${enc(id)}/qmean-auto`),
   /** flusso SSE di un job (status, log dal byte `offset`, end); `offset` null = senza righe di log */
   jobEventsUrl: (id: string, offset: number | null) =>
     `/api/jobs/${enc(id)}/events?${offset === null ? "log=false" : `offset=${Math.max(0, Math.floor(offset))}`}`,

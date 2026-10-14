@@ -747,6 +747,7 @@ class PipelineService:
             self._export_cross_zip(job, rows, dest)
             return
         reports = ReportService(self.jobs, self.compute, self.db)
+        with_qmean = set(self._qmean_by_file(job_id))  # report con QMEAN solo per i modelli valutati
         missing: list[str] = []
         used: set[str] = set()
         with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -763,7 +764,7 @@ class PipelineService:
                 if quality.exists():
                     zf.write(quality, f"qualita/{stem}.quality.json")
                 try:
-                    text = reports.pipeline_item(job, r)
+                    text = reports.pipeline_item(job, r, qmean=r["best_model"] in with_qmean)
                 except Exception as exc:  # un report non generato non deve fermare l'esportazione
                     missing.append(f"{stem}: {getattr(exc, 'message', None) or f'{type(exc).__name__}: {exc}'}")
                     continue
@@ -794,6 +795,7 @@ class PipelineService:
         job_id, params = job["id"], job.get("params") or {}
         names = pair_axes(params)
         reports = ReportService(self.jobs, self.compute, self.db)
+        with_qmean = set(self._qmean_by_file(job_id))  # report con QMEAN solo per i modelli valutati
         missing: list[str] = []
         files: dict[int, str] = {}
         with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -813,7 +815,7 @@ class PipelineService:
                 if quality_file.exists():
                     zf.write(quality_file, f"{base}.quality.json")
                 try:
-                    text = reports.pipeline_item(job, r)
+                    text = reports.pipeline_item(job, r, qmean=r["best_model"] in with_qmean)
                 except Exception as exc:  # un report non generato non deve fermare l'esportazione
                     missing.append(f"{r['name']}: {getattr(exc, 'message', None) or f'{type(exc).__name__}: {exc}'}")
                     continue
@@ -1050,8 +1052,9 @@ qualita/            rapporto di qualità completo (JSON) per ogni modello
 report/             report HTML di ogni modello: un file autonomo (nessuna risorsa esterna) da aprire nel
                     browser e da stampare in PDF, con bersaglio, template, allineamento, parametri di
                     MODELLER, voto, consenso, grafici di Ramachandran e profili per residuo, legenda e
-                    riferimenti (senza la vista 3D, che si aggiunge generando il report dall'interfaccia)
-riepilogo.csv       una riga per sequenza con template, identità, copertura e metriche
+                    riferimenti (senza la vista 3D, che si aggiunge generando il report dall'interfaccia);
+                    con QMEAN se il modello è stato valutato
+riepilogo.csv      una riga per sequenza con template, identità, copertura e metriche
 parametri.json      parametri con cui è stata eseguita la pipeline
 
 Legenda delle colonne principali
@@ -1106,6 +1109,7 @@ Legenda delle colonne principali
 - qmean_interaction_z, qmean_cbeta_z, qmean_packing_z, qmean_torsion_z, qmean_ss_agreement_z, qmean_acc_agreement_z:
   Z-score delle componenti di QMEAN (interazioni, C-beta, impaccamento, torsioni, accordo con struttura secondaria e
   accessibilità predette); qmean_method: QMEAN o QMEANDisCo; qmean_source: locale o SWISS-MODEL
-  Le colonne QMEAN sono piene solo per i modelli valutati (QMEAN automatico: il migliore di ogni sequenza; oppure
-  calcolato dalla pagina Qualità); vuote per gli altri.
+  Le colonne QMEAN sono piene solo per i modelli valutati (QMEAN automatico: il migliore di ogni sequenza, o tutte
+  le coppie se richiesto; oppure calcolato dalla pagina Qualità); vuote per gli altri. Anche il report HTML di un
+  modello valutato contiene QMEAN.
 """

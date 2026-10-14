@@ -8,6 +8,7 @@ import { RecomputeOption } from "../components/CacheOption";
 import { SequenceFileButton } from "../components/FileLoad";
 import { Icon } from "../components/Icon";
 import { JobPanel } from "../components/JobPanel";
+import { AutoQmeanNotice } from "../components/AutoQmeanNotice";
 import { NotifyOption } from "../components/NotifyOption";
 import { PipelineItemActions, PipelineModelView } from "../components/PipelineItemActions";
 import { PipelineMatrix } from "../components/PipelineMatrix";
@@ -89,7 +90,7 @@ const ITEM_COLUMNS = 12;
 /** template al massimo in un solo modello (services/compute._template_specs) */
 const MAX_COMBINED_TEMPLATES = 10;
 
-function Items({ jobId, running, cacheHits }: { jobId: string; running: boolean; cacheHits?: number }) {
+function Items({ jobId, running, completed, cacheHits }: { jobId: string; running: boolean; completed: boolean; cacheHits?: number }) {
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(25);
   const [status, setStatus] = useState("all");
@@ -143,6 +144,7 @@ function Items({ jobId, running, cacheHits }: { jobId: string; running: boolean;
       }
     >
       <div className="stack">
+        <AutoQmeanNotice jobId={jobId} completed={completed} what="Lo ZIP" />
         {parts.length > 0 && (
           <StackBar parts={parts} title={pairs ? "Stato delle coppie" : "Stato delle sequenze"}
             subtitle={pairs ? `${plural(pairs.sequences.length, "sequenza", "sequenze")} × ${pairs.templates.length} template = ${plural(totalItems, "modello", "modelli")}` : `${plural(data.total, "sequenza", "sequenze")} della pipeline`}
@@ -284,6 +286,7 @@ export default function Pipeline() {
   const [quality, setQuality] = useState(true);
   const [extended, setExtended] = useState(false);
   const [qmeanOn, setQmeanOn] = useState(false);
+  const [qmeanScope, setQmeanScope] = useState<"best" | "all">("best");
   // avviso per email alla fine (server di posta in Impostazioni → Notifiche email)
   const { data: notifyStatus } = useAsync(() => api.notify(), []);
   const { data: settings } = useAsync(() => api.settings(), []);
@@ -340,10 +343,11 @@ export default function Pipeline() {
     quality,
     extended_quality: quality && extended,
     qmean: qmeanOn,
+    qmean_scope: qmeanOn && cross ? qmeanScope : "best",
     parallel,
     notify_email: notifyOn ? notifyEmail.trim() : "",
     use_cache: !recompute,
-  }), [projectId, name, fasta, mode, maxTemplates, templates, combination, engine, evalue, twFilter, twIdentity, twCoverage, models, refinement, plddtTrim, plddtMin, quality, extended, qmeanOn, parallel, notifyOn, notifyEmail, recompute]);
+  }), [projectId, name, fasta, mode, maxTemplates, templates, combination, engine, evalue, twFilter, twIdentity, twCoverage, models, refinement, plddtTrim, plddtMin, quality, extended, qmeanOn, qmeanScope, cross, parallel, notifyOn, notifyEmail, recompute]);
   const preflight = usePreflight(useMemo(() => pipelinePreflight(body, count), [body, count]), 800);
 
   const submit = async () => {
@@ -471,8 +475,14 @@ export default function Pipeline() {
                 {predictedPossible && <PlddtOption enabled={plddtTrim} threshold={plddtMin} onEnabled={setPlddtTrim} onThreshold={setPlddtMin} />}
                 <label className="check"><input type="checkbox" checked={quality} onChange={(e) => setQuality(e.target.checked)} /> {cross ? "Analisi di qualità del modello di ogni coppia" : "Analisi di qualità del modello migliore"}</label>
                 {quality && <label className="check"><input type="checkbox" checked={extended} onChange={(e) => setExtended(e.target.checked)} /> Includi PROCHECK e ProSA II (qualche secondo in più per sequenza)</label>}
-                <label className="check"><input type="checkbox" checked={qmeanOn} onChange={(e) => setQmeanOn(e.target.checked)} /> Calcola QMEAN sul modello migliore di ogni sequenza alla fine (un job per modello; in locale uno alla volta, da qualche minuto a oltre mezz'ora ciascuno)</label>
-                <NotifyOption status={notifyStatus ?? null} enabled={notify} email={notifyEmail} onEnabled={setNotify} onEmail={setNotifyEmail} />
+                <label className="check"><input type="checkbox" checked={qmeanOn} onChange={(e) => setQmeanOn(e.target.checked)} /> {cross && qmeanScope === "all" ? "Calcola QMEAN su tutti i modelli alla fine" : "Calcola QMEAN sul modello migliore di ogni sequenza alla fine"} (un job per modello; in locale uno alla volta, da qualche minuto a oltre mezz'ora ciascuno)</label>
+                {qmeanOn && cross && (
+                  <div className="stack-sm" role="radiogroup" aria-label="Modelli su cui calcolare QMEAN" style={{ marginLeft: 24 }}>
+                    <label className="check"><input type="radio" name="qmean-scope" checked={qmeanScope === "best"} onChange={() => setQmeanScope("best")} /> Solo il migliore di ogni sequenza ({plural(count, "calcolo", "calcoli")})</label>
+                    <label className="check"><input type="radio" name="qmean-scope" checked={qmeanScope === "all"} onChange={() => setQmeanScope("all")} /> Tutte le coppie sequenza × template ({plural(count * templates.length, "calcolo", "calcoli")}; prima i migliori di ogni sequenza)</label>
+                  </div>
+                )}
+                <NotifyOption status={notifyStatus ?? null} enabled={notify} email={notifyEmail} onEnabled={setNotify} onEmail={setNotifyEmail} afterQmean={qmeanOn} />
               </FormSection>
               {/* controlli preventivi: licenza, motore e database, tempi e limiti dei servizi, spazio */}
               <PreflightPanel state={preflight} />
@@ -497,7 +507,7 @@ export default function Pipeline() {
           {jobId ? (
             <>
               <JobPanel summary={summary} log={log} onCancel={cancel} resume={job} onResume={doResume} />
-              <Items key={jobId} jobId={jobId} running={running} cacheHits={job?.id === jobId ? job.result?.search_cache_hits : undefined} />
+              <Items key={jobId} jobId={jobId} running={running} completed={summary?.status === "completed"} cacheHits={job?.id === jobId ? job.result?.search_cache_hits : undefined} />
             </>
           ) : <Card><Empty icon="layers" title="Avvia una pipeline o aprine una recente">Stato, log in tempo reale e risultati per sequenza compaiono qui; ogni riga si espande con template, metriche e tempi.</Empty></Card>}
         </div>

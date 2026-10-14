@@ -127,6 +127,13 @@ def cleanup_jobs(body: CleanupIn, core: Core = Depends(get_core)) -> dict:
     return core.cleanup.run(core.cleanup.criteria(body.model_dump()), max_seconds=body.max_seconds)
 
 
+@router.get("/{job_id}/qmean-auto")
+def auto_qmean_status(job_id: str, core: Core = Depends(get_core)) -> dict:
+    """QMEAN automatico di una modellazione o pipeline: `requested`, `pending` (da accodare, in coda o in corso: lo ZIP
+    e l'archivio scaricati ora non li contengono), `counts` per stato, `total`, `done`."""
+    return core.autoqmean.status(job_id)
+
+
 @router.get("/{job_id}")
 def get_job(job_id: str, core: Core = Depends(get_core)) -> dict:
     job = core.jobs.with_eta(core.jobs.get(job_id))

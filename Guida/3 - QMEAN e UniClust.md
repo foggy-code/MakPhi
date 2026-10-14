@@ -36,11 +36,19 @@ esterno.
   consenso all'invio e la tua email. Il risultato dice sempre dove è stato calcolato e perché.
 - **QMEAN automatico:** in Modellazione e in Pipeline la casella «Calcola QMEAN sul modello migliore alla fine» accoda
   un calcolo QMEAN a lavoro completato: sul modello migliore, oppure, nella pipeline, sul migliore di ogni sequenza (un
-  job per modello, M × N compresa). Valgono le Impostazioni (locale o SWISS-MODEL, fallback); i controlli prima
-  dell'avvio dicono se QMEAN potrà partire. Se alla fine non può (disco scollegato, invio non consentito) non si accoda
-  nulla e il motivo è nel log del job. La pagina Qualità e il report del modello mostrano da soli il QMEAN già
-  calcolato; un modello che ha già QMEAN non ne riceve un secondo, anche riprendendo la pipeline. Con migliaia di
-  sequenze e QMEAN locale conta i tempi: da qualche minuto a oltre mezz'ora per modello, uno alla volta.
+  job per modello). Nella pipeline sequenze × template si può scegliere **Tutte le coppie sequenza × template**: QMEAN
+  su ogni modello, prima i migliori di ogni sequenza (tanti calcoli quante le coppie). Valgono le Impostazioni (locale
+  o SWISS-MODEL, fallback); i controlli prima dell'avvio dicono se QMEAN potrà partire. Se alla fine non può (disco
+  scollegato, invio non consentito) non si accoda nulla e il motivo è nel log del job. La pagina Qualità, il report del
+  modello e i report dentro lo ZIP della pipeline mostrano da soli il QMEAN già calcolato; un modello che ha già QMEAN
+  non ne riceve un secondo, anche riprendendo la pipeline. Con migliaia di sequenze e QMEAN locale conta i tempi: da
+  qualche minuto a oltre mezz'ora per modello, uno alla volta.
+- **Attendere la fine dei QMEAN:** i QMEAN partono solo quando la modellazione o la pipeline è completata. Finché ce
+  ne sono in coda o in corso, sopra i risultati compare «QMEAN automatico in corso: X di Y calcoli finiti»: lo ZIP (o
+  il report) scaricato in quel momento non contiene ancora i QMEAN mancanti. Quando finiscono, il riquadro lo dice e
+  lo ZIP scaricato da allora li contiene. Con l'avviso per email attivo, il messaggio parte dopo l'ultimo QMEAN e ne
+  riporta il numero per esito. Se BioLoom viene riavviato mentre i QMEAN sono in coda, questi vengono interrotti e
+  l'avviso non parte più.
 - **Copia di sicurezza dell'immagine:** l'immagine di QMEAN si costruisce da quella ufficiale, scaricata dal registro
   del SIB: se sparisse da lì, non si potrebbe più costruire. Conserva il file `bioloom-qmean-<versione>.tar` della copia
   portatile

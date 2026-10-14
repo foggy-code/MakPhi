@@ -8,6 +8,7 @@ from bioloom.services.autoqmean import AutoQmean, unavailable
 
 from .conftest import until, wait_job
 from .test_pipeline_cross import FakeModeller
+from .test_notify import configure, smtp  # noqa: F401 (smtp: fixture)
 from .test_preflight import codes, env, model_params, run  # noqa: F401 (env: fixture)
 from .test_qmean_fallback import REMOTE_RESULT
 
@@ -146,3 +147,108 @@ def test_preflight_of_modeling_and_pipeline(client_with_ubq, env, monkeypatch): 
                                              "templates": [{"id": "1UBQ", "chains": ["A"]}], "qmean": True})
     auto = next(c for c in pipe["checks"] if c["code"] == "qmean_auto")
     assert "fino a 1 calcolo" in auto["message"]
+    pipe = run(client_with_ubq, "pipeline", {"fasta": fasta * 3, "template_mode": "fixed", "fixed_combination": "each",
+                                             "templates": [{"id": "1UBQ", "chains": ["A"]}], "qmean": True,
+                                             "qmean_scope": "all"})
+    auto = next(c for c in pipe["checks"] if c["code"] == "qmean_auto")
+    assert "su tutti i modelli (fino a 3 calcoli" in auto["message"]
+
+
+# ------------------------------------------------------------------------------ tutte le coppie, ZIP, attesa, avviso
+CROSS = {"fasta": ">a\nMQIFVKTLTGK\n>b\nMQIFVKTLTGK\n", "template_mode": "fixed", "fixed_combination": "each",
+         "options": {"models": 1}, "quality": True, "parallel": 2, "qmean": True,
+         "templates": [{"id": "T1", "chains": ["A"]}, {"id": "T2", "chains": ["A"]}, {"id": "T3", "chains": ["B"]}]}
+BEST = ["items/0001_a__T2_A/a.B99990001.pdb", "items/0005_b__T3_B/b.B99990001.pdb"]
+
+
+@pytest.fixture
+def gate(monkeypatch):
+    """SWISS-MODEL simulato che aspetta `open` prima di rispondere: i QMEAN restano in corso finché il test vuole."""
+    import threading
+
+    event = threading.Event()
+
+    def fake(pdb_text, email, check=None, log=print, sleep=None):
+        assert event.wait(60)
+        return dict(REMOTE_RESULT)
+
+    monkeypatch.setattr(remote, "swissmodel_qmean", fake)
+    monkeypatch.delenv("BIOLOOM_QMEAN_URL", raising=False)
+    yield event
+    event.set()
+
+
+def pipeline(client, **extra) -> str:
+    r = client.post("/api/pipeline", json={**CROSS, **extra})
+    assert r.status_code == 200, r.text
+    job_id = r.json()["id"]
+    assert wait_job(client, job_id)["status"] == "completed"
+    return job_id
+
+
+def auto_status(client, job_id: str) -> dict:
+    r = client.get(f"/api/jobs/{job_id}/qmean-auto")
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_pipeline_can_queue_qmean_on_every_pair_best_first(client, modeller, swissmodel):
+    client.put("/api/settings", json=REMOTE)
+    job_id = pipeline(client, qmean_scope="all")
+    until(lambda: len(qmean_jobs(client)) == 6)
+    done = all_done(client, qmean_jobs(client))
+    assert all(q["status"] == "completed" for q in done)
+    assert len({q["params"]["source"]["file"] for q in done}) == 6
+    targets = AutoQmean(modeller.jobs)._targets(modeller.jobs.get(job_id))
+    assert [file for file, _name in targets[:2]] == BEST  # prima i migliori di ogni sequenza
+    until(lambda: "QMEAN automatico: 6 calcoli accodati." in job_log(client, job_id))
+
+
+def test_status_and_zip_reports_include_qmean_once_finished(client, modeller, gate):
+    import csv
+    import io
+    import zipfile
+
+    client.put("/api/settings", json=REMOTE)
+    job_id = pipeline(client)
+    # QMEAN accodati ma fermi: lo ZIP non li ha ancora e la pagina lo sa
+    until(lambda: auto_status(client, job_id)["total"] == 2)
+    status = auto_status(client, job_id)
+    assert status["requested"] and status["pending"] and status["done"] == 0
+    gate.set()
+    all_done(client, qmean_jobs(client))
+    status = until(lambda: (s := auto_status(client, job_id)) and not s["pending"] and s)
+    assert status == {"requested": True, "pending": False, "counts": {"completed": 2}, "total": 2, "done": 2}
+    archive = zipfile.ZipFile(io.BytesIO(client.get(f"/api/pipeline/{job_id}/export.zip").content))
+    reports = {n: archive.read(n).decode("utf-8") for n in archive.namelist() if n.endswith(".html")}
+    assert len(reports) == 6
+    with_qmean = sorted(n for n, text in reports.items() if "o meno: bassa qualità" in text)  # scheda QMEAN
+    assert with_qmean == ["template/T2_A/a/a__T2_A.html", "template/T3_B/b/b__T3_B.html"]
+    best = list(csv.DictReader(io.StringIO(archive.read("migliori.csv").decode("utf-8-sig"))))
+    assert all(r["qmean4_z"] for r in best)
+    # senza l'opzione: nulla da attendere
+    plain = pipeline(client, qmean=False)
+    assert auto_status(client, plain) == {"requested": False, "pending": False, "counts": {}, "total": 0, "done": 0}
+
+
+def test_notice_waits_for_the_qmean_jobs(client, modeller, gate, smtp):  # noqa: F811 (fixture)
+    configure(client, smtp)
+    client.put("/api/settings", json=REMOTE)
+    job_id = pipeline(client, notify_email="utente@example.org")
+    until(lambda: auto_status(client, job_id)["total"] == 2)
+    assert smtp.messages == []  # pipeline completata, QMEAN in corso: ancora nessun avviso
+    gate.set()
+    msg = until(lambda: smtp.messages)[0]
+    assert msg["subject"].startswith("BioLoom: pipeline «") and msg["subject"].endswith("» completata")
+    assert "QMEAN automatico: 2 calcoli (completati 2), tutti terminati." in msg["body"]
+    assert all(q["status"] == "completed" for q in qmean_jobs(client))  # inviato dopo l'ultimo QMEAN
+    until(lambda: "Email di avviso inviata a utente@example.org" in job_log(client, job_id))
+    assert len(smtp.messages) == 1
+
+
+def test_notice_without_usable_qmean_is_sent_at_once(client, modeller, swissmodel, smtp):  # noqa: F811 (fixture)
+    configure(client, smtp)  # QMEAN non utilizzabile: nessun servizio locale, SWISS-MODEL non consentito
+    job_id = pipeline(client, notify_email="utente@example.org")
+    msg = until(lambda: smtp.messages)[0]
+    assert "QMEAN automatico: nessun calcolo (il servizio QMEAN locale non è attivo" in msg["body"]
+    assert not qmean_jobs(client) and not auto_status(client, job_id)["pending"]

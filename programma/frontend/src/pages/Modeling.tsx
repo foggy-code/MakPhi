@@ -12,6 +12,7 @@ import { LigandPicker } from "../components/LigandPicker";
 import { LigandTable } from "../components/LigandsPanel";
 import { groupTitle, STATUS_TONE } from "../lib/ligands";
 import { AlignmentView } from "../components/AlignmentView";
+import { AutoQmeanNotice } from "../components/AutoQmeanNotice";
 import { ComplexInput } from "../components/ComplexInput";
 import { ComplexResults, type ComplexView } from "../components/ComplexResults";
 import { Icon } from "../components/Icon";
@@ -319,6 +320,7 @@ function Results({ jobId, result, kind }: { jobId: string; result: ModelResult |
         }
       >
         <div className="stack">
+          <AutoQmeanNotice jobId={jobId} completed what="Il report" />
           <ModelsTable jobId={jobId} models={result.models} selected={selected} onSelect={setSelected} templates={full?.templates} viewer={viewer} onRefine={setRefine} onMutate={setMutate} open={open} />
           <ModelScores models={result.models} selected={selected} onSelect={setSelected} filename={`punteggi_modelli_${jobId.slice(0, 8)}`} />
         </div>

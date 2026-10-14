@@ -436,15 +436,21 @@ class PreflightService:
         checks += rules.identical_models_checks(opts.models, opts.refinement)
         self._guard(out, "disordine delle sequenze", lambda: self._pipeline_disorder(out, records))
         if p.get("qmean"):
-            self._auto_qmean(out, items)  # M × N: il migliore di ogni sequenza, come senza coppie
+            # M × N: il migliore di ogni sequenza, come senza coppie, oppure tutte le coppie
+            self._auto_qmean(out, items, items * pairs if pairs and p.get("qmean_scope") == "all" else None)
         self._queue(out)
 
-    def _auto_qmean(self, out: dict, sequences: Optional[int]) -> None:
-        """QMEAN automatico (services/autoqmean.py): un job `qmean` per modello migliore, accodato a calcolo finito.
-        `sequences`: sequenze della pipeline, None per la modellazione."""
-        what = ("A modellazione completata QMEAN partirà da solo sul modello migliore" if sequences is None else
-                f"A pipeline completata QMEAN partirà da solo sul modello migliore di ogni sequenza (fino a "
-                f"{sequences} {'calcolo' if sequences == 1 else 'calcoli'})")
+    def _auto_qmean(self, out: dict, sequences: Optional[int], every: Optional[int] = None) -> None:
+        """QMEAN automatico (services/autoqmean.py): un job `qmean` per modello migliore (o per ogni coppia, `every`
+        modelli), accodato a calcolo finito. `sequences`: sequenze della pipeline, None per la modellazione."""
+        if every:
+            what = (f"A pipeline completata QMEAN partirà da solo su tutti i modelli (fino a {every} "
+                    f"{'calcolo' if every == 1 else 'calcoli'}, prima i migliori di ogni sequenza)")
+        elif sequences is None:
+            what = "A modellazione completata QMEAN partirà da solo sul modello migliore"
+        else:
+            what = (f"A pipeline completata QMEAN partirà da solo sul modello migliore di ogni sequenza (fino a "
+                    f"{sequences} {'calcolo' if sequences == 1 else 'calcoli'})")
         out["checks"].append(rules.check(
             "info", "qmean_auto", what + ": i calcoli locali vanno uno alla volta, dopo il calcolo principale."))
         self._guard(out, "QMEAN", lambda: self._qmean_route(out, {}))
