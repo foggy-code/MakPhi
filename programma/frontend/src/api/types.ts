@@ -1408,6 +1408,19 @@ export type PipelineTemplateChoice = Pick<SuggestedTemplate, "template_id" | "ro
 export type TemplateMode = "auto" | "fixed" | "multi";
 
 /** Corpo di POST /api/pipeline (api/compute.PipelineIn). */
+/** QMEAN automatico di una modellazione o pipeline (GET /api/jobs/{id}/qmean-auto) */
+export interface AutoQmeanStatus {
+  /** il job ha chiesto QMEAN automatico */
+  requested: boolean;
+  /** QMEAN ancora da accodare, in coda o in corso: ZIP e report scaricati ora non li contengono */
+  pending: boolean;
+  /** job qmean automatici per stato */
+  counts: Record<string, number>;
+  total: number;
+  /** finiti (completati, falliti o annullati) */
+  done: number;
+}
+
 export interface PipelineRequest {
   project_id?: string;
   name?: string;
@@ -1427,6 +1440,8 @@ export interface PipelineRequest {
   extended_quality?: boolean;
   /** QMEAN sul modello migliore di ogni sequenza, accodato a pipeline completata */
   qmean?: boolean;
+  /** solo M × N con QMEAN: "best" = il migliore di ogni sequenza (predefinito); "all" = tutte le coppie */
+  qmean_scope?: "best" | "all";
   parallel?: number;
   /** indirizzo per l'avviso via email alla fine (senza risultati); vuoto = nessun avviso */
   notify_email?: string;

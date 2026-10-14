@@ -135,10 +135,13 @@ class ReportService:
                                                            found["job_id"])
         return report.render(data), report.safe_filename(stem)
 
-    def pipeline_item(self, job: dict, row: dict) -> str:
-        """Report del modello migliore di un elemento completato (ZIP della pipeline: senza immagine né QMEAN)."""
+    def pipeline_item(self, job: dict, row: dict, *, qmean: bool = False) -> str:
+        """Report del modello migliore di un elemento completato (ZIP della pipeline: senza immagine). `qmean`: il
+        modello ha un QMEAN completato, da includere come nel report della pagina (il più recente valido); senza, non
+        si cerca (migliaia di elementi senza QMEAN)."""
         rel = _rel(row.get("best_model") or "")
-        data, _stem = self._pipeline_data(job, rel, None, row=row)
+        qmean_job = self._latest_qmean(job, rel) if qmean else None
+        data, _stem = self._pipeline_data(job, rel, qmean_job, row=row)
         self._structure_tools(data, job, rel)
         return report.render(data)
 

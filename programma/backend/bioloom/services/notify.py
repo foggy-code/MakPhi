@@ -3,6 +3,8 @@
 Chi lancia una pipeline può chiedere un'email alla fine (`notify_email` nei parametri): quando il job arriva a uno stato
 finale (completato, fallito o annullato) BioLoom invia un messaggio di solo testo con titolo, esito, durata e numero di
 elementi per stato. Non contiene risultati, sequenze, nomi delle sequenze né file: i risultati restano su BioLoom.
+Se il job completato ha chiesto QMEAN automatico (services/autoqmean.py), l'avviso parte quando sono finiti anche i
+QMEAN, con il loro numero per esito: chi lo riceve trova ZIP e report già completi.
 
 Server di posta (SMTP): host, porta, sicurezza (STARTTLS, SSL/TLS o nessuna), utente, password, mittente e indirizzo
 pubblico di BioLoom (per il link nel messaggio, facoltativo). Non si configura mai dall'interfaccia, in nessuna modalità:
@@ -314,26 +316,44 @@ class NotifyService:
 
     # ------------------------------------------------------------------ fine dei job
     def on_finish(self, job_id: str, status: str) -> None:
-        """Ascoltatore del JobManager (stato finale scritto): avvia l'invio in un thread se il job lo chiede."""
+        """Ascoltatore del JobManager (stato finale scritto): avvia l'invio in un thread se il job lo chiede. Un job
+        completato con QMEAN automatico aspetta invece la fine dei suoi QMEAN (`after_qmean`)."""
+        from .autoqmean import waits  # services/autoqmean importa services/pipeline
+
         try:
-            row = self.jobs.db.query_one("SELECT params FROM jobs WHERE id=?", (job_id,)) or {}
+            row = self.jobs.db.query_one("SELECT kind, params FROM jobs WHERE id=?", (job_id,)) or {}
         except Exception:
             return
         params = row.get("params") if isinstance(row.get("params"), dict) else {}
         to = str(params.get("notify_email") or "").strip()
-        if not to or status not in STATUS_WORD:
+        if not to or status not in STATUS_WORD or waits(row.get("kind"), params, status):
             return
+        self._start(job_id, status, to, None)
+
+    def after_qmean(self, job_id: str, qmean: dict) -> None:
+        """Fine dei QMEAN automatici di un job completato (AutoQmean.on_done): l'avviso, se il job lo chiede, con il
+        numero di QMEAN per esito."""
+        try:
+            row = self.jobs.db.query_one("SELECT status, params FROM jobs WHERE id=?", (job_id,)) or {}
+        except Exception:
+            return
+        params = row.get("params") if isinstance(row.get("params"), dict) else {}
+        to = str(params.get("notify_email") or "").strip()
+        if to and row.get("status") in STATUS_WORD:
+            self._start(job_id, str(row["status"]), to, qmean)
+
+    def _start(self, job_id: str, status: str, to: str, qmean: Optional[dict]) -> None:
         refused = self._reserve_notice(to)
         if refused is not None:  # niente invio: solo il motivo nel log del job, appena si chiude
             threading.Thread(target=self._log, args=(job_id, f"Email di avviso a {to} non inviata: {refused}."),
                              name=f"notify-{job_id[:6]}", daemon=True).start()
             return
-        threading.Thread(target=self._notify, args=(job_id, status, to), name=f"notify-{job_id[:6]}",
+        threading.Thread(target=self._notify, args=(job_id, status, to, qmean), name=f"notify-{job_id[:6]}",
                          daemon=True).start()
 
-    def _notify(self, job_id: str, status: str, to: str) -> None:
+    def _notify(self, job_id: str, status: str, to: str, qmean: Optional[dict] = None) -> None:
         try:
-            subject, body = self.message(job_id, status)
+            subject, body = self.message(job_id, status, qmean)
             self.send(to, subject, body)
             note = f"Email di avviso inviata a {to}"
         except AppError as exc:
@@ -353,8 +373,9 @@ class NotifyService:
         except Exception:
             pass
 
-    def message(self, job_id: str, status: str) -> tuple[str, str]:
-        """Oggetto e testo dell'avviso: titolo, esito, tempi, elementi per stato; nessun risultato."""
+    def message(self, job_id: str, status: str, qmean: Optional[dict] = None) -> tuple[str, str]:
+        """Oggetto e testo dell'avviso: titolo, esito, tempi, elementi per stato e, dopo i QMEAN automatici, quanti
+        per esito; nessun risultato."""
         job = self.jobs.get(job_id, include_result=False)
         what = KIND_WORD.get(job["kind"], "Il job")
         word = STATUS_WORD[status]
@@ -381,12 +402,29 @@ class NotifyService:
                                                            if started else ""))
         if status != "completed" and job.get("error"):
             lines.append(f"Motivo: {' '.join(str(job['error']).split())[:300]}")
+        if qmean is not None:
+            lines.append(qmean_line(qmean))
         cfg, _ = self.config()
         lines.append("")
         if cfg.public_url:
             lines.append(f"Apri in BioLoom: {cfg.public_url}/pipeline?job={job_id}")
         lines.append(f"Identificativo del job: {job_id}")
         return f"BioLoom: {what.split(' ', 1)[1]} «{title}» {word}", "\n".join(lines) + "\n" + FOOTER
+
+
+QMEAN_WORD = {"completed": "completati", "failed": "falliti", "cancelled": "annullati"}
+
+
+def qmean_line(qmean: dict) -> str:
+    """Riga dell'avviso sui QMEAN automatici: quanti per esito, oppure perché non ne sono partiti."""
+    counts = {k: int(v) for k, v in (qmean.get("counts") or {}).items() if v}
+    total = sum(counts.values())
+    if not total:
+        # "QMEAN automatico non accodato: <motivo>." → "<motivo>"
+        note = " ".join(str(qmean.get("note") or "").split()).split(": ", 1)[-1].rstrip(".")
+        return f"QMEAN automatico: nessun calcolo{f' ({note})' if note else ''}."
+    detail = ", ".join(f"{QMEAN_WORD.get(k, k)} {v}" for k, v in sorted(counts.items(), key=lambda kv: -kv[1]))
+    return f"QMEAN automatico: {total} {'calcolo' if total == 1 else 'calcoli'} ({detail}), tutti terminati."
 
 
 FOOTER = "\n--\nMessaggio automatico di BioLoom. I risultati restano su BioLoom e non sono allegati a questa email.\n"

@@ -146,6 +146,9 @@ class PipelineIn(BaseModel):
     extended_quality: bool = False
     qmean: bool = Field(False, description="QMEAN sul modello migliore di ogni sequenza, accodato a pipeline "
                                            "completata")
+    qmean_scope: Literal["best", "all"] = Field(
+        "best", description="Solo pipeline sequenze × template con QMEAN: best = il modello migliore di ogni sequenza; "
+                            "all = tutte le coppie (i migliori per primi)")
     parallel: int = Field(2, ge=1, le=256)
     notify_email: str = Field("", max_length=254, description="Indirizzo a cui inviare un avviso alla fine (senza "
                                                                "risultati); vuoto = nessun avviso")
