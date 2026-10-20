@@ -18,7 +18,7 @@ import { assessmentMap, coverageBadge, featureTracks, hitRanges, missingDomainsN
 import { fmtEvalue, fmtNum, relTime } from "../lib/format";
 import { useAsync, useJob } from "../lib/hooks";
 import { modelingLink, rankTone, rankTooltip, suggestedRoles, suggestionTemplates } from "../lib/templateRank";
-import { hitTracks } from "../lib/workflowView";
+import { hitTracks, remoteSearchNotice } from "../lib/workflowView";
 
 type SortKey = "rank_score" | "evalue" | "identity" | "coverage" | "bitscore" | "resolution";
 
@@ -162,7 +162,7 @@ export default function Search() {
                   }
                 }}
               />
-              <Field label="Motore">
+              <Field label="Motore" hint={remoteSearchNotice(engine) ?? undefined}>
                 <Segmented label="Motore di ricerca" value={engine} onChange={setEngine} options={[{ value: "rcsb", label: "RCSB (rapido)" }, { value: "ncbi", label: "NCBI BLAST" }, { value: "local", label: "BLAST+ locale" }, { value: "mmseqs", label: "MMseqs2 locale" }, { value: "alphafold", label: "AlphaFold DB" }]} />
               </Field>
               {engine === "alphafold" && (

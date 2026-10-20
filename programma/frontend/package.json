@@ -11,6 +11,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "coverage": "vitest run --coverage",
+    "e2e": "playwright test",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -22,7 +23,9 @@
     "react-router-dom": "^7.6.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.64.1",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",

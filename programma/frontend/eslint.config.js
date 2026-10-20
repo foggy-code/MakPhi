@@ -27,8 +27,8 @@ export default defineConfig([
     },
   },
   {
-    // configurazioni di Vite e di ESLint: girano in Node
-    files: ["*.config.{js,ts}"],
+    // configurazioni di Vite, ESLint e Playwright e test nel browser (e2e/): girano in Node
+    files: ["*.config.{js,ts}", "e2e/**/*.ts"],
     extends: [js.configs.recommended, tseslint.configs.recommended],
     languageOptions: { ecmaVersion: 2022, globals: globals.node },
     linterOptions: { reportUnusedDisableDirectives: "error" },

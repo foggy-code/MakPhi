@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { configDefaults } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 // In sviluppo (npm run dev) le chiamate /api vengono inoltrate al server Python.
@@ -23,6 +24,8 @@ export default defineConfig({
   // Copertura (npm run coverage): v8, solo i sorgenti di src/ senza i test; riepilogo testuale e JSON per la CI.
   test: {
     environment: "node",
+    // e2e/: test nel browser di Playwright (npm run e2e), non di vitest
+    exclude: [...configDefaults.exclude, "e2e/**"],
     css: { include: [/styles\.css/, /styles[\\/]pir\.css/] },
     coverage: {
       provider: "v8",

@@ -3,6 +3,7 @@
 #   (docker/impronta.sh, launcher/impronta.ps1), lint e test rapidi in Python puro (senza MODELLER né strumenti
 #   esterni: quei test vengono saltati)
 # - frontend: eslint, typecheck, test con la copertura (riepilogo del job) e build dell'interfaccia
+# - dipendenze: vulnerabilità note (pip-audit sui lock del backend, npm audit sulle dipendenze di produzione)
 # - avviatori: shellcheck sugli script sh (livello warning), PSScriptAnalyzer sugli script PowerShell (solo errori) e
 #   bit di esecuzione dei file .sh e .command nel repository
 # - docker: costruzione dell'immagine completa e test al suo interno, come programma/scripts/test.sh in locale; l'immagine ha
@@ -13,7 +14,8 @@
 #   I test nell'immagine misurano anche la copertura del backend (pytest-cov): il totale va nel riepilogo del job.
 #   L'impronta salvata nell'immagine (/app/IMPRONTA) deve essere quella del codice da cui è costruita.
 #   Poi l'avviatore vero (avvio, salute, arresto) e la copia portatile (prepara), avviata dal file in immagini/ dopo
-#   aver tolto l'immagine da Docker.
+#   aver tolto l'immagine da Docker, e l'avviatore dei server senza compose (launcher/bioloom-podman.sh) con il Podman
+#   del runner, senza root.
 # - qmean: solo a mano (Run workflow con "qmean"), costruzione dell'immagine bioloom-qmean e prova del worker.
 # Le GitHub Actions sono fissate per SHA completo del commit, con il tag nel commento: un tag spostato non cambia il
 # codice che gira qui. Le aggiorna Dependabot (.github/dependabot.yml), che riscrive SHA e commento insieme; a mano:
@@ -95,6 +97,31 @@ jobs:
               riga("Righe", "lines"), riga("Rami", "branches"), riga("Funzioni", "functions")].join("\n"));
           ' >> "$GITHUB_STEP_SUMMARY"
       - run: npx vite build
+
+  dipendenze:
+    # vulnerabilità note nelle dipendenze che finiscono nell'immagine: i lock del backend (pip-audit, banca dati PyPA
+    # e OSV) e le dipendenze di produzione dell'interfaccia (npm audit, livello alto o critico). Le dipendenze di
+    # sviluppo del frontend (vitest e simili) non entrano nell'immagine: il loro rapporto si stampa e basta.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: pip-audit (requirements.lock e requirements-tools.lock)
+        run: |
+          pip install "pip-audit==2.10.1"
+          pip-audit --progress-spinner off --no-deps --disable-pip \
+            -r programma/backend/requirements.lock -r programma/backend/requirements-tools.lock
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      - name: npm audit (dipendenze di produzione dell'interfaccia)
+        working-directory: programma/frontend
+        run: |
+          npm audit --omit=dev --audit-level=high
+          echo "== dipendenze di sviluppo (solo rapporto)"
+          npm audit || true
 
   avviatori:
     runs-on: ubuntu-24.04
@@ -195,11 +222,36 @@ jobs:
           curl -fsS http://127.0.0.1:8765/api/health
           echo
           "$copia/avvia-bioloom.sh" arresta
+      - name: Avviatore per Podman (avvio, salute, arresto)
+        # come sul server senza compose (launcher/bioloom-podman.sh), con il Podman del runner, senza root: l'immagine
+        # è quella appena provata, passata da Docker a Podman (la costruzione con Podman rifarebbe tutto)
+        timeout-minutes: 15
+        env:
+          VERSIONE: ${{ steps.version.outputs.version }}
+        run: |
+          podman --version
+          docker save "bioloom:$VERSIONE" | podman load
+          # il primo avvio crea server.env (dati in data/, solo 127.0.0.1) e si ferma, il secondo avvia
+          programma/launcher/bioloom-podman.sh avvia --no-menu
+          test -f server.env
+          programma/launcher/bioloom-podman.sh avvia --no-menu
+          ok=0
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8765/api/health; then ok=1; break; fi
+            sleep 2
+          done
+          echo
+          podman ps -a --filter name=bioloom
+          test "$ok" = 1
+          programma/launcher/bioloom-podman.sh arresta --no-menu
+          test -z "$(podman ps -q --filter name=bioloom)"
       - name: Container e log (se un passo non è riuscito)
         if: failure()
         run: |
           docker ps -a
           docker compose -p bioloom logs --tail 200 || true
+          podman ps -a || true
+          podman logs --tail 200 bioloom || true
 
   qmean:
     # solo a mano (Actions > CI > Run workflow, con "qmean"): l'immagine di base di QMEAN pesa circa 2 GB

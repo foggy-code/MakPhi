@@ -23,6 +23,7 @@ __pycache__/
 # frontend
 programma/frontend/node_modules/
 programma/frontend/dist/
+programma/frontend/.playwright/
 
 # editor / sistema
 .vscode/

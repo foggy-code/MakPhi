@@ -104,6 +104,19 @@ il calcolo indicato:
 Le risposte di UniProt, InterPro e AlphaFold DB restano in `data/cache` per 7 giorni, i metadati RCSB e le predizioni di
 ESMFold per 30. Sul server l'indirizzo di ESMFold lo sceglie l'amministratore ([Chiavetta e server](5%20-%20Chiavetta%20e%20server.md#server)).
 
+RCSB, il motore predefinito, riceve la sequenza: nelle pagine Ricerca e Pipeline, sotto la scelta del motore, un avviso
+lo ricorda quando il motore scelto è RCSB o NCBI. Per sequenze riservate usa BLAST+ o MMseqs2 locale (Impostazioni →
+Database), e se vuoi rendilo il predefinito in Impostazioni → Generale: la sequenza non esce dal computer.
+
+## Firma dei pacchetti di riproducibilità
+
+Ogni pacchetto contiene l'impronta SHA-256 del suo manifest: un pacchetto modificato per sbaglio o di proposito viene
+rifiutato. Chi lo modifica di proposito, però, può ricalcolare l'impronta. Per riconoscere i pacchetti prodotti dal tuo
+gruppo metti una chiave segreta (un testo qualsiasi di almeno 16 caratteri) nel file `data/licenses/firma-manifest.key`,
+lo stesso su tutti i computer del gruppo. Da quel momento i pacchetti esportati sono firmati, e all'apertura di un
+pacchetto BioLoom dice se la firma è valida, se è di un'altra chiave o se manca. Un pacchetto modificato dopo la firma
+viene rifiutato. La chiave non entra mai nei pacchetti; come le altre licenze resta fuori da Git e dalla copia portatile.
+
 ## Errori interni
 
 Un errore imprevisto del server (un difetto di BioLoom, non un dato sbagliato) compare nell'interfaccia come «Errore

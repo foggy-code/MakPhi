@@ -11,3 +11,4 @@ scripts
 **/.coverage
 **/.coverage.*
 **/.coverage-*.json
+**/.playwright

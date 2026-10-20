@@ -286,9 +286,13 @@ vecchia e codice nuovo non deve uscire. Crea `.env.locale` se manca, che serve a
 
 ### Costruzione riproducibile dell'immagine
 
-`docker/Dockerfile` fissa tutto ciò che scarica, così due costruzioni dello stesso codice partono dagli stessi byte. I
-pacchetti di Ubuntu no: si installano aggiornati, con le correzioni di sicurezza del giorno, e le versioni rilevate sono
-in `THIRD_PARTY_NOTICES.md`.
+`docker/Dockerfile` fissa tutto ciò che scarica, così due costruzioni dello stesso codice partono dagli stessi byte.
+Anche i pacchetti di Ubuntu (4.3.0): vengono dall'istantanea dell'archivio alla data di `UBUNTU_SNAPSHOT`
+(`snapshot.ubuntu.com`, `APT::Snapshot` di apt 2.8 in `/etc/apt/apt.conf.d/50bioloom-snapshot`), quindi due costruzioni
+con la stessa data installano le stesse versioni; le correzioni di sicurezza arrivano spostando la data. L'istantanea si
+legge solo in HTTPS (un indirizzo `http://` viene rediretto) e l'immagine di base non ha i certificati: `ca-certificates`
+si installa prima dall'archivio corrente, l'unico pacchetto non fissato (i pacchetti sono comunque firmati
+dall'archivio). Le versioni rilevate sono in `THIRD_PARTY_NOTICES.md`.
 
 | Cosa | Come è fissato | ARG |
 |---|---|---|
@@ -296,6 +300,7 @@ in `THIRD_PARTY_NOTICES.md`.
 | US-align 20260527, fpocket 4.2.3 | commit del tag (`177cc8a`, `4bb0d84`) e SHA-256 del tar non compresso | `USALIGN_COMMIT`, `USALIGN_SHA256`, `FPOCKET_COMMIT`, `FPOCKET_SHA256`; `USALIGN_TAG` resta e si controlla con l'uscita di `USalign -h` («(Version 20260527)»); `FPOCKET_TAG` tolto (tag e commit nel commento) |
 | MODELLER 10.8 (`modeller_10.8-1_amd64.deb`, 14.229.846 byte) | SHA-256 del `.deb` | `MODELLER_VERSION`, `MODELLER_SHA256` |
 | APBS 3.4.1 | SHA-256 dello zip della release | `APBS_VERSION`, `APBS_SHA256` |
+| pacchetti di Ubuntu (apt), tranne `ca-certificates` | istantanea dell'archivio del 15 ottobre 2026 | `UBUNTU_SNAPSHOT` (`20261015T000000Z`) |
 | immagine di base di QMEAN (`docker/qmean/Dockerfile`) | digest di `registry.scicore.unibas.ch/schwede/qmean` | — |
 
 - **Tag e digest:** il tag non sta davanti al digest perché Podman 2.2.1 (server RHEL 8, `bioloom-podman.sh`) rifiuta i
@@ -3423,7 +3428,7 @@ temporaneo dello scratch e inviato con `FileResponse` come gli altri archivi; ne
 
 | Percorso | Ruolo | Contenuto |
 |---|---|---|
-| `manifest.json` | — | formato e versione del formato; versione di BioLoom e dell'immagine (`BIOLOOM_IMAGE_VERSION`); Python, sistema, architettura, Biopython e NumPy; versioni degli strumenti usati dal calcolo; job (tipo, titolo, date, durata); **parametri completi**; semi casuali; impostazioni che influiscono sul risultato; provenienza dalla cache dei calcoli; input remoti con la data; timbro dei database locali (ricerca); possibilità di riesecuzione con il motivo; note; elenco dei file con ruolo, SHA-256, dimensione e percorso nel job; `manifest_sha256` |
+| `manifest.json` | — | formato e versione del formato; versione di BioLoom, dell'immagine (`BIOLOOM_IMAGE_VERSION`) e impronta del codice (`/app/IMPRONTA`, 4.3.0); Python, sistema, architettura, Biopython e NumPy; versioni degli strumenti usati dal calcolo; job (tipo, titolo, date, durata); **parametri completi**; semi casuali; impostazioni che influiscono sul risultato; provenienza dalla cache dei calcoli; input remoti con la data; timbro dei database locali (ricerca); possibilità di riesecuzione con il motivo; note; elenco dei file con ruolo, SHA-256, dimensione e percorso nel job; `manifest_sha256`; firma HMAC facoltativa (`signature`, 4.3.0) |
 | `LEGGIMI.txt` | `documentation` | contenuto e istruzioni per rieseguire (interfaccia, comando, API), tolleranze, input remoti, note |
 | `inputs/params.json`, `inputs/sequences.fasta` | `params`, `sequences` | parametri e sequenze (bersaglio, catene del complesso, sequenze dell'allineamento, query) |
 | `inputs/library/<ID>.pdb\|cif`, `<ID>.meta.json` | `template`, `template_meta` | file originale del template nella libreria e metadati (sorgente, data, modello predetto); se il template non è più in libreria, la copia preparata del job, con una nota |
@@ -3435,6 +3440,28 @@ temporaneo dello scratch e inviato con `FileResponse` come gli altri archivi; ne
 | `outputs/<percorso>` | `output` | tutti i file del job con lo stesso percorso, `result.json` compreso |
 | `scripts/<percorso>` | `script` | script MODELLER eseguiti (`model.py`, `align.py`, `loop.py`, `dope_eval.py`): solo documentazione |
 | `log/job.log` | `log` | log del calcolo, oscurato |
+
+**Ambiente all'avvio del job** (4.3.0). Il `JobManager` registra all'avvio di ogni esecuzione l'ambiente di calcolo
+(versioni di BioLoom, immagine e impronta del codice, Python, librerie, strumenti del tipo di job: lo stesso
+`ReproducibilityService.current`) in `.environment.json` nella cartella del job: nascosto, quindi fuori dall'elenco dei
+file, dal pacchetto e dal confronto; una ripresa lo riscrive. Il manifest usa quello (`environment.detected`: «all'avvio
+del job (data)») e, se l'esportazione avviene con un'altra versione o un'altra impronta, lo annota fra le note; per i job
+di prima ricade sull'ambiente all'esportazione e lo dice. Un errore nella registrazione non ferma il job (riga di avviso
+nel log). L'impronta va anche nelle voci della cache dei calcoli (`fingerprint`), **non nella chiave**: ogni
+ricostruzione dell'immagine svuoterebbe la cache (profili HHblits e QMEAN compresi); la chiave segue la versione, che si
+aumenta a ogni rilascio (`CHANGELOG.md`). Stessa versione e impronta diversa in riesecuzione: avviso
+`rerun_version_code`.
+
+**Firma del manifest** (facoltativa, 4.3.0). `manifest_sha256` garantisce l'integrità ma non l'autenticità: chi modifica
+il manifest può ricalcolarlo. Con un testo di almeno 16 caratteri in `data/licenses/firma-manifest.key` il manifest
+riceve `signature` = {`algorithm`: `HMAC-SHA256`, `key_id`, `value`}, l'HMAC (RFC 2104) di `manifest_sha256`;
+`key_id` sono i primi 16 caratteri dello SHA-256 della chiave con un prefisso, e riconosce la chiave senza rivelarla.
+`manifest_sha256` si calcola senza `signature`, quindi i pacchetti di prima restano validi. In anteprima
+(`signature_check`): firma valida = informazione `rerun_signature_valid`; firma di una chiave che qui non c'è =
+avviso `rerun_signature_unverified`; pacchetto non firmato su un'installazione che firma = avviso `rerun_unsigned`;
+firma non valida con la stessa chiave (manifest modificato e risigillato) = rifiuto `package_signature_invalid`, anche
+all'avvio. È una firma simmetrica: serve a un gruppo che condivide la chiave, non a dimostrare l'autore a terzi. La
+chiave è fra i segreti oscurati nei pacchetti.
 
 Misurati: analisi di qualità di 1UBQ con PROCHECK 19 file, 2,8 MB decompressi, 0,4 MB compressi; modellazione di
 yeast_ub su 1UBQ con 5 modelli e la qualità estesa 36 file, 3,3 MB e 0,5 MB, esportata in 0,8 s.
@@ -3495,7 +3522,8 @@ yeast_ub su 1UBQ con 5 modelli e la qualità estesa 36 file, 3,3 MB e 0,5 MB, es
 | oltre 256 MB compressi, 512 MB per file o 1 GB decompressi, oltre 5000 file; un file più lungo di quanto dichiara | `package_too_large` (413), `package_too_many_files`, `package_bomb` |
 | rapporto di compressione oltre 100:1 per un file oltre 1 MB (deflate arriva a 1032:1; i file di BioLoom fino a 35:1, misurato) | `package_bomb` |
 | manifest assente, non JSON, di un altro formato o di una versione più recente del formato; campi mancanti; percorsi o checksum non validi; campi letti dopo di forma inattesa (`environment.tools`/`libraries` non oggetti, `python`/`machine` non testi, `notes`, `remote`, `databases` non elenchi, `seeds`, `settings`, `cache`, `rerun` non oggetti, `job.duration_seconds` non numerico, date e titolo non testi): l'impronta si ricalcola, quindi un manifest risigillato di forma inattesa è un rifiuto motivato in anteprima, controlli preventivi e avvio, mai un errore interno | `package_invalid`, `package_manifest_invalid`, `package_format` |
-| impronta del manifest diversa (SHA-256 del JSON canonico senza `manifest_sha256`): parametri, checksum o versioni modificati dopo l'esportazione | `package_manifest_altered` |
+| impronta del manifest diversa (SHA-256 del JSON canonico senza `manifest_sha256` e `signature`): parametri, checksum o versioni modificati dopo l'esportazione | `package_manifest_altered` |
+| firma HMAC non valida con la chiave di questa installazione (manifest modificato e risigillato) | `package_signature_invalid` |
 | file non dichiarati o mancanti; SHA-256 o dimensione diversi (verificati a blocchi, di nuovo all'estrazione) | `package_undeclared`, `package_missing_file`, `package_checksum` |
 | parametri che la rotta di avvio rifiuterebbe (stesso modello Pydantic: `ModelIn`, `QualityIn`, …, e gli stessi controlli immediati) | `package_params_invalid` |
 
@@ -3551,7 +3579,8 @@ usa quella della cartella dati predefinita o di `MODELLER_KEY`.
     primi esempi.
   - **Altri testi** (PIR, profili DOPE, `.sum` di PROCHECK…): riga per riga e parola per parola, numeri con la tolleranza.
 - **Non dipendono dal calcolo** e non si confrontano: la data e l'ora che MODELLER scrive nella riga EXPDTA dei modelli
-  (riprese dal rapporto di qualità nel metodo della struttura), `cached`, `cached_at`, `timings` e `threads`. Misurato
+  (riprese dal rapporto di qualità nel metodo della struttura), `cached`, `cached_at`, `timings`, `threads` e
+  `modeller_workers` (worker della modalità parallela: dipendono dai core liberi, i modelli solo dalla modalità). Misurato
   rieseguendo gli stessi job (qualità con PROCHECK, modellazione con la qualità estesa): data di MODELLER e log a parte,
   tutti i file sono identici byte per byte.
 - **Tolleranze:** coordinate 0,002 Å per atomo (il formato PDB scrive tre decimali: due arrotondamenti dell'ultima cifra
