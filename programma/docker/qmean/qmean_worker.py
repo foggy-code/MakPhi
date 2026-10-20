@@ -58,6 +58,11 @@ PARALLEL = max(1, int(os.environ.get("QMEAN_PARALLEL") or 1))
 # Profili HHblits riusati per sequenza (run_qmean_wrapper.py): spazio massimo in GB, 0 = nessun riuso
 PROFILE_CACHE_GB = float(os.environ.get("QMEAN_PROFILE_CACHE_GB") or 10)
 PROFILES = os.path.join(uniclust.CACHE, "profiles")
+LOCKS = ".locks"  # blocchi per sequenza del wrapper (file vuoti): fuori dal conteggio e dalla pulizia
+# Contare i profili vuol dire leggere ogni file (0,1 s ogni 14.000 sul server): lo stato si rilegge al più ogni
+# PROFILES_STATUS_TTL secondi e la pulizia gira al più ogni PRUNE_SECONDS, non dopo ogni calcolo.
+PROFILES_STATUS_TTL = 30
+PRUNE_SECONDS = 60
 
 
 def hhblits_cpu(fit, slots=1):
@@ -117,6 +122,8 @@ class Gate:
 
 _gate = Gate()
 _prune_lock = threading.Lock()
+_pruned = {"at": 0.0}  # ultima pulizia (time.time)
+_profiles_cache = {"at": 0.0, "value": None}
 
 
 def profile_folder(db):
@@ -136,15 +143,9 @@ def prune_profiles(limit_bytes=None):
     più presenti contano come le altre (si svuotano per prime se più vecchie). Restituisce i byte occupati."""
     limit = PROFILE_CACHE_GB * GB if limit_bytes is None else limit_bytes
     with _prune_lock:
-        files = []
-        for root, _dirs, names in os.walk(PROFILES):
-            for name in names:
-                path = os.path.join(root, name)
-                try:
-                    st = os.stat(path)
-                except OSError:
-                    continue
-                files.append((st.st_mtime, st.st_size, path))
+        _pruned["at"] = time.time()
+        _profiles_cache["at"] = 0.0  # lo stato si rilegge alla prossima richiesta
+        files = [(st.st_mtime, st.st_size, path) for path, st in _profile_files()]
         total = sum(size for _t, size, _p in files)
         if total <= limit:
             return total
@@ -157,6 +158,27 @@ def prune_profiles(limit_bytes=None):
             except OSError:
                 pass
         return total
+
+
+def maybe_prune_profiles():
+    """Pulizia dopo un calcolo, ma al più ogni PRUNE_SECONDS: fra due pulizie si supera il massimo al più dei profili
+    di un minuto di calcoli."""
+    if time.time() - _pruned["at"] >= PRUNE_SECONDS:
+        prune_profiles()
+
+
+def _profile_files():
+    """(percorso, stat) di ogni profilo salvato, senza i blocchi del wrapper."""
+    for root, dirs, names in os.walk(PROFILES):
+        dirs[:] = [d for d in dirs if d != LOCKS]
+        for name in names:
+            path = os.path.join(root, name)
+            try:
+                yield path, os.stat(path)
+            except OSError:
+                continue
+
+
 MAX_BODY = 50 * 1024 * 1024
 
 _jobs = {}
@@ -286,7 +308,7 @@ def _run_qmean(job):
         except (OSError, ValueError):
             pass
         if PROFILE_CACHE_GB > 0:
-            prune_profiles()
+            maybe_prune_profiles()
         return result, output[-4000:]
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
@@ -529,16 +551,19 @@ class Server(socketserver.ThreadingMixIn, HTTPServer):
 
 
 def profiles_status():
-    """Profili HHblits salvati: numero, spazio occupato e massimo (byte)."""
+    """Profili HHblits salvati: numero, spazio occupato e massimo (byte). Riletti al più ogni PROFILES_STATUS_TTL
+    secondi: BioLoom chiede lo stato prima di ogni calcolo."""
+    now = time.time()
+    cached = _profiles_cache["value"]
+    if cached is not None and now - _profiles_cache["at"] < PROFILES_STATUS_TTL:
+        return cached
     count = size = 0
-    for root, _dirs, names in os.walk(PROFILES):
-        for name in names:
-            try:
-                size += os.path.getsize(os.path.join(root, name))
-                count += 1
-            except OSError:
-                pass
-    return {"enabled": PROFILE_CACHE_GB > 0, "count": count, "size": size, "limit": int(PROFILE_CACHE_GB * GB)}
+    for _path, st in _profile_files():
+        size += st.st_size
+        count += 1
+    value = {"enabled": PROFILE_CACHE_GB > 0, "count": count, "size": size, "limit": int(PROFILE_CACHE_GB * GB)}
+    _profiles_cache.update(at=now, value=value)
+    return value
 
 
 def main():

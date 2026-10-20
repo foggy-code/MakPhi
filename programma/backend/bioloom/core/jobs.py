@@ -21,7 +21,7 @@ database; `estimate` stima il tempo residuo dei job in esecuzione (core/eta.py).
 
 Coda e CPU: i job in coda partono in ordine di priorità del tipo (`PRIORITY`), a parità per data di creazione,
 da un dispatcher per pool (core/dispatch.py: "cpu" con i job di calcolo in parallelo delle Impostazioni, "io"
-con 8); i processi esterni di calcolo lanciati da `JobContext.run` prendono gli slot di un budget di CPU
+con 8 più i posti in più del QMEAN locale); i processi esterni di calcolo lanciati da `JobContext.run` prendono gli slot di un budget di CPU
 condiviso fra tutti i job (core/budget.py), così pipeline, elementi e strumenti insieme non saturano la CPU.
 """
 
@@ -510,7 +510,7 @@ class JobManager:
         self._pools = {
             "cpu": Dispatcher("cpu", self.cpu_workers, self._execute, on_blocked=self._blocked,
                               resource_capacity=self._resource_slots),
-            "io": Dispatcher("io", lambda: IO_WORKERS, self._execute, on_blocked=self._blocked,
+            "io": Dispatcher("io", self.io_workers, self._execute, on_blocked=self._blocked,
                              resource_capacity=self._resource_slots),
         }
         self._lock = threading.RLock()
@@ -569,6 +569,18 @@ class JobManager:
             return max(1, int(self.settings_provider().effective_workers()))
         except Exception:  # impostazioni non leggibili: si procede con un solo job alla volta
             return 1
+
+    def io_workers(self) -> int:
+        """Job contemporanei del pool "io": IO_WORKERS più i posti oltre il primo delle risorse con più posti (QMEAN
+        locale con QMEAN_PARALLEL). Così i calcoli QMEAN locali usano tutti i posti del servizio, e ricerche e altri
+        job del pool trovano comunque posto. Letto sotto il lock del dispatcher: le capacità sono senza I/O."""
+        extra = 0
+        for slots in list(self._capacities.values()):
+            try:
+                extra += max(0, int(slots()) - 1)
+            except Exception:  # capacità illeggibile: come una risorsa esclusiva
+                pass
+        return IO_WORKERS + extra
 
     def reconfigure(self) -> None:
         """Le Impostazioni sono cambiate (job in parallelo): code e budget di CPU si riesaminano subito."""
