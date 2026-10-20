@@ -8,3 +8,6 @@ docs
 **/.venv
 *.env
 scripts
+**/.coverage
+**/.coverage.*
+**/.coverage-*.json

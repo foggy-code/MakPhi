@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "pytest-timeout==2.4.0", "ruff>=0.6"]
+dev = ["pytest>=7", "pytest-timeout==2.4.0", "pytest-cov==7.0.0", "ruff>=0.6"]
 
 [project.scripts]
 bioloom = "bioloom.__main__:main"
@@ -45,6 +45,15 @@ filterwarnings = ["ignore::Bio.PDB.PDBExceptions.PDBConstructionWarning"]
 # (wait_job, fino a 1200 s per job), così su un computer lento arriva prima il loro messaggio.
 # Senza il plugin (Python di sistema) pytest dà solo l'avviso "Unknown config option: timeout".
 timeout = 1800
+
+# Copertura dei test (pytest-cov, dipendenza dev; nell'immagine di test e nella CI): `pytest --cov` misura il pacchetto
+# bioloom, righe eseguite su righe eseguibili. Nessuna soglia minima: il numero si legge nel riepilogo della CI.
+[tool.coverage.run]
+source = ["bioloom"]
+
+[tool.coverage.report]
+skip_covered = true
+precision = 1
 
 [tool.ruff]
 line-length = 120

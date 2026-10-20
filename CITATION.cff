@@ -1,0 +1,24 @@
+# Come citare BioLoom (Citation File Format 1.2.0, https://citation-file-format.github.io).
+# GitHub mostra "Cite this repository" a partire da questo file; Zenodo legge invece .zenodo.json.
+# Al primo rilascio archiviato su Zenodo aggiungere il DOI in "identifiers" (e in "doi").
+# Autori: completare con given-names e family-names (qui solo l'alias della licenza).
+cff-version: 1.2.0
+message: "Se usi BioLoom in un lavoro scientifico, citalo con questi metadati."
+title: "BioLoom"
+abstract: >-
+  Suite per la modellazione di proteine per omologia: ricerca e punteggio dei template, allineamento,
+  costruzione con MODELLER, validazione e voto dei modelli, rifinitura, mutagenesi, ligandi e complessi,
+  pacchetti di riproducibilità. Distribuita come immagine Docker (o Podman) con interfaccia web.
+type: software
+authors:
+  - alias: "foggy02"
+version: "4.3.0"
+date-released: "2026-10-21"
+license: MIT
+repository-code: "https://github.com/foggy-code/BioLoom"
+keywords:
+  - homology modelling
+  - protein structure
+  - MODELLER
+  - structural bioinformatics
+  - reproducibility

@@ -249,6 +249,10 @@ def test_compare_file_statuses():
     a = {"dope": -8123.456789, "grade": "A", "cached": True, "timings": {"x": 1}, "list": [1, 2]}
     near = {**a, "dope": -8123.4568, "cached": False, "timings": {"x": 9}}
     assert repro.compare_file("r.json", json.dumps(a).encode(), json.dumps(near).encode())["status"] == "equivalent"
+    # il numero di worker di MODELLER dipende dai core liberi, non dal calcolo
+    workers = {**a, "options": {"parallel": True}, "modeller_workers": 3}
+    assert repro.compare_file("r.json", json.dumps(workers).encode(),
+                              json.dumps({**workers, "modeller_workers": 2}).encode())["status"] == "identical"
     far = repro.compare_file("r.json", json.dumps(a).encode(), json.dumps({**a, "dope": -8100.0}).encode())
     assert far["status"] == "different" and far["diff"]["beyond_tolerance"] == 1
     assert far["diff"]["max_delta"] == pytest.approx(23.456789) and far["diff"]["max_delta_at"] == "dope"
