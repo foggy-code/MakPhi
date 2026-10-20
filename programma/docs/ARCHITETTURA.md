@@ -72,7 +72,7 @@ Computer ospite (Windows, macOS, Linux; Apple Silicon in emulazione x86)
 Container "bioloom" (Ubuntu 24.04, Python 3.12, utente = proprietario di /data)
   Browser ──HTTP──▶ FastAPI (8765; pubblicata su 127.0.0.1, anche sul server; in rete solo con chiave d'accesso)
                      ├─ /api/*   rotte REST (OpenAPI su /docs)      ├─ /*  interfaccia React compilata
-                     ├─ JobManager: code con priorità "cpu" (core−1) + "io" (8) · budget di CPU condiviso · stato su SQLite · lavoro in /scratch
+                     ├─ JobManager: code con priorità "cpu" (core−1) + "io" (8 + posti QMEAN) · budget di CPU condiviso · stato su SQLite · lavoro in /scratch
                      │    └─ sottoprocessi: MODELLER 10.8, mkdssp, BLAST+, MMseqs2, Clustal Omega, MAFFT, MUSCLE,
                      │                      TM-align, US-align, PROCHECK, ProSA II, fpocket, PDB2PQR, APBS, OpenMM
                      └─ servizi remoti: RCSB · UniProt · InterPro · NCBI QBlast · AlphaFold DB (EBI) · SWISS-MODEL (opt-in)
@@ -2200,7 +2200,12 @@ QMEAN in `run_qmean_wrapper.py`); client in `engines/qmean_local.py`, job `qmean
     lavoro: la vista condivisa, ricreata da un calcolo che partiva, toglieva i collegamenti sotto un HHblits in corso
     (`File exists` alla prima prova con 16 calcoli). Lo stato dichiara i posti (`slots`) e BioLoom li usa come
     capacità della risorsa `QMEAN_LOCAL` del dispatcher (`set_resource_capacity`, letta senza I/O dall'ultimo stato:
-    1 finché il worker non è stato interrogato, poi i posti dichiarati). Misurato sullo stesso server, 3PGK ripetuta:
+    1 finché il worker non è stato interrogato, poi i posti dichiarati). I job `qmean` stanno nel pool "io", che ha
+    `IO_WORKERS` (8) più i posti oltre il primo di questa risorsa (`JobManager.io_workers`): con 8 fissi il server
+    teneva occupati 8 posti su 32. Il dispatcher crea i thread che mancano quando la capacità cresce senza `wake`
+    (posti letti dal primo calcolo, con la coda già piena) e riordina la coda solo dopo un evento che può rendere
+    avviabile un job: con 126.000 QMEAN in coda un ordinamento costa circa 0,08 s, e prima lo rifacevano tutti i
+    thread inattivi a ogni fine di un job. Misurato sullo stesso server, 3PGK ripetuta:
 
     | Calcoli insieme | Totale | Per modello |
     |---|---|---|
@@ -2210,12 +2215,21 @@ QMEAN in `run_qmean_wrapper.py`); client in `engines/qmean_local.py`, job `qmean
     | 64 | 167 s | 2,6 s |
 
     Con 16 calcoli la memoria usata è rimasta intorno a 20 GB: gli indici stanno nella cache del sistema, condivisa.
-  - **Profili riusati (`QMEAN_PROFILE_CACHE_GB`, predefinito 10):** HHblits dipende solo dalla sequenza. Il wrapper
+  - **Profili riusati (`QMEAN_PROFILE_CACHE_GB`, predefinito 10, 100 sul server):** HHblits dipende solo dalla sequenza. Il wrapper
     avvolge `run_qmean._seqanno`: prima della ricerca copia `<md5 della sequenza>.a3m` dalla cartella del database in
     `/cache/profiles` (il nome cambia se l'indice degli a3m cambia), dopo salva il profilo nuovo con una scrittura
     atomica; `run_qmean.py` usa da sé un a3m già presente. Risultato identico (provato: stesso QMEAN4 Z-score), ricerca
-    saltata. La pulizia dopo ogni calcolo toglie i profili meno usati oltre il massimo (fino all'80%). Il worker riporta
-    `bioloom_profiles` (riusati, calcolati) e BioLoom lo scrive nel log.
+    saltata. **Una sola ricerca per sequenza:** il wrapper prende un blocco esclusivo (flock su
+    `.locks/<prime 4 cifre dell'md5>.lock` nella cartella del database) prima di guardare la cache e lo tiene fino al
+    salvataggio del profilo; con un profilo già pronto lo lascia subito. I modelli della stessa sequenza che partono
+    insieme aspettano il primo e riusano il suo profilo. Il kernel libera il blocco anche se il processo viene ucciso
+    (timeout, annullamento). La pulizia toglie i profili meno usati oltre il massimo (fino all'80%), al più una volta
+    al minuto (`PRUNE_SECONDS`), e lo stato dei profili si rilegge al più ogni 30 s: contarli vuol dire leggere ogni
+    file (0,09 s ogni 14.000 sul server) e BioLoom chiede lo stato prima di ogni calcolo. Sul server il massimo è 100 GB
+    (`bioloom-podman.sh`, `server.env.example`): un profilo occupa circa 0,8 MB, e con 10 GB una pipeline M × N di
+    23.000 sequenze cancellava i profili dei migliori prima che le altre coppie li riusassero (misurato il 2026-10-20:
+    13.917 profili, 10,71 GB su 10,74). Il worker riporta `bioloom_profiles` (riusati, calcolati) e BioLoom lo scrive
+    nel log.
   - **Risorse nell'uscita:** il worker riporta processori, giudizio sulla memoria (`ok` | `swap`) e secondi dell'intero
     calcolo (`bioloom_hhblits`). `engines/qmean_local.score` li porta nel risultato del job come `hhblits` e li scrive nel
     log («QMEAN locale concluso in … s nel worker»). Il campo è `null` con SWISS-MODEL e con un worker che non li riporta.

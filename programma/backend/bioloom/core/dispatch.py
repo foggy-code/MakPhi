@@ -18,6 +18,9 @@ creato prima (FIFO, anche per un job ripreso).
   restituisca prima con `release`, passato all'esecuzione (QMEAN: finita la parte locale, prima del fallback remoto).
 - **Capacità dinamica:** i job contemporanei del pool si rileggono a ogni scelta (il pool "cpu" segue i job di
   calcolo in parallelo delle Impostazioni); i thread si creano quando servono, fino alla capacità.
+- **Code lunghe:** un thread inattivo riguarda la coda solo dopo un evento che può rendere avviabile un job (job in
+  coda, risorsa o posto liberato, `wake`) o allo scadere di `IDLE_SECONDS`, non a ogni risveglio: con centinaia di
+  migliaia di QMEAN in coda ordinarla costa decimi di secondo.
 - **Stato vero su SQLite:** una voce della coda dice solo "prova ad avviare questo job". `JobManager._execute`
   parte soltanto da 'queued' con un passaggio condizionato, quindi una voce rimasta indietro (job annullato in
   coda e ripreso, ripresa in preparazione) non avvia nulla due volte. Un job ha al più una voce in coda.
@@ -89,6 +92,12 @@ class Dispatcher:
         self._resource_capacity = resource_capacity
         self._held: dict[str, int] = {}  # posti occupati di ogni risorsa
         self._busy = 0
+        # Riesame solo se qualcosa è cambiato: `_version` cresce a ogni evento che può rendere avviabile un job (job
+        # in coda, risorsa o posto liberato, `wake`); `_stale` è la versione dell'ultima scelta senza nulla da
+        # avviare. Con centinaia di migliaia di job in coda ordinare costa decimi di secondo, e senza questo ogni
+        # fine di un job lo farebbe rifare a tutti i thread inattivi del pool.
+        self._version = 0
+        self._stale = -1
         self._threads: list[threading.Thread] = []
         self._seq = itertools.count()
         self._closed = False
@@ -117,6 +126,7 @@ class Dispatcher:
                 return
             self._queued[job_id] = _Entry(int(priority), created_at or "", int(created_seq or 0), next(self._seq),
                                           job_id, self._clock(), resource)
+            self._version += 1
             self._ensure_threads()
             self._cond.notify_all()
 
@@ -140,6 +150,7 @@ class Dispatcher:
     def wake(self) -> None:
         """Riesame immediato (capacità cambiata nelle Impostazioni)."""
         with self._cond:
+            self._version += 1
             self._ensure_threads()
             self._cond.notify_all()
 
@@ -202,22 +213,29 @@ class Dispatcher:
                 else:
                     self._held.pop(entry.held, None)
                 entry.held = None
+                self._version += 1
                 self._cond.notify_all()
 
     def _worker(self) -> None:
         while True:
             with self._cond:
                 entry, blocked = None, []
+                fresh = True  # prima scelta del thread, o riesame periodico: si guarda la coda comunque
                 while not self._closed:
-                    if self._busy < self.capacity():
+                    if self._busy < self.capacity() and (fresh or self._version != self._stale):
                         entry, blocked = self._pick()
                         if entry is not None or blocked:
                             break
-                    self._cond.wait(IDLE_SECONDS)
+                        self._stale = self._version
+                    # allo scadere un riesame completo: capacità di una risorsa o Impostazioni cambiate senza `wake`
+                    fresh = not self._cond.wait(IDLE_SECONDS)
                 if self._closed:
                     return
                 if entry is not None:
                     self._busy += 1
+                    # la capacità può essere cresciuta senza `wake` (posti del QMEAN locale letti dal primo calcolo,
+                    # con la coda già piena): i thread che mancano partono adesso
+                    self._ensure_threads()
             for job_id, resource in blocked:
                 if self._on_blocked is not None:
                     try:
@@ -234,4 +252,5 @@ class Dispatcher:
                 self._release(entry)
                 with self._cond:
                     self._busy -= 1
+                    self._version += 1
                     self._cond.notify_all()

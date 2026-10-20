@@ -8,9 +8,14 @@ Con BIOLOOM_PROFILE_CACHE (cartella del database in uso) il profilo HHblits di o
 sequenza già vista non rifà la ricerca: run_qmean.py usa da sé un a3m già presente nella sua cartella di lavoro
 (`<md5 della sequenza>/hhblits.a3m`), e il profilo dipende solo da sequenza e database, quindi il risultato è lo
 stesso. Profili riusati e calcolati vanno in `$TMPDIR/profile_cache.json`.
+Un solo HHblits per sequenza anche fra calcoli contemporanei: un blocco (flock) per sequenza in `<cartella>/.locks`
+fa aspettare agli altri modelli della stessa sequenza il profilo del primo, che poi riusano. I blocchi sono
+65536 file vuoti al massimo (le prime 4 cifre dell'md5): due sequenze diverse nello stesso file si aspettano a
+vicenda, raramente e senza cambiare il risultato.
 Va avviato con l'interprete di OpenStructure: `ost run_qmean_wrapper.py <argomenti di run_qmean.py>`.
 """
 
+import fcntl
 import importlib.util
 import json
 import os
@@ -18,6 +23,37 @@ import shutil
 import sys
 
 RUN_QMEAN = "/qmean/run_qmean.py"
+LOCKS = ".locks"  # sottocartella dei blocchi per sequenza: la pulizia dei profili non la tocca
+
+
+class _SequenceLock:
+    """Blocco esclusivo fra processi per una sequenza (flock su `<cartella>/.locks/<md5[:4]>.lock`). Se il blocco
+    non si può creare (cartella in sola lettura) si procede senza: al più si rifà un HHblits."""
+
+    def __init__(self, folder, name):
+        self.path = os.path.join(folder, LOCKS, name[:4] + ".lock")
+        self.fh = None
+
+    def __enter__(self):
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            self.fh = open(self.path, "a")
+            fcntl.flock(self.fh, fcntl.LOCK_EX)
+        except OSError:
+            self.close()
+        return self
+
+    def close(self):
+        if self.fh is not None:
+            try:
+                fcntl.flock(self.fh, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            self.fh.close()
+            self.fh = None
+
+    def __exit__(self, *exc):
+        self.close()
 
 
 def _profile_cache(module, folder):
@@ -30,28 +66,33 @@ def _profile_cache(module, folder):
         name = target_seq.GetName()  # md5 della sequenza (run_qmean._get_seq_name)
         cached = os.path.join(folder, name + ".a3m")
         a3m = os.path.join(workdir, name, hhblits3.HHblits.OUTPUT_PREFIX + ".a3m")
-        reused = False
-        if os.path.isfile(cached) and not os.path.exists(a3m):
-            try:
-                os.makedirs(os.path.dirname(a3m), exist_ok=True)
-                shutil.copyfile(cached, a3m)
-                os.utime(cached, None)  # usato ora: la pulizia toglie prima i meno recenti
-                reused = True
-            except OSError:
-                pass
-        result = original(target_seq, workdir, *args, **kwargs)
-        if reused:
-            stats["reused"] += 1
-        else:
-            stats["computed"] += 1
-            if os.path.isfile(a3m) and not os.path.exists(cached):
-                try:  # scrittura atomica: un altro calcolo contemporaneo può salvare lo stesso profilo
-                    os.makedirs(folder, exist_ok=True)
-                    tmp = "%s.%d.tmp" % (cached, os.getpid())
-                    shutil.copyfile(a3m, tmp)
-                    os.replace(tmp, cached)
+        # il blocco resta preso fino al salvataggio del profilo: gli altri modelli della stessa sequenza aspettano
+        # e poi lo riusano invece di rifare la ricerca
+        with _SequenceLock(folder, name) as lock:
+            reused = False
+            if os.path.isfile(cached) and not os.path.exists(a3m):
+                try:
+                    os.makedirs(os.path.dirname(a3m), exist_ok=True)
+                    shutil.copyfile(cached, a3m)
+                    os.utime(cached, None)  # usato ora: la pulizia toglie prima i meno recenti
+                    reused = True
                 except OSError:
                     pass
+            if reused:
+                lock.close()  # profilo già pronto: nessuno deve aspettare il resto di questo calcolo
+            result = original(target_seq, workdir, *args, **kwargs)
+            if reused:
+                stats["reused"] += 1
+            else:
+                stats["computed"] += 1
+                if os.path.isfile(a3m) and not os.path.exists(cached):
+                    try:  # scrittura atomica: chi legge non vede mai un profilo a metà
+                        os.makedirs(folder, exist_ok=True)
+                        tmp = "%s.%d.tmp" % (cached, os.getpid())
+                        shutil.copyfile(a3m, tmp)
+                        os.replace(tmp, cached)
+                    except OSError:
+                        pass
         with open(report, "w") as fh:
             json.dump(stats, fh)
         return result
