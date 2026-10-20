@@ -381,6 +381,7 @@ def validate_manifest(data: Any) -> dict:
     _need(isinstance(data.get("bioloom"), dict) and isinstance(data["bioloom"].get("version"), str),
           "manca la versione di BioLoom")
     _need(_optional(data["bioloom"].get("image"), str), "bioloom.image non è un testo")
+    _need(_optional(data["bioloom"].get("fingerprint"), str), "bioloom.fingerprint non è un testo")
     _need(isinstance(data.get("environment"), dict), "manca la sezione environment")
     _check_shapes(data)
     files = data.get("files")
@@ -794,6 +795,12 @@ def environment_warnings(packaged: dict, current: dict) -> list[dict]:
                     "message": f"Il pacchetto è stato creato con BioLoom {pb.get('version')}, la riesecuzione usa "
                                f"BioLoom {cb.get('version')}: script, analisi e avvisi possono cambiare e i risultati "
                                "differire."})
+    elif isinstance(pb.get("fingerprint"), str) and isinstance(cb.get("fingerprint"), str) \
+            and pb["fingerprint"] != cb["fingerprint"]:
+        out.append({"code": "rerun_version_code",
+                    "message": f"Stessa versione di BioLoom ({pb.get('version')}) ma codice diverso: impronta "
+                               f"{pb['fingerprint'][:12]}… nel pacchetto, {cb['fingerprint'][:12]}… qui. Script, "
+                               "analisi e avvisi possono cambiare e i risultati differire."})
     if pb.get("image") and cb.get("image") and pb.get("image") != cb.get("image"):
         out.append({"code": "rerun_version_image",
                     "message": f"Immagine Docker diversa: {pb.get('image')} nel pacchetto, {cb.get('image')} qui."})
@@ -851,6 +858,7 @@ def readme_text(manifest: dict) -> str:
         f"Calcolo: {KIND_LABEL.get(kind, kind)} «{job.get('title') or job['id']}» (job {job['id']}),",
         f"concluso il {job.get('finished_at') or '?'} con BioLoom {env.get('version')}"
         + (f" (immagine {env['image']})" if env.get("image") else "") + ".",
+        *([f"Impronta del codice: {env['fingerprint']}."] if env.get("fingerprint") else []),
         f"Pacchetto creato il {manifest.get('created_at')}.",
         "",
         "Contenuto",

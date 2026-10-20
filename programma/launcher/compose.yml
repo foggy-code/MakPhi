@@ -19,7 +19,7 @@ name: bioloom
 
 services:
   bioloom:
-    image: bioloom:${BIOLOOM_VERSION:-4.2.0}
+    image: bioloom:${BIOLOOM_VERSION:-4.3.0}
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -59,7 +59,7 @@ services:
 
   qmean:
     profiles: ["qmean"]
-    image: bioloom-qmean:${BIOLOOM_VERSION:-4.2.0}
+    image: bioloom-qmean:${BIOLOOM_VERSION:-4.3.0}
     build:
       context: ../docker/qmean
     platform: linux/amd64

@@ -293,6 +293,29 @@ def test_environment_warnings_name_every_difference():
     assert codes == ["rerun_version_bioloom", "rerun_version_image", "rerun_tool_missing", "rerun_version_tool",
                      "rerun_version_library", "rerun_version_library", "rerun_platform"]
     assert repro.environment_warnings(current, current) == []
+    # stessa versione, codice diverso (fra due rilasci): avviso sull'impronta, non sulla versione
+    same = {"bioloom": {"version": "4.3.0", "fingerprint": "a" * 64}, "environment": {}}
+    other = {"bioloom": {"version": "4.3.0", "fingerprint": "b" * 64}, "environment": {}}
+    assert [w["code"] for w in repro.environment_warnings(same, other)] == ["rerun_version_code"]
+    assert repro.environment_warnings(same, {"bioloom": {"version": "4.3.0"}, "environment": {}}) == []
+
+
+def test_code_fingerprint_is_read_from_the_image_file(tmp_path, monkeypatch):
+    from bioloom.core import fingerprint
+    good = tmp_path / "IMPRONTA"
+    good.write_text("AB" * 32 + "\n")
+    monkeypatch.setenv("BIOLOOM_FINGERPRINT_FILE", str(good))
+    fingerprint.code_fingerprint.cache_clear()
+    try:
+        assert fingerprint.code_fingerprint() == "ab" * 32 and versions.bioloom()["fingerprint"] == "ab" * 32
+        good.write_text("non è un'impronta")
+        fingerprint.code_fingerprint.cache_clear()
+        assert fingerprint.code_fingerprint() is None
+        monkeypatch.setenv("BIOLOOM_FINGERPRINT_FILE", str(tmp_path / "assente"))
+        fingerprint.code_fingerprint.cache_clear()
+        assert fingerprint.code_fingerprint() is None
+    finally:
+        fingerprint.code_fingerprint.cache_clear()
 
 
 def test_tool_versions_are_read_from_the_programs():
@@ -335,6 +358,11 @@ def test_quality_package_content_manifest_and_checksums(client_with_ubq):
     assert not any(p.startswith("outputs/") and p.endswith(("params.json", "job.log")) for p in files)
     readme = files["LEGGIMI.txt"].decode()
     assert "python programma/bioloom.py rerun" in readme and "POST /api/jobs/rerun" in readme
+    # ambiente registrato all'avvio del job, non all'esportazione
+    assert m["environment"]["detected"].startswith("all'avvio del job")
+    recorded = c.app.state.core.jobs.environment(job["id"])
+    assert recorded["bioloom"] == m["bioloom"] and recorded["environment"]["tools"] == m["environment"]["tools"]
+    assert ".environment.json" not in json.dumps(c.get(f"/api/jobs/{job['id']}").json().get("files"))
     # riaperto dal servizio: valido, con l'anteprima senza errori
     summary = _inspect(c, data).json()
     assert summary["job"]["id"] == job["id"] and summary["rerun"]["supported"]

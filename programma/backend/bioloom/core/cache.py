@@ -39,6 +39,7 @@ from typing import Any, Callable, Iterable, Optional
 
 from .. import __version__
 from .errors import AppError
+from .fingerprint import code_fingerprint
 from .storage import atomic_write_bytes, atomic_write_text, read_json, safe_join
 
 FORMAT_VERSION = 1
@@ -186,7 +187,8 @@ def store(operation: str, key: str, result: dict, files: Optional[dict[str, str]
         return None
     now = time.time()
     entry = {"format": FORMAT_VERSION, "operation": operation, "key": key, "created": now, "created_at": iso(now),
-             "bioloom": __version__, "result": {k: v for k, v in result.items() if k not in CACHE_FIELDS},
+             "bioloom": __version__, "fingerprint": code_fingerprint(),
+             "result": {k: v for k, v in result.items() if k not in CACHE_FIELDS},
              "files": files or {}}
     # compatto: la cartella dati può stare su una chiavetta
     text = json.dumps(entry, ensure_ascii=False, separators=(",", ":"))

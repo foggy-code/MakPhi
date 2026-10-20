@@ -8,6 +8,8 @@
 #   docker/Dockerfile               ARG BIOLOOM_VERSION=X.Y.Z (predefinito, per le costruzioni senza --build-arg)
 #   docker/test/Dockerfile          ARG BASE=bioloom:X.Y.Z
 #   launcher/compose.yml            i due ${BIOLOOM_VERSION:-X.Y.Z}
+#   ../CITATION.cff                 version: "X.Y.Z" (citazione, nella radice del repository)
+#   ../.zenodo.json                 "version" (archiviazione su Zenodo, nella radice del repository)
 #
 #   bash programma/scripts/versione.sh          stampa la versione e controlla le copie (uscita 1 con le differenze)
 #   bash programma/scripts/versione.sh X.Y.Z    porta VERSION e tutte le copie a X.Y.Z, poi ricontrolla
@@ -29,7 +31,9 @@ package|frontend/package.json|1
 lock|frontend/package-lock.json|2
 dockerfile|docker/Dockerfile|1
 test|docker/test/Dockerfile|1
-compose|launcher/compose.yml|2"
+compose|launcher/compose.yml|2
+cff|../CITATION.cff|1
+zenodo|../.zenodo.json|1"
 
 # Riga per riga cerca la versione secondo il tipo di file: in lettura (nuova vuota) stampa i valori trovati, in
 # scrittura stampa il file con i valori sostituiti ed esce con 1 se le copie trovate non sono quelle attese.
@@ -62,6 +66,8 @@ tipo == "lock" {
 tipo == "dockerfile" { campo("^ARG[ \t]+BIOLOOM_VERSION=", "[^ \t\r]*") }
 tipo == "test" { campo("^ARG[ \t]+BASE=bioloom:", "[^ \t\r]*") }
 tipo == "compose" { campo("[$][{]BIOLOOM_VERSION:-", "[^}]*") }
+tipo == "cff" { campo("^version:[ 	]*" q, tra_virgolette) }
+tipo == "zenodo" { campo("^  " q "version" q "[ 	]*:[ 	]*" q, tra_virgolette) }
 nuova != "" { print }
 END { if (nuova != "" && trovati != attese) exit 1 }
 '

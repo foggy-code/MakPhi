@@ -52,7 +52,7 @@ from .errors import AppError, Conflict, NotFound
 from .eta import progress_eta, seconds_between
 from .events import DELETED, IDLE, JOB, LOG, ChangeFeed
 from .sensitive import redactor, subprocess_env
-from .storage import atomic_write_json, dir_size, remove_tree, safe_join, validate_identifier
+from .storage import atomic_write_json, dir_size, read_json, remove_tree, safe_join, validate_identifier
 
 TERMINAL = frozenset({"completed", "failed", "cancelled"})
 ACTIVE = frozenset({"queued", "running", "cancelling"})
@@ -74,6 +74,10 @@ TOMBSTONE_PREFIX = ".deleting-"
 UNDO_ATTEMPTS = 3  # tentativi del rinomino inverso quando un'eliminazione non va a buon fine
 _RESUMED = "Il job è stato ripreso nel frattempo: annullalo prima di eliminarlo."
 _NO_LONGER_MATCHES = "Il job non corrisponde più ai criteri della pulizia."
+
+# Ambiente di calcolo registrato all'avvio di ogni esecuzione (versioni di BioLoom, impronta del codice, strumenti),
+# nella cartella definitiva del job: nascosto, quindi fuori dall'elenco dei file e dal confronto delle riesecuzioni.
+ENVIRONMENT_FILE = ".environment.json"
 
 # File intermedi di MODELLER (restrizioni, schedule, traiettorie, violazioni, modelli iniziali, file e log dei worker
 # della modalità parallela, che lo script ricrea) e copie temporanee delle analisi: non vengono salvati tra i risultati
@@ -526,6 +530,9 @@ class JobManager:
         self._log_handles: dict[str, object] = {}
         # chiamati con (job_id, stato) appena un job arriva a uno stato finale (es. l'avviso per email)
         self._finish_listeners: list[Callable[[str, str], None]] = []
+        # (tipo, parametri) -> ambiente di calcolo da registrare all'avvio (`ENVIRONMENT_FILE`); lo imposta il servizio
+        # di riproducibilità, None = nessuna registrazione
+        self.environment_provider: Optional[Callable[[str, dict], dict]] = None
         self._log_dirty: dict[str, float] = {}
         self._log_lock = threading.Lock()
         self._stop = threading.Event()
@@ -1163,6 +1170,7 @@ class JobManager:
             ctx = JobContext(self, job_id, live, job["params"] or {}, event, priority=registration.priority,
                              stage="Avvio", release_resource=release_resource)
             ctx.log(f"Job {job['kind']} avviato")
+            self._record_environment(job_id, job["kind"], job["params"] or {}, ctx)
             result = registration.fn(ctx, job["params"] or {})
             if event.is_set():
                 raise JobCancelled()
@@ -1190,6 +1198,23 @@ class JobManager:
                 self._running.discard(job_id)
                 self._idle.notify_all()  # una ripresa o un'eliminazione in attesa può procedere
             self.events.publish(job_id, IDLE)  # log completo su disco: i flussi SSE possono chiudersi
+
+    def _record_environment(self, job_id: str, kind: str, params: dict, ctx: JobContext) -> None:
+        """Scrive l'ambiente di calcolo di questa esecuzione (una ripresa lo sostituisce). Un errore non ferma il job:
+        il manifest ricadrà sull'ambiente all'esportazione, e lo dirà."""
+        provider = self.environment_provider
+        if provider is None:
+            return
+        try:
+            env = provider(kind, params)
+            atomic_write_json(self.workdir(job_id) / ENVIRONMENT_FILE, {"detected_at": now_iso(), **env})
+        except Exception as exc:
+            ctx.log(f"Avviso: ambiente di calcolo non registrato ({type(exc).__name__}: {exc})")
+
+    def environment(self, job_id: str) -> Optional[dict]:
+        """Ambiente registrato all'avvio dell'ultima esecuzione del job, None per i job di prima (o se illeggibile)."""
+        data = read_json(self.workdir(job_id) / ENVIRONMENT_FILE)
+        return data if isinstance(data, dict) else None
 
     def _end_run(self, job_id: str, live: Optional[Path], status: str, error: str, message: str) -> None:
         """Chiude un'esecuzione annullata o fallita: salva i file, scrive il motivo nel log e lo stato finale.

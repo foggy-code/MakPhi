@@ -462,6 +462,7 @@ class ReproducibilityService:
     def register(self) -> None:
         # priorità 1 come la modellazione (i tipi non elencati in core/jobs.PRIORITY): minuti, non secondi
         self.jobs.register(KIND, self.handle, priority=1)
+        self.jobs.environment_provider = self.current  # ambiente di ogni job registrato al suo avvio
         incoming = self.jobs.jobs_dir / INCOMING
         if incoming.exists():  # copie rimaste da un avvio interrotto
             remove_tree(incoming)
@@ -550,11 +551,25 @@ class ReproducibilityService:
             own_notes.append(f"Il risultato del job veniva dalla cache dei calcoli (calcolo del "
                              f"{result.get('cached_at') or '?'}): la riesecuzione lo ricalcola.")
         own_notes += facts["changed"]
+        recorded = self.jobs.environment(job["id"])
+        if recorded and isinstance(recorded.get("bioloom"), dict) and isinstance(recorded.get("environment"), dict):
+            bioloom = recorded["bioloom"]
+            environment = {**recorded["environment"], "detected": f"all'avvio del job "
+                           f"({recorded.get('detected_at') or '?'}), su questa installazione"}
+            exported = versions.bioloom()
+            if any(exported.get(k) != bioloom.get(k) for k in ("version", "fingerprint")):
+                stamp = f" (impronta {exported['fingerprint'][:12]}…)" if exported.get("fingerprint") else ""
+                own_notes.append(f"Il pacchetto è stato esportato con BioLoom {exported.get('version')}{stamp}, "
+                                 "diverso da quello che ha eseguito il calcolo (vedi «bioloom»).")
+        else:
+            bioloom = versions.bioloom()
+            environment = {**versions.environment(self._tool_keys(kind, params), settings.modeller_python),
+                           "detected": "all'esportazione, su questa installazione (job anteriore alla registrazione "
+                                       "dell'ambiente all'avvio)"}
         return {
             "format": repro.FORMAT, "format_version": repro.FORMAT_VERSION, "created_at": now_iso(),
-            "bioloom": versions.bioloom(),
-            "environment": {**versions.environment(self._tool_keys(kind, params), settings.modeller_python),
-                            "detected": "all'esportazione, su questa installazione (i job non registrano l'ambiente)"},
+            "bioloom": bioloom,
+            "environment": environment,
             "job": {"id": job["id"], "kind": kind, "title": job.get("title") or "", "status": job["status"],
                     "created_at": job.get("created_at"), "started_at": job.get("started_at"),
                     "finished_at": job.get("finished_at"), "duration_seconds": _duration(job)},
