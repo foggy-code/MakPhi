@@ -442,3 +442,19 @@ def test_resume_redoes_completed_items_whose_model_was_never_saved(pipe):
     assert client.post(f"/api/jobs/{job_id}/resume").status_code == 200
     assert wait_job(client, job_id)["status"] == "completed" and fake.calls == ["a"]
     assert kept.is_file()
+
+
+def test_pipeline_records_the_modeller_mode_and_old_resumed_pipelines_stay_serial(pipe):
+    from bioloom.services import pipeline as pipeline_service
+
+    client, _core, _fake, submit = pipe
+    # le pipeline nuove scrivono la modalità nei parametri, anche quando la richiesta non la indica
+    job = wait_job(client, submit(["a"]))
+    assert job["params"]["options"] == {"models": 1, "parallel": True}
+    old = {"options": {"num_models": 2}}
+    assert pipeline_service.options_for_run(old, resumed=False) == (old, None)
+    # creata prima della modalità parallela e ripresa: si resta in serie, e il log lo dice
+    params, note = pipeline_service.options_for_run(old, resumed=True)
+    assert params["options"] == {"num_models": 2, "parallel": False} and "in serie" in note
+    recorded = {"options": {"num_models": 2, "parallel": True}}
+    assert pipeline_service.options_for_run(recorded, resumed=True) == (recorded, None)

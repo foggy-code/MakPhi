@@ -78,6 +78,9 @@ REPORT_JSON = "confronto.json"
 REPORT_TEXT = "RAPPORTO_RIESECUZIONE.txt"
 POCKETS_JSON = "pockets.json"  # tasche di un job `pockets` nel pacchetto di una scansione per tasca
 STAGE_PREFIX = "rerun_"  # pacchetti caricati in attesa dell'avvio, nello scratch (eliminati dopo 24 ore)
+# chiave facoltativa per firmare i manifest (HMAC, domain/reproducibility.sign), nella cartella delle licenze: un
+# testo di almeno 16 caratteri, uguale su tutte le installazioni che devono riconoscere i pacchetti l'una dell'altra
+SIGNING_KEY_FILE = "firma-manifest.key"
 INCOMING = ".rerun-incoming"  # copie in arrivo nella cartella dei job, spostate nel job alla creazione
 # File più grandi di così si copiano a blocchi senza oscuramento (solo il controllo dei segreti) e si confrontano con
 # il solo checksum: in memoria resta al più un file di questa dimensione.
@@ -476,11 +479,20 @@ class ReproducibilityService:
             stored = (self.paths.data / "access_key").read_text(encoding="utf-8").strip()
         except OSError:
             stored = ""
+        key = self.signing_key()
         secrets = [*self.licenses.secrets(), default_env().get("BIOLOOM_MODELLER_KEY", ""), settings.contact_email,
-                   access, stored, *extra_secrets]
+                   access, stored, key.decode("utf-8") if key else "", *extra_secrets]
         places = [(self.paths.data, "<cartella dati>"), (self.paths.scratch, "<scratch>"),
                   (self.paths.local_cache, "<cache locale>"), (ROOT_DIR, "<installazione>"), (Path.home(), "~")]
         return repro.Redactor(secrets, [(str(p), label) for p, label in places])
+
+    def signing_key(self) -> Optional[bytes]:
+        """Chiave della firma dei manifest (`SIGNING_KEY_FILE`, facoltativa), None se assente o troppo corta."""
+        try:
+            text = (self.paths.licenses / SIGNING_KEY_FILE).read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            return None
+        return text.encode("utf-8") if len(text) >= repro.MIN_SIGNING_KEY else None
 
     # ------------------------------------------------------------------------------ esportazione
     def export(self, job_id: str, dest: Path, extra_secrets: tuple[str, ...] = ()) -> str:
@@ -530,6 +542,9 @@ class ReproducibilityService:
                 b.add_bytes(repro.README, repro.readme_text(manifest).encode("utf-8"), "documentation")
                 manifest["files"] = b.entries
                 manifest = repro.seal(manifest)
+                signing = self.signing_key()
+                if signing is not None:
+                    manifest = repro.sign(manifest, signing)
                 text = json.dumps(manifest, indent=2, ensure_ascii=False).encode("utf-8")
                 if redactor.leaks(text):  # impossibile dopo l'oscuramento: ultima difesa
                     raise AppError("Il manifest conterrebbe dati riservati: pacchetto non creato.", code="package_secret")
@@ -960,6 +975,9 @@ class ReproducibilityService:
     def refusal(self, pkg: Package) -> Optional[tuple[str, str]]:
         """(codice, motivo) se il pacchetto non si può rieseguire, None se si può."""
         kind = pkg.kind
+        signature = repro.signature_check(pkg.manifest, self.signing_key())
+        if signature is not None and signature["level"] == "error":
+            return signature["code"], signature["message"]
         rerun = pkg.manifest.get("rerun") if isinstance(pkg.manifest.get("rerun"), dict) else {}
         if kind not in repro.RERUNNABLE:
             remote = kind in repro.REMOTE_KINDS
@@ -1019,6 +1037,9 @@ class ReproducibilityService:
                 params = self.rerun_params(pkg)
             except AppError as exc:
                 checks.append({"level": "error", "code": exc.code, "message": exc.message})
+        signature = repro.signature_check(m, self.signing_key())
+        if signature is not None and signature["level"] != "error":  # una firma non valida è già il rifiuto
+            checks.append(signature)
         current = self.current(kind, params)
         packaged = {"bioloom": m.get("bioloom") or {}, "environment": m.get("environment") or {}}
         checks += [{"level": "warning", **w} for w in repro.environment_warnings(packaged, current)]

@@ -494,6 +494,41 @@ def test_altered_manifest_or_wrong_checksum_are_rejected(client_with_ubq):
     assert not list(tmp.glob(f"{service.STAGE_PREFIX}*"))
 
 
+def test_signed_manifest_is_verified_and_a_resealed_one_is_refused(client_with_ubq):
+    c = client_with_ubq
+    key_file = c.app.state.core.paths.licenses / service.SIGNING_KEY_FILE
+    unsigned = _package(c, _quality(c)["id"])
+    assert "signature" not in _manifest(unsigned)
+    checks = _inspect(c, unsigned).json()["checks"]
+    assert not any(ch["code"].startswith(("rerun_sign", "rerun_unsigned")) for ch in checks)
+    key_file.write_text("chiave-di-laboratorio-0123456789\n", encoding="utf-8")
+    try:
+        data = _package(c, _quality(c)["id"])
+        m = _manifest(data)
+        assert m["signature"]["algorithm"] == "HMAC-SHA256" and repro.validate_manifest(m) is m
+        assert "chiave-di-laboratorio" not in data.decode("latin-1")
+        codes = {ch["code"]: ch["level"] for ch in _inspect(c, data).json()["checks"]}
+        assert codes["rerun_signature_valid"] == "info"
+        # con la chiave configurata un pacchetto senza firma è un avviso, non un errore
+        assert {ch["code"]: ch["level"] for ch in _inspect(c, unsigned).json()["checks"]}["rerun_unsigned"] == "warning"
+
+        # manifest modificato e risigillato (l'impronta SHA-256 torna, la firma no): rifiutato
+        def tweak(m):
+            m["params"]["procheck"] = True
+
+        forged = _rebuild(data, manifest=tweak)
+        summary = _inspect(c, forged).json()
+        assert summary["checks"][0]["code"] == "package_signature_invalid" and not summary["rerun"]["supported"]
+        r = c.post("/api/jobs/rerun", files={"file": ("p.zip", forged, "application/zip")})
+        assert r.status_code == 400 and r.json()["error"]["code"] == "package_signature_invalid"
+        # un'altra installazione con un'altra chiave: firma non verificabile, solo un avviso
+        key_file.write_text("un-altra-chiave-abcdefghijklmnop", encoding="utf-8")
+        codes = {ch["code"]: ch["level"] for ch in _inspect(c, data).json()["checks"]}
+        assert codes["rerun_signature_unverified"] == "warning"
+    finally:
+        key_file.unlink(missing_ok=True)
+
+
 def test_traversal_symlink_and_bomb_packages_are_rejected_without_writing(client_with_ubq, tmp_path):
     c = client_with_ubq
     data = _package(c, _quality(c)["id"])
