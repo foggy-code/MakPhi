@@ -1,7 +1,8 @@
 """Modalità parallela di MODELLER (engines/modeller.PARALLEL_MODULE): script, opzione, stime dei tempi e, con MODELLER
-installato, modelli identici con qualunque numero di worker, file dei worker non salvati, errore di un worker senza
-attese fino al timeout."""
+installato, modelli identici con qualunque numero di worker, modalità seriale deterministica e confrontata con quella
+parallela, file dei worker non salvati, errore di un worker senza attese fino al timeout."""
 
+import os
 import time
 
 import pytest
@@ -11,6 +12,7 @@ from bioloom.domain import preflight as rules
 from bioloom.engines import modeller
 
 from .conftest import YEAST_UB, requires_modeller, wait_job
+from .perf_serial_parallel import _superposed_ca_rmsd
 
 
 def _module_and_worker(script: str) -> tuple[str, str]:
@@ -80,13 +82,21 @@ def _coords(client, job: dict) -> list[list[str]]:
              if ln.startswith("ATOM")] for m in job["result"]["models"]]
 
 
+def _texts(client, job: dict) -> list[str]:
+    core = client.app.state.core
+    return [core.jobs.file_path(job["id"], m["file"]).read_text() for m in job["result"]["models"]]
+
+
 @requires_modeller
 def test_parallel_models_do_not_depend_on_the_number_of_workers(client_with_ubq):
     c = client_with_ubq
     c.put("/api/settings", json={"max_workers": 3})
     three = _model(c, refinement="fast")
     res = three["result"]
-    assert res["options"]["parallel"] is True and 1 <= res["modeller_workers"] <= 3
+    # con almeno 3 core il primo calcolo è davvero parallelo: 3 modelli, 3 worker
+    assert res["options"]["parallel"] is True and res["modeller_workers"] >= 1
+    if (os.cpu_count() or 1) >= 3:
+        assert res["modeller_workers"] == 3
     assert "MODELLER in parallelo" in c.get(f"/api/jobs/{three['id']}/log").json()["text"]
     names = {f["path"] for f in three["files"]}
     assert not any(".worker" in n or n in (modeller.PARALLEL_MODULE, modeller.PARALLEL_WORKER) for n in names)
@@ -97,6 +107,13 @@ def test_parallel_models_do_not_depend_on_the_number_of_workers(client_with_ubq)
     # modalità seriale su richiesta, registrata nel risultato
     serial = _model(c, refinement="fast", parallel=False)
     assert serial["result"]["options"]["parallel"] is False and serial["result"]["modeller_workers"] is None
+    # in serie: stesso seme, stesse coordinate
+    assert _coords(c, _model(c, refinement="fast", parallel=False)) == _coords(c, serial)
+    # serie e parallelo danno la stessa struttura in un altro sistema di riferimento: coordinate assolute diverse,
+    # Cα entro 1 Å dopo la sovrapposizione (misurato su 3 semi: 0,2–0,54 Å; tests/perf_serial_parallel.py)
+    assert _coords(c, serial) != _coords(c, three)
+    for a, b in zip(_texts(c, serial), _texts(c, three)):
+        assert _superposed_ca_rmsd(a, b) < 1.0
     single = _model(c, models=1)  # un solo modello: sempre seriale
     assert single["result"]["options"]["parallel"] is False
 
