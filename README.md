@@ -23,6 +23,9 @@ da una cartella qualsiasi o da un server. Sul computer serve solo Docker.
 3. Si apre il browser su `http://127.0.0.1:8765` (se la porta è occupata, un'altra fino alla 8800:
    [Porta occupata](Guida/1%20-%20Primo%20avvio.md#porta-occupata)). Al primo avvio inserisci la chiave di licenza di
    MODELLER in **Impostazioni → Licenze**: è gratuita per uso accademico (<https://salilab.org/modeller/>).
+4. Facoltativo, per l'analisi estesa della qualità: **PROCHECK** e **ProSA II** non sono inclusi (le loro licenze non
+   lo permettono). Si ottengono a parte e si aggiungono all'immagine:
+   [Licenze → Installare e attivare PROCHECK e ProSA](Guida/6%20-%20Licenze.md#installare-e-attivare-procheck-e-prosa).
 
 Su macOS, se il doppio clic su un avviatore scaricato da internet è bloccato, vedi
 [Primo avvio → macOS](Guida/1%20-%20Primo%20avvio.md#macos-doppio-clic-bloccato).
@@ -52,7 +55,7 @@ BioLoom/
 | [3. QMEAN e UniClust](Guida/3%20-%20QMEAN%20e%20UniClust.md) | QMEAN locale con UniClust30/UniRef30, memoria, fallback su SWISS-MODEL |
 | [4. Dati e privacy](Guida/4%20-%20Dati%20e%20privacy.md) | dove stanno i dati, pulizia, cache, che cosa lascia il computer |
 | [5. Chiavetta e server](Guida/5%20-%20Chiavetta%20e%20server.md) | copia portatile, installazione e aggiornamento su server, accesso, HTTPS, backup |
-| [6. Licenze](Guida/6%20-%20Licenze.md) | licenza MIT di BioLoom, MODELLER, ProSA II (un computer alla volta), PROCHECK e strumenti open source |
+| [6. Licenze](Guida/6%20-%20Licenze.md) | licenza MIT di BioLoom, MODELLER, installare e attivare PROCHECK e ProSA II (un computer alla volta), strumenti open source |
 
 ## Sviluppo e test
 

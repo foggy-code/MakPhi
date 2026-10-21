@@ -24,10 +24,71 @@ riceve BioLoom costruisce le immagini e ottiene le licenze per conto proprio.
   nella licenza, su un computer alla volta ([sotto](#prosa-un-computer-alla-volta)).
 - **PROCHECK:** licenza accademica, senza chiave.
 
+PROCHECK e ProSA vanno anche aggiunti all'immagine: la procedura completa è in
+[Installare e attivare PROCHECK e ProSA](#installare-e-attivare-procheck-e-prosa).
+
 Le chiavi restano in `data/licenses/` e non entrano mai nelle immagini Docker. I pacchetti PROCHECK e ProSA
 (`programma/docker/vendor/`) e le chiavi sono tuoi: non distribuirli ad altri. La copia portatile non contiene i
 pacchetti né, salvo `-ConLicenze` / `--con-licenze`, le chiavi; le sue immagini però hanno i programmi già installati
 ([Chiavetta e server](5%20-%20Chiavetta%20e%20server.md#copia-portatile-chiavetta-usb)).
+
+## Installare e attivare PROCHECK e ProSA
+
+PROCHECK e ProSA II servono all'**analisi estesa** della qualità (Ramachandran di PROCHECK, profilo e z-score di ProSA).
+BioLoom funziona anche senza: l'analisi prosegue con DOPE, mkdssp, clash e le altre misure, e lo dice. Le licenze non
+permettono di distribuirli, quindi né GitHub né la copia portatile li contengono: ognuno li ottiene per sé e li
+aggiunge alla propria immagine. I passi sono gli stessi su Windows, macOS e Linux; per il server vedi il punto 7.
+
+1. **Ottieni le licenze.**
+   - **PROCHECK:** licenza accademica gratuita, previa registrazione presso l'EBI (R. Laskowski; pagina del programma:
+     <https://www.ebi.ac.uk/thornton-srv/software/PROCHECK/>). Ricevi il pacchetto dei sorgenti, `procheck.tar.gz`;
+     non c'è nessuna chiave.
+   - **ProSA II 2003:** licenza personale da <https://prosa.services.came.sbg.ac.at>, legata all'indirizzo MAC di un
+     computer. Nella richiesta indica il MAC della scheda di rete del computer su cui userai BioLoom (su Windows
+     `getmac /v` nel Prompt dei comandi, su macOS `ifconfig en0`, su Linux `ip link`: sono sei coppie di cifre come
+     `80:b6:55:12:34:56`). Ricevi il programma, `prosa2003.linux.tar.gz`, e per email il file `LicenseDB`.
+2. **Metti i pacchetti nella cartella di BioLoom**, senza rinominarli e senza scompattarli:
+
+   | File | Cartella |
+   |---|---|
+   | `procheck.tar.gz` (deve contenere la cartella `procheck/` con i sorgenti) | `programma/docker/vendor/procheck/` |
+   | `prosa2003.linux.tar.gz` | `programma/docker/vendor/prosa/` |
+
+   Il file `LicenseDB` **non** va qui: si carica dall'interfaccia (punto 4).
+3. **Ricostruisci l'immagine.** L'avviatore non si accorge dei pacchetti nuovi (la cartella `vendor/` è fuori
+   dall'impronta del codice), quindi la ricostruzione va lanciata a mano. Dalla cartella di BioLoom, in un terminale
+   (su Windows anche in PowerShell), con Docker Desktop avviato:
+
+   ```bash
+   docker compose -f programma/launcher/compose.yml build bioloom
+   ```
+
+   La prima volta richiede qualche minuto: PROCHECK si compila dai sorgenti. Se il pacchetto di PROCHECK non si compila,
+   la costruzione si ferma con l'errore; un pacchetto assente invece viene saltato senza errori.
+4. **Carica la licenza di ProSA.** Riavvia BioLoom con l'avviatore (**R** nella sua finestra), apri Impostazioni →
+   **Licenze** e trascina il file `LicenseDB` nella scheda **ProSA II 2003**.
+5. **Riavvia ancora con l'avviatore (R).** È all'avvio che l'avviatore legge il MAC da `LicenseDB` e lo assegna al
+   container, e lega la licenza a questo computer ([sotto](#prosa-un-computer-alla-volta)).
+6. **Verifica.**
+   - Impostazioni → Licenze: la scheda **PROCHECK** dice «PROCHECK è installato»; la scheda **ProSA II 2003** mostra
+     programma, scadenza e «MAC del container … corrisponde». Se il MAC risulta «diverso», chiudi BioLoom e riaprilo con
+     l'avviatore (punto 5); se compare «ProSA non è incluso in questa immagine», il pacchetto non era al suo posto quando
+     hai ricostruito (punti 2 e 3).
+   - Impostazioni → **Strumenti** → **Verifica dell'installazione**: prova ogni strumento, PROCHECK e ProSA compresi,
+     sull'ubiquitina 1UBQ in meno di un minuto.
+   - La riga **ProSA** nella finestra dell'avviatore dice se la licenza è attiva su questo computer.
+7. **Sul server con Podman.** PROCHECK funziona come sul PC. ProSA **no**: Podman senza root non può assegnare al
+   container il MAC della licenza, e l'analisi prosegue senza ProSA. Sul server, inoltre, l'immagine non si costruisce: la
+   si costruisce sul PC con i pacchetti al loro posto e la si copia sul server come archivio
+   ([Server con Podman](5%20-%20Chiavetta%20e%20server.md#server-con-podman-senza-docker),
+   [Licenze sul server](5%20-%20Chiavetta%20e%20server.md#licenze-sul-server)).
+8. **Quando aggiorni BioLoom.** Sostituendo `programma/` con una versione nuova (da GitHub o da una copia portatile),
+   la cartella `vendor/` arriva vuota: metti da parte i due pacchetti e rimettili prima di avviare, altrimenti la
+   ricostruzione dell'immagine darà un'immagine senza PROCHECK e ProSA. Le licenze in `data/licenses/` invece restano.
+
+I pacchetti e `LicenseDB` sono tuoi: non pubblicarli e non darli ad altri. Git li ignora, e la copia portatile non
+contiene i pacchetti né, salvo `-ConLicenze` / `--con-licenze`, le chiavi; le **immagini** costruite con i pacchetti li
+contengono invece già installati, e anche loro non vanno date ad altri.
 
 ## ProSA, un computer alla volta
 

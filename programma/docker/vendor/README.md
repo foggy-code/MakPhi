@@ -1,6 +1,8 @@
 # Pacchetti con licenza
 
-Programmi con licenza accademica che l'immagine Docker compila o installa se trova qui il pacchetto.
+Programmi con licenza accademica che l'immagine Docker compila o installa se trova qui il pacchetto. La procedura
+completa per l'utente (licenze, pacchetti, ricostruzione, `LicenseDB`, verifica, server) è nella Guida:
+[Licenze → Installare e attivare PROCHECK e ProSA](../../../Guida/6%20-%20Licenze.md#installare-e-attivare-procheck-e-prosa).
 Se un pacchetto manca, la build prosegue e BioLoom mostra lo strumento come "non installato".
 
 | File | Programma | Licenza |
