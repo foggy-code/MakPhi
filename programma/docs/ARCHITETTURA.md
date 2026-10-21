@@ -2220,6 +2220,23 @@ QMEAN in `run_qmean_wrapper.py`); client in `engines/qmean_local.py`, job `qmean
     | 64 | 167 s | 2,6 s |
 
     Con 16 calcoli la memoria usata è rimasta intorno a 20 GB: gli indici stanno nella cache del sistema, condivisa.
+
+    Con 3PGK ripetuta la sequenza è sempre la stessa e dopo `0aa292a` i calcoli insieme riusano il suo profilo: la
+    tabella sopra misura soprattutto la parte di QMEAN dopo HHblits. **Dati grezzi su sequenze tutte diverse** (4.3.0,
+    2026-10-21, `scripts/benchmark_qmean.py`: modelli di 300 residui costruiti da 3IU0 con il 10 % di mutazioni e un
+    seme nuovo per modello, inviati insieme al worker con `QMEAN_PARALLEL=32`, UniRef30_2023_02; nessun profilo
+    riusato, 57 calcolati; JSON in `bench_out/tempi/server/qmean.json`):
+
+    | Calcoli insieme | Totale | Calcoli all'ora | Un calcolo (mediana, min–max) | HHblits nel worker (mediana) |
+    |---|---|---|---|---|
+    | 1 | 115 s | 31 | 115 s | 113 s |
+    | 8 | 85 s | 338 | 58 s (55–85) | 56 s |
+    | 16 | 76 s | 762 | 60 s (55–76) | 60 s |
+    | 32 | 122 s | 943 | 97 s (66–122) | 95 s |
+
+    HHblits con 7 processori ciascuno è quasi tutto il tempo di un calcolo. Il primo calcolo (115 s) trova il database
+    freddo nella cache del sistema; con 8 e 16 calcoli un calcolo costa circa 58–60 s, a 32 (7 × 32 = 224 processori,
+    tutti quelli del server) sale a 97 s, ma il rendimento continua a crescere: circa 940 sequenze nuove all'ora.
   - **Profili riusati (`QMEAN_PROFILE_CACHE_GB`, predefinito 10, 100 sul server):** HHblits dipende solo dalla sequenza. Il wrapper
     avvolge `run_qmean._seqanno`: prima della ricerca copia `<md5 della sequenza>.a3m` dalla cartella del database in
     `/cache/profiles` (il nome cambia se l'indice degli a3m cambia), dopo salva il profilo nuovo con una scrittura
