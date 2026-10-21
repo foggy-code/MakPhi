@@ -212,7 +212,12 @@ def test_runtime_model_matches_the_measurements():
     assert rules.modeling_seconds(76, 3, "fast", "best", False) == pytest.approx(9.13, rel=0.05)
     for level, measured in (("very_fast", 1.84), ("fast", 5.31), ("normal", 7.26), ("thorough", 19.87)):
         assert rules.building_seconds(76, 2, level) == pytest.approx(measured, rel=0.05), level
-    assert rules.building_seconds(304, 1, "fast") == pytest.approx(11.25, rel=0.05)
+    # oltre i 76 residui: misure ripetute sul portatile (template 3IU0, mediane di 3; scripts/benchmark_tempi.py)
+    for residues, models, measured in ((300, 1, 15.0), (300, 2, 27.0), (600, 1, 48.0), (600, 2, 87.0),
+                                       (1000, 1, 102.0), (1000, 2, 212.0)):
+        assert rules.building_seconds(residues, models, "fast") == pytest.approx(measured, rel=0.15), residues
+    # sul server, più lento del 17 % (stesse lunghezze): un modello di 4000 residui in 1945 s
+    assert rules.building_seconds(4000, 1, "fast") * 1.2 == pytest.approx(1945, rel=0.15)
     # quattro livelli distinti, nell'ordine (prima "normal" e "fast" erano la stessa ottimizzazione)
     times = [rules.building_seconds(76, 5, level) for level in ("very_fast", "fast", "normal", "thorough")]
     assert times == sorted(times) and len(set(times)) == 4
@@ -228,6 +233,11 @@ def test_runtime_checks_and_timeout():
     assert [c["code"] for c in out] == ["estimated_time"] and "circa 14 s (da 7 s a 28 s)" in out[0]["message"]
     risky = rules.runtime_checks(est, process_seconds=3700, timeout_seconds=7200)
     assert [c["code"] for c in risky] == ["estimated_time", "timeout_risk"]
+    # un job lungo arriva all'avviso con il timeout predefinito (120 minuti): 5 modelli di 5000 residui sono più di 2 ore
+    # di costruzione; con la stima lineare di prima erano 13 minuti e l'avviso non scattava
+    long = rules.building_seconds(5000, 5, "fast")
+    assert long > 2 * 3600
+    assert "timeout_risk" in [c["code"] for c in rules.runtime_checks(est, process_seconds=long, timeout_seconds=7200)]
     assert rules.fmt_seconds(45) == "45 s" and rules.fmt_seconds(3 * 60) == "3 min"
     assert rules.fmt_seconds(80 * 60) == "1 h 20 min" and rules.fmt_seconds(5 * 86400) == "5 giorni"
 

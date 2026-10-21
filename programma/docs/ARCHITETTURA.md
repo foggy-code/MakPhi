@@ -1951,7 +1951,7 @@ template, limiti.
 | Limite | Valore | Motivo |
 |---|---|---|
 | Catene | da 2 a 12 | omo-oligomeri comuni fino ai dodecameri; oltre (capsidi, ferritine a 24 catene) una sequenza per catena non è pratica, e l'analisi delle interfacce cresce con le coppie di catene a contatto (fino a 66) |
-| Residui in tutto | 3000 | tempo di MODELLER per modello misurato in crescita un po' più che lineare con i residui (tabella sotto): con 3000 residui 5 modelli "accurati" (3–5 volte più lenti del "rapido") restano nel timeout predefinito dei job (120 min), con 5000 (il limite di una catena singola) no |
+| Residui in tutto | 3000 | tempo di MODELLER per modello in crescita più che lineare con i residui (misure ripetute fino a 4000 residui, 4.3.0: § Prestazioni, «Tempo di costruzione e lunghezza»): sul server un modello "rapido" di 3000 residui costa circa 576 s e le restrizioni altri 440 s, quindi già 5 modelli "rapidi" (~50 min) restano nel timeout predefinito dei job (120 min) ma 5 "accurati" (~3,3 ore) no: i controlli preventivi lo dicono (`timeout_risk`) |
 
 **Allineamento per catena** (`modeller.build_complex_alignment_script`, `complexes.merge_chain_alignments`): `align2d` di
 ogni catena del bersaglio sul segmento FIRST:X–LAST:X della sua catena del template; le righe si uniscono con '/', che

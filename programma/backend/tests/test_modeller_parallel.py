@@ -61,7 +61,8 @@ def test_estimates_with_parallel_lanes():
     assert rules.building_seconds(415, 8, "fast", lanes=1) == serial
     parallel = rules.building_seconds(415, 8, "fast", lanes=8)
     # un giro di modelli invece di 8, più l'avvio dei worker
-    assert parallel == pytest.approx(serial - 7 * 415 / 76 * rules.T_MODEL + rules.T_WORKERS)
+    model = rules.T_MODEL * rules.growth(415 / 76, rules.MODEL_QUADRATIC)
+    assert parallel == pytest.approx(serial - 7 * model + rules.T_WORKERS)
     assert rules.building_seconds(415, 8, "fast", lanes=3) > parallel  # 3 giri
     assert rules.modeling_seconds(76, 5, "fast", "best", True) == pytest.approx(13.89, rel=0.05)  # come prima
 
