@@ -291,11 +291,11 @@ create_env() {
 remove_containers() {  # ferma e rimuove i container, aspettando che il nome si liberi davvero: con Podman 2.2.1
   # "rm -f" su un container ancora in arresto (BioLoom acceso, azione aggiorna) falliva in silenzio e il "run"
   # successivo trovava il nome occupato, lasciando BioLoom spento
-  local name n
+  local name
   for name in bioloom-qmean bioloom; do
     "$PODMAN" container inspect "$name" >/dev/null 2>&1 || continue
     "$PODMAN" stop -t 30 "$name" >/dev/null 2>&1 || true
-    for n in 1 2 3 4 5 6 7 8 9 10; do
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
       "$PODMAN" rm -f "$name" >/dev/null 2>&1 || true
       "$PODMAN" container inspect "$name" >/dev/null 2>&1 || break
       sleep 1

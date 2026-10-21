@@ -62,9 +62,13 @@ def test_cancel_marks_the_waiting_items_at_once_without_starting_them(client, mo
     started: list[int] = []
 
     def slow(ctx, p, item, prepared=None):
+        # in esecuzione finché la pipeline non viene annullata (ctx.check solleva JobCancelled): con un limite di
+        # tempo un elemento poteva finire senza stato finale prima dell'annullamento, su una macchina con pochi core
+        # (un elemento alla volta), e restare "running"
         started.append(item["idx"])
         core.pipeline._update(ctx.job_id, item["idx"], status="running", stage="Prova")
-        for _ in range(200):
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
             ctx.check()
             time.sleep(0.02)
 
@@ -74,7 +78,7 @@ def test_cancel_marks_the_waiting_items_at_once_without_starting_them(client, mo
                                            "templates": [{"id": "T1", "chains": ["A"]}]})
     assert r.status_code == 200, r.text
     job_id = r.json()["id"]
-    until(lambda: len(started) >= 2)
+    until(lambda: len(started) >= 1)
     assert client.post(f"/api/jobs/{job_id}/cancel").status_code == 200
     assert wait_job(client, job_id)["status"] == "cancelled"
     counts = client.get(f"/api/pipeline/{job_id}/items").json()["counts"]
