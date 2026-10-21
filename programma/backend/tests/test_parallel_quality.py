@@ -379,6 +379,9 @@ def test_step_logs_carry_the_step_prefix(manager, ubq_path, monkeypatch):
 @requires_modeller
 def test_quality_all_in_parallel_matches_serial(client_with_ubq, monkeypatch):
     c = client_with_ubq
+    # job paralleli fissi: con il predefinito (core − 1) su una macchina a 2 core, come i runner di GitHub dei
+    # repository privati, le analisi andrebbero comunque in serie
+    c.put("/api/settings", json={"max_workers": 3})
     body = {"target": {"name": "yeast_ub", "sequence": YEAST_UB}, "templates": [{"id": "1UBQ", "chains": ["A"]}],
             "options": {"models": 3, "refinement": "very_fast"}, "quality": "all", "extended_quality": True}
 
