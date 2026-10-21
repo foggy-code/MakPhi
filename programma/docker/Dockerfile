@@ -29,7 +29,7 @@
 #     riga; in *_SHA256 lo SHA-256 del tar non compresso: `curl -fsSL <URL del RUN> | gzip -dc | sha256sum`
 # poi una costruzione completa (e le versioni nuove in THIRD_PARTY_NOTICES.md).
 
-ARG BIOLOOM_VERSION=4.3.0
+ARG BIOLOOM_VERSION=4.3.1
 
 # Immagini di base per digest dell'indice multi-architettura: node:22-slim (Node.js 22.23.3, Debian 12) e ubuntu:24.04
 # (24.04.5 del 2026-09-17). Il tag resta nel commento e non davanti al digest: Podman 2.2.1 (bioloom-podman.sh)

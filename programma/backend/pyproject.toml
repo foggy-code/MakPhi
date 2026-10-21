@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bioloom"
-version = "4.3.0"
+version = "4.3.1"
 description = "BioLoom v4 - suite per la modellazione di proteine per omologia"
 license = "MIT"
 requires-python = ">=3.10"
