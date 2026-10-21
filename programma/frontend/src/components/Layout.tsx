@@ -236,7 +236,7 @@ export function Layout() {
               <Icon name="star" size={14} /> <span className="shell-label">Progetti</span>
             </button>
           </div>
-          <button type="button" className="search-trigger" onClick={() => setSearchOpen(true)} title="Ricerca globale" aria-label="Ricerca globale">
+          <button type="button" className="search-trigger" onClick={() => setSearchOpen(true)} title="Ricerca globale">
             <Icon name="search" size={14} />
             <span>Cerca progetti, job, template…</span>
             <kbd>{MAC ? "⌘" : "Ctrl"} K</kbd>

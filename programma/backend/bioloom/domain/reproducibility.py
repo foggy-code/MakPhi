@@ -21,6 +21,7 @@ rapporto della riesecuzione). La lettura e la scrittura dei file sono in service
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import math
 import re
@@ -107,9 +108,10 @@ COORD_TOLERANCE = 0.002
 # SCORE_ABS = 0,001 vale per i valori vicini allo zero (z-score, frazioni).
 SCORE_ABS = 1e-3
 SCORE_REL = 1e-6
-# Campi dei risultati che non dipendono dal calcolo: provenienza dalla cache dei calcoli, durata dei passi e numero
-# di thread (OpenMM). Non entrano nel confronto.
-IGNORED_KEYS = frozenset({"cached", "cached_at", "timings", "threads"})
+# Campi dei risultati che non dipendono dal calcolo: provenienza dalla cache dei calcoli, durata dei passi, numero
+# di thread (OpenMM) e numero di worker della modalità parallela di MODELLER (dipende dai core liberi; i modelli
+# dipendono solo dalla modalità, registrata nelle opzioni). Non entrano nel confronto.
+IGNORED_KEYS = frozenset({"cached", "cached_at", "timings", "threads", "modeller_workers"})
 # Testo che cambia a ogni esecuzione senza dipendere dal calcolo: data e ora che MODELLER scrive nella riga EXPDTA dei
 # modelli («EXPDTA THEORETICAL MODEL, MODELLER 10.8 2026/10/01 08:19:38»), riprese dal rapporto di qualità nel metodo
 # della struttura. Misurato rieseguendo lo stesso job (modellazione con la qualità estesa, analisi di qualità con
@@ -296,13 +298,55 @@ def sha256(data: bytes) -> str:
 
 
 def manifest_digest(manifest: dict) -> str:
-    """SHA-256 del manifest senza il campo `manifest_sha256`."""
-    return sha256(canonical({k: v for k, v in manifest.items() if k != "manifest_sha256"}))
+    """SHA-256 del manifest senza i campi `manifest_sha256` e `signature`."""
+    return sha256(canonical({k: v for k, v in manifest.items() if k not in ("manifest_sha256", "signature")}))
 
 
 def seal(manifest: dict) -> dict:
     """Manifest con la sua impronta: una modifica successiva (parametri, checksum, tipo di job) si riconosce."""
     return {**manifest, "manifest_sha256": manifest_digest(manifest)}
+
+
+# ------------------------------------------------------------------------------------------ firma (facoltativa)
+# `manifest_sha256` garantisce l'integrità (una modifica si riconosce) ma non l'autenticità: chi modifica il manifest
+# può ricalcolarlo. Con una chiave segreta nella cartella delle licenze (services/reproducibility.SIGNING_KEY_FILE) il
+# manifest riceve anche una firma HMAC-SHA256 (RFC 2104) dell'impronta: solo chi ha la stessa chiave può produrla o
+# verificarla. È una firma simmetrica: serve a un gruppo che condivide la chiave (laboratorio, server comune), non a
+# dimostrare l'autore a terzi. `key_id` riconosce la chiave senza rivelarla.
+SIGNATURE_ALGORITHM = "HMAC-SHA256"
+MIN_SIGNING_KEY = 16  # caratteri: una chiave più corta si indovina
+
+
+def signing_key_id(key: bytes) -> str:
+    return sha256(b"bioloom-manifest-key\0" + key)[:16]
+
+
+def sign(manifest: dict, key: bytes) -> dict:
+    """Manifest sigillato (`seal`) con la firma della sua impronta."""
+    value = hmac.new(key, manifest["manifest_sha256"].encode("ascii"), hashlib.sha256).hexdigest()
+    return {**manifest, "signature": {"algorithm": SIGNATURE_ALGORITHM, "key_id": signing_key_id(key), "value": value}}
+
+
+def signature_check(manifest: dict, key: Optional[bytes]) -> Optional[dict]:
+    """Esito della firma per l'anteprima ({level, code, message}), None se non c'è firma né chiave."""
+    sig = manifest.get("signature")
+    if sig is None:
+        if key is None:
+            return None
+        return {"level": "warning", "code": "rerun_unsigned",
+                "message": "Pacchetto non firmato, mentre questa installazione firma i suoi: l'integrità è verificata "
+                           "(impronta SHA-256), la provenienza no."}
+    if key is None or sig.get("key_id") != signing_key_id(key):
+        return {"level": "warning", "code": "rerun_signature_unverified",
+                "message": f"Pacchetto firmato con una chiave che qui non c'è (identificativo {sig.get('key_id')}): "
+                           "la firma non si può verificare."}
+    expected = hmac.new(key, str(manifest.get("manifest_sha256")).encode("ascii"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, str(sig.get("value"))):
+        return {"level": "error", "code": "package_signature_invalid",
+                "message": "Firma del manifest non valida: il pacchetto è stato modificato o firmato da altri con "
+                           "un identificativo di chiave copiato. Usa il pacchetto originale."}
+    return {"level": "info", "code": "rerun_signature_valid",
+            "message": f"Firma del manifest verificata (chiave {sig['key_id']})."}
 
 
 def _need(cond: bool, message: str) -> None:
@@ -372,6 +416,10 @@ def validate_manifest(data: Any) -> dict:
         raise _error("package_manifest_altered", "Il manifest del pacchetto è stato modificato dopo l'esportazione "
                                                  "(impronta SHA-256 non corrispondente): parametri, checksum o versioni "
                                                  "non sono più quelli registrati da BioLoom. Usa il pacchetto originale.")
+    sig = data.get("signature")
+    _need(sig is None or (isinstance(sig, dict) and sig.get("algorithm") == SIGNATURE_ALGORITHM
+                          and isinstance(sig.get("key_id"), str) and isinstance(sig.get("value"), str)
+                          and bool(_SHA256.match(sig["value"]))), "firma non valida nella forma")
     job = data.get("job")
     _need(isinstance(job, dict), "manca la sezione job")
     _need(isinstance(job.get("kind"), str) and bool(job.get("kind")), "manca il tipo del job")
@@ -380,6 +428,7 @@ def validate_manifest(data: Any) -> dict:
     _need(isinstance(data.get("bioloom"), dict) and isinstance(data["bioloom"].get("version"), str),
           "manca la versione di BioLoom")
     _need(_optional(data["bioloom"].get("image"), str), "bioloom.image non è un testo")
+    _need(_optional(data["bioloom"].get("fingerprint"), str), "bioloom.fingerprint non è un testo")
     _need(isinstance(data.get("environment"), dict), "manca la sezione environment")
     _check_shapes(data)
     files = data.get("files")
@@ -695,7 +744,7 @@ def compare_file(path: str, original: bytes, rerun: Optional[bytes]) -> dict:
             diff = compare_text(na, nb)
         else:
             if _without_ignored(ja) == _without_ignored(jb):
-                return {**out, "status": "identical", "detail": "uguale a parte durata dei passi, thread e cache"}
+                return {**out, "status": "identical", "detail": "uguale a parte durata dei passi, thread, worker e cache"}
             diff = compare_values(ja, jb)
     else:
         diff = compare_text(na, nb)
@@ -793,6 +842,12 @@ def environment_warnings(packaged: dict, current: dict) -> list[dict]:
                     "message": f"Il pacchetto è stato creato con BioLoom {pb.get('version')}, la riesecuzione usa "
                                f"BioLoom {cb.get('version')}: script, analisi e avvisi possono cambiare e i risultati "
                                "differire."})
+    elif isinstance(pb.get("fingerprint"), str) and isinstance(cb.get("fingerprint"), str) \
+            and pb["fingerprint"] != cb["fingerprint"]:
+        out.append({"code": "rerun_version_code",
+                    "message": f"Stessa versione di BioLoom ({pb.get('version')}) ma codice diverso: impronta "
+                               f"{pb['fingerprint'][:12]}… nel pacchetto, {cb['fingerprint'][:12]}… qui. Script, "
+                               "analisi e avvisi possono cambiare e i risultati differire."})
     if pb.get("image") and cb.get("image") and pb.get("image") != cb.get("image"):
         out.append({"code": "rerun_version_image",
                     "message": f"Immagine Docker diversa: {pb.get('image')} nel pacchetto, {cb.get('image')} qui."})
@@ -850,6 +905,7 @@ def readme_text(manifest: dict) -> str:
         f"Calcolo: {KIND_LABEL.get(kind, kind)} «{job.get('title') or job['id']}» (job {job['id']}),",
         f"concluso il {job.get('finished_at') or '?'} con BioLoom {env.get('version')}"
         + (f" (immagine {env['image']})" if env.get("image") else "") + ".",
+        *([f"Impronta del codice: {env['fingerprint']}."] if env.get("fingerprint") else []),
         f"Pacchetto creato il {manifest.get('created_at')}.",
         "",
         "Contenuto",

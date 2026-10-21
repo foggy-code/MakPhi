@@ -104,7 +104,14 @@ class PipelineService:
     # ------------------------------------------------------------------------------ sottomissione
     def submit(self, params: dict, project_id: Optional[str]) -> dict:
         records = self.validate(params)
-        stored = {**params, "sequences": [{"name": r.name, "length": len(r.sequence)} for r in records]}
+        from ..engines import modeller
+
+        # modalità di MODELLER scritta nei parametri: una ripresa costruisce gli elementi rimanenti come i primi
+        # anche se il predefinito cambia (`options_for_run`)
+        raw = params.get("options") or {}
+        options = {**raw, "parallel": modeller.parse_options(raw).parallel}
+        stored = {**params, "options": options,
+                  "sequences": [{"name": r.name, "length": len(r.sequence)} for r in records]}
         if is_cross(params):
             # M × N: elemento idx = sequenza × N + template (`pair_of`), in ordine di sequenza
             labels = template_labels(params.get("templates") or [])
@@ -297,6 +304,9 @@ class PipelineService:
             f"SELECT COUNT(*) FROM pipeline_items WHERE job_id=? AND status IN ({','.join('?' * len(PROCESSED_ITEM))})",
             (ctx.job_id, *PROCESSED_ITEM)))
         parallel = effective_parallel(p, ctx.settings.effective_workers())
+        p, mode_note = options_for_run(p, resumed=already > 0)
+        if mode_note:
+            ctx.log(mode_note)
         cross = is_cross(p)
         unit = _models if cross else _seqs
         noun = "modelli" if cross else "sequenze"
@@ -558,7 +568,9 @@ class PipelineService:
                     "grade_score": q.get("grade_score"), "rama_favored": q.get("rama_favored"),
                     "clashscore": q.get("clashscore"),
                     "metrics": {"zdope": best_model.get("zdope"), "molpdf": best_model.get("molpdf"),
-                                "models": len(res["models"]), **q, **search_info, **af_info,
+                                "models": len(res["models"]),
+                                "modeller_parallel": bool((res.get("options") or {}).get("parallel")),
+                                **q, **search_info, **af_info,
                                 # M × N: lo zDOPE resta quello di MODELLER, il criterio del migliore della sequenza
                                 **({"zdope": best_model.get("zdope")} if cross and best_model.get("zdope") is not None
                                    else {})},
@@ -1098,6 +1110,21 @@ def max_templates(params: dict) -> int:
         raise AppError(f"Numero di template complementari non valido: {value!r} (da 2 a "
                        f"{template_rank.MAX_TEMPLATES_LIMIT}).")
     return number
+
+
+def options_for_run(params: dict, resumed: bool) -> tuple[dict, Optional[str]]:
+    """Parametri con la modalità di MODELLER per questa esecuzione e, se serve, la nota per il log.
+
+    Le pipeline create prima della modalità parallela (12 ottobre 2026, 4.3.0) non la hanno nelle opzioni: i loro
+    elementi sono stati costruiti in serie. Riprese, senza questa correzione costruirebbero i rimanenti in parallelo
+    (il predefinito di oggi), che con lo stesso seme dà modelli diversi: la pipeline mescolerebbe le due modalità.
+    Si resta in serie, come la riesecuzione dei pacchetti di allora (services/reproducibility.rerun_params)."""
+    options = params.get("options") if isinstance(params.get("options"), dict) else {}
+    if "parallel" in options or not resumed:
+        return params, None
+    return ({**params, "options": {**options, "parallel": False}},
+            "Pipeline creata prima della modalità parallela di MODELLER: gli elementi rimanenti si costruiscono in "
+            "serie come quelli già conclusi, così con lo stesso seme tutti i modelli restano confrontabili.")
 
 
 def effective_parallel(params: dict, workers: int) -> int:

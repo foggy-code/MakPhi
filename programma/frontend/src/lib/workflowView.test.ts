@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SearchHit, TemplateItem } from "../api/types";
 import {
   compositionParts, compositionRows, hitTracks, numberedSequence, optionsSummary, rankContributions, residueRanges, resolutionNote, resolutionTone,
-  ssLabel, ssParts, stepSummary, templateLabel, templateMatches, uniprotCommentLabel,
+  remoteSearchNotice, ssLabel, ssParts, stepSummary, templateLabel, templateMatches, uniprotCommentLabel,
 } from "./workflowView";
 import { defaultOptions, initialState, withAlignJob, withModelJob, withPirDoc, withSearchJob, withTarget, withTemplates } from "./wizard";
 
@@ -130,5 +130,15 @@ describe("riepilogo della procedura guidata", () => {
     const o = defaultOptions();
     expect(optionsSummary(o)).toBe("5 modelli · Rapido · qualità sul migliore con PROCHECK e ProSA");
     expect(optionsSummary({ ...o, models: 1, quality: "none", ligands: true }, true)).toBe("1 modello · Rapido · senza analisi di qualità · ligandi trasferiti · ritaglio pLDDT < 70");
+  });
+});
+
+describe("avviso dei motori remoti", () => {
+  it("RCSB e NCBI ricevono la sequenza, i motori locali no", () => {
+    expect(remoteSearchNotice("rcsb")).toContain("inviata a RCSB PDB");
+    expect(remoteSearchNotice("ncbi")).toContain("inviata a NCBI");
+    expect(remoteSearchNotice("local")).toBeNull();
+    expect(remoteSearchNotice("mmseqs")).toBeNull();
+    expect(remoteSearchNotice("alphafold")).toBeNull(); // ha il suo avviso (EBI, NCBI)
   });
 });

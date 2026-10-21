@@ -205,6 +205,16 @@ export const ENGINE_LABEL: Record<SearchEngine, string> = {
   rcsb: "RCSB PDB", ncbi: "NCBI BLAST", local: "BLAST+ locale", mmseqs: "MMseqs2 locale", alphafold: "AlphaFold DB",
 };
 
+/**
+ * Avviso di privacy sotto la scelta del motore: RCSB (il predefinito) e NCBI ricevono la sequenza. AlphaFold DB ha già
+ * il suo avviso (accessione a EBI, sequenze senza accessione a NCBI); i motori locali non inviano nulla.
+ */
+export function remoteSearchNotice(engine: SearchEngine): string | null {
+  const service = engine === "rcsb" ? "RCSB PDB" : engine === "ncbi" ? "NCBI" : null;
+  if (!service) return null;
+  return `La sequenza viene inviata a ${service}, un servizio esterno. Per sequenze riservate usa BLAST+ o MMseqs2 locale (Impostazioni → Database), che non escono dal computer.`;
+}
+
 export const REFINEMENT_LABEL: Record<Refinement, string> = { very_fast: "Rapidissimo", fast: "Rapido", normal: "Standard", thorough: "Accurato" };
 
 const QUALITY_TEXT: Record<WizardOptions["quality"], string> = { best: "qualità sul migliore", all: "qualità su tutti", none: "senza analisi di qualità" };

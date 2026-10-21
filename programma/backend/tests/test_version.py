@@ -87,6 +87,16 @@ def test_versione_compose(versione):
     assert re.match(r"(- )?BIOLOOM_VERSION\b", righe[righe.index("args:") + 1])
 
 
+def test_versione_citazione_e_zenodo(versione):
+    # nella radice del repository: assenti nei test nel container, dove è montata solo programma/
+    cff, zenodo = PROGRAMMA.parent / "CITATION.cff", PROGRAMMA.parent / ".zenodo.json"
+    if not cff.is_file() or not zenodo.is_file():
+        pytest.skip("CITATION.cff o .zenodo.json assenti (solo programma/ montata)")
+    assert re.findall(r'^version:\s*"([^"]*)"', cff.read_text(encoding="utf-8"), re.M) == [versione]
+    metadati = json.loads(zenodo.read_text(encoding="utf-8"))
+    assert metadati["version"] == versione and metadati["license"] == "MIT"
+
+
 def test_server_env_senza_versione(versione):
     # la versione è sempre quella di VERSION: un BIOLOOM_VERSION nell'esempio la farebbe sembrare configurabile
     assert not re.search(r"^\s*BIOLOOM_VERSION\s*=", _testo("launcher/server.env.example"), re.M)

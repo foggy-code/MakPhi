@@ -14,11 +14,16 @@ programma/docker/vendor/**/*.tar
 __pycache__/
 *.pyc
 .pytest_cache/
+# copertura dei test (pytest --cov, npm run coverage)
+.coverage
+.coverage.*
+.coverage-*.json
 *.egg-info/
 
 # frontend
 programma/frontend/node_modules/
 programma/frontend/dist/
+programma/frontend/.playwright/
 
 # editor / sistema
 .vscode/

@@ -25,6 +25,7 @@ import threading
 from typing import Optional
 
 from .. import __version__
+from ..core.fingerprint import code_fingerprint
 from ..core.jobs import default_env
 from . import tools
 
@@ -134,5 +135,7 @@ def environment(keys: list[str], modeller_python: str = "") -> dict:
 
 
 def bioloom() -> dict:
-    """Versione di BioLoom e dell'immagine Docker (vuota fuori dal container)."""
-    return {"version": __version__, "image": os.environ.get("BIOLOOM_IMAGE_VERSION") or None}
+    """Versione di BioLoom, dell'immagine Docker e impronta del codice (core/fingerprint.py); le ultime due sono
+    vuote fuori dal container."""
+    return {"version": __version__, "image": os.environ.get("BIOLOOM_IMAGE_VERSION") or None,
+            "fingerprint": code_fingerprint()}

@@ -47,17 +47,30 @@ PLDDT_TRIM_MOST = 0.5
 
 # ---------------------------------------------------------------------------------------------- tempi
 # Tempi misurati (ARCHITETTURA.md, Prestazioni; container di test, Intel i3-1115G4 con 4 CPU logiche): ubiquitina di
-# lievito (76 residui) su 1UBQ, raffinamento "fast", secondi. Il costo della costruzione dei modelli cresce con i
-# residui: le restrizioni e le coppie non legate che MODELLER ottimizza sono entro distanze di taglio fisse, quindi in
-# numero proporzionale ai residui. Misurato (`test_preflight_calibration`, 1 modello "fast"): 0,0386 s per residuo con
-# 76 residui, 0,0369 con 152, 0,0370 con 304: la stima è lineare.
+# lievito (76 residui) su 1UBQ, raffinamento "fast", secondi. Il costo della costruzione cresce più che linearmente con
+# i residui (4.3.0): fino a 300 residui sembra lineare, oltre no. Misure ripetute (scripts/benchmark_tempi.py e
+# analisi_tempi.py, 3 ripetizioni per punto, coefficiente di variazione sotto il 6 %; dati in bench_out/tempi): sul server
+# (christopher, 100–5000 residui, template 3IU0 ripetuto) un modello costa 5 s a 100 residui, 131 s a 1000, 439 s a 2000,
+# 1945 s a 4000, 3328 s a 5000, cioè ~L^1,5 per modello e ~L^2 per le restrizioni nella media, con la pendenza che cresce
+# ancora con la lunghezza; una legge di potenza adattata su tutto l'intervallo sbaglia del 25 % a 4000 residui. Il modello che le
+# segue entro ±16 % è lineare più quadratico, (1 − β)·s + β·s² con s = residui / 76 (coppie di atomi entro le distanze di
+# taglio, più termini che crescono con le coppie di residui): a 76 residui vale 1, così le costanti misurate qui sotto
+# restano quelle. β viene dal fit sul server (minimi quadrati sugli errori relativi, coefficienti non negativi, 12
+# lunghezze × 1 e 2 modelli) riportato alla velocità del portatile, che sulle lunghezze in comune (300, 600, 1000) è più
+# veloce del 17 %: restrizioni 0,42 (0,193·s² su 0,46), modello 0,132 (0,303·s² su 2,29). Errore sulle mediane fra −17 %
+# e +17 %; oltre 4000 residui le restrizioni crescono ancora più in fretta (a 5000, con un modello, la stima è il 17 %
+# sotto la misura), sempre dentro l'intervallo da metà al doppio che si mostra (ESTIMATE_SPREAD).
 REFERENCE_RESIDUES = 76
 T_PREPARE = 0.02  # preparazione del template
 T_ALIGN = 0.34  # script di allineamento (align2d)
 T_STARTUP = 0.26  # avvio di MODELLER e lettura dell'allineamento
 T_RESTRAINTS = 0.46  # restrizioni: modello 1 (2,75 s) meno un modello successivo (2,29 s)
 T_MODEL = 2.29  # ogni modello, raffinamento "fast"
-T_WORKERS = 2.0  # avvio dei worker della modalità parallela di MODELLER (processi e connessioni)
+RESTRAINTS_QUADRATIC = 0.42  # quota quadratica delle restrizioni a 76 residui (β)
+MODEL_QUADRATIC = 0.132  # quota quadratica di un modello a 76 residui (β)
+# avvio dei worker della modalità parallela di MODELLER (processi e connessioni): misurato sul server, m modelli con m
+# worker (2, 4, 8 a 300 residui; 4 a 1000) costano 1–2 s più di un modello in serie alla stessa lunghezza
+T_WORKERS = 2.0
 T_QUALITY = 1.22  # analisi di qualità di un modello (DOPE, mkdssp, PROCHECK, ProSA in parallelo)
 T_QUALITY_BASIC = 1.23  # analisi di un elemento di pipeline (senza PROCHECK e ProSA)
 QUALITY_MODELS_PARALLEL = 3  # come services/compute.QUALITY_MODELS_PARALLEL
@@ -382,7 +395,13 @@ def building_seconds(residues: int, models: int, refinement: str = "fast", lanes
     lanes = max(1, min(int(lanes), models))
     rounds = math.ceil(models / lanes)
     return (T_STARTUP + (T_WORKERS if lanes > 1 else 0.0)
-            + scale * (T_RESTRAINTS + rounds * T_MODEL * REFINEMENT_FACTOR.get(refinement, 1.0)))
+            + T_RESTRAINTS * growth(scale, RESTRAINTS_QUADRATIC)
+            + rounds * T_MODEL * REFINEMENT_FACTOR.get(refinement, 1.0) * growth(scale, MODEL_QUADRATIC))
+
+
+def growth(scale: float, quadratic: float) -> float:
+    """Costo relativo a `scale` volte i residui di riferimento: (1 − β)·s + β·s², 1 a 76 residui."""
+    return (1.0 - quadratic) * scale + quadratic * scale * scale
 
 
 def modeling_lanes(models: int, workers: int, parallel: bool = True) -> int:
@@ -394,8 +413,9 @@ def modeling_lanes(models: int, workers: int, parallel: bool = True) -> int:
 
 
 MODELING_BASIS = ("Stima dai tempi misurati su un portatile a 4 CPU logiche (Intel i3-1115G4, ubiquitina di 76 "
-                  "residui), lineare nei residui: su un altro computer, in emulazione x86 o con altri calcoli in "
-                  "corso può variare di un fattore 2.")
+                  "residui) e da misure ripetute fino a 4000 residui: il tempo cresce più che linearmente con i "
+                  "residui. Su un altro computer, in emulazione x86 o con altri calcoli in corso può variare di un "
+                  "fattore 2.")
 SEARCH_BASIS = ("Tempi tipici del motore: MMseqs2 misurato (2,3 s con l'indice locale, 12 s senza), NCBI BLAST da 1 a 5 "
                 "minuti, RCSB, BLAST+ e AlphaFold DB con l'accessione pochi secondi.")
 

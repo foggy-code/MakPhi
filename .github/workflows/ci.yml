@@ -2,7 +2,8 @@
 # - backend: versione unica (programma/scripts/versione.sh), impronta del codice uguale in sh e in PowerShell
 #   (docker/impronta.sh, launcher/impronta.ps1), lint e test rapidi in Python puro (senza MODELLER né strumenti
 #   esterni: quei test vengono saltati)
-# - frontend: eslint, typecheck, test e build dell'interfaccia
+# - frontend: eslint, typecheck, test con la copertura (riepilogo del job) e build dell'interfaccia
+# - dipendenze: vulnerabilità note (pip-audit sui lock del backend, npm audit sulle dipendenze di produzione)
 # - avviatori: shellcheck sugli script sh (livello warning), PSScriptAnalyzer sugli script PowerShell (solo errori) e
 #   bit di esecuzione dei file .sh e .command nel repository
 # - docker: costruzione dell'immagine completa e test al suo interno, come programma/scripts/test.sh in locale; l'immagine ha
@@ -10,9 +11,12 @@
 #   quindi qui girano anche i test di tasche, elettrostatica e rifinitura, saltati nel job backend.
 #   PROCHECK e ProSA (pacchetti con licenza) non sono nel repository: l'immagine della CI ne è priva.
 #   La chiave di MODELLER, se configurata come secret MODELLER_KEY, abilita i test di MODELLER.
+#   I test nell'immagine misurano anche la copertura del backend (pytest-cov): il totale va nel riepilogo del job.
 #   L'impronta salvata nell'immagine (/app/IMPRONTA) deve essere quella del codice da cui è costruita.
 #   Poi l'avviatore vero (avvio, salute, arresto) e la copia portatile (prepara), avviata dal file in immagini/ dopo
-#   aver tolto l'immagine da Docker.
+#   aver tolto l'immagine da Docker, e l'avviatore dei server senza compose (launcher/bioloom-podman.sh) con il Podman
+#   del runner, senza root. Infine l'interfaccia servita da BioLoom in Chromium (Playwright): ogni pagina in tema scuro
+#   e chiaro senza errori in console e senza violazioni WCAG 2.1 gravi secondo axe-core (frontend/e2e/).
 # - qmean: solo a mano (Run workflow con "qmean"), costruzione dell'immagine bioloom-qmean e prova del worker.
 # Le GitHub Actions sono fissate per SHA completo del commit, con il tag nel commento: un tag spostato non cambia il
 # codice che gira qui. Le aggiorna Dependabot (.github/dependabot.yml), che riscrive SHA e commento insieme; a mano:
@@ -84,8 +88,41 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm run lint
       - run: npm run typecheck
-      - run: npm test
+      - run: npm run coverage
+      - name: Copertura dei test del frontend (riepilogo)
+        run: |
+          node -e '
+            const t = require("./.coverage/coverage-summary.json").total;
+            const riga = (n, k) => `| ${n} | ${t[k].pct}% | ${t[k].covered} / ${t[k].total} |`;
+            console.log(["### Copertura del frontend (vitest, v8)", "", "| | % | coperte / totali |", "|---|---|---|",
+              riga("Righe", "lines"), riga("Rami", "branches"), riga("Funzioni", "functions")].join("\n"));
+          ' >> "$GITHUB_STEP_SUMMARY"
       - run: npx vite build
+
+  dipendenze:
+    # vulnerabilità note nelle dipendenze che finiscono nell'immagine: i lock del backend (pip-audit, banca dati PyPA
+    # e OSV) e le dipendenze di produzione dell'interfaccia (npm audit, livello alto o critico). Le dipendenze di
+    # sviluppo del frontend (vitest e simili) non entrano nell'immagine: il loro rapporto si stampa e basta.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: pip-audit (requirements.lock e requirements-tools.lock)
+        run: |
+          pip install "pip-audit==2.10.1"
+          pip-audit --progress-spinner off --no-deps --disable-pip \
+            -r programma/backend/requirements.lock -r programma/backend/requirements-tools.lock
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      - name: npm audit (dipendenze di produzione dell'interfaccia)
+        working-directory: programma/frontend
+        run: |
+          npm audit --omit=dev --audit-level=high
+          echo "== dipendenze di sviluppo (solo rapporto)"
+          npm audit || true
 
   avviatori:
     runs-on: ubuntu-24.04
@@ -148,7 +185,15 @@ jobs:
       - name: Test nell'immagine
         env:
           MODELLER_KEY: ${{ secrets.MODELLER_KEY }}
-        run: programma/scripts/test.sh backend
+        run: programma/scripts/test.sh backend --cov --cov-report=term --cov-report=json:/src/backend/.coverage-backend.json
+      - name: Copertura dei test del backend (riepilogo)
+        run: |
+          python3 - programma/backend/.coverage-backend.json >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, sys
+          t = json.load(open(sys.argv[1]))["totals"]
+          print("### Copertura del backend (pytest-cov, nell'immagine)\n")
+          print(f"Righe: **{t['percent_covered']:.1f}%** ({t['covered_lines']} / {t['num_statements']})")
+          PY
       - name: Avviatore (avvio, salute, arresto)
         timeout-minutes: 10
         env:
@@ -178,11 +223,55 @@ jobs:
           curl -fsS http://127.0.0.1:8765/api/health
           echo
           "$copia/avvia-bioloom.sh" arresta
+      - name: Avviatore per Podman (avvio, salute, arresto)
+        # come sul server senza compose (launcher/bioloom-podman.sh), con il Podman del runner, senza root: l'immagine
+        # è quella appena provata, passata da Docker a Podman (la costruzione con Podman rifarebbe tutto)
+        timeout-minutes: 15
+        env:
+          VERSIONE: ${{ steps.version.outputs.version }}
+        run: |
+          podman --version
+          docker save "bioloom:$VERSIONE" | podman load
+          # il primo avvio crea server.env (dati in data/, solo 127.0.0.1) e si ferma, il secondo avvia
+          programma/launcher/bioloom-podman.sh avvia --no-menu
+          test -f server.env
+          programma/launcher/bioloom-podman.sh avvia --no-menu
+          ok=0
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8765/api/health; then ok=1; break; fi
+            sleep 2
+          done
+          echo
+          podman ps -a --filter name=bioloom
+          test "$ok" = 1
+          programma/launcher/bioloom-podman.sh arresta --no-menu
+          test -z "$(podman ps -q --filter name=bioloom)"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: programma/frontend/package-lock.json
+      - name: Interfaccia in un browser vero (Playwright, axe-core)
+        # dopo gli avviatori e la copia portatile: node_modules non deve finire nella copia
+        timeout-minutes: 20
+        run: |
+          (cd programma/frontend && npm ci --no-audit --no-fund && npx playwright install --with-deps chromium)
+          ./avvia-bioloom.sh --no-menu --no-browser
+          curl -fsS http://127.0.0.1:8765/api/health
+          echo
+          set +e
+          (cd programma/frontend && npm run e2e)
+          esito=$?
+          set -e
+          ./avvia-bioloom.sh arresta
+          exit "$esito"
       - name: Container e log (se un passo non è riuscito)
         if: failure()
         run: |
           docker ps -a
           docker compose -p bioloom logs --tail 200 || true
+          podman ps -a || true
+          podman logs --tail 200 bioloom || true
 
   qmean:
     # solo a mano (Actions > CI > Run workflow, con "qmean"): l'immagine di base di QMEAN pesa circa 2 GB

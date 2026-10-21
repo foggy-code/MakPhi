@@ -286,9 +286,13 @@ vecchia e codice nuovo non deve uscire. Crea `.env.locale` se manca, che serve a
 
 ### Costruzione riproducibile dell'immagine
 
-`docker/Dockerfile` fissa tutto ciò che scarica, così due costruzioni dello stesso codice partono dagli stessi byte. I
-pacchetti di Ubuntu no: si installano aggiornati, con le correzioni di sicurezza del giorno, e le versioni rilevate sono
-in `THIRD_PARTY_NOTICES.md`.
+`docker/Dockerfile` fissa tutto ciò che scarica, così due costruzioni dello stesso codice partono dagli stessi byte.
+Anche i pacchetti di Ubuntu (4.3.0): vengono dall'istantanea dell'archivio alla data di `UBUNTU_SNAPSHOT`
+(`snapshot.ubuntu.com`, `APT::Snapshot` di apt 2.8 in `/etc/apt/apt.conf.d/50bioloom-snapshot`), quindi due costruzioni
+con la stessa data installano le stesse versioni; le correzioni di sicurezza arrivano spostando la data. L'istantanea si
+legge solo in HTTPS (un indirizzo `http://` viene rediretto) e l'immagine di base non ha i certificati: `ca-certificates`
+si installa prima dall'archivio corrente, l'unico pacchetto non fissato (i pacchetti sono comunque firmati
+dall'archivio). Le versioni rilevate sono in `THIRD_PARTY_NOTICES.md`.
 
 | Cosa | Come è fissato | ARG |
 |---|---|---|
@@ -296,6 +300,7 @@ in `THIRD_PARTY_NOTICES.md`.
 | US-align 20260527, fpocket 4.2.3 | commit del tag (`177cc8a`, `4bb0d84`) e SHA-256 del tar non compresso | `USALIGN_COMMIT`, `USALIGN_SHA256`, `FPOCKET_COMMIT`, `FPOCKET_SHA256`; `USALIGN_TAG` resta e si controlla con l'uscita di `USalign -h` («(Version 20260527)»); `FPOCKET_TAG` tolto (tag e commit nel commento) |
 | MODELLER 10.8 (`modeller_10.8-1_amd64.deb`, 14.229.846 byte) | SHA-256 del `.deb` | `MODELLER_VERSION`, `MODELLER_SHA256` |
 | APBS 3.4.1 | SHA-256 dello zip della release | `APBS_VERSION`, `APBS_SHA256` |
+| pacchetti di Ubuntu (apt), tranne `ca-certificates` | istantanea dell'archivio del 15 ottobre 2026 | `UBUNTU_SNAPSHOT` (`20261015T000000Z`) |
 | immagine di base di QMEAN (`docker/qmean/Dockerfile`) | digest di `registry.scicore.unibas.ch/schwede/qmean` | — |
 
 - **Tag e digest:** il tag non sta davanti al digest perché Podman 2.2.1 (server RHEL 8, `bioloom-podman.sh`) rifiuta i
@@ -1946,7 +1951,7 @@ template, limiti.
 | Limite | Valore | Motivo |
 |---|---|---|
 | Catene | da 2 a 12 | omo-oligomeri comuni fino ai dodecameri; oltre (capsidi, ferritine a 24 catene) una sequenza per catena non è pratica, e l'analisi delle interfacce cresce con le coppie di catene a contatto (fino a 66) |
-| Residui in tutto | 3000 | tempo di MODELLER per modello misurato in crescita un po' più che lineare con i residui (tabella sotto): con 3000 residui 5 modelli "accurati" (3–5 volte più lenti del "rapido") restano nel timeout predefinito dei job (120 min), con 5000 (il limite di una catena singola) no |
+| Residui in tutto | 3000 | tempo di MODELLER per modello in crescita più che lineare con i residui (misure ripetute fino a 4000 residui, 4.3.0: § Prestazioni, «Tempo di costruzione e lunghezza»): sul server un modello "rapido" di 3000 residui costa circa 576 s e le restrizioni altri 440 s, quindi già 5 modelli "rapidi" (~50 min) restano nel timeout predefinito dei job (120 min) ma 5 "accurati" (~3,3 ore) no: i controlli preventivi lo dicono (`timeout_risk`) |
 
 **Allineamento per catena** (`modeller.build_complex_alignment_script`, `complexes.merge_chain_alignments`): `align2d` di
 ogni catena del bersaglio sul segmento FIRST:X–LAST:X della sua catena del template; le righe si uniscono con '/', che
@@ -2215,6 +2220,23 @@ QMEAN in `run_qmean_wrapper.py`); client in `engines/qmean_local.py`, job `qmean
     | 64 | 167 s | 2,6 s |
 
     Con 16 calcoli la memoria usata è rimasta intorno a 20 GB: gli indici stanno nella cache del sistema, condivisa.
+
+    Con 3PGK ripetuta la sequenza è sempre la stessa e dopo `0aa292a` i calcoli insieme riusano il suo profilo: la
+    tabella sopra misura soprattutto la parte di QMEAN dopo HHblits. **Dati grezzi su sequenze tutte diverse** (4.3.0,
+    2026-10-21, `scripts/benchmark_qmean.py`: modelli di 300 residui costruiti da 3IU0 con il 10 % di mutazioni e un
+    seme nuovo per modello, inviati insieme al worker con `QMEAN_PARALLEL=32`, UniRef30_2023_02; nessun profilo
+    riusato, 57 calcolati; JSON in `bench_out/tempi/server/qmean.json`):
+
+    | Calcoli insieme | Totale | Calcoli all'ora | Un calcolo (mediana, min–max) | HHblits nel worker (mediana) |
+    |---|---|---|---|---|
+    | 1 | 115 s | 31 | 115 s | 113 s |
+    | 8 | 85 s | 338 | 58 s (55–85) | 56 s |
+    | 16 | 76 s | 762 | 60 s (55–76) | 60 s |
+    | 32 | 122 s | 943 | 97 s (66–122) | 95 s |
+
+    HHblits con 7 processori ciascuno è quasi tutto il tempo di un calcolo. Il primo calcolo (115 s) trova il database
+    freddo nella cache del sistema; con 8 e 16 calcoli un calcolo costa circa 58–60 s, a 32 (7 × 32 = 224 processori,
+    tutti quelli del server) sale a 97 s, ma il rendimento continua a crescere: circa 940 sequenze nuove all'ora.
   - **Profili riusati (`QMEAN_PROFILE_CACHE_GB`, predefinito 10, 100 sul server):** HHblits dipende solo dalla sequenza. Il wrapper
     avvolge `run_qmean._seqanno`: prima della ricerca copia `<md5 della sequenza>.a3m` dalla cartella del database in
     `/cache/profiles` (il nome cambia se l'indice degli a3m cambia), dopo salva il profilo nuovo con una scrittura
@@ -3423,7 +3445,7 @@ temporaneo dello scratch e inviato con `FileResponse` come gli altri archivi; ne
 
 | Percorso | Ruolo | Contenuto |
 |---|---|---|
-| `manifest.json` | — | formato e versione del formato; versione di BioLoom e dell'immagine (`BIOLOOM_IMAGE_VERSION`); Python, sistema, architettura, Biopython e NumPy; versioni degli strumenti usati dal calcolo; job (tipo, titolo, date, durata); **parametri completi**; semi casuali; impostazioni che influiscono sul risultato; provenienza dalla cache dei calcoli; input remoti con la data; timbro dei database locali (ricerca); possibilità di riesecuzione con il motivo; note; elenco dei file con ruolo, SHA-256, dimensione e percorso nel job; `manifest_sha256` |
+| `manifest.json` | — | formato e versione del formato; versione di BioLoom, dell'immagine (`BIOLOOM_IMAGE_VERSION`) e impronta del codice (`/app/IMPRONTA`, 4.3.0); Python, sistema, architettura, Biopython e NumPy; versioni degli strumenti usati dal calcolo; job (tipo, titolo, date, durata); **parametri completi**; semi casuali; impostazioni che influiscono sul risultato; provenienza dalla cache dei calcoli; input remoti con la data; timbro dei database locali (ricerca); possibilità di riesecuzione con il motivo; note; elenco dei file con ruolo, SHA-256, dimensione e percorso nel job; `manifest_sha256`; firma HMAC facoltativa (`signature`, 4.3.0) |
 | `LEGGIMI.txt` | `documentation` | contenuto e istruzioni per rieseguire (interfaccia, comando, API), tolleranze, input remoti, note |
 | `inputs/params.json`, `inputs/sequences.fasta` | `params`, `sequences` | parametri e sequenze (bersaglio, catene del complesso, sequenze dell'allineamento, query) |
 | `inputs/library/<ID>.pdb\|cif`, `<ID>.meta.json` | `template`, `template_meta` | file originale del template nella libreria e metadati (sorgente, data, modello predetto); se il template non è più in libreria, la copia preparata del job, con una nota |
@@ -3435,6 +3457,28 @@ temporaneo dello scratch e inviato con `FileResponse` come gli altri archivi; ne
 | `outputs/<percorso>` | `output` | tutti i file del job con lo stesso percorso, `result.json` compreso |
 | `scripts/<percorso>` | `script` | script MODELLER eseguiti (`model.py`, `align.py`, `loop.py`, `dope_eval.py`): solo documentazione |
 | `log/job.log` | `log` | log del calcolo, oscurato |
+
+**Ambiente all'avvio del job** (4.3.0). Il `JobManager` registra all'avvio di ogni esecuzione l'ambiente di calcolo
+(versioni di BioLoom, immagine e impronta del codice, Python, librerie, strumenti del tipo di job: lo stesso
+`ReproducibilityService.current`) in `.environment.json` nella cartella del job: nascosto, quindi fuori dall'elenco dei
+file, dal pacchetto e dal confronto; una ripresa lo riscrive. Il manifest usa quello (`environment.detected`: «all'avvio
+del job (data)») e, se l'esportazione avviene con un'altra versione o un'altra impronta, lo annota fra le note; per i job
+di prima ricade sull'ambiente all'esportazione e lo dice. Un errore nella registrazione non ferma il job (riga di avviso
+nel log). L'impronta va anche nelle voci della cache dei calcoli (`fingerprint`), **non nella chiave**: ogni
+ricostruzione dell'immagine svuoterebbe la cache (profili HHblits e QMEAN compresi); la chiave segue la versione, che si
+aumenta a ogni rilascio (`CHANGELOG.md`). Stessa versione e impronta diversa in riesecuzione: avviso
+`rerun_version_code`.
+
+**Firma del manifest** (facoltativa, 4.3.0). `manifest_sha256` garantisce l'integrità ma non l'autenticità: chi modifica
+il manifest può ricalcolarlo. Con un testo di almeno 16 caratteri in `data/licenses/firma-manifest.key` il manifest
+riceve `signature` = {`algorithm`: `HMAC-SHA256`, `key_id`, `value`}, l'HMAC (RFC 2104) di `manifest_sha256`;
+`key_id` sono i primi 16 caratteri dello SHA-256 della chiave con un prefisso, e riconosce la chiave senza rivelarla.
+`manifest_sha256` si calcola senza `signature`, quindi i pacchetti di prima restano validi. In anteprima
+(`signature_check`): firma valida = informazione `rerun_signature_valid`; firma di una chiave che qui non c'è =
+avviso `rerun_signature_unverified`; pacchetto non firmato su un'installazione che firma = avviso `rerun_unsigned`;
+firma non valida con la stessa chiave (manifest modificato e risigillato) = rifiuto `package_signature_invalid`, anche
+all'avvio. È una firma simmetrica: serve a un gruppo che condivide la chiave, non a dimostrare l'autore a terzi. La
+chiave è fra i segreti oscurati nei pacchetti.
 
 Misurati: analisi di qualità di 1UBQ con PROCHECK 19 file, 2,8 MB decompressi, 0,4 MB compressi; modellazione di
 yeast_ub su 1UBQ con 5 modelli e la qualità estesa 36 file, 3,3 MB e 0,5 MB, esportata in 0,8 s.
@@ -3495,7 +3539,8 @@ yeast_ub su 1UBQ con 5 modelli e la qualità estesa 36 file, 3,3 MB e 0,5 MB, es
 | oltre 256 MB compressi, 512 MB per file o 1 GB decompressi, oltre 5000 file; un file più lungo di quanto dichiara | `package_too_large` (413), `package_too_many_files`, `package_bomb` |
 | rapporto di compressione oltre 100:1 per un file oltre 1 MB (deflate arriva a 1032:1; i file di BioLoom fino a 35:1, misurato) | `package_bomb` |
 | manifest assente, non JSON, di un altro formato o di una versione più recente del formato; campi mancanti; percorsi o checksum non validi; campi letti dopo di forma inattesa (`environment.tools`/`libraries` non oggetti, `python`/`machine` non testi, `notes`, `remote`, `databases` non elenchi, `seeds`, `settings`, `cache`, `rerun` non oggetti, `job.duration_seconds` non numerico, date e titolo non testi): l'impronta si ricalcola, quindi un manifest risigillato di forma inattesa è un rifiuto motivato in anteprima, controlli preventivi e avvio, mai un errore interno | `package_invalid`, `package_manifest_invalid`, `package_format` |
-| impronta del manifest diversa (SHA-256 del JSON canonico senza `manifest_sha256`): parametri, checksum o versioni modificati dopo l'esportazione | `package_manifest_altered` |
+| impronta del manifest diversa (SHA-256 del JSON canonico senza `manifest_sha256` e `signature`): parametri, checksum o versioni modificati dopo l'esportazione | `package_manifest_altered` |
+| firma HMAC non valida con la chiave di questa installazione (manifest modificato e risigillato) | `package_signature_invalid` |
 | file non dichiarati o mancanti; SHA-256 o dimensione diversi (verificati a blocchi, di nuovo all'estrazione) | `package_undeclared`, `package_missing_file`, `package_checksum` |
 | parametri che la rotta di avvio rifiuterebbe (stesso modello Pydantic: `ModelIn`, `QualityIn`, …, e gli stessi controlli immediati) | `package_params_invalid` |
 
@@ -3551,7 +3596,8 @@ usa quella della cartella dati predefinita o di `MODELLER_KEY`.
     primi esempi.
   - **Altri testi** (PIR, profili DOPE, `.sum` di PROCHECK…): riga per riga e parola per parola, numeri con la tolleranza.
 - **Non dipendono dal calcolo** e non si confrontano: la data e l'ora che MODELLER scrive nella riga EXPDTA dei modelli
-  (riprese dal rapporto di qualità nel metodo della struttura), `cached`, `cached_at`, `timings` e `threads`. Misurato
+  (riprese dal rapporto di qualità nel metodo della struttura), `cached`, `cached_at`, `timings`, `threads` e
+  `modeller_workers` (worker della modalità parallela: dipendono dai core liberi, i modelli solo dalla modalità). Misurato
   rieseguendo gli stessi job (qualità con PROCHECK, modellazione con la qualità estesa): data di MODELLER e log a parte,
   tutti i file sono identici byte per byte.
 - **Tolleranze:** coordinate 0,002 Å per atomo (il formato PDB scrive tre decimali: due arrotondamenti dell'ultima cifra
@@ -4075,6 +4121,59 @@ root), quindi quasi gratis.
 - 7500 e 9999 residui non sono stati misurati (prove interrotte): il massimo 9999 dell'impostazione viene dal formato
   PDB e non è verificato con i programmi di analisi.
 
+### Tempo di costruzione e lunghezza: misure ripetute (4.3.0)
+
+Misure del 2026-10-21 per la stima dei controlli preventivi (`domain/preflight.building_seconds`): job `model` senza
+analisi di qualità, raffinamento `fast`, template 3IU0 (ripetuto oltre la sua lunghezza come in
+`benchmark_lunghezza.py`), bersaglio con il 5 % di mutazioni e una sequenza diversa per ripetizione.
+`scripts/misure_tempi.sh` lancia una misura per container (`scripts/benchmark_tempi.py`), `scripts/analisi_tempi.py`
+calcola mediane, dispersione e fit; dati grezzi in `bench_out/tempi/` (non nel repository), un JSON per misura.
+
+- **Server** christopher (immagine 4.2.0 con il codice 4.3.0 montato, Podman senza root): 12 lunghezze × 1 e 2
+  modelli × 3 ripetizioni, 24 misure contemporanee su 224 core (ogni MODELLER in serie usa un core).
+- **Portatile** (i3-1115G4, immagine 4.3.0): la **serie comune** 100, 300, 600, 1000 residui × 1 e 2 modelli × 3
+  ripetizioni, una misura alla volta. Sulle lunghezze in comune il portatile è più veloce del server del 17 % circa
+  (mediane 15/18, 48/59, 102/131 s con un modello).
+- **Dispersione:** coefficiente di variazione sotto il 6 % per quasi tutte le configurazioni, sotto l'1,5 % oltre
+  1000 residui; fino al 12 % solo a 100 residui, dove il tempo (4–5 s) è vicino alla risoluzione di un secondo delle
+  date del job.
+- **Memoria:** picco del processo figlio più grande (`getrusage`, `ru_maxrss`: misurabile anche con Podman senza root,
+  dove il cgroup non è leggibile) da 90 MB a 100 residui a 120 MB a 1000, 146 MB a 2000, 232 MB a 3000, 393 MB a 4000,
+  602 MB a 5000.
+
+| Residui | 1 modello (s) | 2 modelli (s) | Stima 4.3.0 per il server (1 / 2 modelli) | Stima lineare di prima |
+|---|---|---|---|---|
+| 100 | 5 | 9 | 5 / 9 | 4 / 7 |
+| 300 | 18 | 33 | 20 / 35 | 11 / 20 |
+| 600 | 59 | 107 | 59 / 100 | 22 / 40 |
+| 1000 | 131 | 231 | 139 / 233 | 36 / 67 |
+| 2000 | 439 | 735 | 483 / 797 | 73 / 133 |
+| 3000 | 1016 | 1592 | 1034 / 1693 | 109 / 199 |
+| 4000 | 1945 | 2894 | 1790 / 2920 | 145 / 266 |
+| 5000 | 3328 | 4797 | 2752 / 4479 | 181 / 332 |
+
+(mediane di 3; anche 200, 400, 800 e 1500 residui nei dati; la stima per il server è quella del portatile × 1,2.)
+
+**Modello dei tempi.** Restrizioni e modelli crescono come (1 − β)·s + β·s², s = residui/76, valendo 1 a 76 residui
+(dove restano le costanti misurate su 1UBQ): β = 0,42 per le restrizioni, 0,132 per un modello, dal fit sul server
+(minimi quadrati sugli errori relativi, coefficienti non negativi) riportato alla velocità del portatile. Errore sulle
+mediane fra −17 % e +17 %. Una legge di potenza (t ∝ L^p) non basta: adattata su tutto l'intervallo dà ~L^1,5 per
+modello e ~L^2 per le restrizioni ma sbaglia del 25 % a 4000 residui, perché la pendenza continua a crescere; oltre 4000
+le restrizioni crescono più che quadraticamente (a 5000 residui la stima con un modello è il 17 % sotto la misura). La
+stima lineare di prima, calibrata fino a 304 residui su ubiquitina, sottostimava di 3 volte a 1000 residui e di 18 a
+5000: l'avviso `timeout_risk` non scattava mai (5 modelli di 5000 residui erano 13 minuti stimati, oggi oltre 2 ore).
+
+**Avvio dei worker** (`T_WORKERS`, l'unica costante non misurata fino a 4.2.0): sul server m modelli in parallelo con
+m worker (2, 4, 8 a 300 residui; 4 a 1000) costano 1–2 s più di un modello in serie alla stessa lunghezza, come i 2 s
+della stima. Sul portatile (2 core fisici con hyper-threading) 2 worker costano 4 s in più e 4 worker 13 s: oltre i core
+fisici i modelli rallentano, non è il costo di avvio.
+
+**Serie contro parallelo, stesso seme** (`tests/perf_serial_parallel.py`, ubiquitina di lievito su 1UBQ, 3 modelli
+`fast`, semi −4321, −12312, −777): due costruzioni in serie danno coordinate identiche; in parallelo con 1, 2 o 3
+worker coordinate identiche fra loro; serie e parallelo danno la stessa struttura in un altro sistema di riferimento,
+Cα a 0,2–0,54 Å dopo la sovrapposizione ottimale e 4–20 Å senza (MODELLER assegna un seme proprio a ogni modello del
+lavoro parallelo). Per questo la modalità sta nel manifest e nei parametri delle pipeline, e il numero di worker no.
+
 ## Frontend
 
 React 19 + TypeScript + Vite, nessuna libreria UI esterna: componenti propri (`components/ui.tsx`), grafici SVG
@@ -4533,13 +4632,29 @@ analisi strutturali, la rifinitura e la mutagenesi non usano la rete; l'interfac
 
 ## Test
 
-**Conteggi** (contati l'11 ottobre 2026 con `pytest --collect-only -q` in `backend/` e con `npx vitest list` in
-`frontend/`):
+**Conteggi** (contati il 21 ottobre 2026, 4.3.0, con `pytest --collect-only -q` in `backend/` e con `npx vitest list`
+in `frontend/`):
 
 | Suite | File | Test |
 |---|---|---|
-| backend, `backend/tests` (pytest) | 59 | 1461 nella suite predefinita (58 file), più 5 con il marcatore `network`, esclusi da `addopts` (`pytest -m network`): i 4 di `test_remote.py` e uno di `test_rete_bloccata.py` |
-| frontend, `frontend/src/**/*.test.ts(x)` (vitest) | 101 | 815 (11 file in ambiente jsdom) |
+| backend, `backend/tests` (pytest) | 67 | 1536 nella suite predefinita, più 5 con il marcatore `network`, esclusi da `addopts` (`pytest -m network`): i 4 di `test_remote.py` e uno di `test_rete_bloccata.py` |
+| frontend, `frontend/src/**/*.test.ts(x)` (vitest) | 102 | 818 |
+| interfaccia nel browser, `frontend/e2e/*.spec.ts` (Playwright) | 1 | 29: 14 pagine × tema scuro e chiaro, più navigazione e tastiera |
+
+**Ultima esecuzione completa** (21 ottobre 2026, branch `lavori-aperti`, immagine `bioloom:4.3.0` con MODELLER 10.8,
+PROCHECK e ProSA della cartella dati, portatile i3-1115G4): backend **1533 passati, 3 saltati**, 0 falliti in 14 min 41 s
+(`scripts/test.sh backend --cov`), copertura **91,4 %** delle righe di `bioloom` (22.865 righe, 1970 non eseguite);
+frontend 818 passati, copertura 52,3 % delle istruzioni e 83,6 % dei rami (`npm run coverage`); 29 test Playwright su
+29 contro un container 4.3.0. Registro completo in `bench_out/pytest_4.3.0.log` (fuori dal repository). La prima
+esecuzione dei test nel browser ha trovato due difetti veri di accessibilità (nome accessibile del pulsante della
+ricerca globale diverso dal testo visibile, `select` dei selettori senza nome), corretti.
+
+**Copertura e browser in CI** (4.3.0): il job `docker` esegue i test nell'immagine con `--cov` e scrive il totale nel
+riepilogo del job; il job `frontend` usa `npm run coverage` (`@vitest/coverage-v8`). Nessuna soglia minima: il numero si
+legge e si confronta. Dopo gli avviatori il job `docker` avvia BioLoom e lancia Playwright con Chromium (`npm run e2e`,
+`playwright.config.ts`): ogni pagina si carica senza errori in console e senza violazioni WCAG 2.1 A/AA gravi o
+critiche secondo axe-core (`@axe-core/playwright`), in tema scuro e chiaro; le violazioni minori si stampano. Rapporti
+e tracce nelle cartelle nascoste `.coverage/` e `.playwright/`, fuori dall'impronta del codice.
 
 I test che richiedono MODELLER, PROCHECK, ProSA o gli strumenti dell'immagine di sviluppo (fpocket, PDB2PQR, APBS,
 OpenMM, PDBFixer) si saltano da soli, con il motivo, dove mancano (`requires_modeller` e le condizioni degli strumenti):

@@ -249,6 +249,10 @@ def test_compare_file_statuses():
     a = {"dope": -8123.456789, "grade": "A", "cached": True, "timings": {"x": 1}, "list": [1, 2]}
     near = {**a, "dope": -8123.4568, "cached": False, "timings": {"x": 9}}
     assert repro.compare_file("r.json", json.dumps(a).encode(), json.dumps(near).encode())["status"] == "equivalent"
+    # il numero di worker di MODELLER dipende dai core liberi, non dal calcolo
+    workers = {**a, "options": {"parallel": True}, "modeller_workers": 3}
+    assert repro.compare_file("r.json", json.dumps(workers).encode(),
+                              json.dumps({**workers, "modeller_workers": 2}).encode())["status"] == "identical"
     far = repro.compare_file("r.json", json.dumps(a).encode(), json.dumps({**a, "dope": -8100.0}).encode())
     assert far["status"] == "different" and far["diff"]["beyond_tolerance"] == 1
     assert far["diff"]["max_delta"] == pytest.approx(23.456789) and far["diff"]["max_delta_at"] == "dope"
@@ -289,6 +293,29 @@ def test_environment_warnings_name_every_difference():
     assert codes == ["rerun_version_bioloom", "rerun_version_image", "rerun_tool_missing", "rerun_version_tool",
                      "rerun_version_library", "rerun_version_library", "rerun_platform"]
     assert repro.environment_warnings(current, current) == []
+    # stessa versione, codice diverso (fra due rilasci): avviso sull'impronta, non sulla versione
+    same = {"bioloom": {"version": "4.3.0", "fingerprint": "a" * 64}, "environment": {}}
+    other = {"bioloom": {"version": "4.3.0", "fingerprint": "b" * 64}, "environment": {}}
+    assert [w["code"] for w in repro.environment_warnings(same, other)] == ["rerun_version_code"]
+    assert repro.environment_warnings(same, {"bioloom": {"version": "4.3.0"}, "environment": {}}) == []
+
+
+def test_code_fingerprint_is_read_from_the_image_file(tmp_path, monkeypatch):
+    from bioloom.core import fingerprint
+    good = tmp_path / "IMPRONTA"
+    good.write_text("AB" * 32 + "\n")
+    monkeypatch.setenv("BIOLOOM_FINGERPRINT_FILE", str(good))
+    fingerprint.code_fingerprint.cache_clear()
+    try:
+        assert fingerprint.code_fingerprint() == "ab" * 32 and versions.bioloom()["fingerprint"] == "ab" * 32
+        good.write_text("non è un'impronta")
+        fingerprint.code_fingerprint.cache_clear()
+        assert fingerprint.code_fingerprint() is None
+        monkeypatch.setenv("BIOLOOM_FINGERPRINT_FILE", str(tmp_path / "assente"))
+        fingerprint.code_fingerprint.cache_clear()
+        assert fingerprint.code_fingerprint() is None
+    finally:
+        fingerprint.code_fingerprint.cache_clear()
 
 
 def test_tool_versions_are_read_from_the_programs():
@@ -331,6 +358,11 @@ def test_quality_package_content_manifest_and_checksums(client_with_ubq):
     assert not any(p.startswith("outputs/") and p.endswith(("params.json", "job.log")) for p in files)
     readme = files["LEGGIMI.txt"].decode()
     assert "python programma/bioloom.py rerun" in readme and "POST /api/jobs/rerun" in readme
+    # ambiente registrato all'avvio del job, non all'esportazione
+    assert m["environment"]["detected"].startswith("all'avvio del job")
+    recorded = c.app.state.core.jobs.environment(job["id"])
+    assert recorded["bioloom"] == m["bioloom"] and recorded["environment"]["tools"] == m["environment"]["tools"]
+    assert ".environment.json" not in json.dumps(c.get(f"/api/jobs/{job['id']}").json().get("files"))
     # riaperto dal servizio: valido, con l'anteprima senza errori
     summary = _inspect(c, data).json()
     assert summary["job"]["id"] == job["id"] and summary["rerun"]["supported"]
@@ -460,6 +492,41 @@ def test_altered_manifest_or_wrong_checksum_are_rejected(client_with_ubq):
     # niente rimane nello scratch dopo un pacchetto rifiutato
     tmp = c.app.state.core.paths.scratch_tmp
     assert not list(tmp.glob(f"{service.STAGE_PREFIX}*"))
+
+
+def test_signed_manifest_is_verified_and_a_resealed_one_is_refused(client_with_ubq):
+    c = client_with_ubq
+    key_file = c.app.state.core.paths.licenses / service.SIGNING_KEY_FILE
+    unsigned = _package(c, _quality(c)["id"])
+    assert "signature" not in _manifest(unsigned)
+    checks = _inspect(c, unsigned).json()["checks"]
+    assert not any(ch["code"].startswith(("rerun_sign", "rerun_unsigned")) for ch in checks)
+    key_file.write_text("chiave-di-laboratorio-0123456789\n", encoding="utf-8")
+    try:
+        data = _package(c, _quality(c)["id"])
+        m = _manifest(data)
+        assert m["signature"]["algorithm"] == "HMAC-SHA256" and repro.validate_manifest(m) is m
+        assert "chiave-di-laboratorio" not in data.decode("latin-1")
+        codes = {ch["code"]: ch["level"] for ch in _inspect(c, data).json()["checks"]}
+        assert codes["rerun_signature_valid"] == "info"
+        # con la chiave configurata un pacchetto senza firma è un avviso, non un errore
+        assert {ch["code"]: ch["level"] for ch in _inspect(c, unsigned).json()["checks"]}["rerun_unsigned"] == "warning"
+
+        # manifest modificato e risigillato (l'impronta SHA-256 torna, la firma no): rifiutato
+        def tweak(m):
+            m["params"]["procheck"] = True
+
+        forged = _rebuild(data, manifest=tweak)
+        summary = _inspect(c, forged).json()
+        assert summary["checks"][0]["code"] == "package_signature_invalid" and not summary["rerun"]["supported"]
+        r = c.post("/api/jobs/rerun", files={"file": ("p.zip", forged, "application/zip")})
+        assert r.status_code == 400 and r.json()["error"]["code"] == "package_signature_invalid"
+        # un'altra installazione con un'altra chiave: firma non verificabile, solo un avviso
+        key_file.write_text("un-altra-chiave-abcdefghijklmnop", encoding="utf-8")
+        codes = {ch["code"]: ch["level"] for ch in _inspect(c, data).json()["checks"]}
+        assert codes["rerun_signature_unverified"] == "warning"
+    finally:
+        key_file.unlink(missing_ok=True)
 
 
 def test_traversal_symlink_and_bomb_packages_are_rejected_without_writing(client_with_ubq, tmp_path):

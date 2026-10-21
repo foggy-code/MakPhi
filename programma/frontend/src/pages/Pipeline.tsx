@@ -24,7 +24,7 @@ import { recordsToFasta } from "../lib/files";
 import { isEmail } from "../lib/notify";
 import { useAsync, useInterval, useJob, useJobsFeed, useLiveJobList, useThrottled } from "../lib/hooks";
 import { pipelineStatusParts, plural } from "../lib/shellView";
-import { ENGINE_LABEL } from "../lib/workflowView";
+import { ENGINE_LABEL, remoteSearchNotice } from "../lib/workflowView";
 import { clampMaxTemplates, itemTemplates, itemTemplatesTooltip, MAX_TEMPLATES_DEFAULT, MAX_TEMPLATES_MAX, MAX_TEMPLATES_MIN } from "../lib/templateRank";
 
 const SORTS: { key: string; label: string }[] = [
@@ -418,7 +418,7 @@ export default function Pipeline() {
                       </>
                     )}
                     <div className="grid grid-2">
-                      <Field label="Motore">
+                      <Field label="Motore" hint={remoteSearchNotice(engine) ?? undefined}>
                         <select className="input" value={engine} onChange={(e) => setEngine(e.target.value as SearchEngine)}>
                           <option value="rcsb">RCSB (rapido)</option>
                           <option value="ncbi">NCBI BLAST (lento)</option>

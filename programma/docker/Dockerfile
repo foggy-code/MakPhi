@@ -15,8 +15,11 @@
 # `docker buildx build --check` salta la regola FromPlatformFlagConstDisallowed (seconda riga).
 #
 # Costruzione riproducibile: immagini di base fissate per digest e file scaricati verificati con SHA-256 (sha256sum -c
-# ferma la costruzione se un file è cambiato). I pacchetti di Ubuntu invece si installano aggiornati, con le correzioni
-# di sicurezza del giorno (versioni in THIRD_PARTY_NOTICES.md). Per aggiornare:
+# ferma la costruzione se un file è cambiato). I pacchetti di Ubuntu vengono dall'istantanea dell'archivio alla data di
+# UBUNTU_SNAPSHOT (snapshot.ubuntu.com, apt 2.8 di Ubuntu 24.04: APT::Snapshot): due costruzioni con la stessa data
+# installano le stesse versioni. Fa eccezione ca-certificates, installato dall'archivio corrente prima di passare
+# all'istantanea, che si legge solo in HTTPS (i pacchetti sono comunque firmati dall'archivio). Per aggiornare:
+#   - pacchetti di Ubuntu (correzioni di sicurezza): una data più recente in UBUNTU_SNAPSHOT (AAAAMMGGThhmmssZ, UTC)
 #   - immagine di base: `docker buildx imagetools inspect ubuntu:24.04` (o node:22-slim) e il "Digest" in cima, quello
 #     dell'indice multi-architettura (non quello di una sola piattaforma), in UBUNTU_IMAGE o NODE_IMAGE
 #   - MODELLER, APBS: la versione nell'ARG e in *_SHA256 lo `sha256sum` del file scaricato dall'URL del RUN
@@ -26,13 +29,15 @@
 #     riga; in *_SHA256 lo SHA-256 del tar non compresso: `curl -fsSL <URL del RUN> | gzip -dc | sha256sum`
 # poi una costruzione completa (e le versioni nuove in THIRD_PARTY_NOTICES.md).
 
-ARG BIOLOOM_VERSION=4.2.0
+ARG BIOLOOM_VERSION=4.3.0
 
 # Immagini di base per digest dell'indice multi-architettura: node:22-slim (Node.js 22.23.3, Debian 12) e ubuntu:24.04
 # (24.04.5 del 2026-09-17). Il tag resta nel commento e non davanti al digest: Podman 2.2.1 (bioloom-podman.sh)
 # rifiuta i riferimenti con tag e digest insieme.
 ARG NODE_IMAGE=node@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
 ARG UBUNTU_IMAGE=ubuntu@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
+# Istantanea dell'archivio di Ubuntu da cui si installano i pacchetti (vedi in cima)
+ARG UBUNTU_SNAPSHOT=20261015T000000Z
 # Piattaforma dell'interfaccia web: BUILDPLATFORM, che BuildKit e Podman (anche 2.2.1) danno da sé; linux/amd64 per
 # un costruttore che non la dà. Non un predefinito di BUILDPLATFORM stesso: con BuildKit scavalcherebbe il valore
 # automatico.
@@ -50,6 +55,10 @@ RUN npm run build
 
 # ------------------------------------------------------------------ compilazione di US-align, fpocket e PROCHECK
 FROM --platform=linux/amd64 ${UBUNTU_IMAGE} AS tools-build
+ARG UBUNTU_SNAPSHOT
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && printf 'APT::Snapshot "%s";\n' "${UBUNTU_SNAPSHOT}" > /etc/apt/apt.conf.d/50bioloom-snapshot \
+    && rm -rf /var/lib/apt/lists/*
 RUN apt-get update && apt-get install -y --no-install-recommends \
         g++ gfortran gcc make ca-certificates wget unzip \
     && rm -rf /var/lib/apt/lists/*
@@ -127,6 +136,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     USER=bioloom \
     LOGNAME=bioloom
 
+# pacchetti dall'istantanea di UBUNTU_SNAPSHOT (la configurazione resta nell'immagine e vale anche per MODELLER)
+ARG UBUNTU_SNAPSHOT
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && printf 'APT::Snapshot "%s";\n' "${UBUNTU_SNAPSHOT}" > /etc/apt/apt.conf.d/50bioloom-snapshot \
+    && rm -rf /var/lib/apt/lists/*
 # ProSA II 2003 è un programma Linux a 32 bit: servono le librerie i386.
 RUN dpkg --add-architecture i386 && apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-venv ca-certificates wget csh \
