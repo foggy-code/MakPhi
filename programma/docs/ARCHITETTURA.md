@@ -4104,6 +4104,59 @@ root), quindi quasi gratis.
 - 7500 e 9999 residui non sono stati misurati (prove interrotte): il massimo 9999 dell'impostazione viene dal formato
   PDB e non è verificato con i programmi di analisi.
 
+### Tempo di costruzione e lunghezza: misure ripetute (4.3.0)
+
+Misure del 2026-10-21 per la stima dei controlli preventivi (`domain/preflight.building_seconds`): job `model` senza
+analisi di qualità, raffinamento `fast`, template 3IU0 (ripetuto oltre la sua lunghezza come in
+`benchmark_lunghezza.py`), bersaglio con il 5 % di mutazioni e una sequenza diversa per ripetizione.
+`scripts/misure_tempi.sh` lancia una misura per container (`scripts/benchmark_tempi.py`), `scripts/analisi_tempi.py`
+calcola mediane, dispersione e fit; dati grezzi in `bench_out/tempi/` (non nel repository), un JSON per misura.
+
+- **Server** christopher (immagine 4.2.0 con il codice 4.3.0 montato, Podman senza root): 12 lunghezze × 1 e 2
+  modelli × 3 ripetizioni, 24 misure contemporanee su 224 core (ogni MODELLER in serie usa un core).
+- **Portatile** (i3-1115G4, immagine 4.3.0): la **serie comune** 100, 300, 600, 1000 residui × 1 e 2 modelli × 3
+  ripetizioni, una misura alla volta. Sulle lunghezze in comune il portatile è più veloce del server del 17 % circa
+  (mediane 15/18, 48/59, 102/131 s con un modello).
+- **Dispersione:** coefficiente di variazione sotto il 6 % per quasi tutte le configurazioni, sotto l'1,5 % oltre
+  1000 residui; fino al 12 % solo a 100 residui, dove il tempo (4–5 s) è vicino alla risoluzione di un secondo delle
+  date del job.
+- **Memoria:** picco del processo figlio più grande (`getrusage`, `ru_maxrss`: misurabile anche con Podman senza root,
+  dove il cgroup non è leggibile) da 90 MB a 100 residui a 120 MB a 1000, 146 MB a 2000, 232 MB a 3000, 393 MB a 4000,
+  602 MB a 5000.
+
+| Residui | 1 modello (s) | 2 modelli (s) | Stima 4.3.0 per il server (1 / 2 modelli) | Stima lineare di prima |
+|---|---|---|---|---|
+| 100 | 5 | 9 | 5 / 9 | 4 / 7 |
+| 300 | 18 | 33 | 20 / 35 | 11 / 20 |
+| 600 | 59 | 107 | 59 / 100 | 22 / 40 |
+| 1000 | 131 | 231 | 139 / 233 | 36 / 67 |
+| 2000 | 439 | 735 | 483 / 797 | 73 / 133 |
+| 3000 | 1016 | 1592 | 1034 / 1693 | 109 / 199 |
+| 4000 | 1945 | 2894 | 1790 / 2920 | 145 / 266 |
+| 5000 | 3328 | 4797 | 2752 / 4479 | 181 / 332 |
+
+(mediane di 3; anche 200, 400, 800 e 1500 residui nei dati; la stima per il server è quella del portatile × 1,2.)
+
+**Modello dei tempi.** Restrizioni e modelli crescono come (1 − β)·s + β·s², s = residui/76, valendo 1 a 76 residui
+(dove restano le costanti misurate su 1UBQ): β = 0,42 per le restrizioni, 0,132 per un modello, dal fit sul server
+(minimi quadrati sugli errori relativi, coefficienti non negativi) riportato alla velocità del portatile. Errore sulle
+mediane fra −17 % e +17 %. Una legge di potenza (t ∝ L^p) non basta: adattata su tutto l'intervallo dà ~L^1,5 per
+modello e ~L^2 per le restrizioni ma sbaglia del 25 % a 4000 residui, perché la pendenza continua a crescere; oltre 4000
+le restrizioni crescono più che quadraticamente (a 5000 residui la stima con un modello è il 17 % sotto la misura). La
+stima lineare di prima, calibrata fino a 304 residui su ubiquitina, sottostimava di 3 volte a 1000 residui e di 18 a
+5000: l'avviso `timeout_risk` non scattava mai (5 modelli di 5000 residui erano 13 minuti stimati, oggi oltre 2 ore).
+
+**Avvio dei worker** (`T_WORKERS`, l'unica costante non misurata fino a 4.2.0): sul server m modelli in parallelo con
+m worker (2, 4, 8 a 300 residui; 4 a 1000) costano 1–2 s più di un modello in serie alla stessa lunghezza, come i 2 s
+della stima. Sul portatile (2 core fisici con hyper-threading) 2 worker costano 4 s in più e 4 worker 13 s: oltre i core
+fisici i modelli rallentano, non è il costo di avvio.
+
+**Serie contro parallelo, stesso seme** (`tests/perf_serial_parallel.py`, ubiquitina di lievito su 1UBQ, 3 modelli
+`fast`, semi −4321, −12312, −777): due costruzioni in serie danno coordinate identiche; in parallelo con 1, 2 o 3
+worker coordinate identiche fra loro; serie e parallelo danno la stessa struttura in un altro sistema di riferimento,
+Cα a 0,2–0,54 Å dopo la sovrapposizione ottimale e 4–20 Å senza (MODELLER assegna un seme proprio a ogni modello del
+lavoro parallelo). Per questo la modalità sta nel manifest e nei parametri delle pipeline, e il numero di worker no.
+
 ## Frontend
 
 React 19 + TypeScript + Vite, nessuna libreria UI esterna: componenti propri (`components/ui.tsx`), grafici SVG
@@ -4562,13 +4615,29 @@ analisi strutturali, la rifinitura e la mutagenesi non usano la rete; l'interfac
 
 ## Test
 
-**Conteggi** (contati l'11 ottobre 2026 con `pytest --collect-only -q` in `backend/` e con `npx vitest list` in
-`frontend/`):
+**Conteggi** (contati il 21 ottobre 2026, 4.3.0, con `pytest --collect-only -q` in `backend/` e con `npx vitest list`
+in `frontend/`):
 
 | Suite | File | Test |
 |---|---|---|
-| backend, `backend/tests` (pytest) | 59 | 1461 nella suite predefinita (58 file), più 5 con il marcatore `network`, esclusi da `addopts` (`pytest -m network`): i 4 di `test_remote.py` e uno di `test_rete_bloccata.py` |
-| frontend, `frontend/src/**/*.test.ts(x)` (vitest) | 101 | 815 (11 file in ambiente jsdom) |
+| backend, `backend/tests` (pytest) | 67 | 1536 nella suite predefinita, più 5 con il marcatore `network`, esclusi da `addopts` (`pytest -m network`): i 4 di `test_remote.py` e uno di `test_rete_bloccata.py` |
+| frontend, `frontend/src/**/*.test.ts(x)` (vitest) | 102 | 818 |
+| interfaccia nel browser, `frontend/e2e/*.spec.ts` (Playwright) | 1 | 29: 14 pagine × tema scuro e chiaro, più navigazione e tastiera |
+
+**Ultima esecuzione completa** (21 ottobre 2026, branch `lavori-aperti`, immagine `bioloom:4.3.0` con MODELLER 10.8,
+PROCHECK e ProSA della cartella dati, portatile i3-1115G4): backend **1533 passati, 3 saltati**, 0 falliti in 14 min 41 s
+(`scripts/test.sh backend --cov`), copertura **91,4 %** delle righe di `bioloom` (22.865 righe, 1970 non eseguite);
+frontend 818 passati, copertura 52,3 % delle istruzioni e 83,6 % dei rami (`npm run coverage`); 29 test Playwright su
+29 contro un container 4.3.0. Registro completo in `bench_out/pytest_4.3.0.log` (fuori dal repository). La prima
+esecuzione dei test nel browser ha trovato due difetti veri di accessibilità (nome accessibile del pulsante della
+ricerca globale diverso dal testo visibile, `select` dei selettori senza nome), corretti.
+
+**Copertura e browser in CI** (4.3.0): il job `docker` esegue i test nell'immagine con `--cov` e scrive il totale nel
+riepilogo del job; il job `frontend` usa `npm run coverage` (`@vitest/coverage-v8`). Nessuna soglia minima: il numero si
+legge e si confronta. Dopo gli avviatori il job `docker` avvia BioLoom e lancia Playwright con Chromium (`npm run e2e`,
+`playwright.config.ts`): ogni pagina si carica senza errori in console e senza violazioni WCAG 2.1 A/AA gravi o
+critiche secondo axe-core (`@axe-core/playwright`), in tema scuro e chiaro; le violazioni minori si stampano. Rapporti
+e tracce nelle cartelle nascoste `.coverage/` e `.playwright/`, fuori dall'impronta del codice.
 
 I test che richiedono MODELLER, PROCHECK, ProSA o gli strumenti dell'immagine di sviluppo (fpocket, PDB2PQR, APBS,
 OpenMM, PDBFixer) si saltano da soli, con il motivo, dove mancano (`requires_modeller` e le condizioni degli strumenti):

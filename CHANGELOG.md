@@ -31,7 +31,18 @@ le immagini costruite in quel periodo si chiamano tutte `bioloom:4.2.0` ma hanno
   della cache; avviso `rerun_version_code` quando la riesecuzione usa la stessa versione con codice diverso.
 - Ambiente di calcolo (versioni di BioLoom, impronta, strumenti, Python, librerie) registrato all'avvio di ogni job
   in `.environment.json`; il manifest lo usa al posto di quello rilevato all'esportazione.
-- Copertura dei test misurata in CI (pytest-cov nel job docker, `@vitest/coverage-v8` nel job frontend).
+- Copertura dei test misurata in CI (pytest-cov nel job docker, `@vitest/coverage-v8` nel job frontend); al 21 ottobre
+  2026 il backend è al 91,4 % delle righe (1533 test), il frontend al 52,3 % delle istruzioni (818 test).
+- Firma HMAC-SHA256 facoltativa del manifest di riproducibilità (`data/licenses/firma-manifest.key`): firma non valida
+  = rifiuto, chiave assente o diversa = avviso.
+- Le pipeline registrano la modalità di MODELLER nei parametri e in ogni elemento; quelle create prima della modalità
+  parallela, riprese, restano in serie.
+- Test dell'interfaccia in Chromium (Playwright) con audit di accessibilità axe-core (WCAG 2.1 A/AA) su tutte le pagine
+  in tema scuro e chiaro, anche in CI; avviatore Podman provato in CI; scansione delle dipendenze (pip-audit, npm audit).
+- Avviso sotto la scelta del motore nelle pagine Ricerca e Pipeline: RCSB e NCBI ricevono la sequenza.
+- Esperimento serie contro parallelo con lo stesso seme (`tests/perf_serial_parallel.py`) e test rigoroso: stessa
+  struttura in un altro sistema di riferimento.
+- Script di misura `benchmark_tempi.py`, `benchmark_qmean.py`, `misure_tempi.sh` e `analisi_tempi.py`.
 - `CITATION.cff` e `.zenodo.json`; `versione.sh` tiene allineata anche la loro versione.
 - Questo registro delle modifiche e i tag `v4.1.0` e `v4.2.0`.
 
@@ -41,6 +52,14 @@ le immagini costruite in quel periodo si chiamano tutte `bioloom:4.2.0` ma hanno
 - Podman: rimozione dei container con attesa, `aggiorna` non lascia BioLoom spento (`06f7032`); profilo seccomp su
   misura per Podman 2.x (`6773e84`) e MMseqs2 con Podman 2.x e libseccomp 2.4 (`5a6772f`).
 - Il numero di worker di MODELLER (`modeller_workers`) non entra più nel confronto delle riesecuzioni.
+- Stima del tempo di costruzione lineare più quadratica nei residui, dalle misure ripetute fino a 4000 residui: prima
+  era lineare e sottostimava di 13 volte a 4000 residui, e l'avviso `timeout_risk` non scattava sui job lunghi.
+- Pacchetti di Ubuntu dell'immagine da un'istantanea fissata dell'archivio (`UBUNTU_SNAPSHOT`).
+- `certifi` 2026.10.19 (PYSEC-2026-4320).
+
+### Corretto
+- Accessibilità: nome accessibile del pulsante della ricerca globale e dei select dei selettori di struttura, sequenza
+  e template (trovati da axe-core).
 
 ## [4.2.0] - 2026-10-11
 
