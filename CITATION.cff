@@ -1,7 +1,7 @@
 # Come citare BioLoom (Citation File Format 1.2.0, https://citation-file-format.github.io).
 # GitHub mostra "Cite this repository" a partire da questo file; Zenodo legge invece .zenodo.json.
 # Al primo rilascio archiviato su Zenodo aggiungere il DOI in "identifiers" (e in "doi").
-# Autori: completare con given-names e family-names (qui solo l'alias della licenza).
+# Autore: nome e cognome; l'alias è quello della licenza (LICENSE).
 cff-version: 1.2.0
 message: "Se usi BioLoom in un lavoro scientifico, citalo con questi metadati."
 title: "BioLoom"
@@ -11,7 +11,9 @@ abstract: >-
   pacchetti di riproducibilità. Distribuita come immagine Docker (o Podman) con interfaccia web.
 type: software
 authors:
-  - alias: "foggy02"
+  - given-names: "Francesco"
+    family-names: "Fogagnolo"
+    alias: "foggy02"
 version: "4.3.1"
 date-released: "2026-10-21"
 license: MIT
