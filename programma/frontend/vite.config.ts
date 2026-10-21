@@ -13,7 +13,14 @@ export default defineConfig({
     chunkSizeWarningLimit: 1500,
     rollupOptions: {
       output: {
-        manualChunks: { viewer3d: ["3dmol"], vendor: ["react", "react-dom", "react-router-dom"] },
+        // Vite 8 (rolldown) accetta solo la forma a funzione: 3Dmol.js a parte (caricato su richiesta), React e il
+        // router in un blocco comune, come prima con la forma a oggetto
+        manualChunks(id: string) {
+          const path = id.replace(/\\/g, "/");
+          if (path.includes("/node_modules/3dmol/")) return "viewer3d";
+          if (/\/node_modules\/(react|react-dom|react-router|react-router-dom|scheduler)\//.test(path)) return "vendor";
+          return undefined;
+        },
       },
     },
   },

@@ -13,6 +13,19 @@ della cache.
 
 Le versioni fino a 4.2.0 sono ricostruite dalla storia git (21 ottobre 2026): prima non c'era un registro.
 
+## [Non rilasciato]
+
+### Modificato
+- Strumenti di sviluppo dell'interfaccia: Vite 8 (rolldown; `manualChunks` nella forma a funzione), plugin React 6,
+  vitest 5 con `@vitest/coverage-v8` 5, jsdom 30.1.2. `npm audit` non trova più vulnerabilità, nemmeno nelle
+  dipendenze di sviluppo. Stessi blocchi del bundle, 818 test e 29 test nel browser superati.
+- GitHub Actions: checkout 7.0.1, setup-node 7.1.0, setup-python 7.0.0, setup-buildx 4.4.1, build-push 7.4.0 (SHA
+  verificati con `git ls-remote`).
+
+### Corretto
+- Integrazione continua: avviso di shellcheck in `bioloom-podman.sh` e test di annullamento della pipeline instabile
+  sui runner con pochi core (rossi dal 12 e dal 14 ottobre).
+
 ## [4.3.0] - 2026-10-21
 
 Contiene anche le modifiche arrivate in `main` dopo 4.2.0 senza aumentare la versione (dall'11 al 21 ottobre 2026):
