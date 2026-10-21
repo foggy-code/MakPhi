@@ -110,8 +110,9 @@ SCORE_ABS = 1e-3
 SCORE_REL = 1e-6
 # Campi dei risultati che non dipendono dal calcolo: provenienza dalla cache dei calcoli, durata dei passi, numero
 # di thread (OpenMM) e numero di worker della modalità parallela di MODELLER (dipende dai core liberi; i modelli
-# dipendono solo dalla modalità, registrata nelle opzioni). Non entrano nel confronto.
-IGNORED_KEYS = frozenset({"cached", "cached_at", "timings", "threads", "modeller_workers"})
+# dipendono solo dalla modalità, registrata nelle opzioni): `modeller_workers` nel risultato del job, `workers` in
+# models.json, che lo script scrive solo in modalità parallela. Non entrano nel confronto.
+IGNORED_KEYS = frozenset({"cached", "cached_at", "timings", "threads", "modeller_workers", "workers"})
 # Testo che cambia a ogni esecuzione senza dipendere dal calcolo: data e ora che MODELLER scrive nella riga EXPDTA dei
 # modelli («EXPDTA THEORETICAL MODEL, MODELLER 10.8 2026/10/01 08:19:38»), riprese dal rapporto di qualità nel metodo
 # della struttura. Misurato rieseguendo lo stesso job (modellazione con la qualità estesa, analisi di qualità con

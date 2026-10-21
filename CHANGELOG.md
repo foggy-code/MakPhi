@@ -23,6 +23,9 @@ Le versioni fino a 4.2.0 sono ricostruite dalla storia git (21 ottobre 2026): pr
   verificati con `git ls-remote`).
 
 ### Corretto
+- Riesecuzione dei pacchetti: anche il campo `workers` di `models.json` (numero di worker della modalità parallela di
+  MODELLER) esce dal confronto; nella 4.3.0 ne usciva solo `modeller_workers` del risultato, e una riesecuzione con un
+  altro numero di worker risultava ancora «diversa».
 - Integrazione continua: avviso di shellcheck in `bioloom-podman.sh` e test di annullamento della pipeline instabile
   sui runner con pochi core (rossi dal 12 e dal 14 ottobre).
 

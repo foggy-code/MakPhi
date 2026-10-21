@@ -253,6 +253,10 @@ def test_compare_file_statuses():
     workers = {**a, "options": {"parallel": True}, "modeller_workers": 3}
     assert repro.compare_file("r.json", json.dumps(workers).encode(),
                               json.dumps({**workers, "modeller_workers": 2}).encode())["status"] == "identical"
+    # anche in models.json, dove lo script di MODELLER scrive i worker della modalità parallela
+    summary = {"models": [{"name": "t.B99990001.pdb", "molpdf": 512.3, "DOPE score": -7416.0}], "workers": 3}
+    assert repro.compare_file("models.json", json.dumps(summary).encode(),
+                              json.dumps({**summary, "workers": 1}).encode())["status"] == "identical"
     far = repro.compare_file("r.json", json.dumps(a).encode(), json.dumps({**a, "dope": -8100.0}).encode())
     assert far["status"] == "different" and far["diff"]["beyond_tolerance"] == 1
     assert far["diff"]["max_delta"] == pytest.approx(23.456789) and far["diff"]["max_delta_at"] == "dope"
