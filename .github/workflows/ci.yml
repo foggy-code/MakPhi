@@ -15,7 +15,8 @@
 #   L'impronta salvata nell'immagine (/app/IMPRONTA) deve essere quella del codice da cui è costruita.
 #   Poi l'avviatore vero (avvio, salute, arresto) e la copia portatile (prepara), avviata dal file in immagini/ dopo
 #   aver tolto l'immagine da Docker, e l'avviatore dei server senza compose (launcher/bioloom-podman.sh) con il Podman
-#   del runner, senza root.
+#   del runner, senza root. Infine l'interfaccia servita da BioLoom in Chromium (Playwright): ogni pagina in tema scuro
+#   e chiaro senza errori in console e senza violazioni WCAG 2.1 gravi secondo axe-core (frontend/e2e/).
 # - qmean: solo a mano (Run workflow con "qmean"), costruzione dell'immagine bioloom-qmean e prova del worker.
 # Le GitHub Actions sono fissate per SHA completo del commit, con il tag nel commento: un tag spostato non cambia il
 # codice che gira qui. Le aggiorna Dependabot (.github/dependabot.yml), che riscrive SHA e commento insieme; a mano:
@@ -245,6 +246,25 @@ jobs:
           test "$ok" = 1
           programma/launcher/bioloom-podman.sh arresta --no-menu
           test -z "$(podman ps -q --filter name=bioloom)"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: programma/frontend/package-lock.json
+      - name: Interfaccia in un browser vero (Playwright, axe-core)
+        # dopo gli avviatori e la copia portatile: node_modules non deve finire nella copia
+        timeout-minutes: 20
+        run: |
+          (cd programma/frontend && npm ci --no-audit --no-fund && npx playwright install --with-deps chromium)
+          ./avvia-bioloom.sh --no-menu --no-browser
+          curl -fsS http://127.0.0.1:8765/api/health
+          echo
+          set +e
+          (cd programma/frontend && npm run e2e)
+          esito=$?
+          set -e
+          ./avvia-bioloom.sh arresta
+          exit "$esito"
       - name: Container e log (se un passo non è riuscito)
         if: failure()
         run: |

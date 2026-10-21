@@ -77,7 +77,7 @@ export function SequencePicker({ value, onChange, label = "Sequenza bersaglio" }
             {fromFile && <span className="small text-2 ellipsis" style={{ maxWidth: 260 }} title={fromFile.filename}>{fromFile.filename} · {fromFile.format_label}</span>}
           </div>
           {fromFile && fromFile.records.length > 1 && (
-            <select className="input" value={fileIndex} onChange={(e) => {
+            <select className="input" aria-label="Sequenza del file" value={fileIndex} onChange={(e) => {
               const r = fromFile.records[Number(e.target.value)];
               if (r) onChange({ name: r.name, sequence: r.sequence });
             }}>
@@ -91,6 +91,7 @@ export function SequencePicker({ value, onChange, label = "Sequenza bersaglio" }
       ) : mode === "project" ? (
         <select
           className="input"
+          aria-label="Sequenza del progetto"
           value={selectedId}
           onChange={(e) => {
             const s = seqs?.find((x) => x.id === e.target.value);
@@ -247,7 +248,7 @@ export function TemplatePicker({ value, onChange, max = 10, ligands = true, onAn
   return (
     <div className="stack-sm">
       <div className="row">
-        <select className="input" style={{ flex: 1 }} value={adding} onChange={(e) => setAdding(e.target.value)} onFocus={reload}>
+        <select className="input" aria-label="Aggiungi un template dalla libreria" style={{ flex: 1 }} value={adding} onChange={(e) => setAdding(e.target.value)} onFocus={reload}>
           <option value="">{templates?.length ? "— aggiungi un template dalla libreria —" : "Libreria vuota: scarica un template"}</option>
           {templates?.filter((t) => !value.some((v) => v.id === t.id)).map((t) => (
             <option key={t.id} value={t.id}>
@@ -387,7 +388,7 @@ export function StructurePicker({ value, onChange, label = "Struttura" }: { valu
           <span className="small text-2">Il file resta tra i caricamenti per i giorni impostati nella pulizia automatica; i risultati dei calcoli restano per sempre.</span>
         </div>
       ) : kind === "template" ? (
-        <select className="input" value={value?.type === "template" ? value.id : ""} onChange={(e) => onChange(e.target.value ? { type: "template", id: e.target.value, chain: value?.chain } : null)}>
+        <select className="input" aria-label={`${label}: template della libreria`} value={value?.type === "template" ? value.id : ""} onChange={(e) => onChange(e.target.value ? { type: "template", id: e.target.value, chain: value?.chain } : null)}>
           <option value="">— template —</option>
           {templates?.map((t) => (
             <option key={t.id} value={t.id}>{t.id} {t.title ? `· ${t.title.slice(0, 50)}` : ""}</option>
@@ -395,13 +396,13 @@ export function StructurePicker({ value, onChange, label = "Struttura" }: { valu
         </select>
       ) : (
         <div className="grid grid-2">
-          <select className="input" value={jobId} onChange={(e) => { setJobId(e.target.value); onChange(null); }}>
+          <select className="input" aria-label={`${label}: job di modellazione`} value={jobId} onChange={(e) => { setJobId(e.target.value); onChange(null); }}>
             <option value="">— job di modellazione —</option>
             {jobOptions.map((j) => (
               <option key={j.value} value={j.value}>{j.label}</option>
             ))}
           </select>
-          <select className="input" value={chosenFile ?? ""} disabled={!modelOptions.length} onChange={(e) => onChange(e.target.value ? { type: "job", job_id: jobId, file: e.target.value } : null)}>
+          <select className="input" aria-label={`${label}: modello`} value={chosenFile ?? ""} disabled={!modelOptions.length} onChange={(e) => onChange(e.target.value ? { type: "job", job_id: jobId, file: e.target.value } : null)}>
             <option value="">— modello —</option>
             {modelOptions.map((m) => (
               <option key={m} value={m}>{m}</option>
