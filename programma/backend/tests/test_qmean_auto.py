@@ -252,3 +252,50 @@ def test_notice_without_usable_qmean_is_sent_at_once(client, modeller, swissmode
     msg = until(lambda: smtp.messages)[0]
     assert "QMEAN automatico: nessun calcolo (il servizio QMEAN locale non è attivo" in msg["body"]
     assert not qmean_jobs(client) and not auto_status(client, job_id)["pending"]
+
+
+def test_failed_qmean_are_requeued_on_request(client, modeller, monkeypatch):
+    from bioloom.core.errors import ToolUnavailable
+
+    state = {"down": True}
+
+    def fake(pdb_text, email, check=None, log=print, sleep=None):
+        if state["down"]:  # servizio guasto: come il worker QMEAN bloccato sul server
+            raise ToolUnavailable("servizio non raggiungibile")
+        return dict(REMOTE_RESULT)
+
+    monkeypatch.setattr(remote, "swissmodel_qmean", fake)
+    monkeypatch.delenv("BIOLOOM_QMEAN_URL", raising=False)
+    client.put("/api/settings", json=REMOTE)
+    job_id = pipeline(client, qmean_scope="all")
+    until(lambda: (s := auto_status(client, job_id)) and not s["pending"] and s["counts"] == {"failed": 6})
+    failed = {q["id"] for q in qmean_jobs(client)}
+    state["down"] = False
+    r = client.post(f"/api/jobs/{job_id}/qmean-auto/retry")
+    assert r.status_code == 200 and r.json() == {"requeued": 6, "skipped": 0}
+    status = until(lambda: (s := auto_status(client, job_id)) and not s["pending"] and s)
+    assert status["counts"] == {"completed": 6} and status["total"] == 6  # gli stessi job, niente doppioni
+    assert {q["id"] for q in qmean_jobs(client)} == failed
+    assert all(q["params"]["auto"] for q in all_done(client, qmean_jobs(client)))
+    until(lambda: "QMEAN automatico: 6 calcoli falliti rimessi in coda." in job_log(client, job_id))
+    # nessun fallito rimasto: nulla da rimettere in coda
+    assert client.post(f"/api/jobs/{job_id}/qmean-auto/retry").json() == {"requeued": 0, "skipped": 0}
+    # un job senza QMEAN automatico rifiuta la richiesta
+    plain = pipeline(client, qmean=False)
+    r = client.post(f"/api/jobs/{plain}/qmean-auto/retry")
+    assert r.status_code == 400 and r.json()["error"]["code"] == "qmean_auto_not_requested"
+
+
+def test_a_model_with_a_valid_qmean_is_not_requeued(client, modeller, swissmodel):
+    client.put("/api/settings", json=REMOTE)
+    job_id = pipeline(client)
+    done = all_done(client, until(lambda: len(qmean_jobs(client)) == 2 and qmean_jobs(client)))
+    first = done[0]
+    # un fallito più vecchio sullo stesso modello di un QMEAN completato (servizio guasto, poi rilanciato a mano)
+    jobs = client.app.state.core.jobs
+    jobs.db.execute("UPDATE jobs SET status='failed' WHERE id=?", (done[1]["id"],))
+    copy = jobs.submit("qmean", {**first["params"]}, project_id=first.get("project_id"), title="copia")
+    wait_job(client, copy["id"])
+    jobs.db.execute("UPDATE jobs SET status='failed' WHERE id=?", (copy["id"],))
+    out = AutoQmean(jobs).retry_failed(job_id)
+    assert out == {"requeued": 1, "skipped": 1}  # il modello di `first` ha già il suo QMEAN completato
