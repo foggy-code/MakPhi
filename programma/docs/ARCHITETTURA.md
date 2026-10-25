@@ -2254,6 +2254,10 @@ QMEAN in `run_qmean_wrapper.py`); client in `engines/qmean_local.py`, job `qmean
       con "Il servizio QMEAN locale non risponde", che può passare al fallback). Anche le letture dell'avanzamento e
       l'invio riprovano. Un job che il worker non conosce più (404 dopo un riavvio) si invia di nuovo, al più 3
       volte.
+    - **Rilancio dei falliti:** `POST /api/jobs/{id}/qmean-auto/retry` (`AutoQmean.retry_failed`) rimette in coda con
+      `JobManager.requeue` i QMEAN automatici falliti o annullati del job, nell'ordine in cui erano stati accodati.
+      Un modello che ha già un QMEAN in coda, in corso o completato non ne riprende un altro. L'accodamento gira in
+      un thread, e alla fine dei QMEAN l'avviso per email parte di nuovo.
   - **Profili riusati (`QMEAN_PROFILE_CACHE_GB`, predefinito 10, 100 sul server):** HHblits dipende solo dalla sequenza. Il wrapper
     avvolge `run_qmean._seqanno`: prima della ricerca copia `<md5 della sequenza>.a3m` dalla cartella del database in
     `/cache/profiles` (il nome cambia se l'indice degli a3m cambia), dopo salva il profilo nuovo con una scrittura

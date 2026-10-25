@@ -25,7 +25,7 @@ import time
 from pathlib import PurePosixPath
 from typing import Callable, Optional
 
-from ..core.errors import AppError
+from ..core.errors import AppError, Conflict
 from ..core.jobs import JobManager
 from ..engines import qmean_local
 from .pipeline import is_cross
@@ -188,6 +188,73 @@ class AutoQmean:
         if failed:
             parts.append(f"interrotto: {failed}")
         return submitted, ", ".join(parts) + "."
+
+    def retry_failed(self, job_id: str) -> dict:
+        """Rimette in coda i QMEAN automatici falliti o annullati del job: gli stessi job, con i loro parametri (restano
+        automatici e i conteggi di `status` tornano giusti), nell'ordine in cui erano stati accodati. Un modello che ha
+        già un QMEAN in coda, in corso o completato non ne riprende un altro, e di più falliti sullo stesso modello si
+        riprende il primo. Serve dopo un guasto del servizio (il 25 ottobre 2026 un worker bloccato ne ha fatti
+        fallire 107.918). Il lavoro va in un thread, perché con centinaia di migliaia di QMEAN richiede minuti; alla
+        fine dei QMEAN l'avviso per email parte di nuovo. Restituisce `requeued` (da rimettere in coda) e `skipped`."""
+        if not self.status(job_id)["requested"]:  # NotFound per un job inesistente
+            raise AppError("Questo job non ha chiesto QMEAN automatico.", code="qmean_auto_not_requested")
+        with self._lock:
+            if job_id in self._submitting:
+                raise Conflict("I QMEAN automatici di questo job si stanno già accodando: riprova fra qualche minuto.")
+        taken = self._taken(job_id)
+        ids, skipped = [], 0
+        for row in self._failed(job_id):
+            if row["file"] in taken:
+                skipped += 1
+                continue
+            taken.add(row["file"])
+            ids.append(row["id"])
+        if not ids:
+            return {"requeued": 0, "skipped": skipped}
+        with self._lock:
+            self._open.add(job_id)
+            self._submitting.add(job_id)
+        threading.Thread(target=self._requeue, args=(job_id, ids), name=f"autoqmean-retry-{job_id[:6]}",
+                         daemon=True).start()
+        return {"requeued": len(ids), "skipped": skipped}
+
+    def _requeue(self, job_id: str, ids: list[str]) -> None:
+        done = 0
+        try:
+            for qmean_id in ids:
+                try:
+                    self.jobs.requeue(qmean_id, note="QMEAN automatico rilanciato", stage="In coda (rilanciato)")
+                    done += 1
+                except AppError:  # ripreso, annullato o eliminato nel frattempo
+                    continue
+        finally:
+            with self._lock:
+                self._submitting.discard(job_id)
+            try:
+                self.jobs.log_if_present(job_id, f"QMEAN automatico: {done} "
+                                                 f"{'calcolo fallito rimesso' if done == 1 else 'calcoli falliti rimessi'}"
+                                                 " in coda.")
+            except Exception:
+                pass
+            self._check_done(job_id)
+
+    def _failed(self, job_id: str) -> list[dict]:
+        """QMEAN automatici falliti o annullati del job, nell'ordine in cui erano stati accodati: [{id, file}]."""
+        try:
+            rows = self.jobs.db.query(
+                "SELECT id, json_extract(params, '$.source.file') AS file FROM jobs WHERE kind='qmean' AND "
+                "status IN ('failed', 'cancelled') AND json_extract(params, '$.auto') AND "
+                "json_extract(params, '$.source.job_id')=? ORDER BY created_at, rowid", (job_id,))
+            return [{"id": r["id"], "file": str(r["file"])} for r in rows if r.get("file")]
+        except sqlite3.OperationalError:  # SQLite senza funzioni JSON: parametri interi
+            out = []
+            for r in self.jobs.db.query("SELECT id, params FROM jobs WHERE kind='qmean' AND status IN "
+                                        "('failed', 'cancelled') ORDER BY created_at, rowid"):
+                p = r.get("params") or {}
+                source = p.get("source") or {}
+                if p.get("auto") and source.get("job_id") == job_id and source.get("file"):
+                    out.append({"id": r["id"], "file": str(source["file"])})
+            return out
 
     def _targets(self, job: dict) -> list[tuple[str, str]]:
         """(file del modello nel job, nome per il titolo) dei modelli su cui calcolare QMEAN."""

@@ -135,6 +135,14 @@ def auto_qmean_status(job_id: str, core: Core = Depends(get_core)) -> dict:
     return core.autoqmean.status(job_id)
 
 
+@router.post("/{job_id}/qmean-auto/retry")
+def auto_qmean_retry(job_id: str, core: Core = Depends(get_core)) -> dict:
+    """Rimette in coda i QMEAN automatici falliti o annullati di una modellazione o pipeline (gli stessi job):
+    `requeued` (si accodano in un thread, qualche minuto per centinaia di migliaia) e `skipped` (modelli che hanno già
+    un QMEAN valido)."""
+    return core.autoqmean.retry_failed(job_id)
+
+
 @router.get("/{job_id}")
 def get_job(job_id: str, core: Core = Depends(get_core)) -> dict:
     job = core.jobs.with_eta(core.jobs.get(job_id))

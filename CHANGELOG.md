@@ -15,6 +15,12 @@ Le versioni fino a 4.2.0 sono ricostruite dalla storia git (21 ottobre 2026): pr
 
 ## [Non rilasciato]
 
+### Aggiunto
+- `POST /api/jobs/{id}/qmean-auto/retry`: rimette in coda i QMEAN automatici falliti o annullati di una modellazione o
+  pipeline. Riprende gli stessi job, quindi restano automatici e i conteggi tornano giusti, e salta i modelli che
+  hanno già un QMEAN valido. Serve dopo un guasto del servizio QMEAN, quando la pipeline è completata e non si può
+  riprendere.
+
 ### Corretto
 - QMEAN locale con un servizio occupato o bloccato. Sul server una pipeline ha perso 107.918 QMEAN in 5 ore: il
   worker apriva un thread per richiesta e ogni calcolo gli faceva rifare la scansione dei database. A 1096 thread
