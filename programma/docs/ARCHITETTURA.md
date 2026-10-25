@@ -2237,6 +2237,23 @@ QMEAN in `run_qmean_wrapper.py`); client in `engines/qmean_local.py`, job `qmean
     HHblits con 7 processori ciascuno è quasi tutto il tempo di un calcolo. Il primo calcolo (115 s) trova il database
     freddo nella cache del sistema; con 8 e 16 calcoli un calcolo costa circa 58–60 s, a 32 (7 × 32 = 224 processori,
     tutti quelli del server) sale a 97 s, ma il rendimento continua a crescere: circa 940 sequenze nuove all'ora.
+  - **Worker occupato o bloccato:** il 25 ottobre 2026 sul server una pipeline ha perso 107.918 QMEAN in 5 ore. Il
+    worker apriva un thread per richiesta. Ogni calcolo chiedeva `/status?refresh=1`, che rifà la scansione dei
+    database, e l'invio la rifaceva ancora. Con i profili riusati i calcoli durano pochi secondi e le richieste si
+    sono moltiplicate. Quelle scadute (BioLoom aspetta 20 s) lasciavano il loro thread nel worker: a 1096 thread fermi
+    sul GIL il worker non rispondeva più. Ogni calcolo falliva in 4 s con "QMEAN locale non attivo" e lasciava
+    partire subito il seguente. Dalla versione successiva alla 4.3.1:
+    - **Server del worker:** `HTTP_THREADS` thread fissi (16, `QMEAN_HTTP_THREADS`) con una coda; una richiesta in
+      coda da più di `STALE_SECONDS` (10 s) si chiude senza risposta.
+    - **Scansioni e conteggi nel worker:** una scansione dei database alla volta (`uniclust.Cache`); con `force` vale
+      solo una scansione cominciata dopo la richiesta, quindi tante richieste insieme ne fanno al più due. Invio e
+      calcolo usano la scansione in cache (30 s): copie e conversioni la rifanno appena finiscono. Il conteggio dei
+      profili è uno alla volta e la pulizia dei risultati scaduti gira al più ogni 30 s.
+    - **BioLoom:** lo stato viene dalla cache di 15 s, con una richiesta al worker alla volta. Se il worker non
+      risponde, il calcolo aspetta (`_Patience`: un tentativo ogni 15 s, al più 30 minuti, poi `ToolUnavailable`
+      con "Il servizio QMEAN locale non risponde", che può passare al fallback). Anche le letture dell'avanzamento e
+      l'invio riprovano. Un job che il worker non conosce più (404 dopo un riavvio) si invia di nuovo, al più 3
+      volte.
   - **Profili riusati (`QMEAN_PROFILE_CACHE_GB`, predefinito 10, 100 sul server):** HHblits dipende solo dalla sequenza. Il wrapper
     avvolge `run_qmean._seqanno`: prima della ricerca copia `<md5 della sequenza>.a3m` dalla cartella del database in
     `/cache/profiles` (il nome cambia se l'indice degli a3m cambia), dopo salva il profilo nuovo con una scrittura

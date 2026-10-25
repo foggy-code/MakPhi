@@ -297,6 +297,10 @@ Esecuzione** (da 100 a 9999 residui, predefinito 5000): oltre 9999 il formato PD
   insieme 7,6 s per modello, 32 insieme 4,4 s, 64 insieme 2,6 s. Le pipeline con QMEAN automatico ne guadagnano in
   proporzione; un valore intorno alla metà dei core lascia spazio alla modellazione. BioLoom usa tutti i posti
   dichiarati dal servizio, oltre agli 8 riservati a ricerche e altri lavori brevi.
+- **Servizio QMEAN che non risponde:** se il servizio è avviato ma occupato o bloccato, i calcoli non falliscono
+  subito. Aspettano e riprovano ogni 15 secondi, per al più 30 minuti, e il log del job lo scrive. Se il servizio
+  viene riavviato mentre BioLoom segue un calcolo, il modello viene inviato di nuovo. Il messaggio "Il servizio QMEAN
+  locale non risponde" indica un servizio bloccato, non un disco mancante: riavvia BioLoom dall'avviatore.
 - **Processori:** con memoria sufficiente HHblits usa fino a 8 processori, divisi fra i calcoli contemporanei; con
   memoria al limite uno solo. `QMEAN_HHBLITS_CPU` in `server.env` fissa il numero per ogni calcolo, ma oltre 8 non
   accelera (misurato: 141 s con 8, 129 con 16, 134 con 32).

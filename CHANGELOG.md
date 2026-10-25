@@ -13,6 +13,21 @@ della cache.
 
 Le versioni fino a 4.2.0 sono ricostruite dalla storia git (21 ottobre 2026): prima non c'era un registro.
 
+## [Non rilasciato]
+
+### Corretto
+- QMEAN locale con un servizio occupato o bloccato. Sul server una pipeline ha perso 107.918 QMEAN in 5 ore: il
+  worker apriva un thread per richiesta e ogni calcolo gli faceva rifare la scansione dei database. A 1096 thread
+  non rispondeva più, e ogni calcolo falliva in 4 s con "QMEAN locale non attivo".
+  - Worker: 16 thread fissi con una coda (`QMEAN_HTTP_THREADS`), e le richieste scadute si chiudono senza lavoro.
+    Le scansioni dei database e i conteggi dei profili sono uno alla volta e condivisi, e l'invio di un modello non
+    rifà la scansione.
+  - BioLoom: lo stato viene dalla cache di 15 s, con una richiesta al worker alla volta. Se il servizio non risponde
+    il calcolo aspetta e riprova ogni 15 s per al più 30 minuti, invece di fallire. Un calcolo perso da un servizio
+    riavviato si invia di nuovo.
+  - Messaggio distinto per un servizio che non risponde ("Il servizio QMEAN locale non risponde"), invece di quello
+    del disco mancante.
+
 ## [4.3.1] - 2026-10-21
 
 ### Modificato

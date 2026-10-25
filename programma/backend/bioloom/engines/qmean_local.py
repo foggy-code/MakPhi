@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import math
 import os
+import threading
 import time
 from typing import Callable, Optional
 
@@ -29,7 +30,17 @@ POLL_SECONDS = 3.0
 STATUS_TTL = 15.0
 NOT_RUNNING = ("QMEAN locale non attivo: collega il disco con UniClust30/UniRef30 e avvia (o riavvia) BioLoom "
                "dall'avviatore, che attiva il servizio quando trova il database.")
+UNREACHABLE = ("Il servizio QMEAN locale non risponde: è avviato ma occupato o bloccato. Se dura, riavvia BioLoom "
+               "dall'avviatore.")
+# Servizio configurato che non risponde (occupato, bloccato o in riavvio): il calcolo aspetta e riprova ogni
+# RETRY_SECONDS per al più WAIT_MINUTES, poi fallisce. Prima falliva subito: sul server una pipeline ha perso 107.918
+# QMEAN in 5 ore, uno ogni 4 s, perché ogni fallimento lasciava partire subito il calcolo seguente.
+RETRY_SECONDS = 15.0
+WAIT_MINUTES = 30.0
+LOST_RETRIES = 3  # nuovi invii di un calcolo perso dal worker (riavviato mentre BioLoom lo seguiva)
 _status_cache: dict = {"at": 0.0, "key": None, "value": None}
+_status_lock = threading.Lock()  # una richiesta di stato alla volta: le altre ne usano la risposta
+_status_fetches = {"begun": 0}  # richieste di stato partite (`fetch` nella cache: quella che ha dato il valore)
 # calcoli contemporanei del worker (QMEAN_PARALLEL, `slots` nel suo stato): ultimo valore letto, per il dispatcher
 _slots = {"value": 1}
 
@@ -130,7 +141,7 @@ def _client() -> httpx.Client:
 def slots() -> int:
     """Calcoli QMEAN locali contemporanei (posti della risorsa QMEAN_LOCAL): l'ultimo valore dichiarato dal worker,
     senza I/O (si legge sotto il lock del dispatcher); 1 finché il worker non è stato interrogato. Lo stato si rilegge
-    all'inizio di ogni calcolo (`score`), quindi dopo il primo i posti in più si usano."""
+    all'inizio di ogni calcolo (`score`, cache di STATUS_TTL secondi), quindi dopo il primo i posti in più si usano."""
     return max(1, int(_slots["value"])) if base_url() else 1
 
 
@@ -141,15 +152,29 @@ def status(prefer: str = "", force: bool = False) -> dict:
     servizio basta per quel database (`memory_problem`); `memory_required` è il requisito del database scelto, con
     `sufficient` (`memory_sufficient`): l'esito del controllo, che l'interfaccia mostra accanto al requisito (una stima
     più alta della memoria non è un difetto se il worker ha giudicato la memoria sufficiente).
+
+    Una richiesta al worker alla volta: chi arriva mentre un'altra è in corso ne usa la risposta. Con `force` vale solo
+    una risposta chiesta dopo la chiamata, così decine di calcoli che ripartono insieme fanno al più due richieste.
     """
     url = base_url()
     if not url:
         return {"configured": False, "reachable": False, "available": False, "message": NOT_RUNNING,
                 "databases": [], "archives": [], "unsupported": [], "local_orphans": []}
     key = (url, prefer)
-    cached = _status_cache
-    if not force and cached["key"] == key and time.monotonic() - cached["at"] < STATUS_TTL:
-        return cached["value"]
+    before = _status_fetches["begun"]  # richieste partite prima di questa chiamata
+    with _status_lock:
+        cached = _status_cache
+        if cached["key"] == key and cached["value"] is not None:
+            if (cached.get("fetch", 0) > before) if force else time.monotonic() - cached["at"] < STATUS_TTL:
+                return cached["value"]
+        _status_fetches["begun"] += 1
+        fetch = _status_fetches["begun"]
+        value = _fetch_status(prefer, force)
+        _status_cache.update({"at": time.monotonic(), "key": key, "value": value, "fetch": fetch})
+        return value
+
+
+def _fetch_status(prefer: str, force: bool) -> dict:
     try:
         with _client() as c:
             params = {"prefer": prefer} if prefer else {}
@@ -177,9 +202,8 @@ def status(prefer: str = "", force: bool = False) -> dict:
                  "message": message}
         _slots["value"] = value["slots"]
     except (httpx.HTTPError, ValueError):
-        value = {"configured": True, "reachable": False, "available": False, "message": NOT_RUNNING,
+        value = {"configured": True, "reachable": False, "available": False, "message": UNREACHABLE,
                  "databases": [], "archives": [], "unsupported": [], "local_orphans": []}
-    _status_cache.update({"at": time.monotonic(), "key": key, "value": value})
     return value
 
 
@@ -188,9 +212,57 @@ def _requirement(uniclust: dict, memory: Optional[dict]) -> Optional[dict]:
     return None if need is None else {**need, "sufficient": memory_sufficient(uniclust, memory)}
 
 
+def _error_text(resp: httpx.Response) -> str:
+    """Errore del worker (campo `error` del JSON) o testo della risposta."""
+    try:
+        return str(resp.json().get("error") or resp.text)
+    except (ValueError, AttributeError):
+        return resp.text
+
+
+class _WorkerLost(AppError):
+    """Il worker non conosce più il job (è stato riavviato mentre BioLoom lo seguiva)."""
+
+    def __init__(self, what: str) -> None:
+        super().__init__(f"{what}: il servizio QMEAN locale è stato riavviato e ha perso il calcolo.",
+                         code="qmean_lost")
+
+
+class _Patience:
+    """Attesa del worker che non risponde, comune a tutte le richieste di un calcolo: un nuovo tentativo ogni
+    RETRY_SECONDS, al più WAIT_MINUTES (e al più quei tentativi) dalla prima risposta mancata; si azzera quando il
+    worker risponde. Poi ToolUnavailable, che lascia passare al fallback su SWISS-MODEL se è attivo."""
+
+    def __init__(self, ctx: JobContext, sleep: Callable[[float], None]) -> None:
+        self.ctx, self.sleep = ctx, sleep
+        self.since: Optional[float] = None
+        self.tries = 0
+
+    def ok(self) -> None:
+        if self.since is not None:
+            self.ctx.log("Il servizio QMEAN locale risponde di nuovo")
+        self.since, self.tries = None, 0
+
+    def wait(self) -> None:
+        now = time.monotonic()
+        if self.since is None:
+            self.since = now
+            self.ctx.log(f"Il servizio QMEAN locale non risponde: nuovo tentativo ogni {int(RETRY_SECONDS)} s per "
+                         f"al più {int(WAIT_MINUTES)} minuti")
+        self.tries += 1
+        if self.tries > WAIT_MINUTES * 60 / RETRY_SECONDS or now - self.since > WAIT_MINUTES * 60:
+            raise ToolUnavailable(f"{UNREACHABLE} Atteso per {int(WAIT_MINUTES)} minuti.")
+        self.ctx.progress(None, f"QMEAN locale: il servizio non risponde, nuovo tentativo fra {int(RETRY_SECONDS)} s")
+        for _ in range(int(RETRY_SECONDS)):  # a passi di un secondo: l'annullamento arriva subito
+            self.ctx.check()
+            self.sleep(1.0)
+
+
 def _follow(c: httpx.Client, job_id: str, ctx: JobContext, *, timeout_minutes: float, running_stage: str,
-            sleep: Callable[[float], None], what: str) -> dict:
-    """Segue un job del worker fino al termine; annullamento e timeout lo fermano anche nel worker."""
+            sleep: Callable[[float], None], what: str, patience: Optional[_Patience] = None) -> dict:
+    """Segue un job del worker fino al termine; annullamento e timeout lo fermano anche nel worker. Se il worker non
+    risponde si riprova (`_Patience`); se non conosce più il job, `_WorkerLost`."""
+    patience = patience or _Patience(ctx, sleep)
     deadline = time.monotonic() + timeout_minutes * 60
     last: Optional[tuple] = None
     try:
@@ -199,7 +271,15 @@ def _follow(c: httpx.Client, job_id: str, ctx: JobContext, *, timeout_minutes: f
             if time.monotonic() > deadline:
                 raise AppError(f"{what} non ha terminato entro {int(timeout_minutes)} minuti "
                                "(il tempo si modifica nelle Impostazioni).", code="timeout")
-            job = c.get(f"/jobs/{job_id}").json()
+            try:
+                resp = c.get(f"/jobs/{job_id}")
+                job = resp.json()
+            except (httpx.HTTPError, ValueError):
+                patience.wait()
+                continue
+            patience.ok()
+            if resp.status_code == 404:
+                raise _WorkerLost(what)
             state = job.get("status")
             if state == "completed":
                 return job
@@ -225,18 +305,43 @@ def _follow(c: httpx.Client, job_id: str, ctx: JobContext, *, timeout_minutes: f
 
 def score(pdb_text: str, ctx: JobContext, *, method: str = "auto", seqres: str = "", database: str = "",
           timeout_minutes: float = 60, sleep: Callable[[float], None] = time.sleep) -> dict:
-    info = status(database, force=True)
-    if not info["available"]:
-        raise ToolUnavailable(info["message"] or "QMEAN locale non disponibile.")
-    with _client() as c:
-        resp = c.post("/jobs", json={"pdb": pdb_text, "method": method, "seqres": seqres, "database": database})
-        if resp.status_code != 202:
-            raise AppError(f"QMEAN locale: {resp.json().get('error', resp.text)}", code="qmean_error")
-        chosen = info["uniclust"]
-        ctx.log(f"Modello inviato al servizio QMEAN locale (database {chosen.get('prefix')}"
-                f"{', versione ' + chosen['version'] if chosen.get('version') else ''})")
-        job = _follow(c, resp.json()["id"], ctx, timeout_minutes=timeout_minutes, sleep=sleep, what="QMEAN locale",
-                      running_stage="QMEAN locale: profilo HHblits su UniClust30 e punteggi")
+    """Calcolo QMEAN nel worker. Lo stato viene dalla cache (15 s, comune a tutti i calcoli): con una pipeline di
+    migliaia di modelli una richiesta di stato completa per calcolo teneva il worker occupato. Se il worker non
+    risponde il calcolo aspetta (`_Patience`) invece di fallire; se lo perde (riavvio) lo invia di nuovo."""
+    # l'attesa si azzera solo quando il worker segue davvero il calcolo (`_follow`): uno stato che risponde mentre gli
+    # invii non passano non la allunga all'infinito
+    patience = _Patience(ctx, sleep)
+    body = {"pdb": pdb_text, "method": method, "seqres": seqres, "database": database}
+    lost = 0
+    while True:
+        info = status(database)
+        while info["configured"] and not info["reachable"]:
+            patience.wait()
+            info = status(database, force=True)
+        if not info["available"]:
+            raise ToolUnavailable(info["message"] or "QMEAN locale non disponibile.")
+        with _client() as c:
+            try:
+                resp = c.post("/jobs", json=body)
+                accepted = resp.json() if resp.status_code == 202 else None
+            except (httpx.HTTPError, ValueError):
+                patience.wait()  # nessuna risposta all'invio: si riprova dopo aver riletto lo stato
+                continue
+            if accepted is None:
+                raise AppError(f"QMEAN locale: {_error_text(resp)}", code="qmean_error")
+            chosen = info["uniclust"]
+            ctx.log(f"Modello inviato al servizio QMEAN locale (database {chosen.get('prefix')}"
+                    f"{', versione ' + chosen['version'] if chosen.get('version') else ''})")
+            try:
+                job = _follow(c, accepted["id"], ctx, timeout_minutes=timeout_minutes, sleep=sleep,
+                              what="QMEAN locale", patience=patience,
+                              running_stage="QMEAN locale: profilo HHblits su UniClust30 e punteggi")
+                break
+            except _WorkerLost as exc:
+                lost += 1
+                if lost > LOST_RETRIES:
+                    raise
+                ctx.log(f"{exc.message} Nuovo invio ({lost} di {LOST_RETRIES})")
     result = job.get("result") or {}
     used = result.get("bioloom_database") or {}
     hhblits = _hhblits(result.get("bioloom_hhblits"))

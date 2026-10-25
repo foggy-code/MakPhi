@@ -28,6 +28,7 @@ import json
 import os
 import re
 import shutil
+import threading
 import time
 
 SOURCES = [p for p in os.environ.get("BIOLOOM_UNICLUST_SOURCES", "/uniclust_src:/uniclust30").split(":") if p]
@@ -547,12 +548,25 @@ def finish_conversion(plan):
 
 
 class Cache(object):
-    """Risultato della scansione riutilizzato per qualche secondo (la scansione legge solo le cartelle)."""
+    """Risultato della scansione riutilizzato per qualche secondo (la scansione legge solo le cartelle).
+
+    Una scansione alla volta: chi arriva mentre un'altra è in corso la aspetta e, se non è troppo vecchia, ne usa il
+    risultato. Con `force` vale solo una scansione cominciata dopo la richiesta: tante richieste insieme ne fanno al
+    più due, non una a testa (sul server, con decine di calcoli, le scansioni contemporanee bloccavano il worker)."""
 
     def __init__(self, ttl=30):
         self.ttl, self.at, self.value = ttl, 0.0, None
+        self._lock = threading.Lock()
+        self._begun = 0  # scansioni cominciate
+        self._value_scan = 0  # numero della scansione che ha dato `value`
 
     def get(self, force=False):
-        if force or self.value is None or time.time() - self.at > self.ttl:
-            self.value, self.at = discover(), time.time()
-        return self.value
+        before = self._begun  # scansioni cominciate prima della richiesta
+        with self._lock:
+            stale = self._value_scan <= before if force else time.time() - self.at > self.ttl
+            if self.value is None or stale:
+                self._begun += 1
+                started = time.time()
+                self.value = discover()
+                self.at, self._value_scan = started, self._begun  # età dalla partenza della scansione
+            return self.value
