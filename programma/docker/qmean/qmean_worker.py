@@ -24,7 +24,6 @@ import os
 import queue
 import shutil
 import signal
-import socketserver
 import subprocess
 import sys
 import tempfile
@@ -63,6 +62,13 @@ LOCKS = ".locks"  # blocchi per sequenza del wrapper (file vuoti): fuori dal con
 # PROFILES_STATUS_TTL secondi e la pulizia gira al più ogni PRUNE_SECONDS, non dopo ogni calcolo.
 PROFILES_STATUS_TTL = 30
 PRUNE_SECONDS = 60
+PURGE_SECONDS = 30
+# Server HTTP: HTTP_THREADS richieste servite insieme (QMEAN_HTTP_THREADS), le altre in coda. Una richiesta rimasta
+# in coda più di STALE_SECONDS si chiude senza risposta: BioLoom aspetta 20 s e intanto ha già riprovato. Con un
+# thread per richiesta (prima) le richieste abbandonate si accumulavano: 1096 thread fermi sul GIL sul server.
+HTTP_THREADS = max(2, int(os.environ.get("QMEAN_HTTP_THREADS") or 16))
+HTTP_BACKLOG = 128
+STALE_SECONDS = 10.0
 
 
 def hhblits_cpu(fit, slots=1):
@@ -124,6 +130,7 @@ _gate = Gate()
 _prune_lock = threading.Lock()
 _pruned = {"at": 0.0}  # ultima pulizia (time.time)
 _profiles_cache = {"at": 0.0, "value": None}
+_profiles_lock = threading.Lock()  # un conteggio dei profili alla volta
 
 
 def profile_folder(db):
@@ -183,6 +190,7 @@ MAX_BODY = 50 * 1024 * 1024
 
 _jobs = {}
 _lock = threading.Lock()
+_purged = {"at": 0.0}  # ultima pulizia dei risultati scaduti (time.time)
 _queue = queue.Queue()
 _scan = uniclust.Cache(ttl=30)
 
@@ -241,8 +249,13 @@ def database_status(prefer=None, force=False):
 
 
 def _purge():
+    """Toglie i risultati scaduti, al più ogni PURGE_SECONDS: con migliaia di calcoli l'ora scorrerli dopo ognuno
+    tiene occupato il lock dei job."""
     now = time.time()
     with _lock:
+        if now - _purged["at"] < PURGE_SECONDS:
+            return
+        _purged["at"] = now
         for job_id in [j for j, v in _jobs.items() if v.get("finished") and now - v["finished"] > RESULT_TTL]:
             _jobs.pop(job_id, None)
 
@@ -262,7 +275,9 @@ def _run_process(job, cmd, cwd, env, limit):
 
 
 def _run_qmean(job):
-    scan = _scan.get(force=True)
+    # scansione di al più 30 s fa: copie e conversioni (le sole che cambiano i file) la rifanno appena finiscono, e
+    # nessun calcolo gira con loro (Gate)
+    scan = _scan.get()
     db = uniclust.choose(scan["databases"], job.get("database") or None)
     if db is None:
         raise RuntimeError(database_status(job.get("database") or None)["uniclust"]["error"])
@@ -421,6 +436,7 @@ def _new_job(kind, **fields):
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "BioLoomQMEAN/2"
+    timeout = 30  # un client che non manda la richiesta non tiene fermo un thread del server
 
     def log_message(self, fmt, *args):  # registro sintetico su stdout
         print("[qmean-worker] " + fmt % args, flush=True)
@@ -510,7 +526,7 @@ class Handler(BaseHTTPRequestHandler):
         if "ATOM" not in pdb or method not in ("auto", "QMEAN", "QMEANDisCo"):
             self._send(400, {"error": "struttura o metodo non validi"})
             return
-        status = database_status(data.get("database") or None, force=True)["uniclust"]
+        status = database_status(data.get("database") or None)["uniclust"]  # scansione in cache (30 s)
         if not status["valid"]:
             self._send(503, {"error": "UniClust30 non disponibile: " + str(status["error"])})
             return
@@ -546,24 +562,57 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, {"id": job_id, "status": "cancelled"})
 
 
-class Server(socketserver.ThreadingMixIn, HTTPServer):
-    daemon_threads = True
+class Server(HTTPServer):
+    """Server HTTP con `threads` thread fissi (HTTP_THREADS) e una coda: le richieste in più aspettano il loro turno
+    invece di aprire ognuna un thread; quelle rimaste in coda oltre `stale` secondi si chiudono senza risposta (il
+    client non aspetta più)."""
+
+    request_queue_size = HTTP_BACKLOG
+
+    def __init__(self, address, handler, threads=HTTP_THREADS, stale=STALE_SECONDS):
+        HTTPServer.__init__(self, address, handler)
+        self.stale = stale
+        self._pending = queue.Queue()
+        for _ in range(max(1, threads)):
+            threading.Thread(target=self._serve_pending, daemon=True).start()
+
+    def process_request(self, request, client_address):
+        self._pending.put((request, client_address, time.time()))
+
+    def _serve_pending(self):
+        while True:
+            request, client_address, arrived = self._pending.get()
+            try:
+                if time.time() - arrived <= self.stale:
+                    self.finish_request(request, client_address)
+            except Exception:
+                self.handle_error(request, client_address)
+            finally:
+                self.shutdown_request(request)
+
+    def handle_error(self, request, client_address):
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
+            print("[qmean-worker] %s: connessione chiusa dal client prima della risposta" % client_address[0],
+                  flush=True)
+            return
+        HTTPServer.handle_error(self, request, client_address)
 
 
 def profiles_status():
     """Profili HHblits salvati: numero, spazio occupato e massimo (byte). Riletti al più ogni PROFILES_STATUS_TTL
     secondi: BioLoom chiede lo stato prima di ogni calcolo."""
-    now = time.time()
-    cached = _profiles_cache["value"]
-    if cached is not None and now - _profiles_cache["at"] < PROFILES_STATUS_TTL:
-        return cached
-    count = size = 0
-    for _path, st in _profile_files():
-        size += st.st_size
-        count += 1
-    value = {"enabled": PROFILE_CACHE_GB > 0, "count": count, "size": size, "limit": int(PROFILE_CACHE_GB * GB)}
-    _profiles_cache.update(at=now, value=value)
-    return value
+    with _profiles_lock:  # le richieste arrivate insieme usano lo stesso conteggio
+        now = time.time()
+        cached = _profiles_cache["value"]
+        if cached is not None and now - _profiles_cache["at"] < PROFILES_STATUS_TTL:
+            return cached
+        count = size = 0
+        for _path, st in _profile_files():
+            size += st.st_size
+            count += 1
+        value = {"enabled": PROFILE_CACHE_GB > 0, "count": count, "size": size, "limit": int(PROFILE_CACHE_GB * GB)}
+        _profiles_cache.update(at=now, value=value)
+        return value
 
 
 def main():
@@ -588,6 +637,7 @@ def main():
         "fino a %s GB" % uniclust.num(PROFILE_CACHE_GB) if PROFILE_CACHE_GB > 0 else "no"), flush=True)
     if status["uniclust"].get("memory_message"):
         print("[qmean-worker] attenzione: " + status["uniclust"]["memory_message"], flush=True)
+    print("[qmean-worker] richieste HTTP servite insieme: %d" % HTTP_THREADS, flush=True)
     Server(("0.0.0.0", port), Handler).serve_forever()
 
 
