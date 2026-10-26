@@ -2,7 +2,7 @@
   "title": "BioLoom",
   "upload_type": "software",
   "description": "Suite per la modellazione di proteine per omologia: ricerca e punteggio dei template, allineamento, costruzione con MODELLER, validazione e voto dei modelli, rifinitura, mutagenesi, ligandi e complessi, pacchetti di riproducibilità. Distribuita come immagine Docker (o Podman) con interfaccia web.",
-  "version": "4.3.1",
+  "version": "4.4.0",
   "license": "MIT",
   "creators": [
     {

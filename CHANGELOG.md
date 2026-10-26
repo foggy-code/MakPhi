@@ -13,7 +13,7 @@ della cache.
 
 Le versioni fino a 4.2.0 sono ricostruite dalla storia git (21 ottobre 2026): prima non c'era un registro.
 
-## [Non rilasciato]
+## [4.4.0] - 2026-10-27
 
 ### Aggiunto
 - ZIP dei modelli in background: **Prepara ZIP modelli** avvia un job `pipeline_export` con l'avanzamento, e
@@ -146,6 +146,7 @@ modelli AlphaFold DB, scelta dei template, complessi, ligandi e regioni disordin
 tasche ed elettrostatica (F7, F7b); procedura guidata, controlli preventivi e ricerca globale (F8); rifinitura,
 mutagenesi, confronto con ESMFold e pacchetti di riproducibilità (F9).
 
+[4.4.0]: https://github.com/foggy-code/BioLoom/compare/v4.3.1...v4.4.0
 [4.3.1]: https://github.com/foggy-code/BioLoom/compare/v4.3.0...v4.3.1
 [4.3.0]: https://github.com/foggy-code/BioLoom/compare/v4.2.0...v4.3.0
 [4.2.0]: https://github.com/foggy-code/BioLoom/compare/v4.1.0...v4.2.0
