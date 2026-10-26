@@ -13,7 +13,7 @@ della cache.
 
 Le versioni fino a 4.2.0 sono ricostruite dalla storia git (21 ottobre 2026): prima non c'era un registro.
 
-## [Non rilasciato]
+## [4.4.0] - 2026-10-27
 
 ### Aggiunto
 - ZIP dei modelli in background: **Prepara ZIP modelli** avvia un job `pipeline_export` con l'avanzamento, e
@@ -25,6 +25,11 @@ Le versioni fino a 4.2.0 sono ricostruite dalla storia git (21 ottobre 2026): pr
   riprendere.
 
 ### Corretto
+- GA341 cambiava con il numero di worker di MODELLER, a modelli identici: nella tesi 31 coppie su 876 avevano valori
+  diversi fra due pipeline (fino a 0,18). In MODELLER 10.8 il primo GA341 calcolato in un processo è diverso dai
+  successivi, quindi il modello 1 prendeva sempre il valore del primo calcolo e i modelli seguenti solo se avevano un
+  worker tutto per sé. Ora il primo calcolo di ogni processo si fa a vuoto: ogni modello ha lo stesso GA341 con 1 o
+  più worker e in qualsiasi ordine. I GA341 calcolati prima di questa versione possono differire da quelli nuovi.
 - Lo ZIP della pipeline `seq_con_dominio` (139.296 coppie) restava in caricamento: si generava dentro la richiesta, a
   una coppia ogni 3 s (circa 5 giorni prima del primo byte). Inoltre i report non avevano il QMEAN, perché la ricerca
   per struttura guardava solo i 200 QMEAN più recenti di tutto BioLoom. Lo stesso difetto valeva per la pagina
@@ -141,6 +146,7 @@ modelli AlphaFold DB, scelta dei template, complessi, ligandi e regioni disordin
 tasche ed elettrostatica (F7, F7b); procedura guidata, controlli preventivi e ricerca globale (F8); rifinitura,
 mutagenesi, confronto con ESMFold e pacchetti di riproducibilità (F9).
 
+[4.4.0]: https://github.com/foggy-code/BioLoom/compare/v4.3.1...v4.4.0
 [4.3.1]: https://github.com/foggy-code/BioLoom/compare/v4.3.0...v4.3.1
 [4.3.0]: https://github.com/foggy-code/BioLoom/compare/v4.2.0...v4.3.0
 [4.2.0]: https://github.com/foggy-code/BioLoom/compare/v4.1.0...v4.2.0

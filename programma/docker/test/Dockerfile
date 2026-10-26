@@ -2,6 +2,6 @@
 # La costruisce programma/scripts/test.sh; il codice non entra nell'immagine, viene montato a ogni esecuzione.
 # pytest-timeout (versione fissata, come in pyproject.toml) applica il limite di [tool.pytest.ini_options];
 # pytest-cov (versione fissata) misura la copertura con `test.sh backend --cov`.
-ARG BASE=bioloom:4.3.1
+ARG BASE=bioloom:4.4.0
 FROM ${BASE}
 RUN /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check "pytest>=7" "pytest-timeout==2.4.0" "pytest-cov==7.0.0" "ruff>=0.6"
