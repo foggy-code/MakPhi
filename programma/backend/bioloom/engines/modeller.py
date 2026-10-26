@@ -60,7 +60,7 @@ LOOP_LEVELS = {"very_fast": "refine.very_fast", "fast": "refine.fast", "slow": "
 # un server a 224 core (3PGK, 415 residui, raffinamento fast): 8 modelli da 173 s a 28 s con 8 worker, 16 modelli da 344
 # s a 28 s con 16. Il risultato non dipende dal numero di worker (stesso seme, stessi modelli con 1, 2 o N worker), ma a
 # parità di seme è diverso da quello seriale: la modalità si registra nel risultato (`options.parallel`) e la
-# riesecuzione di un pacchetto la rispetta.
+# riesecuzione di un pacchetto la rispetta. GA341 compreso, grazie a GA341_FUNCTION (sotto).
 # - La classe BioLoomModel sta in un modulo (PARALLEL_MODULE) che i worker importano.
 # - I worker sono processi a parte, avviati con PARALLEL_WORKER: stesso preambolo della licenza dello script principale
 #   (che lascia la chiave nell'ambiente per loro) e, se il worker non parte o si interrompe con un errore, termina il
@@ -95,6 +95,23 @@ except BaseException:
     _w_fail()
     raise
 """
+# GA341 di MODELLER 10.8: il primo `assess_ga341()` di ogni processo dà un valore diverso da tutti i successivi, che
+# invece coincidono (stesso modello due volte di fila: 0,318 poi 0,144; il seme e un Environ nuovo non contano). Con
+# `assess.GA341` il modello 1 prendeva sempre il valore del primo calcolo, i modelli seguenti quello del primo calcolo
+# solo se toccava loro un worker nuovo: GA341 cambiava con il numero di worker (fino a 0,18 in una pipeline) a
+# coordinate identiche. La funzione di valutazione fa un calcolo a vuoto alla prima chiamata del processo, così ogni
+# modello ha il valore stabile qualunque sia l'ordine o il worker.
+GA341_FUNCTION = '''
+_ga341_ready = False
+
+
+def ga341_stable(atmsel):
+    global _ga341_ready
+    if not _ga341_ready:
+        atmsel.get_model().assess_ga341()
+        _ga341_ready = True
+    return assess.GA341(atmsel)
+'''
 # Gruppo eteroatomico nelle opzioni: catena (anche di più caratteri nei mmCIF), numero con codice di inserzione,
 # nome del componente chimico (fino a 5 caratteri nei mmCIF)
 _LIGAND_CHAIN = re.compile(r"^[A-Za-z0-9]{1,4}$")
@@ -447,9 +464,10 @@ def build_model_script(knowns: list[str], target_code: str, opts: ModelOptions,
     residui di ogni catena numerati da 1 (`rename_segments` in `special_patches`).
 
     `parallel`: modelli costruiti da worker in processi separati (PARALLEL_MODULE); il numero di worker è il primo
-    argomento dello script (`run_script(workers=...)`, 1 se manca) e il risultato non ne dipende."""
+    argomento dello script (`run_script(workers=...)`, 1 se manca) e il risultato non ne dipende (GA341 compreso:
+    `ga341_stable`, GA341_FUNCTION)."""
     base = "DOPELoopModel" if opts.loop_refinement else "AutoModel"
-    body = [f"class BioLoomModel({base}):", "    _done = 0", "    _loops_done = 0"]
+    body = [GA341_FUNCTION, f"class BioLoomModel({base}):", "    _done = 0", "    _loops_done = 0"]
     if chain_names:
         names = [str(c) for c in chain_names]
         if len(set(names)) != len(names) or not all(re.fullmatch(r"[A-Za-z0-9]", c) for c in names):
@@ -503,7 +521,7 @@ def build_model_script(knowns: list[str], target_code: str, opts: ModelOptions,
         lines.append("env.io.water = True")
     lines += [
         f"a = BioLoomModel(env, alnfile={alnfile!r}, knowns={knowns_tuple}, sequence={target_code!r},",
-        "                 assess_methods=(assess.DOPE, assess.GA341, assess.normalized_dope))",
+        "                 assess_methods=(assess.DOPE, ga341_stable, assess.normalized_dope))",
         "a.starting_model = 1",
         f"a.ending_model = {int(opts.models)}",
     ]
@@ -550,7 +568,7 @@ def _parallel_setup(module: str) -> list[str]:
         "    os.environ['BIOLOOM_MODELLER_KEY'] = _bl_key",
         "os.environ['BIOLOOM_MODELLER_MASTER'] = str(os.getpid())",
         "sys.path.insert(0, os.getcwd())",
-        "from bioloom_model import BioLoomModel",
+        "from bioloom_model import BioLoomModel, ga341_stable",
         "from modeller.parallel import Job, LocalWorker",
         f"job = Job(modeller_path=sys.executable + ' ' + {PARALLEL_WORKER!r})",
         "for _ in range(_bl_workers):",

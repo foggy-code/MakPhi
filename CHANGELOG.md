@@ -25,6 +25,11 @@ Le versioni fino a 4.2.0 sono ricostruite dalla storia git (21 ottobre 2026): pr
   riprendere.
 
 ### Corretto
+- GA341 cambiava con il numero di worker di MODELLER, a modelli identici: nella tesi 31 coppie su 876 avevano valori
+  diversi fra due pipeline (fino a 0,18). In MODELLER 10.8 il primo GA341 calcolato in un processo è diverso dai
+  successivi, quindi il modello 1 prendeva sempre il valore del primo calcolo e i modelli seguenti solo se avevano un
+  worker tutto per sé. Ora il primo calcolo di ogni processo si fa a vuoto: ogni modello ha lo stesso GA341 con 1 o
+  più worker e in qualsiasi ordine. I GA341 calcolati prima di questa versione possono differire da quelli nuovi.
 - Lo ZIP della pipeline `seq_con_dominio` (139.296 coppie) restava in caricamento: si generava dentro la richiesta, a
   una coppia ogni 3 s (circa 5 giorni prima del primo byte). Inoltre i report non avevano il QMEAN, perché la ricerca
   per struttura guardava solo i 200 QMEAN più recenti di tutto BioLoom. Lo stesso difetto valeva per la pagina

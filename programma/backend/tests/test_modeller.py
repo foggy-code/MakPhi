@@ -24,6 +24,52 @@ def test_scripts_are_valid_python():
     compile(modeller.build_loop_script("m.pdb", "m", "5:A", "10:A", 3, "fast"), "loop.py", "exec")
 
 
+class _FakeProcessModel:
+    """Modello finto con il comportamento di GA341 in MODELLER 10.8: il primo calcolo del processo (`process`, un dict
+    condiviso dai modelli dello stesso processo) dà un valore diverso dai successivi."""
+
+    def __init__(self, process, stable):
+        self.process, self.stable = process, stable
+
+    def assess_ga341(self):
+        first = not self.process.get("used")
+        self.process["used"] = True
+        return [self.stable + 0.17 if first else self.stable]
+
+    def get_model(self):  # anche selezione di atomi del modello (atmsel.get_model())
+        return self
+
+
+def _ga341_namespace():
+    """Funzione di valutazione di GA341 come la eseguono uno script MODELLER o un worker (un processo nuovo)."""
+    namespace = {"assess": type("assess", (), {"GA341": staticmethod(lambda atmsel: atmsel.get_model().assess_ga341())})}
+    exec(modeller.GA341_FUNCTION, namespace)
+    return namespace["ga341_stable"]
+
+
+def test_ga341_does_not_depend_on_model_order_or_workers():
+    """Il primo calcolo di GA341 di ogni processo si fa a vuoto: lo stesso modello ha lo stesso valore se è il primo di
+    un worker nuovo o arriva dopo altri modelli, e un processo che lo ricalcola dopo l'altro dà lo stesso valore."""
+    serial, fresh_1, fresh_2 = {}, {}, {}
+    stable = _ga341_namespace()
+    one_worker = [stable(_FakeProcessModel(serial, s))[0] for s in (0.05, 0.14, 0.17)]
+    three_workers = [_ga341_namespace()(_FakeProcessModel(p, s))[0]
+                     for p, s in ((fresh_1, 0.05), (fresh_2, 0.14), ({}, 0.17))]
+    assert one_worker == three_workers == [0.05, 0.14, 0.17]
+    assert stable(_FakeProcessModel(serial, 0.14))[0] == 0.14  # e di nuovo nello stesso processo
+
+
+@pytest.mark.parametrize("parallel", [False, True])
+def test_model_script_assesses_ga341_with_warm_up(parallel):
+    script = modeller.build_model_script(["1UBQ_A"], "target", modeller.parse_options({"models": 3}), parallel=parallel)
+    compile(script, "model.py", "exec")
+    assert "assess_methods=(assess.DOPE, ga341_stable, assess.normalized_dope))" in script
+    assert "assess.GA341," not in script
+    # in parallelo i worker importano la funzione dal modulo della classe, come il processo principale
+    assert ("from bioloom_model import BioLoomModel, ga341_stable" in script) == parallel
+    assert "def ga341_stable(atmsel):" in script
+
+
 REFINEMENT_LINES = {
     "very_fast": ["a.very_fast()"],
     "fast": ["a.library_schedule = autosched.normal", "a.max_var_iterations = 200", "a.md_level = refine.very_fast"],
