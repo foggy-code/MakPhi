@@ -6,7 +6,7 @@ export type JobKind =
   | "selftest" | "db_update_pdbaa" | "db_build_mmseqs" | "db_index_mmseqs" | "db_convert_uniclust" | "db_local_uniclust"
   | "analysis"
   | "pockets" | "electrostatics" | "refine"
-  | "rerun" | "mutate" | "alascan" | "predict";
+  | "rerun" | "mutate" | "alascan" | "predict" | "pipeline_export";
 
 export type SearchEngine = "rcsb" | "ncbi" | "local" | "mmseqs" | "alphafold";
 
@@ -2240,7 +2240,7 @@ export interface ComplexResult {
 
 // ---------------------------------------------------------------------------------- controlli preventivi (F8a)
 export type PreflightKind = "model" | "loop" | "align2d" | "pipeline" | "quality" | "qmean" | "search" | "analysis"
-  | "rerun" | "mutate" | "alascan" | "predict";
+  | "rerun" | "mutate" | "alascan" | "predict" | "pipeline_export";
 /** error = l'avvio fallirebbe (pulsante disattivato); warning = conferma richiesta; info = da sapere */
 export type PreflightLevel = "error" | "warning" | "info";
 
@@ -2713,4 +2713,17 @@ export interface JobDeleteResult {
   deleted: string;
   freed_bytes: number;
   leftover: number;
+}
+
+/** Risultato di un job `pipeline_export`: l'archivio è il file `file` del job. */
+export interface PipelineExportResult {
+  pipeline: string;
+  file: string;
+  size: number;
+  models: number;
+  reports: number;
+  /** report che includono QMEAN */
+  qmean: number;
+  /** report non generati (motivi nel file report_non_generati.txt dell'archivio) */
+  missing: number;
 }

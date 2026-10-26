@@ -25,8 +25,6 @@ Il risultato non passa dalla cache dei calcoli: l'analisi di 1UBQ richiede circa
 
 from __future__ import annotations
 
-import json
-import sqlite3
 import time
 from typing import Optional
 
@@ -36,7 +34,7 @@ from ..core.jobs import JobContext, JobManager
 from ..domain import conservation, fileformats, interactions, interfaces, sequences, structure
 from ..domain.sequences import SeqRecord
 from ..engines import align
-from .compute import ComputeService, describe_source, source_key
+from .compute import ComputeService, describe_source, job_sources, source_key
 
 KIND = "analysis"
 # testo dell'allineamento nei parametri del job (SQLite e params.json): per allineamenti più grandi si usa un job
@@ -224,7 +222,7 @@ class AnalysisService:
         key = source_key(source)
         if key == ("?",):
             return None
-        for row in self._sources():
+        for row in self._sources(source):
             if source_key(row["source"]) != key:
                 continue
             try:
@@ -245,7 +243,7 @@ class AnalysisService:
         key = source_key(source)
         if key == ("?",):
             return None
-        for row in self._sources("status IN ('queued','running')", "created_at DESC"):
+        for row in self._sources(source, "status IN ('queued','running')", "created_at DESC"):
             if source_key(row["source"]) != key:
                 continue
             try:
@@ -254,25 +252,11 @@ class AnalysisService:
                 continue
         return None
 
-    def _sources(self, where: str = "status='completed'", order: str = "finished_at DESC") -> list[dict]:
-        """(id, sorgente) delle analisi nello stato `where` (predefinito: completate), dalla più recente. Si legge
-        solo `params.source` (json_extract): i parametri possono contenere un allineamento incollato fino a 10 MB.
-        Senza le funzioni JSON di SQLite si leggono i parametri interi. `where` e `order` sono costanti del modulo."""
-        sql = f"FROM jobs WHERE kind=? AND {where} ORDER BY {order}, rowid DESC LIMIT ?"
-        try:
-            rows = self.jobs.db.query(f"SELECT id, json_extract(params, '$.source') AS source {sql}",
-                                      (KIND, LOOKUP_LIMIT))
-        except sqlite3.OperationalError:
-            return [{"id": r["id"], "source": (r.get("params") or {}).get("source")}
-                    for r in self.jobs.db.query(f"SELECT id, params {sql}", (KIND, LOOKUP_LIMIT))]
-        out = []
-        for r in rows:
-            try:
-                src = json.loads(r["source"]) if isinstance(r.get("source"), str) else None
-            except ValueError:
-                src = None
-            out.append({"id": r["id"], "source": src})
-        return out
+    def _sources(self, source: dict, where: str = "status='completed'", order: str = "finished_at DESC") -> list[dict]:
+        """(id, sorgente) delle analisi nello stato `where` (predefinito: completate) che possono riguardare `source`,
+        dalla più recente (`job_sources`: si legge solo `params.source`, i parametri possono contenere un allineamento
+        incollato fino a 10 MB). `where` e `order` sono costanti del modulo."""
+        return job_sources(self.jobs.db, (KIND,), source, where=where, order=order, limit=LOOKUP_LIMIT)
 
 
 def report_summary(job: dict) -> Optional[dict]:

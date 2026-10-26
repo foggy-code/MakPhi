@@ -315,8 +315,25 @@ def pipeline_csv(job_id: str, core: Core = Depends(get_core)) -> Response:
                     headers={"Content-Disposition": f'attachment; filename="pipeline_{job_id}.csv"'})
 
 
+@router.post("/pipeline/{job_id}/export")
+def pipeline_export(job_id: str, core: Core = Depends(get_core)) -> dict:
+    """Prepara lo ZIP dei modelli in background (job `pipeline_export`, con avanzamento): a job completato l'archivio
+    è il file `result.file` del job. Se uno è già in coda o in corso per la pipeline restituisce quello."""
+    return public_job(core.exports.submit(job_id))
+
+
+@router.get("/pipeline/{job_id}/export")
+def pipeline_export_latest(job_id: str, core: Core = Depends(get_core)) -> Optional[dict]:
+    """ZIP dei modelli più recente della pipeline (qualunque stato), oppure null."""
+    core.jobs.get(job_id, include_result=False)
+    job = core.exports.latest(job_id)
+    return public_job(job) if job else None
+
+
 @router.get("/pipeline/{job_id}/export.zip")
 def pipeline_zip(job_id: str, core: Core = Depends(get_core)) -> Response:
+    """Lo stesso archivio dentro la richiesta, in un solo processo: per le pipeline piccole. Per quelle grandi (ore di
+    report) `POST /export`."""
     from .jobs import send_temp, temp_download
 
     core.jobs.get(job_id, include_result=False)

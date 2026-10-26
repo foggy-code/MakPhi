@@ -3216,6 +3216,22 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
 - **Pipeline:** `export_zip` aggiunge `report/<nome>.html` per ogni elemento completato (senza immagine), generati e
   scritti uno alla volta: in memoria c'è al più un report. Un report che non si può generare finisce in
   `report/non_generati.txt` e non ferma l'esportazione. Il LEGGIMI dello ZIP descrive la cartella.
+  - **ZIP in background (`services/pipeline_export.py`):** il pulsante della pagina avvia un job `pipeline_export`
+    (`POST /api/pipeline/{id}/export`, uno alla volta per pipeline: un secondo clic restituisce quello in corso),
+    con l'avanzamento; a job completato l'archivio è il file `result.file` del job. `GET /export.zip` costruisce lo
+    stesso archivio dentro la richiesta, per le pipeline piccole. `ZipBuilder` legge una volta tutto ciò che viene
+    dal database (elementi, QMEAN per file, strumenti strutturali, progetto, template della libreria); ogni report
+    si genera poi solo dai file del job (`ReportService.pipeline_item_detached` con un `ItemContext`), in processi
+    di lavoro avviati con `spawn` (al più 8, `export_workers`), che non aprono né il database né la libreria. Al
+    più 4 report per processo sono in volo e l'archivio si scrive nell'ordine degli elementi. Il 26 ottobre 2026 lo
+    ZIP di 139.296 coppie, generato dentro la richiesta, avanzava di una coppia ogni 3 s (circa 5 giorni): ogni
+    report faceva 4 ricerche nella tabella dei job, e la ricerca del QMEAN guardava solo i 200 più recenti di tutto
+    BioLoom, quindi i report non lo avevano. Misurato sul server senza le ricerche: 117 ms per report e 14 ms di
+    scrittura per coppia, circa 98 KB compressi per coppia.
+  - **Ricerca per struttura (`compute.job_sources`):** per il modello di un job si filtra in SQL per job e file
+    (indice sulle espressioni JSON `idx_jobs_source`, più `idx_jobs_kind`); per le altre sorgenti per tipo. Gli
+    indici si creano dopo le migrazioni e sono facoltativi (`OPTIONAL_INDEXES`): senza le funzioni JSON di SQLite
+    l'avvio non si ferma.
   - **Nomi:** `modelli/<nome>.pdb`, `qualita/<nome>.quality.json` e `report/<nome>.html` usano lo stesso nome
     dell'elemento, unico nell'archivio: il report sta sempre accanto al suo modello. I nomi vengono da
     `sequences.sanitize_code` (solo `[A-Za-z0-9_-]`); la deduplicazione registra anche i nomi generati ("x", "x",

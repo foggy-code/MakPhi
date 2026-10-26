@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import re
 from collections import OrderedDict
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Optional
 
@@ -55,6 +55,7 @@ SOURCE_LABEL = {"alphafold": "AlphaFold DB (EBI)", "RCSB PDB": "RCSB PDB", "cari
 ENGINE_LABEL = {"rcsb": "RCSB", "ncbi": "NCBI BLAST", "local": "BLAST+ locale", "mmseqs": "MMseqs2 locale",
                 "alphafold": "AlphaFold DB"}
 USER_TEMPLATE = "scelto dall'utente"
+_ASK = object()  # `_base`: nome del progetto da leggere nel database
 
 
 def _rel(model: str) -> str:
@@ -82,6 +83,49 @@ def _head(path: Optional[Path]) -> str:
         return ""
 
 
+@dataclass(frozen=True)
+class ItemContext:
+    """Dati dal database per il report di un elemento della pipeline, letti una volta per tutto lo ZIP: con questi il
+    report si genera solo dai file del job (`pipeline_item_detached`), anche in un altro processo.
+
+    `qmean`: {"job_id", "result"} del QMEAN completato più recente sul modello, se c'è (impronta verificata al
+    momento del report); `tools`: riepiloghi di analisi strutturale, tasche ed elettrostatica (`analysis`, `pockets`,
+    `electrostatics`, None se mancano)."""
+
+    project: Optional[str] = None
+    qmean: Optional[dict] = None
+    tools: dict = field(default_factory=lambda: {"analysis": None, "pockets": None, "electrostatics": None})
+
+
+def _quality_with(job_id: str, rel: str, path: Path, quality: Optional[dict], metrics: dict,
+                  found: Optional[dict]) -> tuple[Optional[dict], Optional[dict]]:
+    """(consenso, informazioni su QMEAN) come `ReportService._quality` con il QMEAN `found` già letto: lo include solo
+    se riguarda il file attuale (impronta del QMEAN uguale a quella del file e del rapporto di qualità), come
+    `_latest_qmean`; altrimenti il consenso è quello senza QMEAN."""
+    if quality is None:
+        return None, None
+    result = (found or {}).get("result")
+    if isinstance(result, dict):
+        theirs = result.get("source_sha256")
+        same = not theirs or ((not quality.get("source_sha256") or quality["source_sha256"] == theirs)
+                              and _content_hash(path) == theirs)
+        if same:
+            cons = consensus.compute(quality, qmean=result, modeller=metrics)
+            cons["inputs"] = {"source": {"type": "job", "job_id": job_id, "file": rel}, "modeller": metrics,
+                              "qmean": {"job_id": found.get("job_id"), "source": result.get("source"),
+                                        "method": result.get("method")}}
+            return cons, {"version": result.get("qmean_version"), "method": result.get("method"),
+                          "source": result.get("source")}
+    return consensus.compute(quality, modeller=metrics), None
+
+
+def _content_hash(path: Path) -> Optional[str]:
+    try:
+        return cache.content_hash(path)
+    except OSError:
+        return None
+
+
 def _strip_gaps(seq: str) -> str:
     """Sequenza di una voce PIR senza gap né ligandi ('.'); '/' separa le catene."""
     return "".join(c for c in seq if c.isalpha() or c == "/")
@@ -92,6 +136,8 @@ class ReportService:
         self.jobs = jobs
         self.compute = compute
         self.db = db
+        # descrizioni dei template già lette (`_library`): lo ZIP di una pipeline le prepara tutte prima (`ItemContext`)
+        self.library_cache: dict[str, dict] = {}
 
     # ------------------------------------------------------------------------------ ingressi
     def build(self, job_id: str, model: Optional[str] = None, *, qmean_job: Optional[str] = None,
@@ -144,6 +190,16 @@ class ReportService:
         data, _stem = self._pipeline_data(job, rel, qmean_job, row=row)
         self._structure_tools(data, job, rel)
         return report.render(data)
+
+    def pipeline_item_detached(self, job: dict, row: dict, context: ItemContext) -> tuple[str, dict]:
+        """Lo stesso report di `pipeline_item`, con i dati del database già letti (`context`): servono solo i file
+        del job, quindi si può generare in un altro processo (ZIP della pipeline in parallelo). Restituisce anche
+        `quality` (il rapporto di qualità letto, None senza) e `qmean` (vero se il report include il QMEAN)."""
+        rel = _rel(row.get("best_model") or "")
+        data, _stem = self._pipeline_data(job, rel, None, row=row, context=context)
+        data.update(context.tools)
+        included = bool(((data.get("consensus") or {}).get("inputs") or {}).get("qmean"))
+        return report.render(data), {"quality": data.get("quality"), "qmean": included}
 
     def _fingerprint(self, source: dict) -> Optional[str]:
         try:
@@ -202,10 +258,13 @@ class ReportService:
         return prediction_summary(found)
 
     # ------------------------------------------------------------------------------ parti comuni
-    def _base(self, job: dict, kind: str) -> dict:
-        project = None
-        if job.get("project_id"):
-            project = self.db.scalar("SELECT name FROM projects WHERE id=?", (job["project_id"],))
+    def _base(self, job: dict, kind: str, project: object = _ASK) -> dict:
+        """Intestazione comune; `project` è il nome del progetto se già noto (ZIP: letto una volta), altrimenti
+        `_ASK` lo legge dal database."""
+        if project is _ASK:
+            project = None
+            if job.get("project_id"):
+                project = self.db.scalar("SELECT name FROM projects WHERE id=?", (job["project_id"],))
         return {"kind": kind, "title": job.get("title") or "", "job_id": job["id"], "project": project,
                 "created_at": job.get("created_at"), "finished_at": job.get("finished_at"),
                 "generated_at": now_iso(), "warnings": []}
@@ -300,10 +359,16 @@ class ReportService:
     def _library(self, template_id: Optional[str]) -> dict:
         if not template_id:
             return {}
-        try:
-            return self.compute.library.describe(template_id)
-        except (AppError, OSError):
+        if template_id in self.library_cache:
+            return self.library_cache[template_id]
+        if self.compute is None:  # report generato fuori dal processo di BioLoom (ZIP): solo i template preparati
             return {}
+        try:
+            meta = self.compute.library.describe(template_id)
+        except (AppError, OSError):
+            meta = {}
+        self.library_cache[template_id] = meta
+        return meta
 
     @staticmethod
     def _source(meta: dict) -> str:
@@ -402,7 +467,7 @@ class ReportService:
 
     # ------------------------------------------------------------------------------ pipeline
     def _pipeline_data(self, job: dict, rel: str, qmean_job: Optional[str],
-                       row: Optional[dict] = None) -> tuple[dict, str]:
+                       row: Optional[dict] = None, context: Optional[ItemContext] = None) -> tuple[dict, str]:
         match = ITEM_MODEL.match(rel)
         if not match:
             raise NotFound(f"{rel} non è il modello di un elemento della pipeline.")
@@ -423,14 +488,17 @@ class ReportService:
             raise NotFound(f"Il modello {name} non è tra i modelli riusciti dell'elemento {row['name']}.")
         path = self.jobs.file_path(job["id"], rel)
         quality = load_quality_report(self.jobs, job["id"], rel)
-        cons, qmean = self._quality(job["id"], rel, quality, {"ga341": entry.get("ga341"), "zdope": entry.get("zdope")},
-                                    qmean_job)
+        modeller_metrics = {"ga341": entry.get("ga341"), "zdope": entry.get("zdope")}
+        if context is None:
+            cons, qmean = self._quality(job["id"], rel, quality, modeller_metrics, qmean_job)
+        else:
+            cons, qmean = _quality_with(job["id"], rel, path, quality, modeller_metrics, context.qmean)
         head = _head(path)
         alignment = self._item_text(job["id"], f"{folder}/alignment.ali")
         params = job.get("params") or {}
         metrics = row.get("metrics") if isinstance(row.get("metrics"), dict) else {}
         best = PurePosixPath(str(row.get("best_model") or "")).name
-        data = self._base(job, "pipeline")
+        data = self._base(job, "pipeline", project=context.project if context else _ASK)
         # pipeline M × N: l'elemento è la coppia <sequenza>__<template>
         sequence, _sep, pair_template = str(row["name"]).partition("__") if params.get("fixed_combination") == "each" \
             and params.get("template_mode") == "fixed" else (row["name"], "", "")

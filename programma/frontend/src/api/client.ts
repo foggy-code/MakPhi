@@ -390,6 +390,10 @@ export const api = {
   pipelineMatrix: (id: string, page: number, size: number) => get<PipelineMatrix>(`/api/pipeline/${enc(id)}/matrix?page=${page}&size=${size}`),
   pipelineCsvUrl: (id: string) => `/api/pipeline/${enc(id)}/export.csv`,
   pipelineZipUrl: (id: string) => `/api/pipeline/${enc(id)}/export.zip`,
+  /** ZIP dei modelli in background (job `pipeline_export`): quello già in coda o in corso, se c'è */
+  pipelineExport: (id: string) => post<JobSummary>(`/api/pipeline/${enc(id)}/export`),
+  /** ZIP dei modelli più recente della pipeline (qualunque stato), null se non ce n'è */
+  pipelineExportLatest: (id: string) => get<JobSummary | null>(`/api/pipeline/${enc(id)}/export`),
 
   // etichette, preferiti e ricerca globale (F8b)
   /** etichette in uso con i conteggi (tutte o di un tipo) */

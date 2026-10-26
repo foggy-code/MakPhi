@@ -286,6 +286,10 @@ per ogni sequenza completata (cartella `report/`, senza vista 3D).
   matrice si sfoglia a pagine di 50 sequenze; **In parallelo** arriva fino ai **Job di calcolo in parallelo**
   delle Impostazioni (al massimo 256). L'output dei programmi (MODELLER, PROCHECK…) di ogni elemento è nel file
   `programmi.log` della sua cartella, tra i file del job; il log del job riporta i passi di BioLoom.
+- **Preparare lo ZIP:** **Prepara ZIP modelli** prepara l'archivio in background, e il pulsante ne mostra
+  l'avanzamento. Si può chiudere il browser: il lavoro prosegue, e lo ZIP compare anche nella pagina Job. Quando è
+  pronto, **Scarica ZIP** riporta la dimensione dell'archivio. Un secondo clic mentre lo ZIP si prepara non ne avvia
+  un altro. Una pipeline di 139.296 coppie richiede circa 40 minuti e circa 14 GB.
 - **Archivio ZIP:** nella pipeline sequenze × template i file stanno in `template/<template>/<sequenza>/` (modello,
   report e rapporto di qualità di ogni coppia), con `metriche.csv` (una riga per coppia) e `migliori.csv` (una per
   sequenza); nelle altre pipeline in `modelli/`, `qualita/` e `report/`, con `riepilogo.csv`. Tutti i CSV hanno anche

@@ -57,6 +57,7 @@ export const KIND_LABEL: Record<JobKind, string> = {
   mutate: "Mutagenesi",
   alascan: "Scansione di alanina",
   predict: "Confronto con una predizione",
+  pipeline_export: "ZIP della pipeline",
 };
 
 export const ACTIVE_STATUSES: JobStatus[] = ["queued", "running", "cancelling"];

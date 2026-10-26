@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import copy
 import glob
+import json
 import shutil
+import sqlite3
 import threading
 from dataclasses import asdict
 from functools import partial
@@ -1185,6 +1187,40 @@ def source_key(source: Optional[dict]) -> tuple:
     if kind == "upload":
         return ("upload", PurePosixPath(str(source.get("file") or "")).name)
     return ("?",)
+
+
+def job_sources(db, kinds: tuple[str, ...], source: Optional[dict], *, where: str = "status='completed'",
+                order: str = "finished_at DESC", limit: int = 200) -> list[dict]:
+    """(id, sorgente) dei job `kinds` nello stato `where`, dal più recente, al più `limit`, che possono riguardare
+    `source`; il confronto esatto resta a chi chiama (`source_key`). Per un modello di un job la ricerca è ristretta in
+    SQL a quel job e a quel file (indice `idx_jobs_source`), per le altre sorgenti al loro tipo. Prima si esaminavano i
+    `limit` job più recenti di quel tipo, qualunque struttura riguardassero: con i 139.296 QMEAN di una pipeline quello
+    di un modello non si trovava più. Senza le funzioni JSON di SQLite si leggono i parametri interi, senza filtro.
+    `where` e `order` sono costanti di chi chiama."""
+    key = source_key(source)
+    base = f"FROM jobs WHERE kind IN ({','.join('?' * len(kinds))}) AND {where}"
+    tail = f" ORDER BY {order}, rowid DESC LIMIT ?"
+    if key[0] == "job":
+        files = sorted({key[2], str((source or {}).get("file") or "")})
+        narrow = (" AND json_extract(params, '$.source.job_id')=? AND json_extract(params, '$.source.file') IN "
+                  f"({','.join('?' * len(files))})")
+        narrow_args: tuple = (key[1], *files)
+    else:
+        narrow, narrow_args = " AND json_extract(params, '$.source.type')=?", (key[0],)
+    try:
+        rows = db.query(f"SELECT id, json_extract(params, '$.source') AS source {base}{narrow}{tail}",
+                        (*kinds, *narrow_args, limit))
+    except sqlite3.OperationalError:
+        return [{"id": r["id"], "source": (r.get("params") or {}).get("source")}
+                for r in db.query(f"SELECT id, params {base}{tail}", (*kinds, limit))]
+    out = []
+    for r in rows:
+        try:
+            src = json.loads(r["source"]) if isinstance(r.get("source"), str) else None
+        except ValueError:
+            src = None
+        out.append({"id": r["id"], "source": src})
+    return out
 
 
 def describe_source(source: Optional[dict]) -> str:
