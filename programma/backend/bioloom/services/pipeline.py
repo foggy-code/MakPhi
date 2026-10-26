@@ -27,7 +27,6 @@ import io
 import json
 import sqlite3
 import threading
-import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -45,7 +44,6 @@ from ..domain.report import alignment_identity
 from ..domain.sequences import SeqRecord
 from ..engines import quality, search
 from .compute import ComputeService, PreparedTemplates, check_length, model_remarks
-from .reports import ReportService
 
 # Scelta dei template: "auto" = il migliore della ricerca, "fixed" = scelti dall'utente, "multi" = fino a
 # `max_templates` template complementari della ricerca (domain/template_rank.select_complementary)
@@ -755,14 +753,15 @@ class PipelineService:
                 "failed": counts.get("failed", 0), "open": sum(counts.get(s, 0) for s in OPEN_ITEM),
                 "closed": sum(wins), "wins": wins}
 
-    def export_csv(self, job_id: str) -> str:
+    def export_csv(self, job_id: str, qmean: Optional[dict[str, dict]] = None) -> str:
         """Tabella di tutti gli elementi. Pipeline M × N: la tabella delle metriche (una riga per coppia, come
-        `metriche.csv` dello ZIP)."""
+        `metriche.csv` dello ZIP). `qmean`: risultati QMEAN per file già verificati (ZIP), altrimenti si leggono."""
         rows = self.db.query(f"SELECT {ITEM_COLUMNS} FROM pipeline_items WHERE job_id=? ORDER BY idx", (job_id,))
         params = self._params(job_id)
         if is_cross(params):
             return _write_csv(CROSS_FIELDS, self._metric_rows(job_id, rows, params, None))
-        qmean = self._qmean_by_file(job_id)
+        if qmean is None:
+            qmean = self._qmean_by_file(job_id)
         buf = io.StringIO()
         fields = ["idx", "name", "length", "status", "template", "template_source", "identity", "coverage", "evalue",
                   "twilight", "dope", "zdope", "ga341", "grade", "grade_score", "rama_favored", "clashscore",
@@ -775,27 +774,33 @@ class PipelineService:
             writer.writerow({k: _csv_safe(r.get(k)) for k in fields})
         return buf.getvalue()
 
-    def _qmean_by_file(self, job_id: str) -> dict[str, dict]:
-        """Risultati QMEAN dei modelli della pipeline, per file: job `qmean` completati su un file del job (QMEAN
-        automatico o lanciato dalla pagina Qualità), il più recente per ogni file. Si tengono solo quelli che riguardano
-        il file attuale (stessa impronta): una ripresa che rielabora un elemento scrive un modello nuovo con lo stesso
-        nome, e il QMEAN di quello vecchio non vale più."""
+    def qmean_jobs_by_file(self, job_id: str) -> dict[str, dict]:
+        """QMEAN dei modelli della pipeline per file, senza verificare le impronte: {"job_id", "result"} dei job
+        `qmean` completati su un file del job (QMEAN automatico o lanciato dalla pagina Qualità), il più recente per
+        ogni file. Lo ZIP verifica l'impronta mentre genera ogni report (`ItemContext`)."""
         where = "FROM jobs WHERE kind='qmean' AND status='completed'"
         try:
-            rows = self.db.query(f"SELECT json_extract(params, '$.source.file') AS file, result {where} AND "
+            rows = self.db.query(f"SELECT id, json_extract(params, '$.source.file') AS file, result {where} AND "
                                  "json_extract(params, '$.source.job_id')=? ORDER BY finished_at, rowid", (job_id,))
         except sqlite3.OperationalError:  # SQLite senza funzioni JSON: parametri interi
             rows = []
-            for r in self.db.query(f"SELECT params, result {where} ORDER BY finished_at, rowid"):
+            for r in self.db.query(f"SELECT id, params, result {where} ORDER BY finished_at, rowid"):
                 source = (r.get("params") or {}).get("source") or {}
                 if source.get("job_id") == job_id:
-                    rows.append({"file": source.get("file"), "result": r.get("result")})
+                    rows.append({"id": r["id"], "file": source.get("file"), "result": r.get("result")})
         found: dict[str, dict] = {}
         for r in rows:
             if r.get("file") and isinstance(r.get("result"), dict):
-                found[str(r["file"])] = r["result"]  # in ordine di fine: resta il più recente
+                found[str(r["file"])] = {"job_id": r["id"], "result": r["result"]}  # in ordine di fine: il più recente
+        return found
+
+    def _qmean_by_file(self, job_id: str) -> dict[str, dict]:
+        """Risultati QMEAN dei modelli della pipeline, per file (`qmean_jobs_by_file`). Si tengono solo quelli che
+        riguardano il file attuale (stessa impronta): una ripresa che rielabora un elemento scrive un modello nuovo
+        con lo stesso nome, e il QMEAN di quello vecchio non vale più."""
         out: dict[str, dict] = {}
-        for file, result in found.items():
+        for file, found in self.qmean_jobs_by_file(job_id).items():
+            result = found["result"]
             fingerprint = result.get("source_sha256")
             if fingerprint:
                 try:
@@ -806,46 +811,13 @@ class PipelineService:
             out[file] = result
         return out
 
-    def export_zip(self, job_id: str, dest: Path) -> None:
-        """Scrive l'archivio su file (nello scratch): una pipeline di migliaia di modelli non passa dalla RAM.
+    def export_zip(self, job_id: str, dest: Path) -> dict:
+        """Scrive l'archivio su file (nello scratch), in questo processo: `GET /export.zip`, per le pipeline piccole.
+        Lo stesso archivio del job `pipeline_export` (services/pipeline_export.py), che per quelle grandi lo prepara
+        in background con i report in parallelo. Restituisce il riepilogo (modelli, report, dimensione)."""
+        from .pipeline_export import ZipBuilder  # importa questo modulo
 
-        Il report HTML di ogni elemento completato (senza immagine 3D) si genera e si scrive uno alla volta: in
-        memoria c'è al più un report. Un report non generato (file dell'elemento illeggibili) non ferma
-        l'esportazione: il motivo finisce in `report/non_generati.txt`. Modello, rapporto di qualità e report di un
-        elemento hanno lo stesso nome nell'archivio, unico fra gli elementi (`_zip_stem`).
-        """
-        job = self.jobs.get(job_id)
-        rows = self.db.query(f"SELECT {ITEM_COLUMNS}, sequence FROM pipeline_items WHERE job_id=? "
-                             "AND status='completed' ORDER BY idx", (job_id,))
-        if is_cross(job.get("params") or {}):
-            self._export_cross_zip(job, rows, dest)
-            return
-        reports = ReportService(self.jobs, self.compute, self.db)
-        with_qmean = set(self._qmean_by_file(job_id))  # report con QMEAN solo per i modelli valutati
-        missing: list[str] = []
-        used: set[str] = set()
-        with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("riepilogo.csv", self.export_csv(job_id))
-            zf.writestr("LEGGIMI.txt", README_ZIP)
-            for r in rows:
-                try:
-                    model = self.jobs.file_path(job_id, r["best_model"])
-                except NotFound:
-                    continue
-                stem = _zip_stem(r["name"], int(r["idx"]), used)
-                zf.write(model, f"modelli/{stem}.pdb")
-                quality = Path(str(model) + ".quality.json")
-                if quality.exists():
-                    zf.write(quality, f"qualita/{stem}.quality.json")
-                try:
-                    text = reports.pipeline_item(job, r, qmean=r["best_model"] in with_qmean)
-                except Exception as exc:  # un report non generato non deve fermare l'esportazione
-                    missing.append(f"{stem}: {getattr(exc, 'message', None) or f'{type(exc).__name__}: {exc}'}")
-                    continue
-                zf.writestr(f"report/{stem}.html", text)
-            if missing:
-                zf.writestr("report/non_generati.txt", "Report non generati\n\n" + "\n".join(missing) + "\n")
-            zf.writestr("parametri.json", json.dumps(job["params"], indent=2, ensure_ascii=False))
+        return ZipBuilder(self, job_id, dest).run()
 
     def _consensus(self, job_id: str, row: dict) -> tuple:
         """(punteggio, fascia) del consenso dal rapporto di qualità del modello della coppia; (None, None) senza."""
@@ -858,49 +830,6 @@ class PipelineService:
 
     def _metric_rows(self, job_id: str, rows: list[dict], params: dict, files: Optional[dict[int, str]]) -> list[dict]:
         return _metric_rows(rows, params, files, lambda r: self._consensus(job_id, r), self._qmean_by_file(job_id))
-
-    def _export_cross_zip(self, job: dict, rows: list[dict], dest: Path) -> None:
-        """ZIP di una pipeline M × N: una cartella per template e, dentro, una per sequenza,
-        `template/<template>/<sequenza>/`, con modello, report e rapporto di qualità (se l'analisi era richiesta) della
-        coppia, tutti chiamati `<sequenza>__<template>`;
-        `metriche.csv` (una riga per coppia con tutte le metriche di MODELLER, del template e dell'analisi di qualità,
-        e il percorso del modello nell'archivio), `migliori.csv` (una riga per sequenza, con le stesse metriche del
-        modello migliore) e `parametri.json`. Report generati uno alla volta."""
-        job_id, params = job["id"], job.get("params") or {}
-        names = pair_axes(params)
-        reports = ReportService(self.jobs, self.compute, self.db)
-        with_qmean = set(self._qmean_by_file(job_id))  # report con QMEAN solo per i modelli valutati
-        missing: list[str] = []
-        files: dict[int, str] = {}
-        with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("LEGGIMI.txt", README_CROSS_ZIP)
-            for r in rows:
-                try:
-                    model = self.jobs.file_path(job_id, r["best_model"])
-                except NotFound:
-                    continue
-                s, t = pair_of(r["idx"], params)
-                label = names["templates"][t] if t < len(names["templates"]) else pair_names(r["name"])[1]
-                sequence = names["sequences"][s] if s < len(names["sequences"]) else pair_names(r["name"])[0]
-                base = f"template/{label}/{sequence}/{r['name']}"
-                zf.write(model, f"{base}.pdb")
-                files[int(r["idx"])] = f"{base}.pdb"
-                quality_file = Path(str(model) + ".quality.json")
-                if quality_file.exists():
-                    zf.write(quality_file, f"{base}.quality.json")
-                try:
-                    text = reports.pipeline_item(job, r, qmean=r["best_model"] in with_qmean)
-                except Exception as exc:  # un report non generato non deve fermare l'esportazione
-                    missing.append(f"{r['name']}: {getattr(exc, 'message', None) or f'{type(exc).__name__}: {exc}'}")
-                    continue
-                zf.writestr(f"{base}.html", text)
-            if missing:
-                zf.writestr("report_non_generati.txt", "Report non generati\n\n" + "\n".join(missing) + "\n")
-            every = self.db.query(f"SELECT {ITEM_COLUMNS} FROM pipeline_items WHERE job_id=? ORDER BY idx", (job_id,))
-            metric_rows = self._metric_rows(job_id, every, params, files)
-            zf.writestr("metriche.csv", _write_csv(CROSS_FIELDS, metric_rows))
-            zf.writestr("migliori.csv", _write_csv(BEST_FIELDS, _best_rows(metric_rows, params)))
-            zf.writestr("parametri.json", json.dumps(params, indent=2, ensure_ascii=False))
 
 
 # tabella delle metriche di una pipeline M × N (metriche.csv e /export.csv): una riga per coppia

@@ -25,7 +25,7 @@ export const JOB_GROUP: Record<JobKind, JobGroup> = {
   model: "model", loop: "model", refine: "model", mutate: "model", pipeline: "model",
   quality: "analysis", qmean: "analysis", analysis: "analysis", pockets: "analysis", electrostatics: "analysis", predict: "analysis", alascan: "analysis",
   selftest: "service", db_update_pdbaa: "service", db_build_mmseqs: "service", db_index_mmseqs: "service", db_convert_uniclust: "service",
-  db_local_uniclust: "service", rerun: "service",
+  db_local_uniclust: "service", rerun: "service", pipeline_export: "service",
 };
 
 export interface JobCounts {

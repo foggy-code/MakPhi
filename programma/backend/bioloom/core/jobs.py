@@ -102,6 +102,7 @@ PRIORITY = {
     "alascan": 1,  # scansione di alanina: un processo di MODELLER per residuo (minuti)
     "pipeline": 2, "db_update_pdbaa": 2, "db_build_mmseqs": 2, "db_index_mmseqs": 2, "db_convert_uniclust": 2,
     "db_local_uniclust": 2,
+    "pipeline_export": 1,  # ZIP dei modelli di una pipeline (minuti o ore): services/pipeline_export.py
 }
 DEFAULT_PRIORITY = 1
 IO_WORKERS = 8

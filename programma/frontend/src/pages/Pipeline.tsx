@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { FixedCombination, JobItemsEvent, JobSummary, PipelineItem, PipelinePage, PipelineRequest, PipelineResult, ResumeScope, SearchEngine, Sequence, TemplateItem, TemplateMode, TemplateRef } from "../api/types";
+import type { FixedCombination, JobItemsEvent, JobSummary, PipelineExportResult, PipelineItem, PipelinePage, PipelineRequest, PipelineResult, ResumeScope, SearchEngine, Sequence, TemplateItem, TemplateMode, TemplateRef } from "../api/types";
 import { LaunchButton, PreflightPanel, usePreflight } from "../components/Preflight";
 import { pipelinePreflight } from "../lib/preflight";
 import { RecomputeOption } from "../components/CacheOption";
@@ -39,6 +39,53 @@ const SORTS: { key: string; label: string }[] = [
   { key: "rama_favored", label: "Fav. %" },
   { key: "clashscore", label: "Clash" },
 ];
+
+/** ZIP dei modelli: si prepara in background (job `pipeline_export`, con avanzamento) e si scarica quando è pronto.
+ *  Per una pipeline di 139.296 coppie l'archivio, generato dentro la richiesta, faceva aspettare il browser per giorni. */
+function PipelineZip({ jobId, running }: { jobId: string; running: boolean }) {
+  const toast = useToast();
+  const [exportId, setExportId] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setExportId(null);
+    api.pipelineExportLatest(jobId).then((j) => alive && setExportId(j?.id ?? null)).catch(() => undefined);
+    return () => { alive = false; };
+  }, [jobId]);
+  const { job, summary } = useJob<PipelineExportResult>(exportId);
+  const start = async () => {
+    try {
+      const j = await api.pipelineExport(jobId);
+      setExportId(j.id);
+      toast.push("ZIP in preparazione: prosegue anche chiudendo il browser");
+    } catch (e) {
+      toast.error(e);
+    }
+  };
+  const state = summary?.status;
+  if (state && isActive(state)) {
+    const pct = Math.round((summary?.progress ?? 0) * 100);
+    return (
+      <span className="btn btn-sm" aria-live="polite" title={summary?.stage || "ZIP in preparazione"}>
+        <Icon name="download" size={13} /> ZIP in preparazione · {pct}%
+      </span>
+    );
+  }
+  const ready = state === "completed" && job?.result ? job.result : null;
+  return (
+    <>
+      {ready && (
+        <a className="btn btn-sm btn-primary" href={api.jobFileUrl(exportId!, ready.file, true)}
+          title={`Preparato ${fmtDate(job?.finished_at)}: ${plural(ready.models, "modello", "modelli")}, ${plural(ready.reports, "report", "report")}`}>
+          <Icon name="download" size={13} /> Scarica ZIP ({fmtBytes(ready.size)})
+        </a>
+      )}
+      <button type="button" className={`btn btn-sm ${ready ? "" : "btn-primary"}`} disabled={running} onClick={start}
+        title={running ? "Lo ZIP si prepara quando la pipeline è terminata" : state === "failed" ? `Ultimo tentativo non riuscito: ${summary?.error ?? ""}` : "Prepara l'archivio con modelli, rapporti di qualità e report: in background, con l'avanzamento"}>
+        <Icon name="download" size={13} /> {ready ? "Rigenera ZIP" : "Prepara ZIP modelli"}
+      </button>
+    </>
+  );
+}
 
 /** Dettaglio di un elemento (riga espansa): esito, template scelti con le motivazioni, metriche, tempi. */
 function ItemDetail({ item: it }: { item: PipelineItem }) {
@@ -142,7 +189,7 @@ function Items({ jobId, running, completed, cacheHits }: { jobId: string; runnin
           <a className="btn btn-sm" href={api.pipelineCsvUrl(jobId)} title="Scarica la tabella completa dei risultati della pipeline (CSV)">
             <Icon name="download" size={13} /> Tabella pipeline (CSV)
           </a>
-          <a className="btn btn-sm btn-primary" href={api.pipelineZipUrl(jobId)}><Icon name="download" size={13} /> ZIP modelli</a>
+          <PipelineZip jobId={jobId} running={running} />
         </>
       }
     >

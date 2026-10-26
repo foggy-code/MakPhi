@@ -244,7 +244,7 @@ def test_latest_reads_only_the_source(client_with_ubq, monkeypatch):
 
     monkeypatch.setattr(core.jobs.db, "query", spy)
     assert service.latest(UBQ)["id"] == job["id"]
-    lookup = next(s for s in seen if "WHERE kind=?" in s)
+    lookup = next(s for s in seen if "WHERE kind IN (?)" in s)
     assert lookup.startswith("SELECT id, json_extract(params, '$.source') AS source FROM")
 
     def no_json(sql, params=()):

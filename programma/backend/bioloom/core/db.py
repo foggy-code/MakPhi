@@ -161,6 +161,15 @@ MIGRATIONS: tuple[Migration, ...] = (
 
 SCHEMA_VERSION = MIGRATIONS[-1].version if MIGRATIONS else BASE_SCHEMA_VERSION
 
+# Ricerca dei job per struttura (services/compute.job_sources: report, pagina Qualità). Con centinaia di migliaia di
+# job (139.296 QMEAN di una pipeline sul server) ogni ricerca ordinava tutti i job completati: il primo indice la
+# restringe al tipo di job, il secondo, sulle espressioni JSON, al job e al file della sorgente.
+OPTIONAL_INDEXES: tuple[str, ...] = (
+    "CREATE INDEX IF NOT EXISTS idx_jobs_kind ON jobs(kind, status, finished_at)",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_source ON jobs(kind, json_extract(params, '$.source.job_id'), "
+    "json_extract(params, '$.source.file'))",
+)
+
 JSON_COLUMNS = {"params", "result", "meta", "metrics"}
 
 
@@ -226,6 +235,7 @@ class Database:
                 self._conn.execute("PRAGMA foreign_keys=ON")
                 self._conn.execute("PRAGMA synchronous=NORMAL")
                 self._migrate()
+                self._optional_indexes()
             except sqlite3.OperationalError as exc:
                 self._conn.close()
                 if "locked" in str(exc).lower():
@@ -303,6 +313,17 @@ class Database:
                     f"Aggiornamento del database allo schema {migration.version} ({migration.description}) non "
                     f"riuscito: {exc}. Il database è rimasto allo schema {self._stored_version()}{where}.") from exc
             self.migrated.append((migration.version, migration.description))
+
+    def _optional_indexes(self) -> None:
+        """Indici che velocizzano soltanto (`OPTIONAL_INDEXES`): fuori dalle migrazioni, perché non cambiano lo schema
+        (niente copia di sicurezza) e una versione precedente di BioLoom li ignora. Uno che non si può creare
+        (SQLite senza le funzioni JSON) si salta: le ricerche funzionano lo stesso, più lente."""
+        for sql in OPTIONAL_INDEXES:
+            try:
+                self._conn.execute(sql)
+            except sqlite3.OperationalError as exc:
+                if "locked" in str(exc).lower():
+                    raise
 
     def _set_version(self, version: int) -> None:
         self._conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)", (str(version),))

@@ -40,6 +40,7 @@ const OPEN_IN: Record<JobKind, (id: string) => string> = {
   mutate: (id) => `/modeling?job=${id}`,
   alascan: (id) => `/modeling?job=${id}`,
   predict: (id) => `/quality?prjob=${id}`,
+  pipeline_export: (id) => `/jobs?id=${id}`,
 };
 
 /** Parametri letti al più (pannello Dettagli) e mostrati nella riga espansa dell'elenco. */

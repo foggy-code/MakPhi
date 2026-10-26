@@ -21,6 +21,7 @@ from ..services.live import LiveService
 from ..services.mutations import MutationService
 from ..services.notify import NotifyService
 from ..services.pipeline import PipelineService
+from ..services.pipeline_export import PipelineExportService
 from ..services.predict import PredictService
 from ..services.projects import ProjectService
 from ..services.refine import RefineService
@@ -55,6 +56,7 @@ class Core:
     cleanup: JobCleanup | None = None  # pulizia di massa dei job ed eliminazione dei progetti, creato in build_core
     notify: NotifyService | None = None  # avviso per email alla fine delle pipeline, creato in build_core
     autoqmean: AutoQmean | None = None  # QMEAN automatico e sua attesa (ZIP, avviso), creato in build_core
+    exports: PipelineExportService | None = None  # ZIP delle pipeline in background, creato in build_core
 
     def shutting_down(self) -> bool:
         """Arresto in corso: segnale ricevuto da uvicorn (`should_exit`) o JobManager chiuso. I flussi SSE si
@@ -108,6 +110,8 @@ def build_core(paths: Paths, *, server: bool = False) -> Core:
     MutationService(jobs, compute).register()  # job "mutate" e "alascan" (F9.2)
     PredictService(jobs, compute).register()  # job "predict" (F9.3)
     pipeline = PipelineService(db, jobs, compute)
+    exports = PipelineExportService(jobs, pipeline)
+    exports.register()  # job "pipeline_export": ZIP dei modelli in background
     autoqmean = AutoQmean(jobs)  # QMEAN accodato a modellazione o pipeline completata, se il job lo chiede
     databases = DatabaseService(jobs, paths.databases, paths.local_cache, settings.get)
     SelfTestService(jobs, paths.databases)
@@ -128,6 +132,7 @@ def build_core(paths: Paths, *, server: bool = False) -> Core:
     core.notify = NotifyService(paths.data, paths.licenses, jobs, server=server)
     licenses.extra_secrets = core.notify.secrets  # password della posta, come le chiavi di licenza
     core.autoqmean = autoqmean
+    core.exports = exports
     autoqmean.on_done = core.notify.after_qmean  # con QMEAN automatico l'avviso aspetta la fine dei QMEAN
     if recovered:
         print(f"[BioLoom] {recovered} job interrotti dal precedente arresto sono stati marcati come falliti "

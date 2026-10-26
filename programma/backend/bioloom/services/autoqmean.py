@@ -234,9 +234,9 @@ class AutoQmean:
                 self.jobs.log_if_present(job_id, f"QMEAN automatico: {done} "
                                                  f"{'calcolo fallito rimesso' if done == 1 else 'calcoli falliti rimessi'}"
                                                  " in coda.")
-            except Exception:
+                self._check_done(job_id)
+            except Exception:  # database chiuso (arresto): il rilancio non deve far rumore
                 pass
-            self._check_done(job_id)
 
     def _failed(self, job_id: str) -> list[dict]:
         """QMEAN automatici falliti o annullati del job, nell'ordine in cui erano stati accodati: [{id, file}]."""

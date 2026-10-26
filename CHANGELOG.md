@@ -16,12 +16,19 @@ Le versioni fino a 4.2.0 sono ricostruite dalla storia git (21 ottobre 2026): pr
 ## [Non rilasciato]
 
 ### Aggiunto
+- ZIP dei modelli in background: **Prepara ZIP modelli** avvia un job `pipeline_export` con l'avanzamento, e
+  l'archivio si scarica quando è pronto. I report si generano in più processi. Rotte `POST` e
+  `GET /api/pipeline/{id}/export`.
 - `POST /api/jobs/{id}/qmean-auto/retry`: rimette in coda i QMEAN automatici falliti o annullati di una modellazione o
   pipeline. Riprende gli stessi job, quindi restano automatici e i conteggi tornano giusti, e salta i modelli che
   hanno già un QMEAN valido. Serve dopo un guasto del servizio QMEAN, quando la pipeline è completata e non si può
   riprendere.
 
 ### Corretto
+- Lo ZIP della pipeline `seq_con_dominio` (139.296 coppie) restava in caricamento: si generava dentro la richiesta, a
+  una coppia ogni 3 s (circa 5 giorni prima del primo byte). Inoltre i report non avevano il QMEAN, perché la ricerca
+  per struttura guardava solo i 200 QMEAN più recenti di tutto BioLoom. Lo stesso difetto valeva per la pagina
+  Qualità e per il report del modello. Ora la ricerca filtra per job e file, con un indice nel database.
 - QMEAN locale con un servizio occupato o bloccato. Sul server una pipeline ha perso 107.918 QMEAN in 5 ore: il
   worker apriva un thread per richiesta e ogni calcolo gli faceva rifare la scansione dei database. A 1096 thread
   non rispondeva più, e ogni calcolo falliva in 4 s con "QMEAN locale non attivo".

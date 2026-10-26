@@ -64,7 +64,7 @@ JOB_KIND_LABELS = {
     "db_local_uniclust": "Copia locale UniClust30", "analysis": "Analisi strutturale",
     "pockets": "Tasche (fpocket)", "electrostatics": "Elettrostatica (APBS)", "refine": "Rifinitura energetica",
     "rerun": "Riesecuzione da pacchetto", "mutate": "Mutagenesi", "alascan": "Scansione di alanina",
-    "predict": "Confronto con una predizione",
+    "predict": "Confronto con una predizione", "pipeline_export": "ZIP della pipeline",
 }
 
 

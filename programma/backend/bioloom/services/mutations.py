@@ -21,8 +21,6 @@ from __future__ import annotations
 
 import csv
 import io
-import json
-import sqlite3
 import threading
 import time
 from functools import partial
@@ -37,7 +35,7 @@ from ..core.storage import atomic_write_json, atomic_write_text
 from ..domain import interfaces, mutations, refinement, sequences, structure
 from ..engines import mutate as engine
 from ..engines import quality, remote
-from .compute import ComputeService, source_key
+from .compute import ComputeService, job_sources, source_key
 
 MUTATE = "mutate"
 ALASCAN = "alascan"
@@ -420,18 +418,10 @@ class MutationService:
         key = source_key(source)
         if key == ("?",):
             return []
-        sql = ("FROM jobs WHERE kind IN ('mutate','alascan') ORDER BY created_at DESC, rowid DESC LIMIT ?")
-        try:
-            rows = self.jobs.db.query(f"SELECT id, json_extract(params, '$.source') AS source {sql}", (HISTORY_LIMIT,))
-        except sqlite3.OperationalError:
-            rows = [{"id": r["id"], "source": json.dumps((r.get("params") or {}).get("source"))}
-                    for r in self.jobs.db.query(f"SELECT id, params {sql}", (HISTORY_LIMIT,))]
         out = []
-        for r in rows:
-            try:
-                src = json.loads(r["source"]) if isinstance(r.get("source"), str) else None
-            except ValueError:
-                src = None
+        for r in job_sources(self.jobs.db, (MUTATE, ALASCAN), source, where="1=1", order="created_at DESC",
+                             limit=HISTORY_LIMIT):
+            src = r["source"]
             if source_key(src) != key:
                 continue
             try:

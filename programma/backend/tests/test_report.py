@@ -584,13 +584,13 @@ def test_pipeline_zip_contains_one_report_per_completed_item(client_with_ubq, mo
                                         "templates": [{"id": "1UBQ", "chains": ["A"]}]}).json()
     assert wait_job(c, job["id"])["status"] == "completed"
     calls = []
-    original = reports_service.ReportService.pipeline_item
+    original = reports_service.ReportService.pipeline_item_detached
 
-    def spy(self, job_row, row, **kwargs):
+    def spy(self, job_row, row, context):
         calls.append(row["name"])
-        return original(self, job_row, row, **kwargs)
+        return original(self, job_row, row, context)
 
-    monkeypatch.setattr(reports_service.ReportService, "pipeline_item", spy)
+    monkeypatch.setattr(reports_service.ReportService, "pipeline_item_detached", spy)
     r = c.get(f"/api/pipeline/{job['id']}/export.zip")
     assert r.status_code == 200
     with zipfile.ZipFile(io.BytesIO(r.content)) as zf:

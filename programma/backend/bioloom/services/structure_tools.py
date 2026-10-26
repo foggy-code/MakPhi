@@ -15,8 +15,6 @@ più recente sulla stessa struttura per la pagina Qualità (`latest`, `active`).
 
 from __future__ import annotations
 
-import json
-import sqlite3
 from pathlib import Path
 from typing import Optional
 
@@ -25,7 +23,7 @@ from ..core.errors import AppError
 from ..core.jobs import JobContext, JobManager
 from ..domain import electrostatics as es
 from ..engines import electrostatics, pockets
-from .compute import ComputeService, source_key
+from .compute import ComputeService, job_sources, source_key
 
 POCKETS = "pockets"
 ELECTROSTATICS = "electrostatics"
@@ -116,7 +114,7 @@ class StructureToolsService:
         key = source_key(source)
         if key == ("?",):
             return None
-        for row in self._sources(kind):
+        for row in self._sources(kind, source):
             if source_key(row["source"]) != key:
                 continue
             try:
@@ -136,7 +134,7 @@ class StructureToolsService:
         key = source_key(source)
         if key == ("?",):
             return None
-        for row in self._sources(kind, "status IN ('queued','running')", "created_at DESC"):
+        for row in self._sources(kind, source, "status IN ('queued','running')", "created_at DESC"):
             if source_key(row["source"]) != key:
                 continue
             try:
@@ -145,24 +143,11 @@ class StructureToolsService:
                 continue
         return None
 
-    def _sources(self, kind: str, where: str = "status='completed'", order: str = "finished_at DESC") -> list[dict]:
-        """(id, sorgente) dei job `kind` nello stato `where`, dal più recente; solo `params.source` (json_extract),
-        con i parametri interi se SQLite non ha le funzioni JSON. `where` e `order` sono costanti del modulo."""
-        sql = f"FROM jobs WHERE kind=? AND {where} ORDER BY {order}, rowid DESC LIMIT ?"
-        try:
-            rows = self.jobs.db.query(f"SELECT id, json_extract(params, '$.source') AS source {sql}",
-                                      (kind, LOOKUP_LIMIT))
-        except sqlite3.OperationalError:
-            return [{"id": r["id"], "source": (r.get("params") or {}).get("source")}
-                    for r in self.jobs.db.query(f"SELECT id, params {sql}", (kind, LOOKUP_LIMIT))]
-        out = []
-        for r in rows:
-            try:
-                src = json.loads(r["source"]) if isinstance(r.get("source"), str) else None
-            except ValueError:
-                src = None
-            out.append({"id": r["id"], "source": src})
-        return out
+    def _sources(self, kind: str, source: dict, where: str = "status='completed'",
+                 order: str = "finished_at DESC") -> list[dict]:
+        """(id, sorgente) dei job `kind` nello stato `where` che possono riguardare `source`, dal più recente
+        (`job_sources`). `where` e `order` sono costanti del modulo."""
+        return job_sources(self.jobs.db, (kind,), source, where=where, order=order, limit=LOOKUP_LIMIT)
 
     def lookup(self, kind: str, source: dict) -> dict:
         """Risposta di `/latest`: job completato più recente e job della stessa sorgente in coda o in corso lanciato
