@@ -1,4 +1,4 @@
-# Integrazione continua di BioLoom v4.
+# Integrazione continua di MakPhi.
 # - backend: versione unica (programma/scripts/versione.sh), impronta del codice uguale in sh e in PowerShell
 #   (docker/impronta.sh, launcher/impronta.ps1), lint e test rapidi in Python puro (senza MODELLER né strumenti
 #   esterni: quei test vengono saltati)
@@ -14,10 +14,10 @@
 #   I test nell'immagine misurano anche la copertura del backend (pytest-cov): il totale va nel riepilogo del job.
 #   L'impronta salvata nell'immagine (/app/IMPRONTA) deve essere quella del codice da cui è costruita.
 #   Poi l'avviatore vero (avvio, salute, arresto) e la copia portatile (prepara), avviata dal file in immagini/ dopo
-#   aver tolto l'immagine da Docker, e l'avviatore dei server senza compose (launcher/bioloom-podman.sh) con il Podman
-#   del runner, senza root. Infine l'interfaccia servita da BioLoom in Chromium (Playwright): ogni pagina in tema scuro
+#   aver tolto l'immagine da Docker, e l'avviatore dei server senza compose (launcher/makphi-podman.sh) con il Podman
+#   del runner, senza root. Infine l'interfaccia servita da MakPhi in Chromium (Playwright): ogni pagina in tema scuro
 #   e chiaro senza errori in console e senza violazioni WCAG 2.1 gravi secondo axe-core (frontend/e2e/).
-# - qmean: solo a mano (Run workflow con "qmean"), costruzione dell'immagine bioloom-qmean e prova del worker.
+# - qmean: solo a mano (Run workflow con "qmean"), costruzione dell'immagine makphi-qmean e prova del worker.
 # Le GitHub Actions sono fissate per SHA completo del commit, con il tag nel commento: un tag spostato non cambia il
 # codice che gira qui. Le aggiorna Dependabot (.github/dependabot.yml), che riscrive SHA e commento insieme; a mano:
 # `git ls-remote https://github.com/<owner>/<repo> 'refs/tags/<tag>' 'refs/tags/<tag>^{}'`: se c'è la riga che finisce
@@ -31,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       qmean:
-        description: "Costruisci anche l'immagine bioloom-qmean (l'immagine di base di QMEAN pesa circa 2 GB)"
+        description: "Costruisci anche l'immagine makphi-qmean (l'immagine di base di QMEAN pesa circa 2 GB)"
         type: boolean
         default: false
 
@@ -58,7 +58,7 @@ jobs:
         run: |
           a="$(sh programma/docker/impronta.sh programma)"
           b="$(IMPRONTA_SENZA_PERL=1 sh programma/docker/impronta.sh programma)"
-          c="$(pwsh -NoProfile -Command '. ./programma/launcher/impronta.ps1; Get-BioLoomImpronta ./programma')"
+          c="$(pwsh -NoProfile -Command '. ./programma/launcher/impronta.ps1; Get-MakPhiImpronta ./programma')"
           echo "sh:            $a"
           echo "sh senza perl: $b"
           echo "PowerShell:    $c"
@@ -131,8 +131,8 @@ jobs:
       - name: shellcheck (script sh e .command)
         run: |
           shellcheck --version | head -n2
-          shellcheck -S warning programma/launcher/*.sh avvia-bioloom.sh programma/docker/*.sh programma/scripts/*.sh \
-            programma/docker/qmean/tests/*.sh "Avvia BioLoom.command" "Arresta BioLoom.command"
+          shellcheck -S warning programma/launcher/*.sh avvia-makphi.sh programma/docker/*.sh programma/scripts/*.sh \
+            programma/docker/qmean/tests/*.sh "Avvia MakPhi.command" "Arresta MakPhi.command"
       - name: PSScriptAnalyzer (script PowerShell, solo errori)
         shell: pwsh
         run: |
@@ -164,20 +164,20 @@ jobs:
       - name: Versione
         id: version
         run: echo "version=$(head -n1 programma/launcher/VERSION | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
-      - name: Immagine BioLoom
+      - name: Immagine MakPhi
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: programma
           file: programma/docker/Dockerfile
           platforms: linux/amd64
           load: true
-          tags: bioloom:${{ steps.version.outputs.version }}
-          build-args: BIOLOOM_VERSION=${{ steps.version.outputs.version }}
+          tags: makphi:${{ steps.version.outputs.version }}
+          build-args: MAKPHI_VERSION=${{ steps.version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Impronta nell'immagine
         run: |
-          immagine="$(docker run --rm --entrypoint cat bioloom:${{ steps.version.outputs.version }} /app/IMPRONTA)"
+          immagine="$(docker run --rm --entrypoint cat makphi:${{ steps.version.outputs.version }} /app/IMPRONTA)"
           codice="$(sh programma/docker/impronta.sh programma)"
           echo "immagine: $immagine"
           echo "codice:   $codice"
@@ -200,52 +200,52 @@ jobs:
           VERSIONE: ${{ steps.version.outputs.version }}
         run: |
           # i test non devono aver toccato il codice: con un'impronta diversa "prepara" ricostruirebbe l'immagine
-          test "$(sh programma/docker/impronta.sh programma)" = "$(docker run --rm --entrypoint cat "bioloom:$VERSIONE" /app/IMPRONTA)"
-          ./avvia-bioloom.sh --no-menu --no-browser
+          test "$(sh programma/docker/impronta.sh programma)" = "$(docker run --rm --entrypoint cat "makphi:$VERSIONE" /app/IMPRONTA)"
+          ./avvia-makphi.sh --no-menu --no-browser
           curl -fsS http://127.0.0.1:8765/api/health
           echo
-          ./avvia-bioloom.sh arresta
+          ./avvia-makphi.sh arresta
       - name: Copia portatile (prepara, avvio dal file in immagini/, arresto)
         timeout-minutes: 30
         env:
           VERSIONE: ${{ steps.version.outputs.version }}
         run: |
-          copia="$RUNNER_TEMP/copia BioLoom"
-          ./avvia-bioloom.sh prepara "$copia" --no-menu --senza-qmean --senza-dati
+          copia="$RUNNER_TEMP/copia MakPhi"
+          ./avvia-makphi.sh prepara "$copia" --no-menu --senza-qmean --senza-dati
           ls -l "$copia/immagini"
-          test -s "$copia/immagini/bioloom-$VERSIONE.tar"
+          test -s "$copia/immagini/makphi-$VERSIONE.tar"
           # senza l'immagine in Docker la copia deve caricarla dal file in immagini/
-          docker image rm "bioloom-test:bioloom-$VERSIONE" >/dev/null 2>&1 || true
-          docker image rm "bioloom:$VERSIONE"
-          if docker image inspect "bioloom:$VERSIONE" >/dev/null 2>&1; then echo "bioloom:$VERSIONE non tolta"; exit 1; fi
-          "$copia/avvia-bioloom.sh" --no-menu --no-browser
-          docker image inspect "bioloom:$VERSIONE" >/dev/null
+          docker image rm "makphi-test:makphi-$VERSIONE" >/dev/null 2>&1 || true
+          docker image rm "makphi:$VERSIONE"
+          if docker image inspect "makphi:$VERSIONE" >/dev/null 2>&1; then echo "makphi:$VERSIONE non tolta"; exit 1; fi
+          "$copia/avvia-makphi.sh" --no-menu --no-browser
+          docker image inspect "makphi:$VERSIONE" >/dev/null
           curl -fsS http://127.0.0.1:8765/api/health
           echo
-          "$copia/avvia-bioloom.sh" arresta
+          "$copia/avvia-makphi.sh" arresta
       - name: Avviatore per Podman (avvio, salute, arresto)
-        # come sul server senza compose (launcher/bioloom-podman.sh), con il Podman del runner, senza root: l'immagine
+        # come sul server senza compose (launcher/makphi-podman.sh), con il Podman del runner, senza root: l'immagine
         # è quella appena provata, passata da Docker a Podman (la costruzione con Podman rifarebbe tutto)
         timeout-minutes: 15
         env:
           VERSIONE: ${{ steps.version.outputs.version }}
         run: |
           podman --version
-          docker save "bioloom:$VERSIONE" | podman load
+          docker save "makphi:$VERSIONE" | podman load
           # il primo avvio crea server.env (dati in data/, solo 127.0.0.1) e si ferma, il secondo avvia
-          programma/launcher/bioloom-podman.sh avvia --no-menu
+          programma/launcher/makphi-podman.sh avvia --no-menu
           test -f server.env
-          programma/launcher/bioloom-podman.sh avvia --no-menu
+          programma/launcher/makphi-podman.sh avvia --no-menu
           ok=0
           for _ in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:8765/api/health; then ok=1; break; fi
             sleep 2
           done
           echo
-          podman ps -a --filter name=bioloom
+          podman ps -a --filter name=makphi
           test "$ok" = 1
-          programma/launcher/bioloom-podman.sh arresta --no-menu
-          test -z "$(podman ps -q --filter name=bioloom)"
+          programma/launcher/makphi-podman.sh arresta --no-menu
+          test -z "$(podman ps -q --filter name=makphi)"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
@@ -256,22 +256,22 @@ jobs:
         timeout-minutes: 20
         run: |
           (cd programma/frontend && npm ci --no-audit --no-fund && npx playwright install --with-deps chromium)
-          ./avvia-bioloom.sh --no-menu --no-browser
+          ./avvia-makphi.sh --no-menu --no-browser
           curl -fsS http://127.0.0.1:8765/api/health
           echo
           set +e
           (cd programma/frontend && npm run e2e)
           esito=$?
           set -e
-          ./avvia-bioloom.sh arresta
+          ./avvia-makphi.sh arresta
           exit "$esito"
       - name: Container e log (se un passo non è riuscito)
         if: failure()
         run: |
           docker ps -a
-          docker compose -p bioloom logs --tail 200 || true
+          docker compose -p makphi logs --tail 200 || true
           podman ps -a || true
-          podman logs --tail 200 bioloom || true
+          podman logs --tail 200 makphi || true
 
   qmean:
     # solo a mano (Actions > CI > Run workflow, con "qmean"): l'immagine di base di QMEAN pesa circa 2 GB
@@ -289,11 +289,11 @@ jobs:
           context: programma/docker/qmean
           platforms: linux/amd64
           load: true
-          tags: bioloom-qmean:${{ steps.version.outputs.version }}
+          tags: makphi-qmean:${{ steps.version.outputs.version }}
       - name: Worker QMEAN (risponde anche senza database)
         timeout-minutes: 5
         run: |
-          docker run -d --name qmean -p 127.0.0.1:8080:8080 bioloom-qmean:${{ steps.version.outputs.version }}
+          docker run -d --name qmean -p 127.0.0.1:8080:8080 makphi-qmean:${{ steps.version.outputs.version }}
           for _ in $(seq 1 30); do
             curl -fsS http://127.0.0.1:8080/status && exit 0
             sleep 2

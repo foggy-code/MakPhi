@@ -176,7 +176,7 @@ export const MODEL_METRICS: Record<ModelMetric, ModelMetricDef> = {
     note: "funzione obiettivo di MODELLER (violazioni dei vincoli spaziali): più bassa è migliore",
   },
   grade: {
-    label: "Voto BioLoom", digits: 1, better: "high", value: (m) => m.quality?.grade_score ?? null,
+    label: "Voto MakPhi", digits: 1, better: "high", value: (m) => m.quality?.grade_score ?? null,
     references: [{ value: 85, label: "A" }, { value: 70, label: "B" }, { value: 55, label: "C" }], domain: [0, 100],
     note: "punteggio di qualità 0–100 (Ramachandran, contatti sterici, zDOPE): A da 85, B da 70, C da 55",
   },

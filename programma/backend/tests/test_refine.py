@@ -2,7 +2,7 @@
 reali su 1UBQ con una catena laterale ruotata, dinamica breve, interruzioni della catena, annullamento durante OpenMM e
 degradazione senza OpenMM.
 
-I test che eseguono OpenMM si saltano nelle immagini senza OpenMM o PDBFixer (bioloom:4.1.0)."""
+I test che eseguono OpenMM si saltano nelle immagini senza OpenMM o PDBFixer (makphi:4.1.0)."""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ import time
 import numpy as np
 import pytest
 
-from bioloom.core.errors import ToolUnavailable
-from bioloom.core.jobs import PRIORITY, JobManager
-from bioloom.domain import clashes, refinement, structure
-from bioloom.engines import refine as engine
-from bioloom.engines import tools
+from makphi.core.errors import ToolUnavailable
+from makphi.core.jobs import PRIORITY, JobManager
+from makphi.domain import clashes, refinement, structure
+from makphi.engines import refine as engine
+from makphi.engines import tools
 
 from .conftest import DATA, ubq_variant, wait_job
 
@@ -152,7 +152,7 @@ def test_compare_rows_and_backbone_rmsd(tmp_path):
 # ------------------------------------------------------------------------------------------ rilevamento degli strumenti
 def test_python_tools_are_detected_without_importing_them(monkeypatch):
     tools.configure(DATA / "inesistente")  # svuota la cache del rilevamento
-    monkeypatch.setitem(tools.MODULES, "assente", {"module": "bioloom_modulo_inesistente", "label": "Assente",
+    monkeypatch.setitem(tools.MODULES, "assente", {"module": "makphi_modulo_inesistente", "label": "Assente",
                                                    "use": "prova"})
     assert tools.find_module("assente") is None
     monkeypatch.setitem(tools.MODULES, "json", {"module": "json", "label": "JSON", "use": "prova"})
@@ -218,7 +218,7 @@ def test_refine_fixes_a_wrong_rotamer_of_1ubq(client, tmp_path):
     files = {f["path"] for f in job["files"]}
     assert {"UBQROT_refined.pdb", "UBQROT_refined.pdb.quality.json", "input.pdb", "refine_result.json"} <= files
     text = client.get(f"/api/jobs/{job['id']}/files/UBQROT_refined.pdb").text
-    assert "REMARK 999 BIOLOOM REFINED FROM UBQROT OPENMM" in text and "BACKBONE RMSD" in text
+    assert "REMARK 999 MAKPHI REFINED FROM UBQROT OPENMM" in text and "BACKBONE RMSD" in text
     refined = _model(client.app.state.core.jobs.file_path(job["id"], "UBQROT_refined.pdb"))
     assert not any(a.element == "H" for a in refined.get_atoms())  # idrogeni non richiesti
     assert len([r for r in refined.get_residues() if structure.is_amino_residue(r)]) == 76

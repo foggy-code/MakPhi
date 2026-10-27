@@ -34,13 +34,13 @@ export function NotifyCard({ contactEmail }: { contactEmail: string }) {
       right={<Badge tone={status.configured ? "ok" : "warn"}>{status.configured ? "pronte" : "non configurate"}</Badge>}>
       <div className="stack">
         <p className="small text-2">
-          Alla fine di una pipeline con «Avvisami per email» BioLoom invia un messaggio con esito, durata e numero di elementi elaborati. Non contiene
+          Alla fine di una pipeline con «Avvisami per email» MakPhi invia un messaggio con esito, durata e numero di elementi elaborati. Non contiene
           risultati, sequenze, nomi delle sequenze né file.
         </p>
         {status.error ? <Alert tone="err">{status.error}</Alert> : !status.configured && (
           <Alert tone="info">
-            Il server di posta non si imposta da qui: lo configura chi gestisce BioLoom, copiando <span className="mono">programma/launcher/posta.env.example</span>
-            {" "}nella cartella dati come <span className="mono">{status.file}</span> e compilandolo (sul server, in alternativa, le variabili BIOLOOM_SMTP_* in
+            Il server di posta non si imposta da qui: lo configura chi gestisce MakPhi, copiando <span className="mono">programma/launcher/posta.env.example</span>
+            {" "}nella cartella dati come <span className="mono">{status.file}</span> e compilandolo (sul server, in alternativa, le variabili MAKPHI_SMTP_* in
             server.env). Le modifiche valgono subito: poi premi «Rileggi».
           </Alert>
         )}

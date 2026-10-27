@@ -207,7 +207,7 @@ export function optionNotes(o: WizardOptions, ctx: OptionContext): Record<"model
   const quality = o.quality === "none" ? "Nessuna analisi: niente voto né consenso nei risultati."
     : `${o.quality === "all" ? "Su tutti i modelli" : "Sul modello migliore"}: Ramachandran, clash, DOPE e consenso${o.extended ? (tools ? `, più ${tools}` : ", più PROCHECK e ProSA (non disponibili qui: i controlli lo dicono)") : ""}.${!tools ? " PROCHECK e ProSA non sono utilizzabili su questo computer." : ""}`;
   const ligands = ctx.ligandNames.length
-    ? `I template contengono ${ctx.ligandNames.join(", ")} (metalli, cofattori o ligandi): trasferirli mantiene il sito nel modello; BioLoom verifica contatti e coordinazione.`
+    ? `I template contengono ${ctx.ligandNames.join(", ")} (metalli, cofattori o ligandi): trasferirli mantiene il sito nel modello; MakPhi verifica contatti e coordinazione.`
     : "Nessun ligando, cofattore o metallo trasferibile nei template scelti (additivi e ioni del tampone esclusi).";
   const plddt = ctx.predicted
     ? `Template AlphaFold: tolti i residui con pLDDT < ${o.plddtMin} (fasce di AlphaFold DB: sotto 70 lo scheletro non è affidabile).`

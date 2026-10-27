@@ -44,7 +44,7 @@ export function PirHeaderDialog({ code: initialCode, header, onClose, onSave }: 
     >
       <div className="stack">
         <div className="grid grid-2">
-          <Field label="Codice della voce (>P1;…)" hint={errors.code ? <span style={{ color: "var(--err)" }}>{errors.code}</span> : "Per i template BioLoom usa <ID>_<catene>, es. 1ABC_A."}>
+          <Field label="Codice della voce (>P1;…)" hint={errors.code ? <span style={{ color: "var(--err)" }}>{errors.code}</span> : "Per i template MakPhi usa <ID>_<catene>, es. 1ABC_A."}>
             <input className="input mono" value={code} onChange={(e) => setCode(e.target.value)} aria-invalid={!!errors.code} autoFocus />
           </Field>
           <Field label="Tipo" hint={errors.kind}>
@@ -54,7 +54,7 @@ export function PirHeaderDialog({ code: initialCode, header, onClose, onSave }: 
             </select>
           </Field>
         </div>
-        {template && input("file", "File della struttura", "Codice del file che MODELLER apre (<codice>.pdb); BioLoom lo imposta uguale al codice della voce.")}
+        {template && input("file", "File della struttura", "Codice del file che MODELLER apre (<codice>.pdb); MakPhi lo imposta uguale al codice della voce.")}
         <div className="grid grid-2">
           {input("startRes", "Residuo iniziale", template ? "Numero nel file (es. 5 o 52A); FIRST o vuoto per il primo." : "Di solito vuoto per il bersaglio.", "FIRST")}
           {input("startChain", "Catena iniziale", undefined, "A")}
@@ -68,7 +68,7 @@ export function PirHeaderDialog({ code: initialCode, header, onClose, onSave }: 
         <div className="small text-2 mono" aria-label="Anteprima della seconda riga">{formatHeader(h)}</div>
         {code.trim() !== initialCode && (
           <p className="small" style={{ color: "var(--warn)" }}>
-            Cambiando il codice di un template, BioLoom lo abbina al template scelto per posizione invece che per codice: controlla l'ordine
+            Cambiando il codice di un template, MakPhi lo abbina al template scelto per posizione invece che per codice: controlla l'ordine
             dei template prima di modellare.
           </p>
         )}

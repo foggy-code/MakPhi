@@ -1,7 +1,7 @@
 """Elettrostatica (F7b): PQR reale di PDB2PQR su 1UBQ, griglia come psize, input di APBS, mappe OpenDX, superficie;
 job `electrostatics` con PDB2PQR + APBS reali, annullamento durante APBS e degradazione senza gli strumenti.
 
-I test che eseguono PDB2PQR e APBS si saltano nelle immagini senza i programmi (bioloom:4.1.0); gli altri usano il PQR
+I test che eseguono PDB2PQR e APBS si saltano nelle immagini senza i programmi (makphi:4.1.0); gli altri usano il PQR
 reale salvato in tests/data/pdb2pqr_1ubq_parse.pqr (PDB2PQR 3.7.1, PARSE, PROPKA a pH 7) e mappe sintetiche."""
 
 from __future__ import annotations
@@ -12,12 +12,12 @@ import time
 import numpy as np
 import pytest
 
-from bioloom.core.errors import ToolUnavailable
-from bioloom.core.jobs import PRIORITY, JobManager, ProcessResult
-from bioloom.domain import electrostatics as es
-from bioloom.domain import structure
-from bioloom.engines import electrostatics as engine
-from bioloom.engines import tools
+from makphi.core.errors import ToolUnavailable
+from makphi.core.jobs import PRIORITY, JobManager, ProcessResult
+from makphi.domain import electrostatics as es
+from makphi.domain import structure
+from makphi.engines import electrostatics as engine
+from makphi.engines import tools
 
 from .conftest import DATA, ubq_variant, wait_job
 

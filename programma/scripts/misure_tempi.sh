@@ -7,7 +7,7 @@
 #                                                    modalità parallela a 300 e 1000 residui; poi QMEAN 1/8/16/32
 #   bash programma/scripts/misure_tempi.sh comune     serie comune al PC e al server: 100, 300, 600, 1000 residui
 #
-# Variabili: IMAGE (immagine con gli strumenti, predefinita bioloom:<VERSION>), CODE (cartella programma/ da montare,
+# Variabili: IMAGE (immagine con gli strumenti, predefinita makphi:<VERSION>), CODE (cartella programma/ da montare,
 # predefinita questa), DATA (cartella dati: licenses/modeller.key e templates/3IU0.pdb), OUT (risultati, predefinita
 # bench_out/tempi/<serie>), JOBS (misure contemporanee, predefinito 1: sul server 24), REPS (ripetizioni, 3),
 # HOST_LABEL (etichetta della macchina nei risultati), PODMAN (docker o podman), QMEAN_LEVELS (1,8,16,32; vuoto = no).
@@ -24,7 +24,7 @@ OUT="${OUT:-$ROOT/../bench_out/tempi/$SERIE}"
 JOBS="${JOBS:-1}"
 REPS="${REPS:-3}"
 HOST_LABEL="${HOST_LABEL:-$(hostname)}"
-IMAGE="${IMAGE:-bioloom:$(head -n1 "$ROOT/launcher/VERSION" | tr -d '[:space:]')}"
+IMAGE="${IMAGE:-makphi:$(head -n1 "$ROOT/launcher/VERSION" | tr -d '[:space:]')}"
 QMEAN_LEVELS="${QMEAN_LEVELS-1,8,16,32}"
 mkdir -p "$OUT"
 KEY="$(tr -d '\r\n' < "$DATA/licenses/modeller.key")"
@@ -36,7 +36,7 @@ OPTS=(--rm --init -e "MODELLER_KEY=$KEY" -e PYTHONPATH=/src/backend -e PYTHONDON
       -v "$(host_path "$OUT"):/out")
 if [ "$PODMAN" = podman ]; then
   OPTS+=(--security-opt label=disable)
-  for f in "$DATA/../seccomp-podman.json" "$HOME/bioloom/seccomp-podman.json"; do
+  for f in "$DATA/../seccomp-podman.json" "$HOME/makphi/seccomp-podman.json"; do
     if [ -f "$f" ]; then OPTS+=(--security-opt "seccomp=$f"); break; fi
   done
 fi
@@ -81,8 +81,8 @@ wait
 echo "== tempi finiti ($(date '+%F %T'))"
 
 if [ "$SERIE" = server ] && [ -n "$QMEAN_LEVELS" ] && [ ! -s "$OUT/qmean.json" ]; then
-  # nella rete del container bioloom, dove risponde il worker QMEAN (come per BioLoom)
-  "$PODMAN" run "${OPTS[@]}" --network container:bioloom --entrypoint sh "$IMAGE" \
+  # nella rete del container makphi, dove risponde il worker QMEAN (come per MakPhi)
+  "$PODMAN" run "${OPTS[@]}" --network container:makphi --entrypoint sh "$IMAGE" \
     -c 'mkdir -p /scratch/tmp /scratch/home && exec python /src/scripts/benchmark_qmean.py "$@"' sh \
     --levels "$QMEAN_LEVELS" --length 300 --template-file /hostdata/templates/3IU0.pdb --host-label "$HOST_LABEL" \
     --out /out/qmean.json > "$OUT/qmean.log" 2>&1 || echo "misura QMEAN non riuscita (vedi $OUT/qmean.log)" >&2

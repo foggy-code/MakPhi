@@ -11,7 +11,7 @@ export type QmeanRoute = {
   canFallback: boolean;
 };
 
-const LOCAL_MISSING = "Collega il disco con UniClust30/UniRef30 e avvia (o riavvia) BioLoom dall'avviatore.";
+const LOCAL_MISSING = "Collega il disco con UniClust30/UniRef30 e avvia (o riavvia) MakPhi dall'avviatore.";
 const SLOW_DISK = " Dal disco condiviso HHblits è lento: copia gli indici su questo computer (Impostazioni → Database).";
 
 /** Il database in uso arriva da un disco condiviso (Docker Desktop, rete) senza la copia locale degli indici. */
@@ -85,7 +85,7 @@ export function licenseWarnings(s: LicenseStatus): string[] {
       : "Manca la chiave di licenza di MODELLER: senza, la modellazione non parte.");
   }
   if (s.prosa.installed && s.prosa.license && !s.prosa.mac_ok) {
-    out.push("ProSA: il MAC del container non coincide con quello della licenza. Riavvia BioLoom dall'avviatore per applicarlo.");
+    out.push("ProSA: il MAC del container non coincide con quello della licenza. Riavvia MakPhi dall'avviatore per applicarlo.");
   }
   return out;
 }

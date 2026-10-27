@@ -8,9 +8,9 @@ import time
 import httpx
 import pytest
 
-from bioloom.config import UserSettings
-from bioloom.core.jobs import QMEAN_LOCAL, RESOURCE_STAGE
-from bioloom.engines import qmean_local, remote
+from makphi.config import UserSettings
+from makphi.core.jobs import QMEAN_LOCAL, RESOURCE_STAGE
+from makphi.engines import qmean_local, remote
 
 from .conftest import until, wait_job
 from .test_engines_extra import QMEAN_OUTPUT
@@ -51,8 +51,8 @@ class Worker:
                 return httpx.Response(200, json={"status": "failed", "error": "HHblits: memoria insufficiente"})
             return httpx.Response(200, json={"status": "completed", "result": {
                 **QMEAN_OUTPUT, "database": {"state": "ready"},
-                "bioloom_database": {"name": "UniRef30_2023_02", "version": "2023-02"},
-                "bioloom_hhblits": {"cpu": 4, "memory": "ok", "seconds": 312}}})
+                "makphi_database": {"name": "UniRef30_2023_02", "version": "2023-02"},
+                "makphi_hhblits": {"cpu": 4, "memory": "ok", "seconds": 312}}})
         return httpx.Response(200, json={"status": "cancelled"})
 
 
@@ -60,7 +60,7 @@ class Worker:
 def worker(monkeypatch):
     def install(w):
         qmean_local._status_cache.update({"at": 0.0, "key": None, "value": None})
-        monkeypatch.setenv("BIOLOOM_QMEAN_URL", "http://qmean:8080")
+        monkeypatch.setenv("MAKPHI_QMEAN_URL", "http://qmean:8080")
         monkeypatch.setattr(qmean_local, "_client", lambda: httpx.Client(
             base_url="http://qmean:8080", transport=httpx.MockTransport(w)))
         monkeypatch.setattr(qmean_local, "POLL_SECONDS", 0.01)
@@ -127,7 +127,7 @@ def test_fallback_on_failure_when_enabled(client_with_ubq, worker, swissmodel):
 
 
 def test_fallback_when_local_service_is_missing_and_per_request_override(client_with_ubq, monkeypatch, swissmodel):
-    monkeypatch.delenv("BIOLOOM_QMEAN_URL", raising=False)
+    monkeypatch.delenv("MAKPHI_QMEAN_URL", raising=False)
     client_with_ubq.put("/api/settings", json={"qmean_remote": True, "contact_email": "a@b.it"})
     done = qmean(client_with_ubq)  # fallback spento nelle Impostazioni
     assert done["status"] == "failed" and not swissmodel
@@ -137,7 +137,7 @@ def test_fallback_when_local_service_is_missing_and_per_request_override(client_
 
 
 def test_fallback_needs_consent_and_email(client_with_ubq, monkeypatch, swissmodel):
-    monkeypatch.delenv("BIOLOOM_QMEAN_URL", raising=False)
+    monkeypatch.delenv("MAKPHI_QMEAN_URL", raising=False)
     client_with_ubq.put("/api/settings", json={"qmean_fallback_remote": True})
     done = qmean(client_with_ubq)
     assert done["status"] == "failed" and "consenso" in done["error"] and not swissmodel
@@ -355,7 +355,7 @@ class OneAtATimeWorker(Worker):
                 if request.method == "DELETE":
                     return httpx.Response(200, json={"status": "cancelled"})
                 return httpx.Response(200, json={"status": "completed", "result": {
-                    **QMEAN_OUTPUT, "bioloom_database": {"name": "UniRef30_2023_02", "version": "2023-02"}}})
+                    **QMEAN_OUTPUT, "makphi_database": {"name": "UniRef30_2023_02", "version": "2023-02"}}})
             return httpx.Response(200, json={"status": "running"})
         return super().__call__(request)
 
@@ -386,14 +386,14 @@ def test_local_qmean_runs_one_at_a_time_without_blocking_the_io_pool(client_with
 
 def test_remote_qmean_is_not_serialized(client, monkeypatch):
     compute = client.app.state.core.compute
-    monkeypatch.setenv("BIOLOOM_QMEAN_URL", "http://qmean:8080")
+    monkeypatch.setenv("MAKPHI_QMEAN_URL", "http://qmean:8080")
     assert compute._qmean_resource({"mode": "remote"}) is None  # SWISS-MODEL: nessuna risorsa locale
     assert compute._qmean_resource({}) == QMEAN_LOCAL  # Impostazioni predefinite: locale
     assert compute._qmean_resource({"mode": "auto"}) == QMEAN_LOCAL
     # senza servizio locale (l'avviatore non ha trovato UniClust30) il job fallisce subito o va al fallback
-    monkeypatch.delenv("BIOLOOM_QMEAN_URL")
+    monkeypatch.delenv("MAKPHI_QMEAN_URL")
     assert compute._qmean_resource({}) is None
-    monkeypatch.setenv("BIOLOOM_QMEAN_URL", "http://qmean:8080")
+    monkeypatch.setenv("MAKPHI_QMEAN_URL", "http://qmean:8080")
     client.put("/api/settings", json={"qmean_mode": "remote"})
     assert compute._qmean_resource({}) is None
 
@@ -422,7 +422,7 @@ def test_without_the_local_service_fallbacks_run_together(client_with_ubq, monke
     """Modalità locale senza servizio QMEAN e fallback attivo: nessuna risorsa esclusiva, i due invii a SWISS-MODEL
     partono insieme e nessun job dice di aspettare un servizio locale che non c'è."""
     c = client_with_ubq
-    monkeypatch.delenv("BIOLOOM_QMEAN_URL", raising=False)
+    monkeypatch.delenv("MAKPHI_QMEAN_URL", raising=False)
     slow = SlowSwissModel()
     monkeypatch.setattr(remote, "swissmodel_qmean", slow)
     c.put("/api/settings", json=FALLBACK_SETTINGS)
@@ -455,7 +455,7 @@ class FailFirstWorker(Worker):
             if path == "/jobs/q1":
                 return httpx.Response(200, json={"status": "failed", "error": "HHblits: interrotto"})
             return httpx.Response(200, json={"status": "completed", "result": {
-                **QMEAN_OUTPUT, "bioloom_database": {"name": "UniRef30_2023_02", "version": "2023-02"}}})
+                **QMEAN_OUTPUT, "makphi_database": {"name": "UniRef30_2023_02", "version": "2023-02"}}})
         return super().__call__(request)
 
 

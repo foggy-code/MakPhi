@@ -1,8 +1,8 @@
 # Funzioni
 
-Guida di BioLoom: [1. Primo avvio](1%20-%20Primo%20avvio.md) · **2. Funzioni** · [3. QMEAN e UniClust](3%20-%20QMEAN%20e%20UniClust.md) · [4. Dati e privacy](4%20-%20Dati%20e%20privacy.md) · [5. Chiavetta e server](5%20-%20Chiavetta%20e%20server.md) · [6. Licenze](6%20-%20Licenze.md)
+Guida di MakPhi: [1. Primo avvio](1%20-%20Primo%20avvio.md) · **2. Funzioni** · [3. QMEAN e UniClust](3%20-%20QMEAN%20e%20UniClust.md) · [4. Dati e privacy](4%20-%20Dati%20e%20privacy.md) · [5. Chiavetta e server](5%20-%20Chiavetta%20e%20server.md) · [6. Licenze](6%20-%20Licenze.md)
 
-Che cosa fa ogni pagina di BioLoom. Per iniziare, vedi prima [Un percorso tipico](1%20-%20Primo%20avvio.md#un-percorso-tipico).
+Che cosa fa ogni pagina di MakPhi. Per iniziare, vedi prima [Un percorso tipico](1%20-%20Primo%20avvio.md#un-percorso-tipico).
 
 ## Sequenze e file
 
@@ -62,7 +62,7 @@ va letto come un'indicazione.
   asimmetrica dei cristalli: ogni assemblaggio biologico ha il suo badge (per esempio "omo-dimero · A2" per un
   dimero generato per simmetria da una sola catena).
 - **Sostituire un template:** un file caricato prende l'id dal nome (`1UBQ.pdb` → 1UBQ). Se nella libreria c'è già un
-  template con quell'id, BioLoom non lo sostituisce da solo: chiede conferma, dicendo quanti job lo usano.
+  template con quell'id, MakPhi non lo sostituisce da solo: chiede conferma, dicendo quanti job lo usano.
   **Sostituisci** mette al suo posto il nuovo file, anche in un altro formato (.pdb o .cif), e ne rifà l'analisi: i
   calcoli successivi useranno il nuovo file. **Annulla** lascia la libreria com'è. Se il nuovo file non è una struttura
   leggibile, il vecchio template resta intatto. Vale per la pagina Libreria template e per **Da file** del selettore dei
@@ -107,13 +107,13 @@ locale rispetto al bersaglio e segnala la zona crepuscolare (sotto il 25%) e i r
   qualunque numero di processi, ma diversi da quelli della costruzione in serie dei job delle versioni precedenti: la
   riesecuzione di un pacchetto usa la modalità del job originale. Il risultato dice quanti processi ha usato.
 - **Più template:** MODELLER allinea i template fra loro; se così un template finisce spostato rispetto al bersaglio,
-  BioLoom usa l'allineamento di ciascun template sul bersaglio e lo scrive nel log. Quando non può (template a più
+  MakPhi usa l'allineamento di ciascun template sul bersaglio e lo scrive nel log. Quando non può (template a più
   catene o con ligandi) lo segnala fra gli avvisi del risultato e del report: l'allineamento si corregge nell'Editor PIR.
 - **Ligandi, cofattori e metalli:** **Trasferisci ligandi, cofattori, metalli e acque dai template** elenca i gruppi delle
   catene scelte con la classe (metallo, cofattore noto come eme, FAD, NAD, ATP, SAM, PLP, CoA…, additivo, altro ligando).
   Additivi di cristallizzazione (SO₄, glicerolo, PEG, tamponi…) e ioni Na⁺/K⁺ del tampone sono deselezionati per default,
   con il motivo. Con più template lo stesso gruppo nello stesso sito (l'eme di due globine) diventa un solo gruppo del
-  modello, vincolato da tutti. Dopo la modellazione BioLoom verifica ogni gruppo (residui entro 4 Å, scontri sotto 2,2 Å,
+  modello, vincolato da tutti. Dopo la modellazione MakPhi verifica ogni gruppo (residui entro 4 Å, scontri sotto 2,2 Å,
   coordinazione dei metalli con le distanze attese e la geometria, sito del template conservato) con l'esito **buono**,
   **da controllare** o **problematico**; il voto A–D non cambia.
 - **Acque catalitiche e strutturali:** sotto i ligandi di ogni template, **Acque** elenca le acque legate alla struttura
@@ -133,11 +133,11 @@ locale rispetto al bersaglio e segnala la zona crepuscolare (sotto il 25%) e i r
   **stessa della catena …**. Le catene del modello hanno i nomi del template, con i residui numerati da 1; con catene
   uguali si possono aggiungere **restrizioni di simmetria** (rendono uguali le catene; la disposizione viene dal
   template). **Anteprima dell'allineamento per catena** mostra l'allineamento di ogni catena in modalità Confidenza. Da 2 a
-  12 catene e al più 3000 residui in tutto. Per ogni modello BioLoom confronta le interfacce con quelle del template
+  12 catene e al più 3000 residui in tutto. Per ogni modello MakPhi confronta le interfacce con quelle del template
   (residui conservati, area sepolta, **DockQ**, esito alta, media, accettabile o non riprodotta): dice quanto il modello
   riproduce l'interfaccia del template, non se l'interfaccia è quella vera del bersaglio.
 - **Controlli prima dell'avvio** (Modellazione, Pipeline, procedura guidata, mutagenesi, predizioni e riesecuzioni):
-  mentre scegli, BioLoom verifica senza avviare nulla licenza MODELLER, template (presenti, scaricabili, catene),
+  mentre scegli, MakPhi verifica senza avviare nulla licenza MODELLER, template (presenti, scaricabili, catene),
   identità sotto la zona crepuscolare e copertura, regioni disordinate e domini scoperti, ritaglio pLDDT che lascia pochi
   residui, PROCHECK e ProSA per l'analisi estesa, tempo stimato e rischio di timeout, spazio libero, molte ricerche su
   NCBI (le sue linee guida chiedono di lanciarne più di 50 di sera o nel fine settimana).
@@ -157,7 +157,7 @@ locale rispetto al bersaglio e segnala la zona crepuscolare (sotto il 25%) e i r
   ([locale o SWISS-MODEL](3%20-%20QMEAN%20e%20UniClust.md)). Una
   struttura qualunque si analizza caricandone il file; dalla Modellazione l'analisi gira sul modello migliore o su tutti.
 - **Voto A–D** da outlier di Ramachandran, clashscore e zDOPE.
-- **Consenso tra i metodi:** voto BioLoom, z-DOPE, GA341, QMEAN, ProSA e PROCHECK, quando disponibili, sono portati su
+- **Consenso tra i metodi:** voto MakPhi, z-DOPE, GA341, QMEAN, ProSA e PROCHECK, quando disponibili, sono portati su
   una scala 0–100 dichiarata e combinati in un punteggio con fascia buona / intermedia / scarsa. Il riquadro spiega i
   metodi che discordano ed elenca le **regioni problematiche** (tratti segnalati da almeno due metodi), cliccabili. Il voto
   A–D non cambia.
@@ -172,7 +172,7 @@ locale rispetto al bersaglio e segnala la zona crepuscolare (sotto il 25%) e i r
   plausibilità con una predizione indipendente della stessa sequenza, da **ESMFold** (servizio pubblico di ESM Atlas, fino
   a 400 residui) oppure, con l'accessione UniProt, da **AlphaFold DB**.
   - **Sequenza:** quella della catena del modello (residui modificati compresi) oppure quella incollata nella finestra.
-    Se alla catena mancano dei residui, BioLoom invia la sequenza completa del file (SEQRES) quando c'è; altrimenti
+    Se alla catena mancano dei residui, MakPhi invia la sequenza completa del file (SEQRES) quando c'è; altrimenti
     avvisa e non conta come divergenze i residui vicini alle giunzioni: incolla la sequenza completa per un confronto
     pulito.
   - **Esito motivato:** TM-score (da 0,5 stesso ripiegamento), lDDT per residuo e regioni in cui il modello diverge dalla
@@ -198,7 +198,7 @@ Nella pagina Qualità, sulla struttura mostrata (link stabili `/quality?ajob=`, 
   - **Conservazione:** da un allineamento multiplo (un job di Allineamenti del progetto, oppure sequenze o un file
     FASTA/Clustal/Stockholm; le sequenze non allineate si allineano prima) la conservazione di ogni colonna (0–1,
     entropia di Shannon con la penalità per i gap) colora il 3D con la tavolozza di ConSurf. La riga della struttura si
-    indica con il nome del FASTA (`sp|P0CG47|UBB_HUMAN`) o con quello mostrato da BioLoom (`sp_P0CG47_UBB_HUMAN`).
+    indica con il nome del FASTA (`sp|P0CG47|UBB_HUMAN`) o con quello mostrato da MakPhi (`sp_P0CG47_UBB_HUMAN`).
 - **Tasche** (fpocket): cavità della superficie ordinate per *druggability* (0–1; da 0,5 la tasca è probabilmente adatta a
   legare una piccola molecola simile a un farmaco), con punteggio, volume, sfere alfa e residui che la rivestono, colorate
   nel 3D. Ligandi e acque si escludono dal calcolo, quindi i loro siti compaiono come tasche vuote.
@@ -220,7 +220,7 @@ Il report HTML del modello riassume interfacce e ponti disolfuro, se l'analisi d
 - **Mutagenesi in silico** (scheda **Mutagenesi** della Qualità, **Mutagenesi** nella tabella dei modelli, o per qualunque
   struttura nel riquadro dei loop):
   - **Mutazioni** nella numerazione della struttura: `A:K48R`, anche `A:LYS48ARG`; più mutazioni separate da virgole (al
-    più 10) formano una variante. Il residuo originale deve corrispondere a quello della struttura, altrimenti BioLoom lo
+    più 10) formano una variante. Il residuo originale deve corrispondere a quello della struttura, altrimenti MakPhi lo
     dice prima di partire. MODELLER sostituisce il residuo e riottimizza la sua catena laterale e quelle entro 5 Å; il
     selvatico passa dallo stesso protocollo, così il confronto misura solo la sostituzione.
   - **Varianti di UniProt:** con l'accessione, le varianti naturali, associate a malattie e di mutagenesi sperimentale,
@@ -234,7 +234,7 @@ Il report HTML del modello riassume interfacce e ponti disolfuro, se l'analisi d
     (differenza di DOPE, prolina o glicina in un'elica o in un filamento, legami idrogeno, ponti salini e disolfuri persi,
     superficie idrofobica sepolta persa, residuo nel nucleo, contatti sterici, residui d'interfaccia). Facoltativa la
     differenza di energia con OpenMM (circa un minuto in più). **Non è un ΔΔG** né una previsione calibrata come FoldX o
-    Rosetta (che BioLoom non usa: licenze non ridistribuibili): indica la direzione probabile dell'effetto, da
+    Rosetta (che MakPhi non usa: licenze non ridistribuibili): indica la direzione probabile dell'effetto, da
     verificare.
   - Il risultato confronta selvatico e mutante (Qualità di entrambi, pagina Confronto) e ha il suo report HTML.
 
@@ -259,9 +259,9 @@ struttura sperimentale), con US-align/TM-align o con il motore integrato.
 
 Il pulsante **Report** (tabella dei modelli in Modellazione, pagina Qualità, righe della pipeline e la sua finestra
 «Visualizza», risultati di rifinitura e mutagenesi) scarica un file HTML autonomo, da aprire con qualunque browser
-anche senza BioLoom e da stampare in PDF (Stampa → Salva come PDF):
+anche senza MakPhi e da stampare in PDF (Stampa → Salva come PDF):
 
-- intestazione con job, progetto, date e versioni (BioLoom, MODELLER, strumenti di validazione usati);
+- intestazione con job, progetto, date e versioni (MakPhi, MODELLER, strumenti di validazione usati);
 - bersaglio, template (sorgente, identità e copertura; avviso e ritaglio pLDDT per i modelli predetti), allineamento
   PIR a blocchi, parametri di MODELLER e tabella dei modelli con il migliore evidenziato;
 - per il modello: voto con le penalità, consenso tra i metodi (discordanze e regioni problematiche), grafici di
@@ -285,7 +285,7 @@ per ogni sequenza completata (cartella `report/`, senza vista 3D).
   pipeline sequenze × template, oltre 1000 sequenze il filtro per sequenza lascia il posto alla ricerca per nome e la
   matrice si sfoglia a pagine di 50 sequenze; **In parallelo** arriva fino ai **Job di calcolo in parallelo**
   delle Impostazioni (al massimo 256). L'output dei programmi (MODELLER, PROCHECK…) di ogni elemento è nel file
-  `programmi.log` della sua cartella, tra i file del job; il log del job riporta i passi di BioLoom.
+  `programmi.log` della sua cartella, tra i file del job; il log del job riporta i passi di MakPhi.
 - **Preparare lo ZIP:** **Prepara ZIP modelli** prepara l'archivio in background, e il pulsante ne mostra
   l'avanzamento. Si può chiudere il browser: il lavoro prosegue, e lo ZIP compare anche nella pagina Job. Quando è
   pronto, **Scarica ZIP** riporta la dimensione dell'archivio. Un secondo clic mentre lo ZIP si prepara non ne avvia
@@ -301,7 +301,7 @@ per ogni sequenza completata (cartella `report/`, senza vista 3D).
   messaggio quando la pipeline finisce, completata, fallita o annullata: titolo, esito, durata e numero di elementi per
   stato, senza risultati né sequenze. Con QMEAN automatico, una pipeline completata manda il messaggio quando sono
   finiti anche i QMEAN, con il loro numero per esito: ZIP e report sono già completi. L'indirizzo predefinito è l'email di contatto delle Impostazioni. Serve un server
-  di posta, che non si imposta dall'interfaccia: lo configura chi gestisce BioLoom nel file `licenses/posta.env` della
+  di posta, che non si imposta dall'interfaccia: lo configura chi gestisce MakPhi nel file `licenses/posta.env` della
   cartella dati ([Dati e privacy](4%20-%20Dati%20e%20privacy.md#avviso-per-email)) o, sul server, in `server.env`.
   Impostazioni → Generale → **Notifiche email** ne mostra lo stato (mai la password) e ha **Invia email di prova** (al
   più una ogni 30 secondi e 5 all'ora); una ripresa della pipeline avvisa di nuovo alla sua fine. L'esito dell'invio è
@@ -327,9 +327,9 @@ per ogni sequenza completata (cartella `report/`, senza vista 3D).
   etichette) e, se il progetto non è vuoto, chiede di scriverne il nome. Con job in coda o in esecuzione non si può:
   prima vanno annullati (**Vai ai job**). I job si eliminano a blocchi, con l'avanzamento e **Interrompi**: se
   interrompi, il progetto, le sue sequenze e i suoi documenti restano (i job già eliminati no). Eliminando l'ultimo
-  progetto BioLoom ne crea uno vuoto, «Nuovo progetto», perché ne serve sempre almeno uno.
+  progetto MakPhi ne crea uno vuoto, «Nuovo progetto», perché ne serve sempre almeno uno.
 - **File in uso:** se un file di un job è aperto in un altro programma (antivirus, Esplora risorse), il job non si
-  elimina e BioLoom chiede di chiuderlo; i resti di un job già eliminato li toglie **Pulisci file temporanei**.
+  elimina e MakPhi chiede di chiuderlo; i resti di un job già eliminato li toglie **Pulisci file temporanei**.
 - **Priorità:** ricerche, allineamenti, analisi di qualità e strutturali, tasche, elettrostatica, QMEAN, mutagenesi e
   predizioni partono prima di modellazioni, loop, rifiniture, scansioni di alanina e riesecuzioni, e questi prima di
   pipeline e aggiornamenti dei database; a parità, in ordine di creazione. Un job che aspetta da molto sale di priorità,
@@ -344,7 +344,7 @@ per ogni sequenza completata (cartella `report/`, senza vista 3D).
 ## Riproducibilità
 
 - **Pacchetto riproducibile** (dettaglio del job nella pagina Job e riquadro del job nelle pagine dei risultati): un ZIP
-  con il manifest (versioni di BioLoom, dell'immagine, di MODELLER e degli altri strumenti usati, parametri completi,
+  con il manifest (versioni di MakPhi, dell'immagine, di MODELLER e degli altri strumenti usati, parametri completi,
   semi casuali, impostazioni che contano, input scaricati da servizi remoti con la data, checksum SHA-256 di ogni file),
   gli input (sequenze, template e copie preparate, allineamento PIR, strutture analizzate), i risultati, gli script
   MODELLER eseguiti e un LEGGIMI. Non contiene mai la chiave di MODELLER, i codici di ProSA, la tua email, la chiave
@@ -352,15 +352,15 @@ per ogni sequenza completata (cartella `report/`, senza vista 3D).
   rifinitura, tasche, elettrostatica, mutagenesi e scansione di alanina; anche per ricerca di template, QMEAN e confronto
   con una predizione, che però dipendono da servizi remoti e non si possono rieseguire (la predizione ricevuta è nel
   pacchetto, con la data).
-- **Riesegui da pacchetto** (pulsante nella pagina Job, `/rerun`): BioLoom verifica manifest e checksum, mostra
+- **Riesegui da pacchetto** (pulsante nella pagina Job, `/rerun`): MakPhi verifica manifest e checksum, mostra
   l'anteprima (versioni nel pacchetto e qui, parametri, input remoti) con i controlli prima dell'avvio, ripete il calcolo
   con gli stessi parametri e gli input del pacchetto (nessun download, cache ignorata) e confronta i risultati:
   **identico**, **equivalente** (entro le tolleranze numeriche), **compatibile** (entro le tolleranze scientifiche
   dichiarate: il rumore di OpenMM su più thread nella rifinitura e nell'energia della mutagenesi) o **diverso**, con RMSD
-  delle coordinate e differenze delle metriche. Versioni diverse di BioLoom o degli strumenti sono avvisi, non errori. Il
+  delle coordinate e differenze delle metriche. Versioni diverse di MakPhi o degli strumenti sono avvisi, non errori. Il
   rapporto (`RAPPORTO_RIESECUZIONE.txt`) resta nel job.
-- **Da riga di comando:** `python programma/bioloom.py rerun <pacchetto.zip> --data <cartella>`, oppure nel container
-  `docker compose -p bioloom exec bioloom python3 -m bioloom rerun /data/<pacchetto.zip> --data /scratch/riesecuzione`.
+- **Da riga di comando:** `python programma/makphi.py rerun <pacchetto.zip> --data <cartella>`, oppure nel container
+  `docker compose -p makphi exec makphi python3 -m makphi rerun /data/<pacchetto.zip> --data /scratch/riesecuzione`.
   Con il server attivo la cartella dati è in uso: serve un'altra cartella. Codice d'uscita 0 se identico, equivalente o
   compatibile, 1 se diverso, 2 se il pacchetto non è valido o il calcolo non riesce.
 
@@ -409,7 +409,7 @@ per ogni sequenza completata (cartella `report/`, senza vista 3D).
 - **Schermi stretti:** la barra laterale si apre dal pulsante del menu (☰) in alto a sinistra.
 - **Errori dell'interfaccia:** se una pagina non si riesce a disegnare compare il messaggio d'errore, con **Ricarica la
   pagina**, **Riprova** e **Copia i dettagli** (da allegare a una segnalazione), invece di una pagina bianca; i calcoli
-  in corso continuano sul server. Dopo un aggiornamento di BioLoom una scheda rimasta aperta con l'interfaccia vecchia si
+  in corso continuano sul server. Dopo un aggiornamento di MakPhi una scheda rimasta aperta con l'interfaccia vecchia si
   ricarica da sola, al più una volta al minuto; se il browser blocca i dati dei siti non lo fa, e resta il pulsante.
   Un errore interno del server mostra un codice al posto dei dettagli, che sono nel log
   ([Errori interni](4%20-%20Dati%20e%20privacy.md#errori-interni)); in modalità server una sessione scaduta riporta alla

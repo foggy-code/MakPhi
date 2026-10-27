@@ -2,8 +2,8 @@
 
 import pytest
 
-from bioloom.core.errors import RemoteServiceError
-from bioloom.engines import remote, search
+from makphi.core.errors import RemoteServiceError
+from makphi.engines import remote, search
 
 BLAST_XML = """<?xml version="1.0"?>
 <!DOCTYPE BlastOutput PUBLIC "-//NCBI//NCBI BlastOutput/EN" "http://www.ncbi.nlm.nih.gov/dtd/NCBI_BlastOutput.dtd">
@@ -84,7 +84,7 @@ def test_ncbi_client_polling(monkeypatch):
     xml = remote.ncbi_blast("MQIFVKTLTG", email="test@example.org", sleep=lambda s: None, log=lambda m: None)
     assert "<BlastOutput>" in xml
     put = calls[0][1]
-    assert put["CMD"] == "Put" and put["email"] == "test@example.org" and put["tool"] == "BioLoom"
+    assert put["CMD"] == "Put" and put["email"] == "test@example.org" and put["tool"] == "MakPhi"
     assert calls[-1][1]["RID"] == "TEST123" and calls[-1][1]["FORMAT_TYPE"] == "XML"
 
 

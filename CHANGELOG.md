@@ -1,17 +1,44 @@
 # Registro delle modifiche
 
-Tutte le modifiche rilevanti di BioLoom v4, dalla più recente. Formato ispirato a
+Tutte le modifiche rilevanti di MakPhi, dalla più recente. Fino alla 4.4.0 il programma si chiamava BioLoom: le
+sezioni di quelle versioni lasciano il nome e le variabili (`BIOLOOM_*`) com'erano. Formato ispirato a
 [Keep a Changelog](https://keepachangelog.com/it/1.1.0/); numeri di versione secondo
 [Semantic Versioning](https://semver.org/lang/it/).
 
 **Procedura di rilascio.** Ogni modifica che arriva in `main` e cambia il comportamento del programma aumenta la
 versione (`bash programma/scripts/versione.sh X.Y.Z`), aggiunge qui una sezione e, dopo il merge, riceve il tag
-annotato `vX.Y.Z` sul commit di merge (`git tag -a vX.Y.Z -m "BioLoom X.Y.Z" <commit>`). La versione entra nella chiave
+annotato `vX.Y.Z` sul commit di merge (`git tag -a vX.Y.Z -m "MakPhi X.Y.Z" <commit>`). La versione entra nella chiave
 della cache dei calcoli: aumentarla invalida i risultati calcolati con il codice precedente. L'impronta del codice
 (`/app/IMPRONTA`) identifica invece l'immagine esatta e finisce nel manifest, nell'ambiente di ogni job e nelle voci
 della cache.
 
 Le versioni fino a 4.2.0 sono ricostruite dalla storia git (21 ottobre 2026): prima non c'era un registro.
+
+## [5.0.0] - 2026-10-27
+
+### Cambiato
+- **Nuovo nome: MakPhi** (prima BioLoom, nome già usato da un prodotto di bioprinting), per l'archiviazione su Zenodo
+  con un DOI. Cambiano l'interfaccia, i report, la Guida, i metadati di citazione (`CITATION.cff`, `.zenodo.json`) e i
+  nomi tecnici:
+  - avviatori `Avvia MakPhi` / `Arresta MakPhi` e `avvia-makphi.sh`; script in `programma/launcher/makphi*.sh|ps1`;
+  - pacchetto Python `makphi` (`python -m makphi`, `python programma/makphi.py rerun`);
+  - immagini `makphi:<versione>` e `makphi-qmean:<versione>`, progetto compose e container `makphi`, volumi
+    `makphi_*`; file delle immagini in `immagini/makphi-<versione>.tar`;
+  - variabili d'ambiente `MAKPHI_*`, database `makphi.db`, cookie `makphi_session`, preferenze del browser `makphi.*`,
+    file scaricati `makphi_*`, formato dei pacchetti di riproducibilità `makphi-reproducibility`.
+
+### Compatibilità con BioLoom
+- Le variabili `BIOLOOM_*` valgono ancora (quelle `MAKPHI_*` prevalgono). Gli avviatori riscrivono una volta
+  `.env.locale` e `server.env` con i nomi nuovi e conservano l'originale in `<file>.bioloom`.
+- `bioloom.db` diventa `makphi.db` al primo avvio, con i suoi file `-wal`/`-shm`/`-journal`.
+- I container di BioLoom si rimuovono prima dell'avvio (se sono in esecuzione, con il consenso, come un'altra copia);
+  su Podman si tolgono anche le loro unità systemd. I volumi con l'indice MMseqs2, le copie di UniClust e i profili
+  HHblits (`bioloom_cache`, `bioloom_qmean_cache`) si riusano con il nome vecchio finché non ne esiste uno nuovo.
+- Restano validi i cookie di sessione già emessi e la chiave di firma dei pacchetti (stesso identificativo); i
+  pacchetti di riproducibilità di BioLoom si verificano e si rieseguono come prima.
+- Le preferenze salvate nel browser (`bioloom.*`: tema, progetto attivo, pannelli, editor PIR) passano alle chiavi
+  `makphi.*` alla prima apertura.
+- Come a ogni versione, la cache dei calcoli riparte (la versione è nella chiave).
 
 ## [4.4.0] - 2026-10-27
 

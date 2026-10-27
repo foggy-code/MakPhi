@@ -15,18 +15,18 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from bioloom import selftest as selftest_cli
-from bioloom.api import auth as auth_api
-from bioloom.app import create_app
-from bioloom.config import Paths, SettingsStore, UserSettings
-from bioloom.core import auth, sensitive
-from bioloom.core import jobs as jobs_module
-from bioloom.core.db import Database
-from bioloom.core.errors import AppError
-from bioloom.core.jobs import JobManager, default_env, set_subprocess_env
-from bioloom.engines import quality, tools, versions
-from bioloom.services import licenses as lic
-from bioloom.services.notify import NotifyService, wait_text
+from makphi import selftest as selftest_cli
+from makphi.api import auth as auth_api
+from makphi.app import create_app
+from makphi.config import Paths, SettingsStore, UserSettings
+from makphi.core import auth, sensitive
+from makphi.core import jobs as jobs_module
+from makphi.core.db import Database
+from makphi.core.errors import AppError
+from makphi.core.jobs import JobManager, default_env, set_subprocess_env
+from makphi.engines import quality, tools, versions
+from makphi.services import licenses as lic
+from makphi.services.notify import NotifyService, wait_text
 
 from .conftest import until
 
@@ -54,7 +54,7 @@ class _Probe:
     def __call__(self, cmd, **kwargs):
         env = kwargs.get("env") or {}
         self.envs.append(env)
-        key = env.get("BIOLOOM_MODELLER_KEY", "")
+        key = env.get("MAKPHI_MODELLER_KEY", "")
         return SimpleNamespace(returncode=1, stdout="",
                                stderr=f"Traceback...\nModellerError: check_lice_E> Invalid license key: {key}\n")
 
@@ -70,7 +70,7 @@ def probe(monkeypatch):
 
 def test_modeller_probe_masks_active_and_candidate_keys(probe, monkeypatch):
     monkeypatch.delenv("MODELLER_KEY", raising=False)
-    set_subprocess_env("BIOLOOM_MODELLER_KEY", KEY)
+    set_subprocess_env("MAKPHI_MODELLER_KEY", KEY)
     info = tools.detect_modeller("", force=True)
     errors = [a["error"] for a in info["attempts"]]
     assert errors and all(KEY not in e for e in errors) and any("MOD••••••••A9" in e for e in errors)
@@ -82,14 +82,14 @@ def test_modeller_probe_masks_active_and_candidate_keys(probe, monkeypatch):
 
 def test_system_info_selftest_and_licenses_never_show_the_key(client, probe, monkeypatch):
     monkeypatch.delenv("MODELLER_KEY", raising=False)
-    set_subprocess_env("BIOLOOM_MODELLER_KEY", KEY)
+    set_subprocess_env("MAKPHI_MODELLER_KEY", KEY)
     info = client.get("/api/system/info?refresh=true")
     assert info.status_code == 200 and KEY not in info.text and "MOD••••••••A9" in info.text
     assert KEY not in client.get("/api/licenses").text
     r = client.put("/api/licenses/modeller", json={"key": "MODELNUOVA55"})
     assert r.status_code == 422 and "MODELNUOVA55" not in r.text
     # verifica dell'installazione (job selftest): il passo MODELLER riporta il messaggio mascherato
-    from bioloom.services.selftest import SelfTestService
+    from makphi.services.selftest import SelfTestService
 
     ctx = SimpleNamespace(settings=UserSettings())
     with pytest.raises(AppError) as exc:
@@ -98,15 +98,15 @@ def test_system_info_selftest_and_licenses_never_show_the_key(client, probe, mon
 
 
 def test_secrets_are_not_passed_to_external_programs(monkeypatch):
-    for name, value in {"BIOLOOM_ACCESS_KEY": ACCESS, "BIOLOOM_SMTP_PASSWORD": "pw-posta",
-                        "BIOLOOM_SMTP_USER": "utente", "BIOLOOM_SMTP_HOST": "smtp.example.org",
-                        "BIOLOOM_SMTP_FROM": "a@example.org", "MODELLER_KEY": "MODELDAENV12"}.items():
+    for name, value in {"MAKPHI_ACCESS_KEY": ACCESS, "MAKPHI_SMTP_PASSWORD": "pw-posta",
+                        "MAKPHI_SMTP_USER": "utente", "MAKPHI_SMTP_HOST": "smtp.example.org",
+                        "MAKPHI_SMTP_FROM": "a@example.org", "MODELLER_KEY": "MODELDAENV12"}.items():
         monkeypatch.setenv(name, value)
-    set_subprocess_env("BIOLOOM_MODELLER_KEY", KEY)
+    set_subprocess_env("MAKPHI_MODELLER_KEY", KEY)
     env = default_env()
-    assert not {k for k in env if k.upper().startswith("BIOLOOM_SMTP_")}
-    assert "BIOLOOM_ACCESS_KEY" not in env and "MODELLER_KEY" not in env
-    assert env["BIOLOOM_MODELLER_KEY"] == KEY  # MODELLER riceve ancora la chiave attiva
+    assert not {k for k in env if k.upper().startswith("MAKPHI_SMTP_")}
+    assert "MAKPHI_ACCESS_KEY" not in env and "MODELLER_KEY" not in env
+    assert env["MAKPHI_MODELLER_KEY"] == KEY  # MODELLER riceve ancora la chiave attiva
     assert env.get("PATH") == os.environ.get("PATH") and env["PYTHONIOENCODING"] == "utf-8"
     # anche i processi lanciati senza job: sonde delle versioni e passi di qualità fuori da un job
     seen = []
@@ -122,7 +122,7 @@ def test_secrets_are_not_passed_to_external_programs(monkeypatch):
     quality._run([sys.executable, "--version"], Path("."), None, 10)
     assert len(seen) == 2
     for value in seen:
-        assert value is not None and "BIOLOOM_ACCESS_KEY" not in value and "BIOLOOM_SMTP_PASSWORD" not in value
+        assert value is not None and "MAKPHI_ACCESS_KEY" not in value and "MAKPHI_SMTP_PASSWORD" not in value
 
 
 @pytest.fixture
@@ -146,13 +146,13 @@ def _wait(mgr, job_id, timeout=30):
 
 
 def test_external_process_environment_and_output_in_a_job(manager, monkeypatch):
-    monkeypatch.setenv("BIOLOOM_ACCESS_KEY", ACCESS)
-    monkeypatch.setenv("BIOLOOM_SMTP_PASSWORD", "pw-posta")
-    set_subprocess_env("BIOLOOM_MODELLER_KEY", KEY)
+    monkeypatch.setenv("MAKPHI_ACCESS_KEY", ACCESS)
+    monkeypatch.setenv("MAKPHI_SMTP_PASSWORD", "pw-posta")
+    set_subprocess_env("MAKPHI_MODELLER_KEY", KEY)
     script = ("import os\n"
-              "print('chiave d accesso:', os.environ.get('BIOLOOM_ACCESS_KEY', 'assente'))\n"
-              "print('password:', os.environ.get('BIOLOOM_SMTP_PASSWORD', 'assente'))\n"
-              "print('check_lice_E> Invalid license key:', os.environ.get('BIOLOOM_MODELLER_KEY'))\n")
+              "print('chiave d accesso:', os.environ.get('MAKPHI_ACCESS_KEY', 'assente'))\n"
+              "print('password:', os.environ.get('MAKPHI_SMTP_PASSWORD', 'assente'))\n"
+              "print('check_lice_E> Invalid license key:', os.environ.get('MAKPHI_MODELLER_KEY'))\n")
     outputs = []
 
     def handler(ctx, _params):
@@ -226,7 +226,7 @@ def test_login_limiter_memory_is_bounded():
 
 @pytest.fixture
 def server(tmp_path, monkeypatch):
-    monkeypatch.delenv("BIOLOOM_ALLOW_SHUTDOWN", raising=False)
+    monkeypatch.delenv("MAKPHI_ALLOW_SHUTDOWN", raising=False)
     data = tmp_path / "data"
     app = create_app(Paths(data), frontend_dist=None, auth_config=auth.AuthConfig(enabled=True, key=ACCESS))
     with TestClient(app) as c:
@@ -360,7 +360,7 @@ def test_client_address_behind_a_trusted_proxy():
 
 def test_login_limit_per_client_behind_a_trusted_proxy(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(auth_api, "_warned", set())
-    monkeypatch.setenv("BIOLOOM_TRUSTED_PROXIES", "172.16.0.0/12")
+    monkeypatch.setenv("MAKPHI_TRUSTED_PROXIES", "172.16.0.0/12")
     app = create_app(Paths(tmp_path / "data"), frontend_dist=None,
                      auth_config=auth.AuthConfig(enabled=True, key=ACCESS))
     with TestClient(app, client=("172.18.0.1", 40000)) as proxy:
@@ -374,9 +374,9 @@ def test_login_limit_per_client_behind_a_trusted_proxy(tmp_path, monkeypatch, ca
         # gli altri client dietro lo stesso proxy non sono bloccati
         assert proxy.post("/api/auth/login", json={"key": ACCESS},
                           headers={"X-Forwarded-For": "198.51.100.5"}).status_code == 200
-    assert "BIOLOOM_TRUSTED_PROXIES=" not in capsys.readouterr().out
+    assert "MAKPHI_TRUSTED_PROXIES=" not in capsys.readouterr().out
     # senza proxy fidati: un unico indirizzo per tutti, e un avviso nel log (una volta) con quello da scrivere
-    monkeypatch.setenv("BIOLOOM_TRUSTED_PROXIES", "")
+    monkeypatch.setenv("MAKPHI_TRUSTED_PROXIES", "")
     app = create_app(Paths(tmp_path / "data2"), frontend_dist=None,
                      auth_config=auth.AuthConfig(enabled=True, key=ACCESS))
     with TestClient(app, client=("172.18.0.1", 40000)) as proxy:
@@ -386,20 +386,20 @@ def test_login_limit_per_client_behind_a_trusted_proxy(tmp_path, monkeypatch, ca
         assert proxy.post("/api/auth/login", json={"key": ACCESS},
                           headers={"X-Forwarded-For": "198.51.100.5"}).status_code == 429
     out = capsys.readouterr().out
-    assert out.count("BIOLOOM_TRUSTED_PROXIES=172.18.0.1 in server.env") == 1
+    assert out.count("MAKPHI_TRUSTED_PROXIES=172.18.0.1 in server.env") == 1
     # un valore sbagliato ferma l'avvio, con il motivo
-    monkeypatch.setenv("BIOLOOM_TRUSTED_PROXIES", "proxy.example.org")
+    monkeypatch.setenv("MAKPHI_TRUSTED_PROXIES", "proxy.example.org")
     app = create_app(Paths(tmp_path / "data3"), frontend_dist=None,
                      auth_config=auth.AuthConfig(enabled=True, key=ACCESS))
     with pytest.raises(auth.AccessKeyError):
         with TestClient(app):
             pass
-    assert "ERRORE: BIOLOOM_TRUSTED_PROXIES contiene «proxy.example.org»" in capsys.readouterr().out
+    assert "ERRORE: MAKPHI_TRUSTED_PROXIES contiene «proxy.example.org»" in capsys.readouterr().out
 
 
 def test_short_access_key_stops_the_startup(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("BIOLOOM_AUTH", "on")
-    monkeypatch.setenv("BIOLOOM_ACCESS_KEY", "corta-15-chars!")
+    monkeypatch.setenv("MAKPHI_AUTH", "on")
+    monkeypatch.setenv("MAKPHI_ACCESS_KEY", "corta-15-chars!")
     with pytest.raises(auth.AccessKeyError) as exc:
         auth.load(tmp_path)
     message = str(exc.value)
@@ -408,8 +408,8 @@ def test_short_access_key_stops_the_startup(tmp_path, monkeypatch, capsys):
     with pytest.raises(auth.AccessKeyError):
         with TestClient(app):
             pass
-    assert "ERRORE: BIOLOOM_ACCESS_KEY è troppo corta" in capsys.readouterr().out
-    monkeypatch.setenv("BIOLOOM_ACCESS_KEY", "x" * 16)
+    assert "ERRORE: MAKPHI_ACCESS_KEY è troppo corta" in capsys.readouterr().out
+    monkeypatch.setenv("MAKPHI_ACCESS_KEY", "x" * 16)
     cfg = auth.load(tmp_path)
     assert cfg.enabled and cfg.key == "x" * 16 and (tmp_path / "session_epoch").read_text().strip() == "0"
 
@@ -512,7 +512,7 @@ def test_logout_all_in_local_mode(client):
 
 # ------------------------------------------------------------------------------------------ interprete di MODELLER
 def test_modeller_python_is_set_by_the_server_in_server_mode(server, monkeypatch, tmp_path):
-    monkeypatch.setenv("BIOLOOM_MODELLER_PYTHON", "/opt/modeller/bin/python")
+    monkeypatch.setenv("MAKPHI_MODELLER_PYTHON", "/opt/modeller/bin/python")
     assert server.post("/api/auth/login", json={"key": ACCESS}).status_code == 200
     current = server.get("/api/settings").json()
     assert current["modeller_python"] == "/opt/modeller/bin/python"
@@ -522,7 +522,7 @@ def test_modeller_python_is_set_by_the_server_in_server_mode(server, monkeypatch
     other = server.put("/api/settings", json={"modeller_python": "/tmp/altro/python"})
     assert other.status_code == 403
     error = other.json()["error"]
-    assert error["code"] == "modeller_python_locked" and "BIOLOOM_MODELLER_PYTHON" in error["message"]
+    assert error["code"] == "modeller_python_locked" and "MAKPHI_MODELLER_PYTHON" in error["message"]
     assert server.app.state.core.settings._settings.modeller_python == ""  # niente salvato
     # in locale vale il valore salvato
     path = tmp_path / "settings.json"
@@ -532,12 +532,12 @@ def test_modeller_python_is_set_by_the_server_in_server_mode(server, monkeypatch
 
 
 def test_selftest_command_uses_the_server_settings(tmp_path, monkeypatch):
-    """`bioloom.sh verifica` (python -m bioloom.selftest nel container) usa l'interprete di MODELLER del server."""
+    """`makphi.sh verifica` (python -m makphi.selftest nel container) usa l'interprete di MODELLER del server."""
     data = tmp_path / "data"
     data.mkdir()
     (data / "settings.json").write_text('{"modeller_python": "/usr/bin/python3"}', encoding="utf-8")
-    monkeypatch.setenv("BIOLOOM_DATA_DIR", str(data))
-    monkeypatch.setenv("BIOLOOM_MODELLER_PYTHON", "/opt/modeller/bin/python")
+    monkeypatch.setenv("MAKPHI_DATA_DIR", str(data))
+    monkeypatch.setenv("MAKPHI_MODELLER_PYTHON", "/opt/modeller/bin/python")
     seen = []
 
     class Stop(Exception):
@@ -550,10 +550,10 @@ def test_selftest_command_uses_the_server_settings(tmp_path, monkeypatch):
         raise Stop
 
     monkeypatch.setattr(selftest_cli, "SettingsStore", spy)
-    monkeypatch.setenv("BIOLOOM_AUTH", "on")
+    monkeypatch.setenv("MAKPHI_AUTH", "on")
     with pytest.raises(Stop):
         selftest_cli.main()
-    monkeypatch.setenv("BIOLOOM_AUTH", "off")
+    monkeypatch.setenv("MAKPHI_AUTH", "off")
     with pytest.raises(Stop):
         selftest_cli.main()
     assert seen == ["/opt/modeller/bin/python", "/usr/bin/python3"]
@@ -584,7 +584,7 @@ def mailer(tmp_path):
 
     service = NotifyService(tmp_path, tmp_path / "licenses", Jobs(), sender_factory=lambda cfg: _Smtp())
     service.file.parent.mkdir(parents=True)
-    service.file.write_text("BIOLOOM_SMTP_HOST=smtp.example.org\nBIOLOOM_SMTP_FROM=bioloom@example.org\n",
+    service.file.write_text("MAKPHI_SMTP_HOST=smtp.example.org\nMAKPHI_SMTP_FROM=makphi@example.org\n",
                             encoding="utf-8")
     clock = Clock()
     service.clock = clock
@@ -593,7 +593,7 @@ def mailer(tmp_path):
 
 
 def test_test_email_rate_limit(mailer, monkeypatch):
-    for name in ("BIOLOOM_SMTP_HOST", "BIOLOOM_SMTP_PASSWORD"):
+    for name in ("MAKPHI_SMTP_HOST", "MAKPHI_SMTP_PASSWORD"):
         monkeypatch.delenv(name, raising=False)
     service, clock = mailer
     assert service.send_test("utente@example.org")["sent"]
@@ -618,7 +618,7 @@ def test_test_email_rate_limit(mailer, monkeypatch):
 
 
 def test_test_email_limit_counts_failed_attempts_too(mailer, monkeypatch):
-    monkeypatch.delenv("BIOLOOM_SMTP_HOST", raising=False)
+    monkeypatch.delenv("MAKPHI_SMTP_HOST", raising=False)
     service, clock = mailer
     service.retry_delays = ()
     service._connect = lambda cfg: (_ for _ in ()).throw(ConnectionRefusedError("giù"))
@@ -632,10 +632,10 @@ def test_test_email_limit_counts_failed_attempts_too(mailer, monkeypatch):
 
 
 def test_test_email_rate_limit_through_the_api(client, monkeypatch):
-    monkeypatch.delenv("BIOLOOM_SMTP_HOST", raising=False)
+    monkeypatch.delenv("MAKPHI_SMTP_HOST", raising=False)
     service = client.app.state.core.notify
     service.file.parent.mkdir(parents=True, exist_ok=True)
-    service.file.write_text("BIOLOOM_SMTP_HOST=smtp.example.org\nBIOLOOM_SMTP_FROM=bioloom@example.org\n",
+    service.file.write_text("MAKPHI_SMTP_HOST=smtp.example.org\nMAKPHI_SMTP_FROM=makphi@example.org\n",
                             encoding="utf-8")
     service._connect = lambda cfg: _Smtp()
     assert client.post("/api/notify/test", json={"to": "utente@example.org"}).status_code == 200
@@ -671,11 +671,11 @@ class _FinishedJobs:
 def test_job_notices_are_rate_limited(tmp_path, monkeypatch):
     """Gli avvisi di fine job non aggirano il limite delle email di prova: al più N all'ora allo stesso indirizzo e
     M per tutto il server; oltre, niente invio e il motivo nel log del job."""
-    monkeypatch.delenv("BIOLOOM_SMTP_HOST", raising=False)
+    monkeypatch.delenv("MAKPHI_SMTP_HOST", raising=False)
     jobs = _FinishedJobs()
     service = NotifyService(tmp_path, tmp_path / "licenses", jobs, sender_factory=lambda cfg: _Smtp())
     service.file.parent.mkdir(parents=True)
-    service.file.write_text("BIOLOOM_SMTP_HOST=smtp.example.org\nBIOLOOM_SMTP_FROM=bioloom@example.org\n",
+    service.file.write_text("MAKPHI_SMTP_HOST=smtp.example.org\nMAKPHI_SMTP_FROM=makphi@example.org\n",
                             encoding="utf-8")
     clock = Clock()
     service.clock = clock
@@ -705,7 +705,7 @@ def test_job_notices_are_rate_limited(tmp_path, monkeypatch):
 
 
 def test_subprocess_env_strips_case_insensitive_names():
-    env = sensitive.subprocess_env({"bioloom_access_key": "x", "Bioloom_Smtp_Password": "y", "PATH": "/bin",
-                                    "BIOLOOM_DATA_DIR": "/data"})
-    assert env == {"PATH": "/bin", "BIOLOOM_DATA_DIR": "/data"}
-    assert jobs_module.output_secrets({"BIOLOOM_MODELLER_KEY": "MODELXYZ1"})[-1] == "MODELXYZ1"
+    env = sensitive.subprocess_env({"makphi_access_key": "x", "Makphi_Smtp_Password": "y", "PATH": "/bin",
+                                    "MAKPHI_DATA_DIR": "/data"})
+    assert env == {"PATH": "/bin", "MAKPHI_DATA_DIR": "/data"}
+    assert jobs_module.output_secrets({"MAKPHI_MODELLER_KEY": "MODELXYZ1"})[-1] == "MODELXYZ1"

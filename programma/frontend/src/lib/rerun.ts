@@ -73,15 +73,15 @@ export interface VersionRow {
 
 const dash = (v: string | null | undefined) => (v ? v : "—");
 
-/** Versioni del pacchetto e di questa installazione, riga per riga (BioLoom, immagine, Python, librerie, strumenti
+/** Versioni del pacchetto e di questa installazione, riga per riga (MakPhi, immagine, Python, librerie, strumenti
  *  usati dal calcolo): le differenze sono avvisi, non errori. */
-export function versionRows(packaged: { bioloom: PackageVersion; environment: PackageEnvironment },
-  current: { bioloom: PackageVersion; environment: PackageEnvironment }): VersionRow[] {
+export function versionRows(packaged: { makphi: PackageVersion; environment: PackageEnvironment },
+  current: { makphi: PackageVersion; environment: PackageEnvironment }): VersionRow[] {
   const rows: VersionRow[] = [];
   const add = (label: string, a: string | null | undefined, b: string | null | undefined) =>
     rows.push({ label, packaged: dash(a), current: dash(b), same: !a || !b || a === b });
-  add("BioLoom", packaged.bioloom?.version, current.bioloom?.version);
-  if (packaged.bioloom?.image || current.bioloom?.image) add("Immagine Docker", packaged.bioloom?.image, current.bioloom?.image);
+  add("MakPhi", packaged.makphi?.version, current.makphi?.version);
+  if (packaged.makphi?.image || current.makphi?.image) add("Immagine Docker", packaged.makphi?.image, current.makphi?.image);
   add("Python", packaged.environment?.python, current.environment?.python);
   const libs = { ...(packaged.environment?.libraries ?? {}) };
   for (const [name, version] of Object.entries(libs)) add(name === "biopython" ? "Biopython" : name === "numpy" ? "NumPy" : name, version, current.environment?.libraries?.[name]);
@@ -182,5 +182,5 @@ export function toleranceText(t: RerunResult["tolerance"]): string {
 
 /** Nome del file del pacchetto proposto quando il server non lo indica. */
 export function packageFallbackName(kind: string, jobId: string): string {
-  return `bioloom_riproducibile_${kind.replace(/[^A-Za-z0-9_-]+/g, "_") || "job"}_${jobId}.zip`;
+  return `makphi_riproducibile_${kind.replace(/[^A-Za-z0-9_-]+/g, "_") || "job"}_${jobId}.zip`;
 }

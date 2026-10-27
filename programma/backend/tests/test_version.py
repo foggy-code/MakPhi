@@ -1,6 +1,6 @@
 """Versione unica e impronta del codice.
 
-La versione viene solo da programma/launcher/VERSION: le copie letterali (bioloom.__version__, pyproject.toml,
+La versione viene solo da programma/launcher/VERSION: le copie letterali (makphi.__version__, pyproject.toml,
 package.json, i due campi del progetto in package-lock.json, ARG del Dockerfile e di docker/test/Dockerfile, i due
 predefiniti di compose.yml) le allinea programma/scripts/versione.sh e qui si controlla che coincidano.
 L'impronta del codice (docker/impronta.sh; la stessa definizione in launcher/impronta.ps1) si confronta con la
@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-import bioloom
+import makphi
 
 PROGRAMMA = Path(__file__).resolve().parents[2]   # tests/ → backend/ → programma/
 VERSION_FILE = PROGRAMMA / "launcher" / "VERSION"
@@ -47,7 +47,7 @@ def _testo(rel: str) -> str:
 # ------------------------------------------------------------------------------------ copie della versione
 
 def test_versione_del_pacchetto(versione):
-    assert bioloom.__version__ == versione
+    assert makphi.__version__ == versione
 
 
 def test_versione_pyproject(versione):
@@ -69,22 +69,22 @@ def test_versione_frontend(versione):
 
 def test_versione_dockerfile(versione):
     testo = _testo("docker/Dockerfile")
-    assert re.findall(r"^ARG BIOLOOM_VERSION=(\S*)$", testo, re.M) == [versione]
+    assert re.findall(r"^ARG MAKPHI_VERSION=(\S*)$", testo, re.M) == [versione]
     # impronta e versione nell'immagine finale: l'avviatore le legge da lì
     assert re.search(r"^FROM .* AS impronta$", testo, re.M)
     assert re.search(r"^COPY --from=impronta /impronta /app/IMPRONTA$", testo, re.M)
-    assert re.search(r"^LABEL bioloom\.version=\$\{BIOLOOM_VERSION\}$", testo, re.M)
-    assert re.findall(r"^ARG BASE=bioloom:(\S*)$", _testo("docker/test/Dockerfile"), re.M) == [versione]
+    assert re.search(r"^LABEL makphi\.version=\$\{MAKPHI_VERSION\}$", testo, re.M)
+    assert re.findall(r"^ARG BASE=makphi:(\S*)$", _testo("docker/test/Dockerfile"), re.M) == [versione]
 
 
 def test_versione_compose(versione):
     testo = _testo("launcher/compose.yml")
-    assert re.findall(r"\$\{BIOLOOM_VERSION:-([^}]*)\}", testo) == [versione, versione]
-    # BIOLOOM_VERSION passata come build arg all'immagine bioloom (ENV BIOLOOM_IMAGE_VERSION, LABEL bioloom.version)
-    servizio = testo.split("\n  bioloom:\n", 1)[1].split("\n  qmean:\n", 1)[0]
+    assert re.findall(r"\$\{MAKPHI_VERSION:-([^}]*)\}", testo) == [versione, versione]
+    # MAKPHI_VERSION passata come build arg all'immagine makphi (ENV MAKPHI_IMAGE_VERSION, LABEL makphi.version)
+    servizio = testo.split("\n  makphi:\n", 1)[1].split("\n  qmean:\n", 1)[0]
     righe = [r.strip() for r in servizio.splitlines() if r.strip() and not r.strip().startswith("#")]
     assert "args:" in righe
-    assert re.match(r"(- )?BIOLOOM_VERSION\b", righe[righe.index("args:") + 1])
+    assert re.match(r"(- )?MAKPHI_VERSION\b", righe[righe.index("args:") + 1])
 
 
 def test_versione_citazione_e_zenodo(versione):
@@ -98,8 +98,8 @@ def test_versione_citazione_e_zenodo(versione):
 
 
 def test_server_env_senza_versione(versione):
-    # la versione è sempre quella di VERSION: un BIOLOOM_VERSION nell'esempio la farebbe sembrare configurabile
-    assert not re.search(r"^\s*BIOLOOM_VERSION\s*=", _testo("launcher/server.env.example"), re.M)
+    # la versione è sempre quella di VERSION: un MAKPHI_VERSION nell'esempio la farebbe sembrare configurabile
+    assert not re.search(r"^\s*MAKPHI_VERSION\s*=", _testo("launcher/server.env.example"), re.M)
 
 
 # ------------------------------------------------------------------------------------ impronta del codice
@@ -135,8 +135,8 @@ def _impronta_python(radice: Path) -> str:
 
 
 INCLUSI = {
-    "backend/bioloom/__init__.py": '"""BioLoom."""\n\n__version__ = "0.0.0"\n',
-    "backend/bioloom/app.py": "def app():\n    return 1\n",
+    "backend/makphi/__init__.py": '"""MakPhi."""\n\n__version__ = "0.0.0"\n',
+    "backend/makphi/app.py": "def app():\n    return 1\n",
     "backend/requirements.lock": "fastapi==0.110\n",
     "backend/nome con spazi.txt": "spazi nel nome\n",
     "backend/testsuite/x.py": "x = 1\n",            # non è backend/tests/
@@ -157,13 +157,13 @@ INCLUSI = {
     "backend/a.txt": "uso privato\n", "frontend/zé.js": "accento\n",
 }
 ESCLUSI = {
-    "backend/bioloom/__pycache__/app.cpython-312.pyc": b"\x00pyc",
-    "backend/bioloom/vecchio.pyc": b"\x00pyc",
-    "backend/bioloom.egg-info/PKG-INFO": "Name: bioloom\n",
+    "backend/makphi/__pycache__/app.cpython-312.pyc": b"\x00pyc",
+    "backend/makphi/vecchio.pyc": b"\x00pyc",
+    "backend/makphi.egg-info/PKG-INFO": "Name: makphi\n",
     "backend/tests/test_x.py": "def test_x():\n    pass\n",
     "backend/.ruff_cache/cache": "x\n",
     "backend/.env": "SEGRETO=1\n",
-    "backend/bioloom/.nascosta/dentro.py": "x = 1\n",
+    "backend/makphi/.nascosta/dentro.py": "x = 1\n",
     "frontend/node_modules/react/index.js": "module.exports = 1;\n",
     "frontend/src/node_modules/x.js": "x\n",
     "frontend/dist/index.html": "<html></html>\n",
@@ -171,7 +171,7 @@ ESCLUSI = {
     "frontend/.DS_Store": b"\x00\x00\x00\x01Bud1",
     "docker/vendor/procheck/procheck.tar.gz": b"\x1f\x8b\x08\x00",
     "docker/qmean/Dockerfile": "FROM qmean\n",
-    "docker/test/Dockerfile": "ARG BASE=bioloom:0.0.0\n",
+    "docker/test/Dockerfile": "ARG BASE=makphi:0.0.0\n",
     "docker/.gitkeep": "",
     "scripts/test.sh": "#!/bin/sh\n",
     "launcher/VERSION": "0.0.0\n",
@@ -215,7 +215,7 @@ def test_impronta_definizione_python(tmp_path):
     assert _percorsi(programma) == sorted(INCLUSI, key=lambda r: r.encode("utf-8"))
     assert _percorsi(programma)[:8] == ["backend/Zeta.py", "backend/a-b.py", "backend/a.py", "backend/a/b.py",
                                         "backend/a.txt", "backend/a！.txt", "backend/a\U0001F600.txt",
-                                        "backend/bioloom/__init__.py"]
+                                        "backend/cr_isolato.txt"]
 
 
 @pytest.mark.parametrize("senza_perl", [False, True], ids=["perl", "solo-sh"])
@@ -240,7 +240,7 @@ def test_impronta_powershell_come_la_definizione(tmp_path):
     attesa = _impronta_python(_crea_programma(tmp_path / "lf", "\n"))
     programma = _crea_programma(tmp_path / "crlf", "\r\n")
     involucro = tmp_path / "impronta_prova.ps1"
-    involucro.write_text("param($Script, $Root)\n. $Script\nGet-BioLoomImpronta $Root\n", encoding="utf-8")
+    involucro.write_text("param($Script, $Root)\n. $Script\nGet-MakPhiImpronta $Root\n", encoding="utf-8")
     r = subprocess.run([shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(involucro),
                         "-Script", str(IMPRONTA_PS1), "-Root", str(programma)],
                        capture_output=True, timeout=300)

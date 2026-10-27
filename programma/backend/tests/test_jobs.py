@@ -4,10 +4,10 @@ import time
 
 import pytest
 
-from bioloom.config import UserSettings
-from bioloom.core.db import Database
-from bioloom.core.errors import AppError, Conflict, NotFound
-from bioloom.core.jobs import JobManager
+from makphi.config import UserSettings
+from makphi.core.db import Database
+from makphi.core.errors import AppError, Conflict, NotFound
+from makphi.core.jobs import JobManager
 
 from .conftest import until
 

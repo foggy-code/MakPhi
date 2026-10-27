@@ -23,10 +23,10 @@ from html.parser import HTMLParser
 
 import pytest
 
-from bioloom.core.errors import AppError
-from bioloom.domain import consensus, grading, report, sequences
-from bioloom.engines import modeller, quality
-from bioloom.services import reports as reports_service
+from makphi.core.errors import AppError
+from makphi.domain import consensus, grading, report, sequences
+from makphi.engines import modeller, quality
+from makphi.services import reports as reports_service
 
 from .conftest import DATA, HUMAN_UB, YEAST_UB, requires_modeller, wait_job
 from .test_consensus import UBQ_ZDOPE, _dope_profile, _fake_qmean
@@ -109,7 +109,7 @@ def model_data(rep: dict, **extra) -> dict:
     data = {
         "kind": "model", "title": "Modello yeast · 1UBQ", "job_id": "abc123", "project": "Ubiquitine",
         "created_at": "2026-09-30T15:50:00+00:00", "finished_at": "2026-09-30T15:53:05+00:00",
-        "generated_at": "2026-09-30T16:00:00+00:00", "tools": [("BioLoom", "4.1.0"), ("MODELLER", "10.8")],
+        "generated_at": "2026-09-30T16:00:00+00:00", "tools": [("MakPhi", "4.1.0"), ("MODELLER", "10.8")],
         "model": "yeast.B99990001.pdb", "target": {"name": "yeast", "sequence": YEAST_UB},
         "templates": [{"id": "1UBQ", "code": "1UBQ_A", "chains": ["A"], "first": "1", "last": "76",
                        "source": "RCSB PDB", "title": "UBIQUITIN", "method": "X-RAY DIFFRACTION", "resolution": 1.8,
@@ -141,11 +141,11 @@ def test_alignment_identity_of_yeast_and_human_ubiquitin():
 def test_modeller_texts():
     assert report.modeller_version(MODELLER_HEADER) == "10.8"
     assert report.modeller_version("EXPDTA    X-RAY DIFFRACTION\n") is None
-    head = ("REMARK 999 BIOLOOM PLDDT_TRIM THRESHOLD 70 REMOVED 11 OF 76 FRAGMENTS 4\n")
+    head = ("REMARK 999 MAKPHI PLDDT_TRIM THRESHOLD 70 REMOVED 11 OF 76 FRAGMENTS 4\n")
     assert report.prepared_trim(head) == {"threshold": 70.0, "removed": 11, "total": 76, "removed_fragments": 4,
                                           "kept": 65}
-    trims = report.model_trims("REMARK 999 BIOLOOM TEMPLATE AF-P0CG47-F1_A ALPHAFOLD PLDDT<70 REMOVED 11\n"
-                               "REMARK 999 BIOLOOM TEMPLATE AF-Q1-F1_A ALPHAFOLD PLDDT_TRIM OFF\n")
+    trims = report.model_trims("REMARK 999 MAKPHI TEMPLATE AF-P0CG47-F1_A ALPHAFOLD PLDDT<70 REMOVED 11\n"
+                               "REMARK 999 MAKPHI TEMPLATE AF-Q1-F1_A ALPHAFOLD PLDDT_TRIM OFF\n")
     assert trims == {"AF-P0CG47-F1_A": {"threshold": 70.0, "removed": 11}, "AF-Q1-F1_A": None}
 
 
@@ -221,7 +221,7 @@ def test_render_escapes_untrusted_text(ubq_quality):
     rep["clashes"]["clashes"] = [{"atom1": f"A 1 {EVIL} CA", "atom2": "A 2 GLN N", "distance": 2.0, "overlap": 1.1}]
     rep["warnings"] = [EVIL]
     data = model_data(rep, title=EVIL, project=EVIL, model=f"{EVIL}.pdb", target={"name": EVIL, "sequence": "MQ"},
-                      tools=[("BioLoom", EVIL)], warnings=[EVIL])
+                      tools=[("MakPhi", EVIL)], warnings=[EVIL])
     data["templates"][0].update(title=EVIL, source=EVIL, id=EVIL)
     data["models"][0]["file"] = EVIL
     text = report.render(data)
@@ -307,7 +307,7 @@ def test_model_report_route(client_with_ubq):
     text = r.text
     for sid in SECTIONS:
         assert f'id="{sid}"' in text, sid
-    assert "MODELLER 10.8" in text and "BioLoom 4." in text and "file caricato" in text  # 1UBQ caricato nei test
+    assert "MODELLER 10.8" in text and "MakPhi 5." in text and "file caricato" in text  # 1UBQ caricato nei test
     assert "96,1%" in text and "Avviso del job di prova" in text and "optimization failed" in text
     assert "99,6/100" in text and rama_points(text) == 74
     assert flagged(text, "Energia DOPE per residuo (media mobile di MODELLER)") == 4
@@ -408,13 +408,13 @@ def _energies(total: float) -> dict:
 def fake_refine_job(client) -> dict:
     """Job "refine" con i file e il risultato che salverebbe services/refine.py (OpenMM simulato: coordinate di 1UBQ,
     energie e tempi plausibili)."""
-    from bioloom.domain import refinement
+    from makphi.domain import refinement
 
     core = client.app.state.core
 
     def handler(ctx, p):
         modeller_like(ctx.workdir / "input.pdb", header="")
-        modeller_like(ctx.workdir / REFINED, header="REMARK 999 BIOLOOM REFINED FROM 1UBQ OPENMM 8.2 AMBER ff14SB OBC2\n")
+        modeller_like(ctx.workdir / REFINED, header="REMARK 999 MAKPHI REFINED FROM 1UBQ OPENMM 8.2 AMBER ff14SB OBC2\n")
         before = quality.analyze(ctx.workdir / "input.pdb", None, with_dope=False)
         after = quality_with_dope(ctx.workdir / REFINED)
         (ctx.workdir / f"{REFINED}.quality.json").write_text(json.dumps(after))
@@ -499,10 +499,10 @@ def test_quality_report_names_keep_the_model_number(client_with_ubq):
 
 def test_refine_report_without_quality_and_dynamics(ubq_quality):
     """Dati di render senza rapporto di qualità né dinamica: avviso senza «MODELLER», «nessuna» dinamica."""
-    from bioloom.domain import refinement
+    from makphi.domain import refinement
 
     data = {"kind": "refine", "title": "Rifinitura · x", "job_id": "r1", "model": "x_refined.pdb",
-            "tools": [("BioLoom", "4.1.0"), ("OpenMM", "8.2")], "target": {"name": "x (rifinito)", "sequence": "MQ"},
+            "tools": [("MakPhi", "4.1.0"), ("OpenMM", "8.2")], "target": {"name": "x (rifinito)", "sequence": "MQ"},
             "quality": None, "consensus": None, "warnings": [],
             "refine": {"protocol": refinement.protocol(0.0, False), "energy": {"before": 10.0, "after": 5.0,
                                                                               "delta": -5.0, "decreased": True},
@@ -641,7 +641,7 @@ def test_pipeline_zip_names_are_unique_and_match_the_models(client_with_ubq, mon
 
 
 def test_pipeline_deduplicates_generated_names_too():
-    from bioloom.services.pipeline import PipelineService
+    from makphi.services.pipeline import PipelineService
 
     fasta = "".join(f">{name}\n{HUMAN_UB}\n" for name in ("x", "x", "x_2", "x", "abc", "abc-"))
     names = [r.name for r in PipelineService._records({"fasta": fasta})]
@@ -651,7 +651,7 @@ def test_pipeline_deduplicates_generated_names_too():
 def test_pipeline_zip_of_an_old_job_with_repeated_names(client_with_ubq, monkeypatch):
     """Job di una versione precedente con nomi ripetuti ("x", "x", "x_2" → "x", "x_2", "x_2"): nello ZIP il secondo
     "x_2" prende il nome della sua cartella, e ogni report resta accanto al suo modello."""
-    from bioloom.services.pipeline import PipelineService
+    from makphi.services.pipeline import PipelineService
 
     c = client_with_ubq
     core = c.app.state.core
@@ -813,8 +813,8 @@ def _site(**over) -> dict:
 
 
 def _mutation_result(energy: bool = True) -> dict:
-    from bioloom.domain import mutations, refinement
-    from bioloom.services.mutations import MutationService
+    from makphi.domain import mutations, refinement
+    from makphi.services.mutations import MutationService
 
     rows = [{"role": "wild_type", "dope": -7918.0, "local": -5576.3, "interchain": -120.0},
             {"role": "mutant", "dope": -7569.4, "local": -5227.7, "interchain": -60.0}]
@@ -831,7 +831,7 @@ def _mutation_result(energy: bool = True) -> dict:
 
 
 def _scan_result() -> dict:
-    from bioloom.domain import mutations
+    from makphi.domain import mutations
 
     mut = _mutation_result(energy=False)
     row = {"label": "A:I30A", "mutation": {"chain": "A", "resnum": "30"}, "site": mut["sites"][0], "dope": mut["dope"],
@@ -888,7 +888,7 @@ def _disordered_report(rep: dict) -> dict:
 
 def _report_case(name: str, rep: dict) -> dict:
     """Dati di render per ogni tipo di report e per le sezioni facoltative."""
-    from bioloom.domain import refinement
+    from makphi.domain import refinement
 
     lig = quality.analyze(DATA / "ubq_zn.pdb", None, with_dope=False)
     base = model_data(rep)
@@ -967,8 +967,8 @@ def test_document_sections_cannot_stay_open():
 def _real_analysis(path=DATA / "ubq_dimer.pdb") -> dict:
     """Riepilogo di un'analisi strutturale vera (interazioni, interfacce del dimero, conservazione) come lo prepara
     services/analysis.report_summary."""
-    from bioloom.domain import conservation, interactions, interfaces, structure
-    from bioloom.services.analysis import report_summary
+    from makphi.domain import conservation, interactions, interfaces, structure
+    from makphi.services.analysis import report_summary
 
     model = structure.first_model(structure.load_structure(path, "dimero"))
     inter = interactions.analyze(model)
@@ -980,8 +980,8 @@ def _real_analysis(path=DATA / "ubq_dimer.pdb") -> dict:
 
 
 def _real_pockets() -> dict:
-    from bioloom.domain import pockets
-    from bioloom.services.structure_tools import pockets_summary
+    from makphi.domain import pockets
+    from makphi.services.structure_tools import pockets_summary
 
     result = {**pockets.read_output(DATA / "fpocket_1ubq_out", "structure"), "params": {"program": "fpocket 4.2.3"},
               "warnings": []}
@@ -990,15 +990,15 @@ def _real_pockets() -> dict:
 
 def _fake_apbs(monkeypatch):
     """PDB2PQR e APBS simulati: PQR reale di 1UBQ e mappa sintetica (test_electrostatics._FakeTools)."""
-    from bioloom.engines import tools
+    from makphi.engines import tools
 
     monkeypatch.setattr(tools, "missing_message", lambda *_a, **_k: None)
     monkeypatch.setattr(tools, "find", lambda key: key)
 
 
 def _real_electrostatics(tmp_path, monkeypatch) -> dict:
-    from bioloom.engines import electrostatics as engine
-    from bioloom.services.structure_tools import electrostatics_summary
+    from makphi.engines import electrostatics as engine
+    from makphi.services.structure_tools import electrostatics_summary
 
     from .test_electrostatics import _FakeTools
 
@@ -1015,7 +1015,7 @@ def test_full_report_has_every_chart_and_table(ubq_quality, tmp_path, monkeypatc
     """Report di un modello con tutto: punteggi dei modelli, tracce del consenso, profili per residuo (DOPE, RSA,
     B-factor), PROCHECK, interazioni, interfacce, conservazione, tasche, elettrostatica, predizione e la tabella per
     residuo; ogni grafico è SVG ben formato e le tabelle lunghe stanno in blocchi richiudibili."""
-    from bioloom.domain import procheck
+    from makphi.domain import procheck
 
     rep = json.loads(json.dumps(ubq_quality))
     rep["procheck"] = procheck.parse_sum((DATA / "procheck_1ubq.sum").read_text())
@@ -1084,9 +1084,9 @@ def test_consensus_tracks_mark_regions(ubq_quality):
 def test_report_route_includes_analysis_pockets_and_electrostatics(client_with_ubq, monkeypatch):
     """Dalla rotta: l'analisi strutturale, le tasche e l'elettrostatica più recenti sulla stessa struttura entrano nel
     report dell'analisi di qualità (fpocket e APBS simulati con le uscite reali di 1UBQ)."""
-    from bioloom.domain import pockets
-    from bioloom.engines import electrostatics as es_engine
-    from bioloom.engines import pockets as pk_engine
+    from makphi.domain import pockets
+    from makphi.engines import electrostatics as es_engine
+    from makphi.engines import pockets as pk_engine
 
     from .test_electrostatics import _FakeTools
 

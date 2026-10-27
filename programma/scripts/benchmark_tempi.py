@@ -1,7 +1,7 @@
 """Tempo di costruzione di MODELLER in funzione della lunghezza: le misure ripetute da cui si ricava la stima dei
 controlli preventivi (domain/preflight.building_seconds, punti 4 e 20–24 dei lavori aperti).
 
-Gira dentro l'immagine di BioLoom con il codice montato in /src, come scripts/benchmark_lunghezza.py, una misura per
+Gira dentro l'immagine di MakPhi con il codice montato in /src, come scripts/benchmark_lunghezza.py, una misura per
 container (così il picco di memoria è quello di quella misura):
 
     python /src/scripts/benchmark_tempi.py --length 1000 --models 2 --template-file /hostdata/templates/3IU0.pdb \
@@ -36,11 +36,11 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from benchmark_lunghezza import chain_residues, mutate, tiled_template  # noqa: E402
 
-from bioloom import __version__  # noqa: E402
-from bioloom.app import create_app  # noqa: E402
-from bioloom.config import Paths  # noqa: E402
-from bioloom.core.fingerprint import code_fingerprint  # noqa: E402
-from bioloom.domain import preflight  # noqa: E402
+from makphi import __version__  # noqa: E402
+from makphi.app import create_app  # noqa: E402
+from makphi.config import Paths  # noqa: E402
+from makphi.core.fingerprint import code_fingerprint  # noqa: E402
+from makphi.domain import preflight  # noqa: E402
 
 
 def seconds_between(a: str, b: str) -> float:
@@ -93,7 +93,7 @@ def main() -> None:
         lanes = result.get("modeller_workers") or 1
         out = {
             "host": a.host_label, "cpu_count": os.cpu_count(), "machine": platform.machine(),
-            "bioloom": __version__, "fingerprint": code_fingerprint(),
+            "makphi": __version__, "fingerprint": code_fingerprint(),
             "date": datetime.now().astimezone().isoformat(timespec="seconds"),
             "length": a.length, "models": a.models, "parallel": a.parallel, "workers_setting": a.workers,
             "refinement": a.refinement, "rep": a.rep,

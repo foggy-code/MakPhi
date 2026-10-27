@@ -3,7 +3,7 @@ sequenza; entità dal COMPND del PDB e da _entity_poly del mmCIF."""
 
 from pathlib import Path
 
-from bioloom.domain import composition, structure
+from makphi.domain import composition, structure
 
 DATA = Path(__file__).parent / "data"
 UBQ = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"

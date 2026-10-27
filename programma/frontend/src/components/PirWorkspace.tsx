@@ -27,7 +27,7 @@ import { templateLabel } from "../lib/workflowView";
 const ORIGINAL_KEY = "original_sequences";
 
 /** Preferenza "struttura secondaria nella griglia" (solo in questo browser). */
-const SS_PREF = "bioloom.pir.secondary";
+const SS_PREF = "makphi.pir.secondary";
 function readSsPref(): boolean {
   try {
     return localStorage.getItem(SS_PREF) !== "0";
@@ -54,7 +54,7 @@ function savedOriginal(meta: Record<string, unknown> | undefined): Record<string
 }
 
 /** Preferenza "pannello dei dettagli aperto" (solo in questo browser). */
-const SIDE_PREF = "bioloom.pir.side";
+const SIDE_PREF = "makphi.pir.side";
 function readSidePref(): boolean {
   try {
     return localStorage.getItem(SIDE_PREF) !== "0";

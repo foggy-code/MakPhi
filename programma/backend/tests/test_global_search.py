@@ -10,14 +10,14 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from bioloom.app import create_app
-from bioloom.config import Paths
-from bioloom.core.db import Database
-from bioloom.domain import textsearch
-from bioloom.services import globalsearch
-from bioloom.services.globalsearch import GlobalSearch, header_organism
-from bioloom.services.labels import LabelService
-from bioloom.services.templates import TemplateLibrary
+from makphi.app import create_app
+from makphi.config import Paths
+from makphi.core.db import Database
+from makphi.domain import textsearch
+from makphi.services import globalsearch
+from makphi.services.globalsearch import GlobalSearch, header_organism
+from makphi.services.labels import LabelService
+from makphi.services.templates import TemplateLibrary
 
 from .conftest import DATA, HUMAN_UB, YEAST_UB, wait_job
 
@@ -65,7 +65,7 @@ def test_header_organism():
 # ------------------------------------------------------------------------------------------ ricerca via API
 @pytest.fixture(params=["fts5", "like"])
 def sclient(request, tmp_path, monkeypatch):
-    monkeypatch.setenv("BIOLOOM_SEARCH_FTS", "1" if request.param == "fts5" else "0")
+    monkeypatch.setenv("MAKPHI_SEARCH_FTS", "1" if request.param == "fts5" else "0")
     app = create_app(Paths(tmp_path / "data"), frontend_dist=None)
     with TestClient(app) as c:
         assert c.app.state.core.search.engine == request.param

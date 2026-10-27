@@ -13,7 +13,7 @@ F1.2/F1.3: sul codice precedente si lancia solo `test_profile`.
 
 Per ogni valore: mediana e minimo delle ripetizioni. Su una macchina condivisa il minimo è la stima meno disturbata
 del tempo del calcolo (Chen & Revels, "Robust benchmarking in noisy environments", 2016).
-Variabili: BIOLOOM_PERF_REPEAT (ripetizioni, predefinita 3).
+Variabili: MAKPHI_PERF_REPEAT (ripetizioni, predefinita 3).
 """
 
 from __future__ import annotations
@@ -27,14 +27,14 @@ from pathlib import Path
 
 import pytest
 
-from bioloom.core import jobs as jobs_module
-from bioloom.domain import clashes, consensus, ramachandran, secondary, structure
-from bioloom.domain import preflight as preflight_rules
-from bioloom.engines import modeller, procheck, prosa, quality, search
-from bioloom.services import compute as compute_module
+from makphi.core import jobs as jobs_module
+from makphi.domain import clashes, consensus, ramachandran, secondary, structure
+from makphi.domain import preflight as preflight_rules
+from makphi.engines import modeller, procheck, prosa, quality, search
+from makphi.services import compute as compute_module
 from tests.conftest import DATA, YEAST_UB, requires_modeller, wait_job
 
-REPEAT = int(os.environ.get("BIOLOOM_PERF_REPEAT", "3"))
+REPEAT = int(os.environ.get("MAKPHI_PERF_REPEAT", "3"))
 
 
 class Timer:
@@ -302,8 +302,8 @@ def test_profile_modeller_startup(client, timer):
 @requires_modeller
 def test_paired(client_with_ubq, timer, monkeypatch, tmp_path):
     """Varianti alternate nello stesso processo (vedi l'intestazione del modulo)."""
-    from bioloom.services import pipeline as pipeline_module
-    from bioloom.services.compute import PreparedTemplates
+    from makphi.services import pipeline as pipeline_module
+    from makphi.services.compute import PreparedTemplates
 
     c = client_with_ubq
     core = c.app.state.core
@@ -368,7 +368,7 @@ def test_paired(client_with_ubq, timer, monkeypatch, tmp_path):
 
 def _chains_pir(template_id: str, chains: str, target: str, template_seq: str) -> str:
     """PIR con un bersaglio di `len(chains)` catene uguali (`target`) sulle catene omonime di un template."""
-    from bioloom.domain import sequences
+    from makphi.domain import sequences
 
     n = len(chains)
     return sequences.format_pir([

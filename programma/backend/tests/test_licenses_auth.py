@@ -8,13 +8,13 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from bioloom.app import create_app
-from bioloom.config import Paths, UserSettings
-from bioloom.core import auth
-from bioloom.core.errors import AppError
-from bioloom.core.jobs import default_env
-from bioloom.services import licenses as lic
-from bioloom.services.licenses import LicenseService
+from makphi.app import create_app
+from makphi.config import Paths, UserSettings
+from makphi.core import auth
+from makphi.core.errors import AppError
+from makphi.core.jobs import default_env
+from makphi.services import licenses as lic
+from makphi.services.licenses import LicenseService
 
 from .conftest import requires_modeller
 
@@ -42,7 +42,7 @@ def test_parse_prosa_license():
 def test_modeller_key_sources_and_subprocess_env(tmp_path, monkeypatch):
     svc = LicenseService(tmp_path / "licenses", UserSettings)
     monkeypatch.delenv("MODELLER_KEY", raising=False)
-    monkeypatch.delenv("BIOLOOM_MODELLER_KEY", raising=False)
+    monkeypatch.delenv("MAKPHI_MODELLER_KEY", raising=False)
     assert svc.modeller_key() == ("", None)
     monkeypatch.setenv("MODELLER_KEY", "MODELDAENV")
     assert svc.modeller_key() == ("MODELDAENV", "env")
@@ -50,12 +50,12 @@ def test_modeller_key_sources_and_subprocess_env(tmp_path, monkeypatch):
     (tmp_path / "licenses" / "modeller.key").write_text("MODELDAFILE\n")
     assert svc.modeller_key() == ("MODELDAFILE", "file")  # il file salvato dall'interfaccia ha la precedenza
     svc.apply()
-    assert default_env()["BIOLOOM_MODELLER_KEY"] == "MODELDAFILE"
+    assert default_env()["MAKPHI_MODELLER_KEY"] == "MODELDAFILE"
     svc.remove_modeller_key()
-    assert default_env()["BIOLOOM_MODELLER_KEY"] == "MODELDAENV"
+    assert default_env()["MAKPHI_MODELLER_KEY"] == "MODELDAENV"
     monkeypatch.delenv("MODELLER_KEY")
     svc.apply()
-    assert "BIOLOOM_MODELLER_KEY" not in default_env()
+    assert "MAKPHI_MODELLER_KEY" not in default_env()
 
 
 def test_invalid_key_format_is_rejected_without_probe(tmp_path):
@@ -121,21 +121,21 @@ def test_auth_config_tokens():
 
 
 def test_auth_load_generates_and_reuses_key(tmp_path, monkeypatch):
-    monkeypatch.delenv("BIOLOOM_ACCESS_KEY", raising=False)
-    monkeypatch.setenv("BIOLOOM_AUTH", "off")
+    monkeypatch.delenv("MAKPHI_ACCESS_KEY", raising=False)
+    monkeypatch.setenv("MAKPHI_AUTH", "off")
     assert auth.load(tmp_path).enabled is False
-    monkeypatch.setenv("BIOLOOM_AUTH", "on")
+    monkeypatch.setenv("MAKPHI_AUTH", "on")
     first = auth.load(tmp_path)
     assert first.enabled and first.generated and len(first.key) >= 16
     second = auth.load(tmp_path)
     assert second.key == first.key and not second.generated
-    monkeypatch.setenv("BIOLOOM_ACCESS_KEY", "chiave-fissa-abbastanza-lunga")  # almeno 16 caratteri
+    monkeypatch.setenv("MAKPHI_ACCESS_KEY", "chiave-fissa-abbastanza-lunga")  # almeno 16 caratteri
     assert auth.load(tmp_path).key == "chiave-fissa-abbastanza-lunga"
 
 
 @pytest.fixture
 def server_client(tmp_path, monkeypatch):
-    monkeypatch.delenv("BIOLOOM_ALLOW_SHUTDOWN", raising=False)
+    monkeypatch.delenv("MAKPHI_ALLOW_SHUTDOWN", raising=False)
     app = create_app(Paths(tmp_path / "data"), frontend_dist=None,
                      auth_config=auth.AuthConfig(enabled=True, key="segreto-12345"))
     with TestClient(app) as c:
@@ -174,7 +174,7 @@ def test_session_cookie_is_secure_behind_an_https_proxy(server_client):
 
 
 def test_shutdown_allowed_by_launcher_flag(monkeypatch):
-    monkeypatch.setenv("BIOLOOM_ALLOW_SHUTDOWN", "1")
+    monkeypatch.setenv("MAKPHI_ALLOW_SHUTDOWN", "1")
     assert auth.shutdown_allowed()
-    monkeypatch.setenv("BIOLOOM_ALLOW_SHUTDOWN", "0")
+    monkeypatch.setenv("MAKPHI_ALLOW_SHUTDOWN", "0")
     assert not auth.shutdown_allowed()

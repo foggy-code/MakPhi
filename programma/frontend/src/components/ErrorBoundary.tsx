@@ -9,7 +9,7 @@ interface State {
   stack: string | null;
 }
 
-const RELOAD_FLAG = "bioloom.chunk-reload";
+const RELOAD_FLAG = "makphi.chunk-reload";
 /** intervallo minimo fra due ricariche automatiche della stessa scheda */
 const RELOAD_GAP_MS = 60_000;
 const STALE_MODULE = /dynamically imported module|Importing a module script failed|Failed to fetch/i;

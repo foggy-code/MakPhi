@@ -14,11 +14,11 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from bioloom.app import create_app
-from bioloom.config import Paths
-from bioloom.core import cache as cache_module
-from bioloom.core import jobs as jobs_module
-from bioloom.engines import tools
+from makphi.app import create_app
+from makphi.config import Paths
+from makphi.core import cache as cache_module
+from makphi.core import jobs as jobs_module
+from makphi.engines import tools
 
 DATA = Path(__file__).parent / "data"
 
@@ -26,11 +26,11 @@ DATA = Path(__file__).parent / "data"
 # rifiuterebbe. Aggiunto qui, prima di ogni create_app, vale anche per le app create direttamente nei test; aggiunto e
 # non solo predefinito, perché la variabile può esistere vuota (compose.yml) o con altri nomi. I test della guardia la
 # tolgono o la cambiano con monkeypatch.
-os.environ["BIOLOOM_ALLOWED_HOSTS"] = f"{os.environ.get('BIOLOOM_ALLOWED_HOSTS', '')} testserver".strip()
+os.environ["MAKPHI_ALLOWED_HOSTS"] = f"{os.environ.get('MAKPHI_ALLOWED_HOSTS', '')} testserver".strip()
 
 # Chiave MODELLER per i test (es. nel container: -e MODELLER_KEY=...), come la usa il server.
 if os.environ.get("MODELLER_KEY"):
-    jobs_module.set_subprocess_env("BIOLOOM_MODELLER_KEY", os.environ["MODELLER_KEY"])
+    jobs_module.set_subprocess_env("MAKPHI_MODELLER_KEY", os.environ["MODELLER_KEY"])
 
 
 @pytest.fixture(autouse=True)

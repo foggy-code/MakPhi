@@ -1,9 +1,9 @@
 import numpy as np
 import pytest
 
-from bioloom.domain import clashes, geometry, grading, ramachandran, secondary, structure
-from bioloom.domain.sequences import SeqRecord
-from bioloom.engines import align, quality
+from makphi.domain import clashes, geometry, grading, ramachandran, secondary, structure
+from makphi.domain.sequences import SeqRecord
+from makphi.engines import align, quality
 
 
 @pytest.fixture

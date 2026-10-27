@@ -14,12 +14,12 @@ import threading
 import httpx
 import pytest
 
-from bioloom.core.errors import AppError
-from bioloom.domain import preflight as rules
-from bioloom.engines import qmean_local, remote, search, tools
-from bioloom.services import preflight as preflight_module
-from bioloom.services.licenses import LicenseService
-from bioloom.services.preflight import PreflightService
+from makphi.core.errors import AppError
+from makphi.domain import preflight as rules
+from makphi.engines import qmean_local, remote, search, tools
+from makphi.services import preflight as preflight_module
+from makphi.services.licenses import LicenseService
+from makphi.services.preflight import PreflightService
 
 from .conftest import DATA, HUMAN_UB, YEAST_UB, wait_job
 from .test_alphafold import af_pdb
@@ -140,7 +140,7 @@ def test_similarity_rost_curve_and_baker_sali():
 
 
 def template_rank_threshold(n: int) -> float:
-    from bioloom.domain import template_rank
+    from makphi.domain import template_rank
 
     return template_rank.rost_threshold(n)
 
@@ -417,7 +417,7 @@ def test_model_low_coverage_and_uncovered_disorder(client_with_ubq, env):
 
 
 def test_model_with_a_pir_alignment(client_with_ubq, env):
-    from bioloom.domain import sequences
+    from makphi.domain import sequences
 
     pir = sequences.format_pir([sequences.template_entry("1UBQ_A", HUMAN_UB, "1", "A", "76", "A"),
                                 sequences.target_entry("yeast", YEAST_UB)])
@@ -435,7 +435,7 @@ def test_model_with_a_pir_alignment(client_with_ubq, env):
 def test_model_two_chain_pir_uses_the_pir_columns(client, env):
     """Bersaglio a due catene: la copertura non si valuta (nota), l'identità sì dalle colonne del PIR (32 identici su
     152, 21,1%: sotto la curva di Rost per 152 residui, 24,1%)."""
-    from bioloom.domain import sequences
+    from makphi.domain import sequences
 
     with open(DATA / "ubq_dimer.pdb", "rb") as fh:
         assert client.post("/api/templates/upload", files={"file": ("DIMR.pdb", fh, "chemical/x-pdb")}).status_code \
@@ -683,7 +683,7 @@ class MemoryWorker:
 def qmean_worker(monkeypatch):
     def install(worker):
         qmean_local._status_cache.update({"at": 0.0, "key": None, "value": None})
-        monkeypatch.setenv("BIOLOOM_QMEAN_URL", "http://qmean:8080")
+        monkeypatch.setenv("MAKPHI_QMEAN_URL", "http://qmean:8080")
         monkeypatch.setattr(qmean_local, "_client", lambda: httpx.Client(base_url="http://qmean:8080",
                                                                           transport=httpx.MockTransport(worker)))
     return install
@@ -707,7 +707,7 @@ def test_qmean_kind_memory(client_with_ubq, env, qmean_worker):
 
 
 def test_qmean_kind_without_service_and_remote(client_with_ubq, env, monkeypatch):
-    monkeypatch.delenv("BIOLOOM_QMEAN_URL", raising=False)
+    monkeypatch.delenv("MAKPHI_QMEAN_URL", raising=False)
     body = {"source": {"type": "template", "id": "1UBQ"}}
     assert codes(run(client_with_ubq, "qmean", body), "error") == ["qmean_unavailable"]
     assert codes(run(client_with_ubq, "qmean", {**body, "mode": "remote"}), "error") == ["qmean_remote_disabled"]

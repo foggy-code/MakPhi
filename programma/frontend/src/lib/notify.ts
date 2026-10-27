@@ -15,7 +15,7 @@ export const SECURITY_LABEL: Record<NotifyStatus["security"], string> = {
 };
 
 export const SOURCE_LABEL: Record<NotifyStatus["source"], string> = {
-  env: "variabili BIOLOOM_SMTP_* (server.env)",
+  env: "variabili MAKPHI_SMTP_* (server.env)",
   file: "file licenses/posta.env della cartella dati",
   none: "nessuna configurazione",
 };
@@ -25,7 +25,7 @@ export function notifySummary(s: NotifyStatus | null | undefined): string {
   if (!s) return "Configurazione della posta non letta.";
   if (s.error) return `Avviso via email non disponibile: ${s.error}`;
   if (!s.configured) {
-    return `Avviso via email non disponibile: il server di posta lo configura chi gestisce BioLoom, nel file ${s.file} della cartella dati (o in server.env sul server).`;
+    return `Avviso via email non disponibile: il server di posta lo configura chi gestisce MakPhi, nel file ${s.file} della cartella dati (o in server.env sul server).`;
   }
   return `Server di posta ${s.host}:${s.port}, mittente ${s.sender}.`;
 }

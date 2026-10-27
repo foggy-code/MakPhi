@@ -17,7 +17,7 @@ import sys
 
 import pytest
 
-from bioloom.domain import exports
+from makphi.domain import exports
 
 from .conftest import DATA, wait_job
 
@@ -58,7 +58,7 @@ def commands(script: str) -> list[str]:
 # ------------------------------------------------------------------------------------------ script
 def test_script_loads_the_structure_unchanged_and_shows_it():
     script = exports.pymol_script(UBQ, "modello_1")
-    assert script.startswith("# Sessione PyMOL generata da BioLoom v4\n# Apri con: pymol modello_1.pml\n")
+    assert script.startswith("# Sessione PyMOL generata da MakPhi\n# Apri con: pymol modello_1.pml\n")
     assert script.endswith("\n")
     assert loaded(script) == (UBQ, "modello_1")
     cmds = commands(script)
@@ -75,7 +75,7 @@ def test_script_loads_the_structure_unchanged_and_shows_it():
     ("modello; delete all\nquit", "modello__delete_all_quit"),  # niente comandi aggiunti allo script
     ("proteína ricostruita", "prote_na_ricostruita"),  # solo ASCII
     ("x" * 60, "x" * 40),
-    ("", "bioloom_model"),
+    ("", "makphi_model"),
 ], ids=["semplice", "punti", "virgolette", "comandi", "non-ascii", "lungo", "vuoto"])
 def test_object_name_is_safe_for_pymol_commands(name, expected):
     script = exports.pymol_script(UBQ, name)
@@ -118,7 +118,7 @@ def test_triple_quotes_in_the_file_cannot_end_the_embedded_text():
 
 @pytest.mark.parametrize("tail", [
     "REMARK   1 FILE C:\\temp\\new\\1ubq.pdb\n",   # una stringa non raw farebbe di \t e \n tabulazione e a capo
-    "REMARK   1 FILE C:\\Users\\bioloom\\1ubq.pdb\n",  # \U: in una stringa non raw è un SyntaxError
+    "REMARK   1 FILE C:\\Users\\makphi\\1ubq.pdb\n",  # \U: in una stringa non raw è un SyntaxError
     'REMARK   1 FINE CON VIRGOLETTE "',  # chiuderebbe male una stringa fra tre virgolette
 ], ids=["escape", "unicode-escape", "virgolette-finali"])
 def test_backslashes_and_final_quotes_reach_pymol_unchanged(tail):

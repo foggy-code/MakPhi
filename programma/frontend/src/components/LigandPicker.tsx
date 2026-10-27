@@ -147,7 +147,7 @@ export function LigandPicker({ templates, known = {}, enabled, onEnabled, select
             scelte una per una (colonne «w» nel PIR letto da MODELLER): restano nella posizione del template rispetto ai residui vicini, senza
             ottimizzare la rete di legami idrogeno.
             {templates.length > 1 && " Lo stesso gruppo nello stesso sito di più template diventa un solo gruppo del modello, con i vincoli di tutti."} Dopo
-            la modellazione BioLoom verifica contatti, scontri e coordinazione dei metalli (pagina Qualità).
+            la modellazione MakPhi verifica contatti, scontri e coordinazione dei metalli (pagina Qualità).
           </Disclosure>
         </div>
       )}

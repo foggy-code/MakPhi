@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from bioloom.domain import structure
+from makphi.domain import structure
 
 DATA = Path(__file__).parent / "data"
 

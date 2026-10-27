@@ -1,6 +1,6 @@
-"""Worker QMEAN per BioLoom: piccolo servizio HTTP interno che esegue run_qmean.py.
+"""Worker QMEAN per MakPhi: piccolo servizio HTTP interno che esegue run_qmean.py.
 
-Gira nel container ufficiale di QMEAN (Python 3.6, sola libreria standard). BioLoom lo raggiunge sulla
+Gira nel container ufficiale di QMEAN (Python 3.6, sola libreria standard). MakPhi lo raggiunge sulla
 rete interna di Docker (nessuna porta pubblicata, nessun accesso al socket di Docker).
 
   GET    /status[?prefer=<id>]  database UniClust30/UniRef30 trovati (qualunque versione), QMTL, coda
@@ -64,7 +64,7 @@ PROFILES_STATUS_TTL = 30
 PRUNE_SECONDS = 60
 PURGE_SECONDS = 30
 # Server HTTP: HTTP_THREADS richieste servite insieme (QMEAN_HTTP_THREADS), le altre in coda. Una richiesta rimasta
-# in coda più di STALE_SECONDS si chiude senza risposta: BioLoom aspetta 20 s e intanto ha già riprovato. Con un
+# in coda più di STALE_SECONDS si chiude senza risposta: MakPhi aspetta 20 s e intanto ha già riprovato. Con un
 # thread per richiesta (prima) le richieste abbandonate si accumulavano: 1096 thread fermi sul GIL sul server.
 HTTP_THREADS = max(2, int(os.environ.get("QMEAN_HTTP_THREADS") or 16))
 HTTP_BACKLOG = 128
@@ -302,9 +302,9 @@ def _run_qmean(job):
                 fh.write(job["seqres"])
             cmd += ["--seqres", seqres]
         # TMPDIR: anche le cartelle temporanee di run_qmean.py finiscono in workdir, eliminata sempre
-        env = dict(os.environ, BIOLOOM_UNICLUST_PREFIX=prefix, BIOLOOM_HHBLITS_CPU=str(cpu), TMPDIR=workdir)
+        env = dict(os.environ, MAKPHI_UNICLUST_PREFIX=prefix, MAKPHI_HHBLITS_CPU=str(cpu), TMPDIR=workdir)
         if PROFILE_CACHE_GB > 0:
-            env["BIOLOOM_PROFILE_CACHE"] = profile_folder(db)
+            env["MAKPHI_PROFILE_CACHE"] = profile_folder(db)
         with _lock:
             job.update(method_used=method, database_used=uniclust.public(db), cpu=cpu)
         code, output = _run_process(job, cmd, workdir, env, MAX_SECONDS)
@@ -314,12 +314,12 @@ def _run_qmean(job):
             raise RuntimeError("run_qmean.py terminato con codice %s\n%s" % (code, tail))
         with io.open(out_path, encoding="utf-8") as fh:
             result = json.load(fh)
-        result["bioloom_database"] = uniclust.public(db)
-        result["bioloom_hhblits"] = {"cpu": cpu, "memory": fit, "seconds": round(time.time() - job["started"]),
+        result["makphi_database"] = uniclust.public(db)
+        result["makphi_hhblits"] = {"cpu": cpu, "memory": fit, "seconds": round(time.time() - job["started"]),
                                      "parallel": _gate.slots}
         try:  # profili riusati e calcolati (run_qmean_wrapper.py)
             with io.open(os.path.join(workdir, "profile_cache.json"), encoding="utf-8") as fh:
-                result["bioloom_profiles"] = json.load(fh)
+                result["makphi_profiles"] = json.load(fh)
         except (OSError, ValueError):
             pass
         if PROFILE_CACHE_GB > 0:
@@ -435,7 +435,7 @@ def _new_job(kind, **fields):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "BioLoomQMEAN/2"
+    server_version = "MakPhiQMEAN/2"
     timeout = 30  # un client che non manda la richiesta non tiene fermo un thread del server
 
     def log_message(self, fmt, *args):  # registro sintetico su stdout
@@ -600,7 +600,7 @@ class Server(HTTPServer):
 
 def profiles_status():
     """Profili HHblits salvati: numero, spazio occupato e massimo (byte). Riletti al più ogni PROFILES_STATUS_TTL
-    secondi: BioLoom chiede lo stato prima di ogni calcolo."""
+    secondi: MakPhi chiede lo stato prima di ogni calcolo."""
     with _profiles_lock:  # le richieste arrivate insieme usano lo stesso conteggio
         now = time.time()
         cached = _profiles_cache["value"]

@@ -6,7 +6,7 @@ import { Icon } from "./Icon";
 
 /** Stato aperto/chiuso ricordato nel browser (sezioni a scomparsa); senza chiave resta solo in memoria. */
 function useOpenState(storageKey: string | undefined, defaultOpen: boolean): [boolean, () => void] {
-  const key = storageKey ? `bioloom.open.${storageKey}` : null;
+  const key = storageKey ? `makphi.open.${storageKey}` : null;
   const [open, setOpen] = useState<boolean>(() => {
     if (!key) return defaultOpen;
     try {
@@ -285,7 +285,7 @@ export function Badge({ tone, children, title }: { tone?: "ok" | "info" | "warn"
 
 export function Grade({ grade, large = false, title }: { grade?: string | null; large?: boolean; title?: string }) {
   return (
-    <span className={`grade grade-${gradeTone(grade)} ${large ? "grade-lg" : ""}`} title={title ?? "Voto BioLoom (A–D)"}>
+    <span className={`grade grade-${gradeTone(grade)} ${large ? "grade-lg" : ""}`} title={title ?? "Voto MakPhi (A–D)"}>
       {grade ?? "–"}
     </span>
   );

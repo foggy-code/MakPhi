@@ -75,7 +75,7 @@ export function LicensesPanel() {
             ) : (
               <Alert tone="err">{m.configured ? `La chiave attuale non è valida: ${m.message ?? ""}` : "Nessuna chiave di licenza: la modellazione non può partire."}</Alert>
             )}
-            <Field label={m.configured ? "Sostituisci la chiave" : "Chiave di licenza MODELLER"} hint={<>Si ottiene gratis per uso accademico su <a href="https://salilab.org/modeller/registration.html" target="_blank" rel="noreferrer">salilab.org/modeller</a>. BioLoom la prova con MODELLER e la salva solo se viene accettata.</>}>
+            <Field label={m.configured ? "Sostituisci la chiave" : "Chiave di licenza MODELLER"} hint={<>Si ottiene gratis per uso accademico su <a href="https://salilab.org/modeller/registration.html" target="_blank" rel="noreferrer">salilab.org/modeller</a>. MakPhi la prova con MODELLER e la salva solo se viene accettata.</>}>
               <div className="row">
                 <input className="input mono" style={{ flex: 1 }} value={key} onChange={(e) => setKey(e.target.value)} placeholder="MODELXXXX" autoComplete="off" spellCheck={false} />
                 <button className="btn btn-primary" onClick={saveKey} disabled={busy || key.trim().length < 4}>{busy ? <Spinner /> : <Icon name="check" size={14} />} Verifica e salva</button>
@@ -118,7 +118,7 @@ export function LicensesPanel() {
                 <dt>MAC della licenza</dt><dd className="mono">{p.mac_required}</dd>
                 <dt>MAC del container</dt><dd className="mono">{p.mac_current ?? "—"} {p.mac_ok ? <Badge tone="ok">corrisponde</Badge> : <Badge tone="warn">diverso</Badge>}</dd>
               </dl>
-              {!p.mac_ok && <Alert tone="warn">Chiudi BioLoom e riaprilo con l'avviatore: legge il MAC dalla licenza e lo assegna al container.</Alert>}
+              {!p.mac_ok && <Alert tone="warn">Chiudi MakPhi e riaprilo con l'avviatore: legge il MAC dalla licenza e lo assegna al container.</Alert>}
               <button className="btn btn-sm btn-ghost" style={{ alignSelf: "start" }} onClick={() => api.removeProsaLicense().then(update).catch(toast.error)}>
                 <Icon name="trash" size={13} /> Rimuovi la licenza
               </button>
@@ -304,19 +304,19 @@ function UniclustCard({ status: q, running, onConvert, onLocal, onChanged }: {
                 Il disco arriva nel container attraverso la condivisione di file di Docker Desktop: è veloce a blocchi grandi ma molto lento per le
                 letture piccole con cui HHblits scorre gli indici. <b>Copia indici</b> porta su questo computer solo indici e cs219 (pochi GB, nel disco
                 di Docker: su Windows di solito in C:): i file grandi restano sul disco e se ne leggono solo le voci trovate. Va fatto una volta per computer; se il database
-                cambia, BioLoom se ne accorge e torna a leggere dal disco finché non aggiorni la copia.
+                cambia, MakPhi se ne accorge e torna a leggere dal disco finché non aggiorni la copia.
               </Disclosure>
             )}
             {dbs.some((d) => d.state === "needs_conversion") && (
               <Disclosure title="Conversione dei formati vecchi">
-                Le versioni in formato HH-suite 2 (uniclust30 2016–2017) vanno convertite una volta: BioLoom ricrea il file cs219 dagli allineamenti
+                Le versioni in formato HH-suite 2 (uniclust30 2016–2017) vanno convertite una volta: MakPhi ricrea il file cs219 dagli allineamenti
                 e lo conserva su questo computer, senza modificare il disco. Sui database completi richiede alcune ore.
               </Disclosure>
             )}
           </>
         )}
         {(q.archives ?? []).map((a) => (
-          <Alert key={a.file} tone="warn">Trovato l'archivio <span className="mono">{a.file}</span> ({fmtBytes(a.size)}) ma non è estratto: estrailo sul disco (es. <span className="mono">tar -xzf</span>) e riavvia BioLoom.</Alert>
+          <Alert key={a.file} tone="warn">Trovato l'archivio <span className="mono">{a.file}</span> ({fmtBytes(a.size)}) ma non è estratto: estrailo sul disco (es. <span className="mono">tar -xzf</span>) e riavvia MakPhi.</Alert>
         ))}
         {(q.unsupported ?? []).map((u) => <Alert key={u.file} tone="warn"><span className="mono">{u.file}</span>: {u.reason}</Alert>)}
         {(q.local_orphans ?? []).map((o) => (
@@ -330,7 +330,7 @@ function UniclustCard({ status: q, running, onConvert, onLocal, onChanged }: {
         <Disclosure title="Come collegare il database" defaultOpen={!q.available && !dbs.length}>
           <div className="step-list">
             <div className="step"><span className="n">1</span><div className="small">Collega il disco con UniClust30 o UniRef30, in qualunque versione (UniRef30 2020–2023, uniclust30 2016–2018), anche più versioni in cartelle diverse.</div></div>
-            <div className="step"><span className="n">2</span><div className="small">Avvia (o riavvia) BioLoom con l'avviatore: trova da solo le versioni sui dischi collegati, anche se cambia la lettera o il punto di montaggio. Se non le trova, indica la cartella con il tasto U.</div></div>
+            <div className="step"><span className="n">2</span><div className="small">Avvia (o riavvia) MakPhi con l'avviatore: trova da solo le versioni sui dischi collegati, anche se cambia la lettera o il punto di montaggio. Se non le trova, indica la cartella con il tasto U.</div></div>
             <div className="step"><span className="n">3</span><div className="small">Facoltativo: una cartella con la QMTL abilita QMEANDisCo.</div></div>
           </div>
         </Disclosure>
@@ -448,7 +448,7 @@ export function StoragePanel({ form, set, info }: { form: Settings; set: <K exte
           right={<button type="button" className="btn btn-sm" onClick={clean} disabled={cleaning} title="Elimina file caricati scaduti, cache scadute, area temporanea e resti di job già eliminati: mai i risultati dei job">{cleaning ? <Spinner /> : <Icon name="trash" size={13} />} Pulisci file temporanei</button>}>
           {storage ? (
             <div className="stack">
-              {total > 0 && <StackBar parts={parts} title="Composizione dello spazio" titleHidden subtitle="cartella dati e volumi Docker" filename="bioloom_spazio" />}
+              {total > 0 && <StackBar parts={parts} title="Composizione dello spazio" titleHidden subtitle="cartella dati e volumi Docker" filename="makphi_spazio" />}
               <div className="grid grid-2">
                 {entries.map(([k, label, note]) => (
                   <Stat key={k} label={label} value={<span style={{ fontSize: 16 }}>{fmtBytes(storage[k])}</span>} note={note} />
@@ -502,7 +502,7 @@ export function StoragePanel({ form, set, info }: { form: Settings; set: <K exte
         <Card icon="info" title="Installazione">
           {info && (
             <dl className="kv">
-              <dt>Versione</dt><dd>BioLoom {info.version}{info.runtime?.image ? ` · immagine ${info.runtime.image}` : ""}</dd>
+              <dt>Versione</dt><dd>MakPhi {info.version}{info.runtime?.image ? ` · immagine ${info.runtime.image}` : ""}</dd>
               <dt>Esecuzione</dt><dd>{info.runtime?.container ? "container Docker" : "nativa"} · Python {info.python} · {info.runtime?.arch}</dd>
               <dt>Accesso</dt><dd>{info.runtime?.auth ? "protetto da chiave (server)" : "locale, senza login"}</dd>
               <dt>Cartella dati</dt><dd className="mono">{info.data_dir}</dd>

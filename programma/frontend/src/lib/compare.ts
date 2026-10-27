@@ -265,7 +265,7 @@ export function rowScrollDelta(row: { top: number; bottom: number }, view: { top
 }
 
 /**
- * Il risultato strutturale è di una versione precedente di BioLoom, senza confronto per residuo: niente coppie e
+ * Il risultato strutturale è di una versione precedente di MakPhi, senza confronto per residuo: niente coppie e
  * niente `comparison_version`. Non basta l'assenza di una nota: il metodo integrato ha sempre scritto la sua
  * ("Allineamento dipendente dalla sequenza…"), mentre un risultato nuovo senza coppie ha la versione e la sua nota.
  */

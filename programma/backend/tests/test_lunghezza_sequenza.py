@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from bioloom.config import SEQUENCE_MAX_DEFAULT, SEQUENCE_MAX_LIMIT, SEQUENCE_MAX_MIN, SettingsStore, UserSettings
+from makphi.config import SEQUENCE_MAX_DEFAULT, SEQUENCE_MAX_LIMIT, SEQUENCE_MAX_MIN, SettingsStore, UserSettings
 
 from .conftest import YEAST_UB, wait_job
 from .test_preflight import by_code, codes, env, model_params, pipeline_params, run  # noqa: F401 (fixture env)

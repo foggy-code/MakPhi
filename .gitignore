@@ -3,6 +3,10 @@
 /.env.locale
 /server.env
 /seccomp-podman.json
+# da BioLoom (fino alla 4.4.0): copie dei file di configurazione prima del cambio di nome, volumi vecchi riusati
+/.env.locale.bioloom
+/server.env.bioloom
+/.volumi-bioloom.yml
 immagini/*.tar
 
 # pacchetti con licenza (vedi programma/docker/vendor/README.md)

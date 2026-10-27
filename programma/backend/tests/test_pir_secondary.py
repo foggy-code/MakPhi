@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from bioloom.domain import pir_secondary, secondary, structure
-from bioloom.domain.sequences import parse_pir
+from makphi.domain import pir_secondary, secondary, structure
+from makphi.domain.sequences import parse_pir
 
 from .conftest import DATA, HUMAN_UB, ubq_variant
 

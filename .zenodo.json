@@ -1,8 +1,8 @@
 {
-  "title": "BioLoom",
+  "title": "MakPhi",
   "upload_type": "software",
   "description": "Suite per la modellazione di proteine per omologia: ricerca e punteggio dei template, allineamento, costruzione con MODELLER, validazione e voto dei modelli, rifinitura, mutagenesi, ligandi e complessi, pacchetti di riproducibilità. Distribuita come immagine Docker (o Podman) con interfaccia web.",
-  "version": "4.4.0",
+  "version": "5.0.0",
   "license": "MIT",
   "creators": [
     {
@@ -18,7 +18,7 @@
   ],
   "related_identifiers": [
     {
-      "identifier": "https://github.com/foggy-code/BioLoom",
+      "identifier": "https://github.com/foggy-code/MakPhi",
       "relation": "isSupplementTo",
       "scheme": "url"
     }

@@ -7,7 +7,7 @@ Formati riconosciuti (tutti nella stessa cartella, con lo stesso prefisso):
     Il file cs219 di HH-suite 2 non è leggibile da HHblits 3: si ricrea una volta dagli allineamenti
     (cstranslate) e si conserva nel volume /cache.
 
-Più versioni possono stare sullo stesso disco: si usa quella scelta in BioLoom, altrimenti la più recente.
+Più versioni possono stare sullo stesso disco: si usa quella scelta in MakPhi, altrimenti la più recente.
 Per ogni calcolo si prepara una "vista" con i nomi standard (collegamenti simbolici), senza toccare il disco.
 
 Copia locale: con Docker Desktop (Windows, macOS) il disco arriva nel container attraverso la condivisione
@@ -31,9 +31,9 @@ import shutil
 import threading
 import time
 
-SOURCES = [p for p in os.environ.get("BIOLOOM_UNICLUST_SOURCES", "/uniclust_src:/uniclust30").split(":") if p]
-CACHE = os.environ.get("BIOLOOM_UNICLUST_CACHE", "/cache")
-VIEWS = os.environ.get("BIOLOOM_UNICLUST_VIEWS", "/tmp/uniclust_views")
+SOURCES = [p for p in os.environ.get("MAKPHI_UNICLUST_SOURCES", "/uniclust_src:/uniclust30").split(":") if p]
+CACHE = os.environ.get("MAKPHI_UNICLUST_CACHE", "/cache")
+VIEWS = os.environ.get("MAKPHI_UNICLUST_VIEWS", "/tmp/uniclust_views")
 MAX_DEPTH = 4
 
 A3M_PAIRS = [("_a3m.ffdata", "_a3m.ffindex"), ("_a3m_db", "_a3m_db.index")]

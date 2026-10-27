@@ -55,7 +55,7 @@ export function ConsensusPanel({ report, consensus, error, selected, onSelect, o
           <p className="small text-2">
             Ogni metodo è portato su 0–100 con una scala lineare a tratti costruita sulle soglie della letteratura (70 = soglia di
             affidabilità, 40 = soglia dei problemi); il consenso è la media pesata dei soli metodi disponibili. Il voto A–D resta
-            quello di BioLoom.
+            quello di MakPhi.
           </p>
         </div>
         <div className="stack-sm">

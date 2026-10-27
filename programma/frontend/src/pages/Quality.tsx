@@ -282,7 +282,7 @@ function Report({ report, source, consensusRef }: { report: QualityReport; sourc
     <div className="stack">
       <Card className="quality-hero">
         <div className="quality-hero-main">
-          <Grade grade={g.grade} large title={`Voto BioLoom ${g.grade}: punteggio ${fmtNum(g.score, 1)}/100`} />
+          <Grade grade={g.grade} large title={`Voto MakPhi ${g.grade}: punteggio ${fmtNum(g.score, 1)}/100`} />
           <div className="quality-hero-text">
             <h2>{report.structure.title || report.structure.file}</h2>
             {report.structure.title && report.structure.file !== report.structure.title && <span className="small text-2 mono">{report.structure.file}</span>}

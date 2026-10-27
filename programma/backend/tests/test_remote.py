@@ -2,7 +2,7 @@
 
 import pytest
 
-from bioloom.engines import remote
+from makphi.engines import remote
 from tests.conftest import YEAST_UB
 
 pytestmark = pytest.mark.network

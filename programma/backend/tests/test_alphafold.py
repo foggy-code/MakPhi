@@ -17,13 +17,13 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from bioloom.config import UserSettings
-from bioloom.core.errors import AppError, NotFound, RemoteServiceError
-from bioloom.core.jobs import JobCancelled
-from bioloom.domain import plddt, sequences, structure
-from bioloom.engines import modeller, remote, search
-from bioloom.services.compute import ComputeService
-from bioloom.services.templates import TemplateLibrary
+from makphi.config import UserSettings
+from makphi.core.errors import AppError, NotFound, RemoteServiceError
+from makphi.core.jobs import JobCancelled
+from makphi.domain import plddt, sequences, structure
+from makphi.engines import modeller, remote, search
+from makphi.services.compute import ComputeService
+from makphi.services.templates import TemplateLibrary
 
 from .conftest import DATA, HUMAN_UB, YEAST_UB, requires_modeller, until, wait_job
 
@@ -664,7 +664,7 @@ def test_prepare_template_removes_low_plddt_residues(tmp_path):
     text = (tmp_path / "job" / info["file"]).read_text()
     assert text.count(" CA ") == 65
     assert text.startswith("HEADER") and "ALPHAFOLD MONOMER V2.0 PREDICTION" in text  # provenienza conservata
-    assert "REMARK 999 BIOLOOM PLDDT_TRIM THRESHOLD 70 REMOVED 11 OF 76" in text
+    assert "REMARK 999 MAKPHI PLDDT_TRIM THRESHOLD 70 REMOVED 11 OF 76" in text
     assert "DBREF" not in text and "SEQRES" not in text
     assert [r for r in info["_residues"] if not r[3]][0] == ("A", "1", "M", False)
     # i B-factor rimasti sono ancora pLDDT
@@ -866,7 +866,7 @@ def test_end_to_end_modeling_with_a_trimmed_alphafold_template(client, afdb):
     best = next(m for m in res["models"] if m["best"])
     pdb = client.get(f"/api/jobs/{job['id']}/files/{best['file']}").text
     assert pdb.count(" CA ") == 76  # anche le code senza template sono nel modello
-    assert "REMARK 999 BIOLOOM TEMPLATE AF-P0CG48-F1_A ALPHAFOLD PLDDT<70 REMOVED 11" in pdb
+    assert "REMARK 999 MAKPHI TEMPLATE AF-P0CG48-F1_A ALPHAFOLD PLDDT<70 REMOVED 11" in pdb
     # l'allineamento automatico usa la sequenza ritagliata del template
     tmpl = next(e for e in sequences.parse_pir(res["alignment"]) if e.is_template)
     assert re.sub(r"[^A-Z]", "", tmpl.sequence) == HUMAN_UB[5:70]

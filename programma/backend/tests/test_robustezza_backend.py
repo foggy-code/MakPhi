@@ -14,13 +14,13 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from bioloom.app import create_app
-from bioloom.config import Paths, SettingsStore, UserSettings
-from bioloom.core import cache
-from bioloom.core.db import Database
-from bioloom.core.jobs import JobManager, ProcessResult
-from bioloom.engines import remote, search
-from bioloom.services.housekeeping import Housekeeping
+from makphi.app import create_app
+from makphi.config import Paths, SettingsStore, UserSettings
+from makphi.core import cache
+from makphi.core.db import Database
+from makphi.core.jobs import JobManager, ProcessResult
+from makphi.engines import remote, search
+from makphi.services.housekeeping import Housekeeping
 
 from .conftest import until, wait_job
 
@@ -363,14 +363,14 @@ def test_internal_errors_hide_details_and_log_them_with_a_code(tmp_path, capsys)
 
     @app.post("/api/prova-errore")
     def boom():
-        raise RuntimeError("dettaglio riservato /srv/bioloom/data/jobs/abc")
+        raise RuntimeError("dettaglio riservato /srv/makphi/data/jobs/abc")
 
     with TestClient(app, raise_server_exceptions=False) as c:
         r = c.post("/api/prova-errore")
     assert r.status_code == 500
     error = r.json()["error"]
     assert error["code"] == "internal_error"
-    match = re.fullmatch(r"Errore interno \(codice ([0-9a-f]{8})\): i dettagli sono nel log di BioLoom\.",
+    match = re.fullmatch(r"Errore interno \(codice ([0-9a-f]{8})\): i dettagli sono nel log di MakPhi\.",
                          error["message"])
     assert match and "riservato" not in r.text
     out = capsys.readouterr().out

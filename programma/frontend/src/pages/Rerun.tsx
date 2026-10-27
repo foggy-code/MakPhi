@@ -107,7 +107,7 @@ function RerunReport({ jobId, result }: { jobId: string; result: RerunResult }) 
           <span style={{ flex: 1 }}>{result.summary}</span>
         </div>
         <p className="small text-2" style={{ margin: 0 }}>
-          Pacchetto del job {local ? <Link to={`/jobs?id=${result.original.job_id}`} className="mono">{result.original.job_id}</Link> : <span className="mono" title={local === false ? "Job non presente in questa installazione" : undefined}>{result.original.job_id}</span>}{local === false ? " (non in questa installazione)" : ""} «{result.original.title}», concluso {fmtDate(result.original.finished_at)} con BioLoom {result.original.bioloom ?? "?"}; riesecuzione con BioLoom {result.bioloom} in {fmtValue(result.duration_seconds)} s, file in <span className="mono">{result.folder}/</span>.
+          Pacchetto del job {local ? <Link to={`/jobs?id=${result.original.job_id}`} className="mono">{result.original.job_id}</Link> : <span className="mono" title={local === false ? "Job non presente in questa installazione" : undefined}>{result.original.job_id}</span>}{local === false ? " (non in questa installazione)" : ""} «{result.original.title}», concluso {fmtDate(result.original.finished_at)} con MakPhi {result.original.makphi ?? "?"}; riesecuzione con MakPhi {result.makphi} in {fmtValue(result.duration_seconds)} s, file in <span className="mono">{result.folder}/</span>.
         </p>
         {result.warnings.length > 0 && (
           <Alert tone="warn">
@@ -240,7 +240,7 @@ export default function Rerun() {
   return (
     <div className="page">
       <PageHead title="Riesegui da pacchetto"
-        lead="Carica un pacchetto riproducibile (Job → «Pacchetto riproducibile»): BioLoom verifica manifest e checksum, ricrea il calcolo con gli stessi parametri e input (cache ignorata, nessun download) e confronta i risultati con quelli del pacchetto." />
+        lead="Carica un pacchetto riproducibile (Job → «Pacchetto riproducibile»): MakPhi verifica manifest e checksum, ricrea il calcolo con gli stessi parametri e input (cache ignorata, nessun download) e confronta i risultati con quelli del pacchetto." />
       <div className="split">
         <div className="stack">
           <Card icon="upload" title="Pacchetto">
@@ -259,7 +259,7 @@ export default function Rerun() {
               )}
               <p className="small text-2">
                 Gli script MODELLER del pacchetto sono solo documentazione: la riesecuzione li rigenera dai parametri, validati come
-                quelli di un calcolo nuovo. Da riga di comando: <span className="mono">python programma/bioloom.py rerun &lt;pacchetto.zip&gt; --data &lt;cartella&gt;</span> (dalla cartella di BioLoom).
+                quelli di un calcolo nuovo. Da riga di comando: <span className="mono">python programma/makphi.py rerun &lt;pacchetto.zip&gt; --data &lt;cartella&gt;</span> (dalla cartella di MakPhi).
               </p>
             </div>
           </Card>

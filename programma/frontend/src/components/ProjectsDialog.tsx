@@ -30,7 +30,7 @@ export interface ProjectDeleteViewProps {
   /** null mentre si legge (o se la lettura è fallita: `usageError`) */
   usage: ProjectUsage | null;
   usageError?: string;
-  /** è l'ultimo progetto: BioLoom ne creerà uno vuoto */
+  /** è l'ultimo progetto: MakPhi ne creerà uno vuoto */
   isLast: boolean;
   typed: string;
   onTyped: (text: string) => void;
@@ -95,7 +95,7 @@ export function ProjectDeleteView(p: ProjectDeleteViewProps) {
           </p>
         </div>
       )}
-      {p.isLast && <Alert tone="info">È l'ultimo progetto: BioLoom ne creerà uno vuoto, perché ne serve sempre almeno uno.</Alert>}
+      {p.isLast && <Alert tone="info">È l'ultimo progetto: MakPhi ne creerà uno vuoto, perché ne serve sempre almeno uno.</Alert>}
       {blocked && (
         <Alert tone="warn">
           <div className="stack-sm">

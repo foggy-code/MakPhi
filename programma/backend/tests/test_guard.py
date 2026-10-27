@@ -7,10 +7,10 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from bioloom.api import system
-from bioloom.app import DEV_ORIGINS, create_app
-from bioloom.config import Paths
-from bioloom.core import auth, guard
+from makphi.api import system
+from makphi.app import DEV_ORIGINS, create_app
+from makphi.config import Paths
+from makphi.core import auth, guard
 
 from .conftest import DATA
 
@@ -20,7 +20,7 @@ EVIL = "https://evil.example"
 
 @pytest.fixture
 def make_client(tmp_path, monkeypatch):
-    """App nuova con BIOLOOM_ALLOWED_HOSTS a scelta (None = assente: solo i nomi di loopback). Le origini di Vite
+    """App nuova con MAKPHI_ALLOWED_HOSTS a scelta (None = assente: solo i nomi di loopback). Le origini di Vite
     sono esplicite: i test girano anche nel container, dove create_app non le ammette (None = predefinite)."""
     counter = count()
     with ExitStack() as stack:
@@ -55,23 +55,23 @@ def test_split_host_forms():
 
 def test_allowed_hosts_parsing():
     assert guard.allowed_hosts("") == frozenset()
-    assert guard.allowed_hosts(" Bioloom.Lab, 10.0.0.5:8765  altro.example,,") == {"bioloom.lab", "10.0.0.5",
+    assert guard.allowed_hosts(" Makphi.Lab, 10.0.0.5:8765  altro.example,,") == {"makphi.lab", "10.0.0.5",
                                                                                      "altro.example"}
     assert guard.allowed_hosts("*") == {"*"}
-    # voci scritte come URL, per analogia con BIOLOOM_PUBLIC_URL: conta il nome
-    assert guard.allowed_hosts("https://Bioloom.Lab, http://10.0.0.5:8765/ bioloom2.lab/ http://[::2]:8765/x") == {
-        "bioloom.lab", "10.0.0.5", "bioloom2.lab", "::2"}
-    assert guard.host_allowed("bioloom.lab", guard.allowed_hosts("https://bioloom.lab"))
+    # voci scritte come URL, per analogia con MAKPHI_PUBLIC_URL: conta il nome
+    assert guard.allowed_hosts("https://Makphi.Lab, http://10.0.0.5:8765/ makphi2.lab/ http://[::2]:8765/x") == {
+        "makphi.lab", "10.0.0.5", "makphi2.lab", "::2"}
+    assert guard.host_allowed("makphi.lab", guard.allowed_hosts("https://makphi.lab"))
     assert guard.allowed_hosts("http://[::1, https://") == frozenset()  # URL non validi: nessun nome
 
 
 def test_host_allowed():
-    allowed = guard.allowed_hosts("bioloom.lab")
-    for host in ("127.0.0.1:8765", "127.0.0.1:1", "localhost", "localhost:5173", "[::1]:8765", "BIOLOOM.LAB:8765",
+    allowed = guard.allowed_hosts("makphi.lab")
+    for host in ("127.0.0.1:8765", "127.0.0.1:1", "localhost", "localhost:5173", "[::1]:8765", "MAKPHI.LAB:8765",
                  None, ""):
         assert guard.host_allowed(host, allowed), host
     for host in ("evil.example", "evil.example:8765", "127.0.0.1.nip.io:8765", "localhost.evil.example",
-                 "bioloom.lab.evil.example", "[::2]:8765"):
+                 "makphi.lab.evil.example", "[::2]:8765"):
         assert not guard.host_allowed(host, allowed), host
     assert guard.host_allowed("evil.example", guard.allowed_hosts("*"))
 
@@ -80,20 +80,20 @@ def test_same_origin():
     assert guard.same_origin("http://127.0.0.1:8765", "127.0.0.1:8765")
     assert guard.same_origin("http://LOCALHOST:8765", "localhost:8765")
     assert guard.same_origin("http://[::1]:8765", "[::1]:8765")
-    assert guard.same_origin("https://bioloom.lab", "bioloom.lab")  # porta predefinita dello schema
-    assert guard.same_origin("https://bioloom.lab", "bioloom.lab:443")
-    assert guard.same_origin("http://bioloom.lab:80", "bioloom.lab")
+    assert guard.same_origin("https://makphi.lab", "makphi.lab")  # porta predefinita dello schema
+    assert guard.same_origin("https://makphi.lab", "makphi.lab:443")
+    assert guard.same_origin("http://makphi.lab:80", "makphi.lab")
     assert not guard.same_origin("http://127.0.0.1:8766", "127.0.0.1:8765")
-    assert not guard.same_origin("https://bioloom.lab:8443", "bioloom.lab")
-    assert not guard.same_origin("http://bioloom.lab", "bioloom.lab:8765")
+    assert not guard.same_origin("https://makphi.lab:8443", "makphi.lab")
+    assert not guard.same_origin("http://makphi.lab", "makphi.lab:8765")
     assert not guard.same_origin("http://evil.example:8765", "127.0.0.1:8765")
     assert not guard.same_origin("null", "127.0.0.1:8765")
     assert not guard.same_origin("http://[::1", "[::1]:8765")  # Origin non valido
     assert not guard.same_origin("ftp://127.0.0.1:8765", "127.0.0.1:8765")
     assert not guard.same_origin("http://127.0.0.1:8765", None)
     # reverse proxy: conta il primo X-Forwarded-Host
-    assert guard.same_origin("https://bioloom.lab", "127.0.0.1:8765", "bioloom.lab, proxy-interno")
-    assert not guard.same_origin("https://bioloom.lab", "127.0.0.1:8765", "proxy-interno, bioloom.lab")
+    assert guard.same_origin("https://makphi.lab", "127.0.0.1:8765", "makphi.lab, proxy-interno")
+    assert not guard.same_origin("https://makphi.lab", "127.0.0.1:8765", "proxy-interno, makphi.lab")
 
 
 def test_origin_allowed_rules():
@@ -112,7 +112,7 @@ def test_origin_allowed_rules():
     assert not ok(fetch_site="same-site") and not ok(fetch_site="cross-site")
     # Sec-Fetch-Site vince su Origin: è il punto di vista del browser, anche dietro un proxy che cambia Host
     assert not ok(origin="http://127.0.0.1:8765", fetch_site="cross-site")
-    assert ok(origin="https://bioloom.lab", fetch_site="same-origin")
+    assert ok(origin="https://makphi.lab", fetch_site="same-origin")
     assert ok(origin="http://127.0.0.1:8765") and not ok(origin=EVIL) and not ok(origin="null")
     assert ok()  # né Origin né Sec-Fetch-Site: curl, script, avviatori
 
@@ -122,17 +122,17 @@ def test_origin_allowed_rules():
 def test_hostile_host_is_refused_without_access_key(make_client, tmp_path):
     dist = tmp_path / "dist"
     dist.mkdir()
-    (dist / "index.html").write_text("<!doctype html><title>BioLoom</title>", encoding="utf-8")
+    (dist / "index.html").write_text("<!doctype html><title>MakPhi</title>", encoding="utf-8")
     c = make_client(frontend_dist=dist)
     for path in ("/api/projects", "/api/system/info", "/", "/progetti", "/docs", "/openapi.json"):
         r = c.get(path, headers={"Host": "evil.example:8765"})
         assert r.status_code == 400 and _code(r) == "host_not_allowed", path
     msg = r.json()["error"]["message"]
-    assert "BIOLOOM_ALLOWED_HOSTS" in msg and "evil.example" in msg
+    assert "MAKPHI_ALLOWED_HOSTS" in msg and "evil.example" in msg
     assert c.post("/api/projects", json={"name": "x"}, headers={"Host": "evil.example"}).status_code == 400
     assert c.get("/api/health", headers={"Host": "evil.example"}).status_code == 200  # esente
     page = c.get("/", headers={"Host": "localhost:5173"})  # proxy di Vite
-    assert page.status_code == 200 and "BioLoom" in page.text
+    assert page.status_code == 200 and "MakPhi" in page.text
 
 
 def test_loopback_hosts_with_any_port_are_allowed(make_client):
@@ -142,8 +142,8 @@ def test_loopback_hosts_with_any_port_are_allowed(make_client):
 
 
 def test_allowed_hosts_variable(make_client):
-    c = make_client("bioloom.lab, Altro.Example")
-    assert c.get("/api/projects", headers={"Host": "bioloom.lab:8765"}).status_code == 200
+    c = make_client("makphi.lab, Altro.Example")
+    assert c.get("/api/projects", headers={"Host": "makphi.lab:8765"}).status_code == 200
     assert c.get("/api/projects", headers={"Host": "ALTRO.example"}).status_code == 200
     assert c.get("/api/projects", headers={"Host": "127.0.0.1:8765"}).status_code == 200
     assert c.get("/api/projects", headers={"Host": "evil.example"}).status_code == 400
@@ -153,7 +153,7 @@ def test_allowed_hosts_variable(make_client):
 
 def test_host_check_is_off_with_access_key(make_client):
     # in modalità server proteggono chiave e cookie, e il server si raggiunge per IP, nome o proxy
-    c = make_client(auth_config=auth.AuthConfig(enabled=True, key=KEY), base_url="http://bioloom.lab")
+    c = make_client(auth_config=auth.AuthConfig(enabled=True, key=KEY), base_url="http://makphi.lab")
     r = c.get("/api/projects", headers={"Host": "10.0.0.5:8765"})
     assert r.status_code == 401 and _code(r) == "auth_required"
     assert c.get("/api/projects", headers={"Authorization": f"Bearer {KEY}"}).status_code == 200
@@ -192,18 +192,18 @@ def test_same_origin_and_non_browser_writes_pass(make_client):
 
 
 def test_origin_is_compared_with_host_and_default_port(make_client):
-    c = make_client("bioloom.lab", base_url="http://bioloom.lab")
-    assert c.post("/api/projects", json={"name": "a"}, headers={"Origin": "http://bioloom.lab"}).status_code == 200
-    assert c.post("/api/projects", json={"name": "b"}, headers={"Origin": "http://bioloom.lab:80"}).status_code == 200
+    c = make_client("makphi.lab", base_url="http://makphi.lab")
+    assert c.post("/api/projects", json={"name": "a"}, headers={"Origin": "http://makphi.lab"}).status_code == 200
+    assert c.post("/api/projects", json={"name": "b"}, headers={"Origin": "http://makphi.lab:80"}).status_code == 200
     assert c.post("/api/projects", json={"name": "c"},
-                  headers={"Origin": "http://bioloom.lab:8080"}).status_code == 403
+                  headers={"Origin": "http://makphi.lab:8080"}).status_code == 403
 
 
 def test_reverse_proxy_and_server_mode(make_client):
     c = make_client(auth_config=auth.AuthConfig(enabled=True, key=KEY))
     bearer = {"Authorization": f"Bearer {KEY}"}
     # il proxy TLS raggiunge il container su 127.0.0.1:8765 e dichiara il nome pubblico
-    proxied = {**bearer, "Origin": "https://bioloom.example.org", "X-Forwarded-Host": "bioloom.example.org"}
+    proxied = {**bearer, "Origin": "https://makphi.example.org", "X-Forwarded-Host": "makphi.example.org"}
     assert c.post("/api/projects", json={"name": "a"}, headers=proxied).status_code == 200
     assert c.post("/api/projects", json={"name": "b"},
                   headers={**proxied, "X-Forwarded-Host": "altro.example.org"}).status_code == 403
@@ -232,7 +232,7 @@ def test_reads_and_preflight_are_never_blocked_by_origin(make_client):
 def test_cross_site_shutdown_never_reaches_the_handler(make_client, monkeypatch):
     """Lo scenario reale: una pagina qualsiasi fa fetch("http://127.0.0.1:8765/api/system/shutdown",
     {method: "POST", mode: "no-cors"}) con l'arresto consentito come in Docker."""
-    monkeypatch.setenv("BIOLOOM_ALLOW_SHUTDOWN", "1")
+    monkeypatch.setenv("MAKPHI_ALLOW_SHUTDOWN", "1")
     started = []
 
     class FakeThread:  # al posto del thread di arresto: niente si ferma anche se la guardia lasciasse passare
@@ -248,7 +248,7 @@ def test_cross_site_shutdown_never_reaches_the_handler(make_client, monkeypatch)
         r = c.post("/api/system/shutdown", headers=headers)
         assert r.status_code == 403 and _code(r) == "cross_origin", headers
     assert started == []
-    # dalla pagina di BioLoom l'arresto passa ancora la guardia
+    # dalla pagina di MakPhi l'arresto passa ancora la guardia
     ok = c.post("/api/system/shutdown", headers={"Sec-Fetch-Site": "same-origin", "Origin": "http://127.0.0.1:8765"})
     assert ok.status_code == 200 and ok.json()["status"] == "stopping" and len(started) == 1
 
@@ -256,7 +256,7 @@ def test_cross_site_shutdown_never_reaches_the_handler(make_client, monkeypatch)
 def test_dev_origins_only_outside_the_container(make_client, monkeypatch):
     vite = {"Origin": "http://localhost:5173", "Sec-Fetch-Site": "cross-site"}  # pagina sulla porta 5173
     preflight = {"Origin": "http://localhost:5173", "Access-Control-Request-Method": "POST"}
-    monkeypatch.setenv("BIOLOOM_CONTAINER", "1")
+    monkeypatch.setenv("MAKPHI_CONTAINER", "1")
     c = make_client(dev_origins=None)
     r = c.post("/api/system/cleanup", json={}, headers=vite)
     assert r.status_code == 403 and _code(r) == "cross_origin"
@@ -265,7 +265,7 @@ def test_dev_origins_only_outside_the_container(make_client, monkeypatch):
     assert c.post("/api/projects", json={"name": "a"}, headers={"Sec-Fetch-Site": "same-origin"}).status_code == 200
     assert c.post("/api/projects", json={"name": "b"}, headers={"Host": "localhost:5173",
                                                                 "Origin": "http://localhost:5173"}).status_code == 200
-    monkeypatch.delenv("BIOLOOM_CONTAINER")
+    monkeypatch.delenv("MAKPHI_CONTAINER")
     native = make_client(dev_origins=None)
     assert native.post("/api/projects", json={"name": "c"}, headers=vite).status_code == 200
     assert native.options("/api/projects", headers=preflight).headers["access-control-allow-origin"] == (
@@ -280,11 +280,11 @@ def _no_frames(r) -> bool:
 
 
 def test_pages_and_api_cannot_be_framed(make_client, tmp_path):
-    """Una pagina di BioLoom in un iframe trasparente di un altro sito invierebbe le richieste come «stessa origine»
+    """Una pagina di MakPhi in un iframe trasparente di un altro sito invierebbe le richieste come «stessa origine»
     (Sec-Fetch-Site: same-origin) e passerebbe il controllo dell'origine: il browser non deve mostrarla."""
     dist = tmp_path / "dist"
     dist.mkdir()
-    (dist / "index.html").write_text("<!doctype html><title>BioLoom</title>", encoding="utf-8")
+    (dist / "index.html").write_text("<!doctype html><title>MakPhi</title>", encoding="utf-8")
     c = make_client(frontend_dist=dist)
     framed = {"Sec-Fetch-Dest": "iframe", "Sec-Fetch-Site": "cross-site"}
     for path in ("/", "/progetti", "/api/projects", "/api/health", "/docs"):

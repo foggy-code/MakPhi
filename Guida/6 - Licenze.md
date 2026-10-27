@@ -1,19 +1,19 @@
 # Licenze
 
-Guida di BioLoom: [1. Primo avvio](1%20-%20Primo%20avvio.md) · [2. Funzioni](2%20-%20Funzioni.md) · [3. QMEAN e UniClust](3%20-%20QMEAN%20e%20UniClust.md) · [4. Dati e privacy](4%20-%20Dati%20e%20privacy.md) · [5. Chiavetta e server](5%20-%20Chiavetta%20e%20server.md) · **6. Licenze**
+Guida di MakPhi: [1. Primo avvio](1%20-%20Primo%20avvio.md) · [2. Funzioni](2%20-%20Funzioni.md) · [3. QMEAN e UniClust](3%20-%20QMEAN%20e%20UniClust.md) · [4. Dati e privacy](4%20-%20Dati%20e%20privacy.md) · [5. Chiavetta e server](5%20-%20Chiavetta%20e%20server.md) · **6. Licenze**
 
-## BioLoom
+## MakPhi
 
-BioLoom è software libero con licenza **MIT** (© 2026 foggy02, testo in [LICENSE](../LICENSE)): il codice in
+MakPhi è software libero con licenza **MIT** (© 2026 foggy02, testo in [LICENSE](../LICENSE)): il codice in
 `programma/`, gli avviatori e questa guida si possono usare, copiare, modificare e ridistribuire, purché resti l'avviso di
 copyright e di licenza.
 
-La licenza MIT non copre i programmi di terzi che BioLoom usa. Le immagini Docker (`bioloom`, `bioloom-qmean`) e
+La licenza MIT non copre i programmi di terzi che MakPhi usa. Le immagini Docker (`makphi`, `makphi-qmean`) e
 l'interfaccia web contengono componenti con licenze proprie, elencati con versione e licenza in
 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md), che indica anche dove trovare il sorgente del software GPL e LGPL
 delle immagini (su richiesta, per tre anni). MODELLER, PROCHECK e ProSA II hanno invece licenze accademiche personali: le
 immagini che li contengono, anche quelle nella cartella `immagini/` della copia portatile, non vanno date ad altri. Chi
-riceve BioLoom costruisce le immagini e ottiene le licenze per conto proprio.
+riceve MakPhi costruisce le immagini e ottiene le licenze per conto proprio.
 
 ## MODELLER, ProSA II e PROCHECK
 
@@ -35,7 +35,7 @@ pacchetti né, salvo `-ConLicenze` / `--con-licenze`, le chiavi; le sue immagini
 ## Installare e attivare PROCHECK e ProSA
 
 PROCHECK e ProSA II servono all'**analisi estesa** della qualità (Ramachandran di PROCHECK, profilo e z-score di ProSA).
-BioLoom funziona anche senza: l'analisi prosegue con DOPE, mkdssp, clash e le altre misure, e lo dice. Le licenze non
+MakPhi funziona anche senza: l'analisi prosegue con DOPE, mkdssp, clash e le altre misure, e lo dice. Le licenze non
 permettono di distribuirli, quindi né GitHub né la copia portatile li contengono: ognuno li ottiene per sé e li
 aggiunge alla propria immagine. I passi sono gli stessi su Windows, macOS e Linux; per il server vedi il punto 7.
 
@@ -44,10 +44,10 @@ aggiunge alla propria immagine. I passi sono gli stessi su Windows, macOS e Linu
      <https://www.ebi.ac.uk/thornton-srv/software/PROCHECK/>). Ricevi il pacchetto dei sorgenti, `procheck.tar.gz`;
      non c'è nessuna chiave.
    - **ProSA II 2003:** licenza personale da <https://prosa.services.came.sbg.ac.at>, legata all'indirizzo MAC di un
-     computer. Nella richiesta indica il MAC della scheda di rete del computer su cui userai BioLoom (su Windows
+     computer. Nella richiesta indica il MAC della scheda di rete del computer su cui userai MakPhi (su Windows
      `getmac /v` nel Prompt dei comandi, su macOS `ifconfig en0`, su Linux `ip link`: sono sei coppie di cifre come
      `80:b6:55:12:34:56`). Ricevi il programma, `prosa2003.linux.tar.gz`, e per email il file `LicenseDB`.
-2. **Metti i pacchetti nella cartella di BioLoom**, senza rinominarli e senza scompattarli:
+2. **Metti i pacchetti nella cartella di MakPhi**, senza rinominarli e senza scompattarli:
 
    | File | Cartella |
    |---|---|
@@ -56,22 +56,22 @@ aggiunge alla propria immagine. I passi sono gli stessi su Windows, macOS e Linu
 
    Il file `LicenseDB` **non** va qui: si carica dall'interfaccia (punto 4).
 3. **Ricostruisci l'immagine.** L'avviatore non si accorge dei pacchetti nuovi (la cartella `vendor/` è fuori
-   dall'impronta del codice), quindi la ricostruzione va lanciata a mano. Dalla cartella di BioLoom, in un terminale
+   dall'impronta del codice), quindi la ricostruzione va lanciata a mano. Dalla cartella di MakPhi, in un terminale
    (su Windows anche in PowerShell), con Docker Desktop avviato:
 
    ```bash
-   docker compose -f programma/launcher/compose.yml build bioloom
+   docker compose -f programma/launcher/compose.yml build makphi
    ```
 
    La prima volta richiede qualche minuto: PROCHECK si compila dai sorgenti. Se il pacchetto di PROCHECK non si compila,
    la costruzione si ferma con l'errore; un pacchetto assente invece viene saltato senza errori.
-4. **Carica la licenza di ProSA.** Riavvia BioLoom con l'avviatore (**R** nella sua finestra), apri Impostazioni →
+4. **Carica la licenza di ProSA.** Riavvia MakPhi con l'avviatore (**R** nella sua finestra), apri Impostazioni →
    **Licenze** e trascina il file `LicenseDB` nella scheda **ProSA II 2003**.
 5. **Riavvia ancora con l'avviatore (R).** È all'avvio che l'avviatore legge il MAC da `LicenseDB` e lo assegna al
    container, e lega la licenza a questo computer ([sotto](#prosa-un-computer-alla-volta)).
 6. **Verifica.**
    - Impostazioni → Licenze: la scheda **PROCHECK** dice «PROCHECK è installato»; la scheda **ProSA II 2003** mostra
-     programma, scadenza e «MAC del container … corrisponde». Se il MAC risulta «diverso», chiudi BioLoom e riaprilo con
+     programma, scadenza e «MAC del container … corrisponde». Se il MAC risulta «diverso», chiudi MakPhi e riaprilo con
      l'avviatore (punto 5); se compare «ProSA non è incluso in questa immagine», il pacchetto non era al suo posto quando
      hai ricostruito (punti 2 e 3).
    - Impostazioni → **Strumenti** → **Verifica dell'installazione**: prova ogni strumento, PROCHECK e ProSA compresi,
@@ -82,7 +82,7 @@ aggiunge alla propria immagine. I passi sono gli stessi su Windows, macOS e Linu
    si costruisce sul PC con i pacchetti al loro posto e la si copia sul server come archivio
    ([Server con Podman](5%20-%20Chiavetta%20e%20server.md#server-con-podman-senza-docker),
    [Licenze sul server](5%20-%20Chiavetta%20e%20server.md#licenze-sul-server)).
-8. **Quando aggiorni BioLoom.** Sostituendo `programma/` con una versione nuova (da GitHub o da una copia portatile),
+8. **Quando aggiorni MakPhi.** Sostituendo `programma/` con una versione nuova (da GitHub o da una copia portatile),
    la cartella `vendor/` arriva vuota: metti da parte i due pacchetti e rimettili prima di avviare, altrimenti la
    ricostruzione dell'immagine darà un'immagine senza PROCHECK e ProSA. Le licenze in `data/licenses/` invece restano.
 
@@ -93,7 +93,7 @@ contengono invece già installati, e anche loro non vanno date ad altri.
 ## ProSA, un computer alla volta
 
 La licenza di ProSA II vale per un singolo computer e vieta di cambiarne la configurazione per aggirarla, mentre la
-cartella dati di BioLoom può passare da un computer all'altro (chiavetta, copia portatile con `-ConLicenze` /
+cartella dati di MakPhi può passare da un computer all'altro (chiavetta, copia portatile con `-ConLicenze` /
 `--con-licenze`). Per questo l'avviatore applica il MAC di `LicenseDB` solo sul computer a cui la licenza è legata:
 
 - **Prima volta:** il primo computer che applica il MAC lega a sé la licenza nel file `data/licenses/prosa/computer`
@@ -106,14 +106,14 @@ cartella dati di BioLoom può passare da un computer all'altro (chiavetta, copia
 - **Spostare la licenza:** rispondi **s** alla domanda «Spostare la licenza ProSA su questo computer? [s/N]», che
   l'avviatore pone a ogni avvio (anche con **R**; Invio = no). Senza la finestra dell'avviatore (`-NoMenu` /
   `--no-menu`) e sul server si sposta con `-SpostaProsa` su Windows e `--sposta-prosa` su macOS, Linux e server
-  (`./avvia-bioloom.sh server --sposta-prosa`). Da quel momento la licenza vale qui, e l'altro computer al suo avvio la
+  (`./avvia-makphi.sh server --sposta-prosa`). Da quel momento la licenza vale qui, e l'altro computer al suo avvio la
   trova attiva altrove.
 - **Una licenza per computer:** in alternativa chiedi agli autori di ProSA una chiave per il nuovo computer e caricala da
   Impostazioni → Licenze.
 
 La riga **ProSA** nella finestra dell'avviatore dice quale caso vale: licenza attivata su questo computer, licenza di questo
 computer, licenza spostata su questo computer, licenza attiva su un altro computer (MAC non applicato), nessuna licenza.
-Sul server il controllo vale quando `BIOLOOM_MAC` in `server.env` è il MAC della licenza
+Sul server il controllo vale quando `MAKPHI_MAC` in `server.env` è il MAC della licenza
 ([Chiavetta e server](5%20-%20Chiavetta%20e%20server.md#licenze-sul-server)).
 
 ## Strumenti open source dell'immagine

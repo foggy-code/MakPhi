@@ -1,7 +1,7 @@
 import pytest
 
-from bioloom.core.errors import AppError
-from bioloom.domain import sequences
+from makphi.core.errors import AppError
+from makphi.domain import sequences
 from tests.conftest import HUMAN_UB, YEAST_UB
 
 

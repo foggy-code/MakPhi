@@ -86,7 +86,7 @@ function ModelDetail({ model: m, templates }: { model: ModelEntry; templates?: P
   ];
   if (q) {
     items.push(
-      { label: "Voto BioLoom", value: <span className="row" style={{ gap: 6 }}><Grade grade={q.grade} /> {fmtNum(q.grade_score, 1)}/100</span> },
+      { label: "Voto MakPhi", value: <span className="row" style={{ gap: 6 }}><Grade grade={q.grade} /> {fmtNum(q.grade_score, 1)}/100</span> },
       { label: "Ramachandran favorite", value: <Toned tone={favoredTone(q.rama_favored)}>{`${fmtNum(q.rama_favored)}%`}</Toned> },
       { label: "Ramachandran outlier", value: <Toned tone={outlierTone(q.rama_outliers)}>{`${fmtNum(q.rama_outliers)}%`}</Toned> },
       { label: "Clashscore", value: <Toned tone={clashTone(q.clashscore)}>{fmtNum(q.clashscore, 2)}</Toned> },
@@ -642,7 +642,7 @@ export default function Modeling() {
                       <div className="right row">
                         <TextFileButton accept=".txt,.csv,.tsv,.rsr" onText={loadRestraints}>Da file</TextFileButton>
                         {!!restraints.length && (
-                          <button type="button" className="btn btn-sm" onClick={() => downloadText("vincoli_bioloom.txt", formatRestraints(restraints))}><Icon name="download" size={13} /> Esporta</button>
+                          <button type="button" className="btn btn-sm" onClick={() => downloadText("vincoli_makphi.txt", formatRestraints(restraints))}><Icon name="download" size={13} /> Esporta</button>
                         )}
                         <button type="button" className="btn btn-sm" onClick={() => setRestraints([...restraints, { type: "helix", start: "", end: "" }])}><Icon name="plus" size={13} /> Vincolo</button>
                       </div>

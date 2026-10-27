@@ -16,11 +16,11 @@ import pytest
 from Bio.PDB.Atom import Atom
 from Bio.PDB.Residue import Residue
 
-from bioloom.config import UserSettings
-from bioloom.core import cache
-from bioloom.core.jobs import JobContext, ProcessResult
-from bioloom.domain import comparison, geometry, structure
-from bioloom.engines import align, tools
+from makphi.config import UserSettings
+from makphi.core import cache
+from makphi.core.jobs import JobContext, ProcessResult
+from makphi.domain import comparison, geometry, structure
+from makphi.engines import align, tools
 
 from .conftest import DATA, HUMAN_UB, wait_job
 

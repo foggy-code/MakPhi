@@ -11,8 +11,8 @@ import zipfile
 
 import pytest
 
-from bioloom.domain import fileformats, sequences
-from bioloom.services import pipeline as pipeline_service
+from makphi.domain import fileformats, sequences
+from makphi.services import pipeline as pipeline_service
 
 from .conftest import until, wait_job
 from .test_pipeline_cross import cross  # noqa: F401 (fixture)

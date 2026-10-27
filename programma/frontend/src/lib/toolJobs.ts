@@ -26,5 +26,5 @@ export function missingTools(info: SystemInfo | null | undefined, keys: string[]
 export function missingToolsText(missing: string[], purpose: string): string | null {
   if (!missing.length) return null;
   return `${purpose} non disponibile: ${missing.length === 1 ? "manca" : "mancano"} ${missing.join(", ")} in questa installazione. ` +
-    "fpocket, APBS, PDB2PQR, OpenMM e PDBFixer sono nell'immagine Docker aggiornata di BioLoom: ricostruiscila dall'avviatore.";
+    "fpocket, APBS, PDB2PQR, OpenMM e PDBFixer sono nell'immagine Docker aggiornata di MakPhi: ricostruiscila dall'avviatore.";
 }

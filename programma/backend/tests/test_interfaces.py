@@ -8,7 +8,7 @@ import time
 import numpy as np
 import pytest
 
-from bioloom.domain import conservation, interactions, interfaces, structure
+from makphi.domain import conservation, interactions, interfaces, structure
 
 from .conftest import DATA, HUMAN_UB
 

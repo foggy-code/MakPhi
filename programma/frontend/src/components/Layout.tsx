@@ -158,7 +158,7 @@ export function Layout() {
         <div className="brand">
           <span className="shell-mark"><img src="/favicon.svg" alt="" /></span>
           <div>
-            <b>BioLoom<span className="shell-version">v{info?.version ?? "4"}</span></b>
+            <b>MakPhi<span className="shell-version">v{info?.version ?? "4"}</span></b>
             <small>Modellazione per omologia</small>
           </div>
           <button type="button" className="btn btn-ghost btn-icon nav-close" onClick={() => setNavOpen(false)} aria-label="Chiudi il menu" title="Chiudi il menu (Esc)">
@@ -206,7 +206,7 @@ export function Layout() {
               </button>
             )}
             {info?.runtime?.allow_shutdown !== false && (
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAskShutdown(true)} title="Arresta BioLoom">
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAskShutdown(true)} title="Arresta MakPhi">
                 <Icon name="power" size={14} /> Esci
               </button>
             )}
@@ -305,7 +305,7 @@ export function Layout() {
       {projectsOpen && <ProjectsDialog onClose={() => setProjectsOpen(false)} />}
       {askLogoutAll && (
         <Confirm
-          text="Chiudere tutte le sessioni aperte con la chiave d'accesso, su ogni computer e browser, compresa questa? Chi usa BioLoom dovrà inserire di nuovo la chiave; i calcoli in corso continuano."
+          text="Chiudere tutte le sessioni aperte con la chiave d'accesso, su ogni computer e browser, compresa questa? Chi usa MakPhi dovrà inserire di nuovo la chiave; i calcoli in corso continuano."
           confirmLabel="Esci da tutti"
           onCancel={() => setAskLogoutAll(false)}
           onConfirm={() => {
@@ -321,12 +321,12 @@ export function Layout() {
       )}
       {askShutdown && (
         <Confirm
-          text={active > 0 ? `Ci sono ${active} job attivi: verranno interrotti. Arrestare BioLoom?` : "Arrestare BioLoom? Potrai riavviarlo con l'avviatore (Avvia BioLoom)."}
+          text={active > 0 ? `Ci sono ${active} job attivi: verranno interrotti. Arrestare MakPhi?` : "Arrestare MakPhi? Potrai riavviarlo con l'avviatore (Avvia MakPhi)."}
           confirmLabel="Arresta"
           onCancel={() => setAskShutdown(false)}
           onConfirm={() => {
             setAskShutdown(false);
-            api.shutdown().then(() => toast.push("BioLoom si sta arrestando. Puoi chiudere questa scheda.", "info")).catch(toast.error);
+            api.shutdown().then(() => toast.push("MakPhi si sta arrestando. Puoi chiudere questa scheda.", "info")).catch(toast.error);
           }}
         />
       )}

@@ -520,7 +520,7 @@ export function projectDeleteToast(name: string, r: ProjectDeleteResult, drained
   const freed = count(r.freed_bytes) + (drained?.freedBytes ?? 0);
   const leftover = count(r.leftover) + (drained?.leftover ?? 0);
   let text = `Progetto «${name}» eliminato${jobs || freed ? ` (${fmtInt(jobs)} job, ${fmtBytes(freed)} liberati)` : ""}.`;
-  if (r.replacement) text += ` Ne ho creato uno vuoto, «${r.replacement.name}»: BioLoom ne richiede almeno uno.`;
+  if (r.replacement) text += ` Ne ho creato uno vuoto, «${r.replacement.name}»: MakPhi ne richiede almeno uno.`;
   if (leftover > 0) text += ` ${leftoverText(leftover)}.`;
   return text;
 }

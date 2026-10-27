@@ -63,7 +63,7 @@ function GenerateDialog({ onClose, onDone }: { onClose: () => void; onDone: (pir
   );
 }
 
-const DOCS_PREF = "bioloom.pir.docs";
+const DOCS_PREF = "makphi.pir.docs";
 function readDocsPref(): boolean {
   try {
     return localStorage.getItem(DOCS_PREF) !== "0";

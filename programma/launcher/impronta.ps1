@@ -1,4 +1,4 @@
-﻿# Impronta del codice di BioLoom per l'avviatore di Windows (bioloom.ps1 la carica con dot-source). La definizione è
+﻿# Impronta del codice di MakPhi per l'avviatore di Windows (makphi.ps1 la carica con dot-source). La definizione è
 # quella di docker/impronta.sh, l'implementazione di riferimento, e la CI controlla che le due diano lo stesso valore:
 #   - radice: la cartella programma (il contesto della build Docker);
 #   - file regolari sotto backend/, frontend/ e docker/, esclusi i percorsi con un segmento che inizia con "."
@@ -12,7 +12,7 @@
 # Funziona con Windows PowerShell 5.1 e con pwsh 7 (anche su Linux, per la CI). I file si leggono a blocchi di byte:
 # vanno bene anche quelli grandi o binari.
 
-function Get-BioLoomImpronta([string]$Root) {
+function Get-MakPhiImpronta([string]$Root) {
     # impronta della cartella $Root (64 cifre esadecimali minuscole), $null se non si può calcolare
     $hex = { param([byte[]]$bytes) ([BitConverter]::ToString($bytes) -replace '-', '').ToLowerInvariant() }
     try {

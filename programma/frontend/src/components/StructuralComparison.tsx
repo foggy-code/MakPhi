@@ -113,7 +113,7 @@ function Metrics({ result }: { result: AlignResult }) {
         {gdt.length > 0 && (
           <Disclosure title="Cα di A entro ogni soglia (GDT)" extra={`${gdt.length} soglie`}>
             <div className="stack-sm">
-              <p>Per ogni soglia BioLoom cerca la sovrapposizione che porta più Cα di B entro quella distanza dal corrispondente di A.</p>
+              <p>Per ogni soglia MakPhi cerca la sovrapposizione che porta più Cα di B entro quella distanza dal corrispondente di A.</p>
               <div className="table-wrap">
                 <table className="table">
                   <thead><tr><th>Soglia</th><th className="num">Cα di A</th><th>Percentuale</th><th>Entra nel</th></tr></thead>
@@ -601,7 +601,7 @@ export function StructuralComparison({ jobId, result }: { jobId: string; result:
       {result.note && <Alert tone="info">{result.note}</Alert>}
       {comparisonOutdated(result) && (
         <Alert tone="info">
-          Confronto per residuo non disponibile: risultato di una versione precedente di BioLoom. Rilancia l'allineamento
+          Confronto per residuo non disponibile: risultato di una versione precedente di MakPhi. Rilancia l'allineamento
           (i risultati precedenti in cache vengono ricalcolati) per distanze, GDT e lDDT.
         </Alert>
       )}

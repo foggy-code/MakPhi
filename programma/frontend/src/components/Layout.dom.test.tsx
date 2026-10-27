@@ -110,7 +110,7 @@ describe("Esci da tutti i dispositivi (modalità server)", () => {
       if (method === "GET" && url.startsWith("/api/system/info")) return json(systemInfo({ auth: true }));
       if (method === "GET" && url.startsWith("/api/projects")) return json([]);
       if (method === "GET" && url.startsWith(JOBS)) return json([]);
-      if (method === "POST" && url === "/api/auth/logout-all") return json({ error: { code: "internal_error", message: "Errore interno (codice ab12cd34): i dettagli sono nel log di BioLoom." } }, 500);
+      if (method === "POST" && url === "/api/auth/logout-all") return json({ error: { code: "internal_error", message: "Errore interno (codice ab12cd34): i dettagli sono nel log di MakPhi." } }, 500);
       return undefined;
     });
     const required = vi.fn();

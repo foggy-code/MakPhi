@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import pytest
 
-from bioloom.config import UserSettings
-from bioloom.core.db import Database
-from bioloom.core.jobs import JobManager
-from bioloom.engines import procheck, tools
+from makphi.config import UserSettings
+from makphi.core.db import Database
+from makphi.core.jobs import JobManager
+from makphi.engines import procheck, tools
 
 from .conftest import DATA
 from .test_parallel_quality import run_job

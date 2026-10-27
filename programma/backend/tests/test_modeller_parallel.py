@@ -7,9 +7,9 @@ import time
 
 import pytest
 
-from bioloom.core.jobs import is_intermediate
-from bioloom.domain import preflight as rules
-from bioloom.engines import modeller
+from makphi.core.jobs import is_intermediate
+from makphi.domain import preflight as rules
+from makphi.engines import modeller
 
 from .conftest import YEAST_UB, requires_modeller, wait_job
 from .perf_serial_parallel import _superposed_ca_rmsd
@@ -31,21 +31,21 @@ def test_parallel_script_writes_module_and_worker():
     assert opts.parallel is True and modeller.parse_options({"parallel": False}).parallel is False
     serial = modeller.build_model_script(["T_A"], "t", opts)
     parallel = modeller.build_model_script(["T_A"], "t", opts, parallel=True)
-    assert "use_parallel_job" not in serial and "class BioLoomModel" in serial
+    assert "use_parallel_job" not in serial and "class MakPhiModel" in serial
     compile(parallel, "model.py", "exec")
     # la classe sta nel modulo importato dai worker, non nello script principale
     assert not any(ln.startswith("class ") for ln in parallel.splitlines())
-    assert "from bioloom_model import BioLoomModel" in parallel
+    assert "from makphi_model import MakPhiModel" in parallel
     assert "a.use_parallel_job(job)" in parallel and "out['workers'] = _bl_workers" in parallel
-    assert "os.environ['BIOLOOM_MODELLER_MASTER']" in parallel
+    assert "os.environ['MAKPHI_MODELLER_MASTER']" in parallel
     module, worker = _module_and_worker(parallel)
     compile(module, modeller.PARALLEL_MODULE, "exec")
     compile(worker, modeller.PARALLEL_WORKER, "exec")
-    assert "class BioLoomModel(DOPELoopModel)" in module and "secondary_structure.Alpha" in module
+    assert "class MakPhiModel(DOPELoopModel)" in module and "secondary_structure.Alpha" in module
     assert "def mark(text)" in module
     # il worker applica la licenza prima di importare MODELLER e, se fallisce, ferma lo script principale
     assert worker.startswith(modeller.tools.LICENSE_PREAMBLE)
-    assert "modworker import main" in worker and "@@BIOLOOM worker-failed" in worker and "SIGTERM" in worker
+    assert "modworker import main" in worker and "@@MAKPHI worker-failed" in worker and "SIGTERM" in worker
 
 
 def test_worker_files_are_intermediate():

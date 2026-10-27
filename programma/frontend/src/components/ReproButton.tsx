@@ -8,7 +8,7 @@ import { Spinner } from "./ui";
 
 /**
  * «Pacchetto riproducibile» (F9.4): ZIP del job con manifest (versioni, parametri, semi, checksum), input, output,
- * script MODELLER e LEGGIMI, da rieseguire con «Riesegui da pacchetto» o `python programma/bioloom.py rerun`. Solo per i job
+ * script MODELLER e LEGGIMI, da rieseguire con «Riesegui da pacchetto» o `python programma/makphi.py rerun`. Solo per i job
  * completati dei tipi che hanno un pacchetto.
  */
 export function ReproButton({ jobId, kind, status, compact = false }: { jobId: string; kind: string; status: string; compact?: boolean }) {

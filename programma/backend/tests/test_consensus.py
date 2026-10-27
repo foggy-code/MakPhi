@@ -6,9 +6,9 @@ import shutil
 
 import pytest
 
-from bioloom.domain import consensus, perresidue, plddt
-from bioloom.domain import procheck as procheck_parser
-from bioloom.engines import prosa, qmean_local, quality
+from makphi.domain import consensus, perresidue, plddt
+from makphi.domain import procheck as procheck_parser
+from makphi.engines import prosa, qmean_local, quality
 
 from .conftest import DATA, wait_job
 
@@ -341,7 +341,7 @@ XRAY_FROM_AF_CIF = (
 MODELLER_HEADER = (
     "EXPDTA    THEORETICAL MODEL, MODELLER 10.8 2026/09/27 10:40:27\n"
     "REMARK   6 MODELLER OBJECTIVE FUNCTION:       242.7604\n"
-    "REMARK 999 BIOLOOM TEMPLATE AF-P0CG47-F1_A ALPHAFOLD PLDDT<70 REMOVED 11\n"
+    "REMARK 999 MAKPHI TEMPLATE AF-P0CG47-F1_A ALPHAFOLD PLDDT<70 REMOVED 11\n"
 )
 AF_CIF = ("data_AF-P0CG47-F1\n_software.name AlphaFold\n_ma_qa_metric.id 1\n_ma_qa_metric.name pLDDT\nloop_\n"
           "_atom_site.group_PDB\n")
@@ -381,8 +381,8 @@ def test_experimental_structure_from_an_alphafold_starting_model(tmp_path):
 def test_library_quality_and_prepared_template_agree_on_alphafold_files(tmp_path):
     """Un solo riconoscimento: la libreria (modello predetto, ritaglio), il rapporto di qualità (pLDDT) e la copia
     del template preparata per MODELLER danno lo stesso esito sugli stessi file."""
-    from bioloom.engines import modeller
-    from bioloom.services.templates import TemplateLibrary
+    from makphi.engines import modeller
+    from makphi.services.templates import TemplateLibrary
 
     files = tmp_path / "files"
     files.mkdir()
@@ -504,7 +504,7 @@ def test_consensus_route_rejects_qmean_of_a_replaced_template(client, monkeypatc
 
 def test_consensus_route_needs_a_completed_qmean(client_with_ubq, monkeypatch):
     c = client_with_ubq
-    monkeypatch.delenv("BIOLOOM_QMEAN_URL", raising=False)  # nessun QMEAN: il job fallisce
+    monkeypatch.delenv("MAKPHI_QMEAN_URL", raising=False)  # nessun QMEAN: il job fallisce
     qjob = _run(c, "/api/quality", {"source": {"type": "template", "id": "1UBQ"}, "dope": False,
                                     "procheck": False, "prosa": False})
     failed = wait_job(c, c.post("/api/qmean", json={"source": {"type": "template", "id": "1UBQ"}}).json()["id"])

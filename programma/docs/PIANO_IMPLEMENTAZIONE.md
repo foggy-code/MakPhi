@@ -1,4 +1,4 @@
-# Piano di implementazione — evoluzione di BioLoom v4
+# Piano di implementazione — evoluzione di MakPhi
 
 Stato: **completato** — tutte le fasi F0–F9 sono realizzate. Lo stato finale di ognuna, con le differenze rispetto al
 piano e i motivi, è nella sezione [Avanzamento](#avanzamento); i limiti noti che restano sono in [Seguiti
@@ -15,7 +15,7 @@ stime di effort sono relative (S ≈ 1–2 giorni, M ≈ 3–5, L ≈ 1–2 sett
   arrivare a un motore o a una rotta.
 - **Funzionamento senza strumenti opzionali:** ogni funzione che richiede uno strumento esterno (OpenMM, fpocket,
   APBS, FoldX…) si rileva in `engines/tools.py` e degrada con un messaggio chiaro, come già avviene per ProSA/QMEAN.
-- **Docker resta l'unico ambiente:** nuovi strumenti nell'immagine `bioloom` solo se piccoli; quelli pesanti in
+- **Docker resta l'unico ambiente:** nuovi strumenti nell'immagine `makphi` solo se piccoli; quelli pesanti in
   profili compose separati (come `qmean`).
 - **Nessun dato inviato a servizi remoti senza opt-in** (regola già in vigore per SWISS-MODEL).
 
@@ -46,7 +46,7 @@ F1, F2 e F3 sono indipendenti e possono procedere in parallelo. F8 è l'ultima p
 | CI GitHub Actions | `pytest` (backend), `tsc --noEmit` + `vitest` (frontend), build Docker senza push |
 | Lint | `ruff` (backend, regole E4/E7/E9/F/B in `pyproject.toml`); nel frontend il controllo resta `tsc --noEmit` (ESLint non è installato) |
 | Dati di test | Aggiungere 1–2 strutture piccole oltre a 1UBQ (una multi-catena, una con ligando) in `backend/tests/data/` |
-| Esecuzione | `scripts/test.sh`: pytest nell'immagine di BioLoom (MODELLER reale) e test del frontend; i test di MODELLER si saltano da soli senza MODELLER (`requires_modeller`, già presente) |
+| Esecuzione | `scripts/test.sh`: pytest nell'immagine di MakPhi (MODELLER reale) e test del frontend; i test di MODELLER si saltano da soli senza MODELLER (`requires_modeller`, già presente) |
 
 **Accettazione:** CI verde su `main`; un PR che rompe un test viene bloccato.
 
@@ -173,7 +173,7 @@ Suddivisa in sotto-PR indipendenti, dalla più semplice.
 
 ## F6 — Qualità con consenso (S–M)
 
-- `domain/consensus.py`: combina grade BioLoom, DOPE, GA341, QMEAN, ProSA, PROCHECK in un punteggio 0–100 con pesi
+- `domain/consensus.py`: combina grade MakPhi, DOPE, GA341, QMEAN, ProSA, PROCHECK in un punteggio 0–100 con pesi
   dichiarati (nel modulo, con test) e indica quali metodi discordano.
 - `Quality.tsx`: grafico per residuo sovrapposto dei metodi disponibili; testo esplicativo generato dalla
   discordanza ("DOPE segnala il loop 40–52, Ramachandran no").
@@ -223,7 +223,7 @@ Tutti come job `analysis` opzionali, con strumento rilevato o messaggio di indis
 
 **9.4 Riproducibilità**
 - Esportazione guidata di `params.json` + script MODELLER completo + versione degli strumenti in un archivio; un
-  comando `bioloom rerun <archivio>` in `bioloom.py`.
+  comando `makphi rerun <archivio>` in `makphi.py`.
 
 ---
 
@@ -298,7 +298,7 @@ sono nelle sezioni di [ARCHITETTURA.md](ARCHITETTURA.md).
 | F9.1 | fatto | Rifinitura con OpenMM e PDBFixer in un processo separato (`engines/refine_worker.py`), restrizioni sulla catena principale, dinamica facoltativa, confronto prima/dopo | Solvente implicito OBC2 invece di GBn2, molto più lento sulla CPU; strumenti nell'immagine principale (circa 140 MB in più in tutto) invece che in un profilo separato |
 | F9.2 | fatto | Mutagenesi e scansione di alanina con MODELLER (protocollo `mutate_model` esteso ai vicini entro 5 Å), stima qualitativa dell'effetto con indicatori dichiarati, energia facoltativa con OpenMM, varianti di UniProt | Nessun ΔΔG: FoldX e Rosetta non sono ridistribuibili, e la stima resta qualitativa con l'avvertenza. Varianti da UniProt (naturali, di malattia, di mutagenesi), non da ClinVar |
 | F9.3 | fatto | Confronto con ESMFold (consenso esplicito, indirizzo configurabile, fino a 400 residui) o con il modello di AlphaFold DB; TM-score, lDDT per residuo, regioni divergenti incrociate con il pLDDT e il consenso | In più rispetto al piano: AlphaFold DB come seconda sorgente e l'accordo nel consenso e nel report |
-| F9.4 | fatto | Pacchetti riproducibili (manifest con versioni, parametri, semi, checksum), riesecuzione da interfaccia (`/rerun`) e con `python bioloom.py rerun`, confronto dei risultati | Esito «compatibile» in più per il rumore di OpenMM su più thread (tolleranze scientifiche dichiarate), distinto da «equivalente» (tolleranze numeriche). Ricerca, QMEAN e predizione hanno il pacchetto ma non si rieseguono (dipendono da servizi remoti) |
+| F9.4 | fatto | Pacchetti riproducibili (manifest con versioni, parametri, semi, checksum), riesecuzione da interfaccia (`/rerun`) e con `python makphi.py rerun`, confronto dei risultati | Esito «compatibile» in più per il rumore di OpenMM su più thread (tolleranze scientifiche dichiarate), distinto da «equivalente» (tolleranze numeriche). Ricerca, QMEAN e predizione hanno il pacchetto ma non si rieseguono (dipendono da servizi remoti) |
 
 **Dopo le fasi: gestione dello spazio.** Eliminazione dei progetti e pulizia dei job, per non accumulare file inutili
 (fuori dalla tabella, che è per fasi; funzionamento in
@@ -330,7 +330,7 @@ sono nelle sezioni di [ARCHITETTURA.md](ARCHITETTURA.md).
 Nessuna migrazione dello schema; test in `test_cleanup.py` (98) e in quattro file del frontend (65).
 
 Rischi trasversali: FoldX e Rosetta sono esclusi perché le loro licenze non sono ridistribuibili; l'immagine cresce di
-circa 140 MB per fpocket, APBS, PDB2PQR, OpenMM e PDBFixer (`bioloom:4.1.0` 869 MB, immagine di sviluppo 1,04 GB);
+circa 140 MB per fpocket, APBS, PDB2PQR, OpenMM e PDBFixer (`makphi:4.1.0` 869 MB, immagine di sviluppo 1,04 GB);
 l'unica migrazione dello schema è quella delle etichette (`priority` e `interrupted` non sono servite), con la copia di
 sicurezza automatica; i servizi remoti hanno cache, timeout e consenso dove inviano sequenze o coordinate.
 
@@ -340,9 +340,9 @@ Limiti noti dichiarati nel codice e in [ARCHITETTURA.md](ARCHITETTURA.md), da cu
 
 **Installazione e verifica**
 
-- L'immagine `bioloom:4.1.0` dell'avviatore non contiene fpocket, APBS, PDB2PQR, OpenMM e PDBFixer: tasche,
+- L'immagine `makphi:4.1.0` dell'avviatore non contiene fpocket, APBS, PDB2PQR, OpenMM e PDBFixer: tasche,
   elettrostatica e rifinitura funzionano dopo averla ricostruita (avviatore o `docker compose -f launcher/compose.yml
-  build`); i loro test girano nell'immagine di sviluppo `bioloom:dev`.
+  build`); i loro test girano nell'immagine di sviluppo `makphi:dev`.
 - Un calcolo QMEAN locale completo non è stato verificato sul PC di sviluppo (5,7 GB per Docker contro i 12 richiesti da
   UniRef30_2020_06): ricerca dei database, vista, copia locale e avvio di HHblits sì.
 - Sui Mac Apple Silicon i container girano in emulazione x86 (MODELLER, ProSA e QMEAN esistono solo per x86).
@@ -363,11 +363,11 @@ Limiti noti dichiarati nel codice e in [ARCHITETTURA.md](ARCHITETTURA.md), da cu
 - La ridondanza fra template è di sola sequenza; un filtro strutturale (TM-score fra i candidati) richiederebbe di
   scaricarli tutti.
 - Due frammenti dello stesso file caricati come template diversi ricevono l'avviso di orientamento non vincolato anche se
-  condividono le coordinate: BioLoom non può saperlo.
+  condividono le coordinate: MakPhi non può saperlo.
 - Ligandi: i gruppi di una catena senza residui proteici non si trasferiscono; il carbonio non è considerato donatore (CO
   e CN⁻ legati al ferro dell'eme risultano scontri); i codici minuscoli di `restyp.lib` in un PIR dell'utente si leggono
   come amminoacidi; il raffinamento dei loop non legge gli HETATM, quindi i ligandi non passano ai modelli di loop. Le
-  distanze attese per Ser/Thr/Tyr e Met sono scelte di BioLoom non verificate su una fonte, e i valori per residuo di
+  distanze attese per Ser/Thr/Tyr e Met sono scelte di MakPhi non verificate su una fonte, e i valori per residuo di
   Bazayeva et al. 2024 non sono stati consultati.
 - Complessi: un solo template per complesso, da 2 a 12 catene e al più 3000 residui; gli avvisi di copertura non si
   calcolano nella modalità Complesso né per i PIR a più catene; DockQ misura la fedeltà all'interfaccia del template, non
@@ -405,7 +405,7 @@ Limiti noti dichiarati nel codice e in [ARCHITETTURA.md](ARCHITETTURA.md), da cu
 - Eliminazione automatica dei risultati dei job per età, disattivata per impostazione predefinita: oggi i risultati si
   eliminano solo a mano.
 - Cestino o annullamento dell'eliminazione: un job o un progetto eliminato non si recupera.
-- VACUUM e checkpoint del WAL dopo una pulizia grande: `bioloom.db` non si restringe, e un VACUUM richiede circa il
+- VACUUM e checkpoint del WAL dopo una pulizia grande: `makphi.db` non si restringe, e un VACUUM richiede circa il
   doppio dello spazio del database e blocca l'unica connessione per tutta la sua durata.
 - Una voce manuale, con anteprima, per le cartelle `jobs/<id>` già senza riga (eliminazioni non riuscite, copie
   parziali della cartella dati): nessuna scansione automatica, perché con un database perso o ripristinato sembrerebbero
