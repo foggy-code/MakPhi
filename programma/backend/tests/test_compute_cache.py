@@ -12,11 +12,11 @@ from pathlib import Path
 
 import pytest
 
-from bioloom.config import SettingsStore, UserSettings
-from bioloom.core import cache
-from bioloom.core.errors import AppError, RemoteServiceError
-from bioloom.core.jobs import JobContext, ProcessResult
-from bioloom.engines import align, remote, search, tools
+from makphi.config import SettingsStore, UserSettings
+from makphi.core import cache
+from makphi.core.errors import AppError, RemoteServiceError
+from makphi.core.jobs import JobContext, ProcessResult
+from makphi.engines import align, remote, search, tools
 
 from .conftest import HUMAN_UB, YEAST_UB, wait_job
 from .test_search import BLAST_XML
@@ -506,7 +506,7 @@ def test_selftest_always_runs_the_tools(monkeypatch, tmp_path):
     """La verifica dell'installazione non deve mai rispondere con un risultato dalla cache."""
     from types import SimpleNamespace
 
-    from bioloom.services.selftest import SelfTestService
+    from makphi.services.selftest import SelfTestService
 
     seen = []
 

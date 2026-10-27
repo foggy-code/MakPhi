@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import "@fontsource-variable/inter";
 import "./styles.css";
 import { App } from "./App";
+import { migrateLegacyKeys } from "./lib/legacyStorage";
 import { initialTheme } from "./lib/theme";
 
 // tema prima del primo render (scuro, chiaro o quello del sistema), senza lampi dell'altro tema
@@ -14,6 +15,7 @@ try {
 } catch {
   storage = null;
 }
+migrateLegacyKeys(storage); // preferenze salvate da BioLoom (fino alla 4.4.0)
 document.documentElement.dataset.theme = initialTheme(storage);
 
 createRoot(document.getElementById("root")!).render(

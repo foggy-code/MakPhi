@@ -114,7 +114,7 @@ export default function SettingsPage() {
                     // modifica. Il campo c'è solo in esecuzione nativa, dove server.env non conta (lo leggono gli avviatori dei
                     // container): la nota nomina la variabile d'ambiente, come il messaggio del backend (MODELLER_PYTHON_LOCKED)
                     <Field label="Interprete Python con MODELLER (esecuzione nativa)" hint={info?.runtime?.auth
-                      ? "In modalità server lo imposta l'amministratore sul server (variabile d'ambiente BIOLOOM_MODELLER_PYTHON); vuoto = rilevamento automatico."
+                      ? "In modalità server lo imposta l'amministratore sul server (variabile d'ambiente MAKPHI_MODELLER_PYTHON); vuoto = rilevamento automatico."
                       : "Lascia vuoto per usare quello del server."}>
                       <div className="row">
                         <input className="input mono" style={{ flex: 1 }} value={form.modeller_python} onChange={(e) => set("modeller_python", e.target.value)} placeholder="(automatico)"
@@ -214,7 +214,7 @@ export default function SettingsPage() {
                     EBI solo l'accessione UniProt.
                   </p>
                   <Field label="Indirizzo del servizio ESMFold" hint={info?.runtime?.auth
-                    ? "In modalità server lo imposta l'amministratore sul server (BIOLOOM_ESMFOLD_URL in server.env); vuoto = API pubblica di ESM Atlas."
+                    ? "In modalità server lo imposta l'amministratore sul server (MAKPHI_ESMFOLD_URL in server.env); vuoto = API pubblica di ESM Atlas."
                     : `Vuoto = API pubblica di ESM Atlas (${ESMFOLD_PUBLIC_URL}). Un altro servizio deve accettare la sequenza in POST e rispondere con un PDB, come quello pubblico.`}>
                     <input className="input mono" value={form.esmfold_url} maxLength={300} onChange={(e) => set("esmfold_url", e.target.value)} placeholder={ESMFOLD_PUBLIC_URL} readOnly={!!info?.runtime?.auth} />
                   </Field>

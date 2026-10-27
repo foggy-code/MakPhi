@@ -80,7 +80,7 @@ export class ApiError extends Error {
 }
 
 /** `signal` annulla la richiesta (l'AbortError arriva a chi chiama così com'è); `text` legge la risposta come testo anche
- * se il server la dichiara JSON (file di struttura): gli errori restano quelli JSON di BioLoom. */
+ * se il server la dichiara JSON (file di struttura): gli errori restano quelli JSON di MakPhi. */
 interface RequestOptions {
   signal?: AbortSignal;
   text?: boolean;
@@ -101,7 +101,7 @@ async function request<T>(method: string, path: string, body?: unknown, isForm =
     resp = await fetch(path, init);
   } catch (err) {
     if (opts.signal?.aborted) throw err; // annullata da chi chiama: non è un server irraggiungibile
-    throw new ApiError("Server BioLoom non raggiungibile. È ancora in esecuzione?", 0, "network");
+    throw new ApiError("Server MakPhi non raggiungibile. È ancora in esecuzione?", 0, "network");
   }
   const type = resp.headers.get("content-type") || "";
   const json = type.includes("application/json") && (!resp.ok || !opts.text);
@@ -120,7 +120,7 @@ async function requestFile(path: string, body: unknown, fallback: string): Promi
   try {
     resp = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
   } catch {
-    throw new ApiError("Server BioLoom non raggiungibile. È ancora in esecuzione?", 0, "network");
+    throw new ApiError("Server MakPhi non raggiungibile. È ancora in esecuzione?", 0, "network");
   }
   if (!resp.ok) {
     const json = (resp.headers.get("content-type") || "").includes("application/json");
@@ -138,7 +138,7 @@ async function downloadFile(path: string, fallback: string): Promise<ReportFile>
   try {
     resp = await fetch(path);
   } catch {
-    throw new ApiError("Server BioLoom non raggiungibile. È ancora in esecuzione?", 0, "network");
+    throw new ApiError("Server MakPhi non raggiungibile. È ancora in esecuzione?", 0, "network");
   }
   if (!resp.ok) {
     const json = (resp.headers.get("content-type") || "").includes("application/json");
@@ -151,7 +151,7 @@ async function downloadFile(path: string, fallback: string): Promise<ReportFile>
 }
 
 /** Evento globale: il server (modalità server) richiede la chiave d'accesso. */
-export const AUTH_EVENT = "bioloom:auth-required";
+export const AUTH_EVENT = "makphi:auth-required";
 
 export function notifyAuthRequired() {
   window.dispatchEvent(new CustomEvent(AUTH_EVENT));
@@ -433,7 +433,7 @@ export const api = {
   packageUrl: (id: string) => `/api/jobs/${enc(id)}/package`,
   /** pacchetto ZIP di un job completato (manifest, input, output, script, LEGGIMI), da salvare */
   downloadPackage: (id: string): Promise<ReportFile> =>
-    downloadFile(api.packageUrl(id), `bioloom_riproducibile_${id}.zip`),
+    downloadFile(api.packageUrl(id), `makphi_riproducibile_${id}.zip`),
   /** carica e verifica un pacchetto: anteprima del manifest con `package_id` (conservato 24 ore) */
   inspectPackage: (file: File) => {
     const form = new FormData();

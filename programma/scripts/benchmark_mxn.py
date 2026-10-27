@@ -7,14 +7,14 @@ del cgroup vale per tutta la vita del container.
 
     python /src/scripts/benchmark_mxn.py --parallel 2 --sequences 2 --templates 6 --out /out/p2.json
 
-Esempio completo (dalla cartella di BioLoom, Linux; chiave di MODELLER in data/licenses/modeller.key; la licenza ProSA,
+Esempio completo (dalla cartella di MakPhi, Linux; chiave di MODELLER in data/licenses/modeller.key; la licenza ProSA,
 se c'è, si legge da /hostdata/licenses/prosa):
 
-    docker run --rm --init -e MODELLER_KEY="$(cat data/licenses/modeller.key)" -e PYTHONPATH=/src/backend       -v "$PWD/programma:/src:ro" -v "$PWD/data:/hostdata:ro" -v "$PWD/bench_out:/out"       --entrypoint sh "bioloom:$(tr -d '[:space:]' < programma/launcher/VERSION)" -c 'mkdir -p /scratch/tmp /scratch/home && exec python       /src/scripts/benchmark_mxn.py "$@"' sh --parallel 16 --sequences 8 --templates 6 --extended       --template-file /hostdata/templates/3IU0.pdb --template-file /hostdata/templates/1IU4.pdb       --sequence MYTRSK... --out /out/p16.json
+    docker run --rm --init -e MODELLER_KEY="$(cat data/licenses/modeller.key)" -e PYTHONPATH=/src/backend       -v "$PWD/programma:/src:ro" -v "$PWD/data:/hostdata:ro" -v "$PWD/bench_out:/out"       --entrypoint sh "makphi:$(tr -d '[:space:]' < programma/launcher/VERSION)" -c 'mkdir -p /scratch/tmp /scratch/home && exec python       /src/scripts/benchmark_mxn.py "$@"' sh --parallel 16 --sequences 8 --templates 6 --extended       --template-file /hostdata/templates/3IU0.pdb --template-file /hostdata/templates/1IU4.pdb       --sequence MYTRSK... --out /out/p16.json
 
 Per una stima affidabile: prima `--parallel 1` (CPU per coppia su un core), poi il parallelismo previsto con almeno
 due coppie per corsia (`--sequences` × `--templates` ≥ 2 × `--parallel`). Nel risultato `main_process_cpu_per_pair_s`
-è la CPU del processo di BioLoom per coppia (la parte limitata dal GIL), `cpu_per_pair_s` quella totale.
+è la CPU del processo di MakPhi per coppia (la parte limitata dal GIL), `cpu_per_pair_s` quella totale.
 
 Template: copie di file PDB locali (--template-file, ripetibile) caricate con identificativi diversi (T1, T2, …),
 così le coppie sono tutte distinte. Sequenze: la sequenza di riferimento con il 5 % di mutazioni casuali (seme fisso).
@@ -34,8 +34,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from bioloom.app import create_app
-from bioloom.config import Paths
+from makphi.app import create_app
+from makphi.config import Paths
 
 AA = "ACDEFGHIKLMNPQRSTVWY"
 CG = Path("/sys/fs/cgroup")
@@ -60,7 +60,7 @@ def du(path: Path) -> int:
 
 
 def db_size(data: Path) -> int:
-    return sum(f.stat().st_size for f in data.glob("bioloom.db*"))
+    return sum(f.stat().st_size for f in data.glob("makphi.db*"))
 
 
 def by_ext(path: Path) -> dict:
@@ -159,7 +159,7 @@ def main() -> None:
                 break
             time.sleep(2)
         wall, cpu = time.time() - t0, (cpu_usec() - cpu0) / 1e6
-        own = time.process_time() - own0  # CPU del processo di BioLoom (Python, GIL), senza i sottoprocessi
+        own = time.process_time() - own0  # CPU del processo di MakPhi (Python, GIL), senza i sottoprocessi
         sampler.stop.set()
         items = client.get(f"/api/pipeline/{job_id}/items?size=500").json()["items"]
         from datetime import datetime

@@ -9,8 +9,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from bioloom.core.errors import AppError
-from bioloom.domain import assembly, geometry, interfaces, structure
+from makphi.core.errors import AppError
+from makphi.domain import assembly, geometry, interfaces, structure
 from tests.conftest import DATA
 
 UBQ_ATOMS = [ln for ln in (DATA / "1UBQ.pdb").read_text(encoding="utf-8").splitlines() if ln.startswith("ATOM")]
@@ -45,7 +45,7 @@ def make_mmcif(ops: list, assemblies: list[tuple[str, str, str, int]], gens: lis
                auth_chain: str = "A") -> str:
     """mmCIF sintetico: 1UBQ (asym A, catena dell'autore `auth_chain`) più due acque (asym B, stessa catena
     dell'autore, come nei file del PDB), con gli assemblaggi e gli operatori indicati."""
-    lines = ["data_TEST", "#", "_struct.title 'SYNTHETIC UBIQUITIN C2 ASSEMBLY (BIOLOOM TESTS)'",
+    lines = ["data_TEST", "#", "_struct.title 'SYNTHETIC UBIQUITIN C2 ASSEMBLY (MAKPHI TESTS)'",
              "_exptl.method 'X-RAY DIFFRACTION'", "#", "loop_"]
     lines += [f"_atom_site.{k}" for k in (
         "group_PDB", "id", "type_symbol", "label_atom_id", "label_alt_id", "label_comp_id", "label_asym_id",
@@ -274,7 +274,7 @@ def test_generated_pdb_text_and_interface(tmp_path):
     text, chains = assembly.pdb_text(_load(path), info, assembly.find(info, "1"), source_id="C2UBQ", header=header)
     assert text.startswith("HEADER    BIOLOGICAL ASSEMBLY 1 OF C2UBQ")
     assert "EXPDTA    X-RAY DIFFRACTION" in text and "TITLE     SYNTHETIC UBIQUITIN C2 ASSEMBLY" in text
-    assert "REMARK 999 BIOLOOM ASSEMBLY CHAIN B FROM A OPERATOR 2" in text
+    assert "REMARK 999 MAKPHI ASSEMBLY CHAIN B FROM A OPERATOR 2" in text
     assert chains == [{"chain": "A", "source": "A", "operator": "1", "identity": True, "protein": True},
                       {"chain": "B", "source": "A", "operator": "2", "identity": False, "protein": True}]
     out = tmp_path / "asm.pdb"
@@ -353,7 +353,7 @@ def test_assembly_route_errors(client, tmp_path):
 def test_assembly_template_ids_are_never_truncated():
     """`<ID>_ASM<n>` senza troncamento: con un id lungo gli assemblaggi 1 e 10 restano distinti (normalize_id li
     tagliava a 40 caratteri e li faceva coincidere) e l'id non coincide con quello d'origine."""
-    from bioloom.services.templates import MAX_ID, assembly_template_id
+    from makphi.services.templates import MAX_ID, assembly_template_id
 
     assert assembly_template_id("C2UBQ", "1") == "C2UBQ_ASM1"
     tid35 = "A" * 35

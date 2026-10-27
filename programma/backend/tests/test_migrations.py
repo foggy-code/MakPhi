@@ -14,10 +14,10 @@ import threading
 import pytest
 from fastapi.testclient import TestClient
 
-from bioloom.app import create_app
-from bioloom.config import Paths
-from bioloom.core import db as db_module
-from bioloom.core.db import BACKUP_DIR, Database, DatabaseInUse, Migration, MigrationError
+from makphi.app import create_app
+from makphi.config import Paths
+from makphi.core import db as db_module
+from makphi.core.db import BACKUP_DIR, Database, DatabaseInUse, Migration, MigrationError
 
 from .conftest import HUMAN_UB, YEAST_UB
 
@@ -91,7 +91,7 @@ def stored_version(path) -> str:
 
 @pytest.fixture
 def v1(tmp_path):
-    path = tmp_path / "data" / "bioloom.db"
+    path = tmp_path / "data" / "makphi.db"
     make_v1_database(path)
     reference = tmp_path / "reference.db"
     shutil.copyfile(path, reference)
@@ -125,7 +125,7 @@ def test_migration_v1_to_v2_keeps_data_and_backs_up(v1):
     assert dump(path) == before  # nessuna riga persa né cambiata
     # copia di sicurezza: schema 1, stessi dati, integra
     assert backup is not None and backup.parent == path.parent / BACKUP_DIR and backup.exists()
-    assert backup.name.startswith("bioloom.schema1.") and backup.suffix == ".db"
+    assert backup.name.startswith("makphi.schema1.") and backup.suffix == ".db"
     assert stored_version(backup) == "1" and dump(backup) == before
     assert ("table", "tags") not in schema_objects(backup)
     assert not list(backup.parent.glob(".*.tmp"))  # nessun file temporaneo lasciato
@@ -134,9 +134,9 @@ def test_migration_v1_to_v2_keeps_data_and_backs_up(v1):
 def test_backup_includes_rows_still_in_the_wal(tmp_path):
     """Arresto brusco della versione 1: le righe sono solo nel WAL. La copia (API di backup) le contiene, una copia
     del solo file principale no."""
-    path = tmp_path / "data" / "bioloom.db"
+    path = tmp_path / "data" / "makphi.db"
     make_v1_database(path, wal_only=True)
-    assert (path.parent / "bioloom.db-wal").stat().st_size > 0
+    assert (path.parent / "makphi.db-wal").stat().st_size > 0
     main_only = tmp_path / "main_only.db"
     shutil.copyfile(path, main_only)
     conn = sqlite3.connect(str(main_only))
@@ -169,7 +169,7 @@ def test_reopening_is_idempotent(v1):
 
 
 def test_migration_reapplied_after_old_version_reset_schema_version(v1):
-    """La versione 1 di BioLoom riscriveva schema_version=1 a ogni avvio: aperta dopo la 2, il database torna
+    """La versione 1 di MakPhi riscriveva schema_version=1 a ogni avvio: aperta dopo la 2, il database torna
     "versione 1" con le tabelle nuove già presenti. La migrazione riparte senza errori e senza perdere etichette."""
     path, before = v1
     db = Database(path)
@@ -205,7 +205,7 @@ def test_failed_migration_leaves_database_unchanged(v1, monkeypatch):
     objects = schema_objects(path)
     assert ("table", "tags") not in objects and ("table", "favorites") not in objects
     assert dump(path) == before
-    assert len(list((path.parent / BACKUP_DIR).glob("bioloom.schema1.*.db"))) == 1
+    assert len(list((path.parent / BACKUP_DIR).glob("makphi.schema1.*.db"))) == 1
     # con le migrazioni vere il database si aggiorna
     monkeypatch.setattr(db_module, "MIGRATIONS", (real,))
     db = Database(path)
@@ -242,7 +242,7 @@ def test_no_migration_without_backup(v1):
 
 
 def test_new_database_needs_no_backup(tmp_path):
-    db = Database(tmp_path / "data" / "bioloom.db")
+    db = Database(tmp_path / "data" / "makphi.db")
     try:
         assert db.schema_version() == 2 and db.backup is None
         assert db.migrated == [(2, "etichette e preferiti")]

@@ -12,7 +12,7 @@ import { cancelAndSync, type JobSync, recordStatus, resumeAndSync } from "./stat
 const WATCH_RESUMABLE_MS = 5000;
 
 /** Evento: licenze o configurazione cambiate (la barra laterale e gli avvisi si aggiornano). */
-export const SYSTEM_CHANGED = "bioloom:system-changed";
+export const SYSTEM_CHANGED = "makphi:system-changed";
 
 export function notifySystemChanged() {
   window.dispatchEvent(new CustomEvent(SYSTEM_CHANGED));

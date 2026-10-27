@@ -1,7 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
-// Ogni pagina dell'interfaccia in Chromium, servita da una BioLoom vera (playwright.config.ts): si carica senza errori
+// Ogni pagina dell'interfaccia in Chromium, servita da una MakPhi vera (playwright.config.ts): si carica senza errori
 // nella console, ha il suo titolo e nessuna violazione WCAG 2.1 A/AA grave o critica secondo axe-core, in tema scuro
 // (il predefinito) e chiaro. Le violazioni minori e moderate si stampano, senza far fallire il test.
 
@@ -23,10 +23,10 @@ const PAGINE: [string, string][] = [
 ];
 
 async function accedi(page: Page) {
-  const key = process.env.BIOLOOM_ACCESS_KEY;
+  const key = process.env.MAKPHI_ACCESS_KEY;
   if (key) {
     const r = await page.request.post("/api/auth/login", { data: { key } });
-    expect(r.ok(), "login con BIOLOOM_ACCESS_KEY").toBeTruthy();
+    expect(r.ok(), "login con MAKPHI_ACCESS_KEY").toBeTruthy();
   }
 }
 
@@ -34,7 +34,7 @@ for (const theme of ["dark", "light"] as const) {
   test.describe(`tema ${theme === "dark" ? "scuro" : "chiaro"}`, () => {
     test.beforeEach(async ({ page }) => {
       await accedi(page);
-      await page.addInitScript((t) => window.localStorage.setItem("bioloom.theme", JSON.stringify(t)), theme);
+      await page.addInitScript((t) => window.localStorage.setItem("makphi.theme", JSON.stringify(t)), theme);
     });
 
     for (const [path, nome] of PAGINE) {

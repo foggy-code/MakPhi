@@ -1,10 +1,10 @@
 # Avvisi di terze parti
 
-BioLoom è © 2026 foggy02 e ha licenza MIT ([LICENSE](LICENSE)): il codice in `programma/` (backend, interfaccia web,
+MakPhi è © 2026 foggy02 e ha licenza MIT ([LICENSE](LICENSE)): il codice in `programma/` (backend, interfaccia web,
 avviatori, script, Dockerfile e worker di QMEAN in `programma/docker/qmean/`), la guida e gli avviatori nella cartella
 principale.
 
-BioLoom distribuisce anche software di terzi: nelle immagini Docker `bioloom` e `bioloom-qmean` (costruite
+MakPhi distribuisce anche software di terzi: nelle immagini Docker `makphi` e `makphi-qmean` (costruite
 dall'avviatore o salvate in `immagini/` nella copia portatile) e nell'interfaccia web. Ogni componente resta sotto la
 propria licenza, che qui è solo riassunta: fa fede il testo del componente. Le licenze sono indicate con gli
 identificativi [SPDX](https://spdx.org/licenses/); `LicenseRef-…` indica una licenza senza identificativo SPDX.
@@ -12,47 +12,47 @@ identificativi [SPDX](https://spdx.org/licenses/); `LicenseRef-…` indica una l
 Le versioni dei pacchetti Python, dei programmi compilati e dell'interfaccia sono fissate (Dockerfile,
 `requirements*.lock`, `package-lock.json`); quelle dei pacchetti di Ubuntu no: sono le versioni rilevate il 10 ottobre
 2026 in un'immagine costruita con lo stesso Dockerfile (cambiano solo versione e impronta) e la revisione Ubuntu può
-cambiare a ogni ricostruzione. L'elenco esatto di un'immagine si ottiene così (dalla cartella di BioLoom; su Git Bash
+cambiare a ogni ricostruzione. L'elenco esatto di un'immagine si ottiene così (dalla cartella di MakPhi; su Git Bash
 per Windows anteporre `MSYS_NO_PATHCONV=1` ai comandi `docker`; `tr` toglie l'a capo e il CR che `VERSION` ha in una
 cartella venuta da Windows):
 
 ```bash
 V=$(tr -d '[:space:]' < programma/launcher/VERSION)
-docker run --rm --platform linux/amd64 --entrypoint dpkg-query "bioloom:$V" -W -f='${Package} ${Version} ${source:Package} ${source:Version}\n'
-docker run --rm --platform linux/amd64 --entrypoint /opt/venv/bin/pip "bioloom:$V" list
-docker run --rm --platform linux/amd64 --entrypoint rpm "bioloom-qmean:$V" -qa --qf '%{NAME} %{VERSION}-%{RELEASE} %{LICENSE} %{SOURCERPM}\n'
+docker run --rm --platform linux/amd64 --entrypoint dpkg-query "makphi:$V" -W -f='${Package} ${Version} ${source:Package} ${source:Version}\n'
+docker run --rm --platform linux/amd64 --entrypoint /opt/venv/bin/pip "makphi:$V" list
+docker run --rm --platform linux/amd64 --entrypoint rpm "makphi-qmean:$V" -qa --qf '%{NAME} %{VERSION}-%{RELEASE} %{LICENSE} %{SOURCERPM}\n'
 ```
 
 1. [Software non open source](#1-software-non-open-source)
-2. [Immagine bioloom](#2-immagine-bioloom)
-3. [Immagine bioloom-qmean](#3-immagine-bioloom-qmean)
+2. [Immagine makphi](#2-immagine-makphi)
+3. [Immagine makphi-qmean](#3-immagine-makphi-qmean)
 4. [Interfaccia web](#4-interfaccia-web)
 5. [Software GPL e LGPL: sorgente corrispondente](#5-software-gpl-e-lgpl-sorgente-corrispondente)
 6. [Testi delle licenze](#6-testi-delle-licenze)
 
 ## 1. Software non open source
 
-Programmi con licenze accademiche o proprietarie: BioLoom li usa, ma non può concederli in licenza ad altri.
+Programmi con licenze accademiche o proprietarie: MakPhi li usa, ma non può concederli in licenza ad altri.
 
 | Programma | Dove | Licenza | Condizioni principali |
 |---|---|---|---|
-| MODELLER 10.8 | `bioloom`, sempre (pacchetto degli autori scaricato alla costruzione) | `LicenseRef-MODELLER-Academic` | gratuita per istituzioni accademiche senza scopo di lucro, solo per ricerca interna non commerciale, con chiave personale; vietato distribuire o trasferire il programma senza il permesso scritto del licenziante. <https://salilab.org/modeller/> |
-| PROCHECK 3.5.4 | `bioloom`, solo se alla costruzione c'era `programma/docker/vendor/procheck/procheck.tar.gz` | `LicenseRef-PROCHECK` | gratuito per uso accademico (R. Laskowski, EBI); oggi è su GitHub senza una licenza dichiarata: condizioni da verificare con l'autore. <https://github.com/RomanLas/PROCHECK> |
-| ProSA II 2003 | `bioloom`, solo se c'era `programma/docker/vendor/prosa/prosa2003.linux.tar.gz` | `LicenseRef-ProSA` | didattica e ricerca di base, non commerciale; una chiave (`LicenseDB`) per ogni computer; vietato modificare la licenza o la configurazione del computer per aggirarla. Il pacchetto contiene anche Python 2.2, Tcl/Tk 8.4 e BLT 2.4 forniti dagli autori. <https://www.came.sbg.ac.at/prosa_license.html> |
-| PSIPRED 3.5 | `bioloom-qmean` (immagine ufficiale di QMEAN) | `LicenseRef-PSIPRED` | © 2000 D.T. Jones, tutti i diritti riservati; uso libero per ricerca, con citazione; non in servizi a pagamento senza permesso (termini della licenza di PSIPRED: da verificare per la 3.5). <http://bioinf.cs.ucl.ac.uk/psipred/> |
-| SSpro/ACCpro 4 | `bioloom-qmean` (immagine ufficiale di QMEAN) | `LicenseRef-SCRATCH` | gratuito per ricerca accademica non commerciale; altri usi su accordo con gli autori (UC Irvine). <https://download.igb.uci.edu> |
+| MODELLER 10.8 | `makphi`, sempre (pacchetto degli autori scaricato alla costruzione) | `LicenseRef-MODELLER-Academic` | gratuita per istituzioni accademiche senza scopo di lucro, solo per ricerca interna non commerciale, con chiave personale; vietato distribuire o trasferire il programma senza il permesso scritto del licenziante. <https://salilab.org/modeller/> |
+| PROCHECK 3.5.4 | `makphi`, solo se alla costruzione c'era `programma/docker/vendor/procheck/procheck.tar.gz` | `LicenseRef-PROCHECK` | gratuito per uso accademico (R. Laskowski, EBI); oggi è su GitHub senza una licenza dichiarata: condizioni da verificare con l'autore. <https://github.com/RomanLas/PROCHECK> |
+| ProSA II 2003 | `makphi`, solo se c'era `programma/docker/vendor/prosa/prosa2003.linux.tar.gz` | `LicenseRef-ProSA` | didattica e ricerca di base, non commerciale; una chiave (`LicenseDB`) per ogni computer; vietato modificare la licenza o la configurazione del computer per aggirarla. Il pacchetto contiene anche Python 2.2, Tcl/Tk 8.4 e BLT 2.4 forniti dagli autori. <https://www.came.sbg.ac.at/prosa_license.html> |
+| PSIPRED 3.5 | `makphi-qmean` (immagine ufficiale di QMEAN) | `LicenseRef-PSIPRED` | © 2000 D.T. Jones, tutti i diritti riservati; uso libero per ricerca, con citazione; non in servizi a pagamento senza permesso (termini della licenza di PSIPRED: da verificare per la 3.5). <http://bioinf.cs.ucl.ac.uk/psipred/> |
+| SSpro/ACCpro 4 | `makphi-qmean` (immagine ufficiale di QMEAN) | `LicenseRef-SCRATCH` | gratuito per ricerca accademica non commerciale; altri usi su accordo con gli autori (UC Irvine). <https://download.igb.uci.edu> |
 
 - **Pacchetti e chiavi.** I pacchetti di PROCHECK e ProSA (`programma/docker/vendor/`) e le chiavi (`data/licenses/`:
   chiave di MODELLER, `LicenseDB` di ProSA) sono di chi ha ottenuto la licenza: non vanno pubblicati né dati ad altri.
   Sono esclusi da git e dalla copia portatile, che contiene le chiavi solo con `--con-licenze` / `-ConLicenze`.
 - **Immagini.** Le immagini, anche i file in `immagini/` della copia portatile, contengono MODELLER e, se costruite con
   i pacchetti, PROCHECK e ProSA già installati (le chiavi no). Servono a chi ha diritto a queste licenze e non vanno
-  date ad altri senza il permesso dei titolari: chi vuole BioLoom ottiene programmi e chiavi per conto proprio.
+  date ad altri senza il permesso dei titolari: chi vuole MakPhi ottiene programmi e chiavi per conto proprio.
 - **ProSA, un computer alla volta.** L'avviatore assegna al container il MAC della licenza solo sul computer a cui è
   legata (`data/licenses/prosa/computer`); su un altro computer serve una chiave per quel computer, oppure la licenza
   va spostata (e il primo computer la perde).
 
-## 2. Immagine bioloom
+## 2. Immagine makphi
 
 Base: **Ubuntu 24.04 LTS** (immagine ufficiale `ubuntu:24.04`, 24.04.5 del 2026-09-17, fissata per digest:
 `ubuntu@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55`) con Python 3.12 di Ubuntu. La
@@ -141,7 +141,7 @@ Nella venv `/opt/venv`, con i testi delle licenze in `/opt/venv/lib/python3.12/s
   (`GPL-3.0-or-later WITH GCC-exception-3.1`) e libquadmath (`LGPL-2.1-or-later`): dettagli in
   `numpy-2.5.3.dist-info/licenses/LICENSE.txt`.
 - **OpenMM**: API e piattaforme Reference e CPU `MIT`; i plugin della piattaforma OpenCL, presenti nella ruota ma non
-  usati da BioLoom, `LGPL-3.0-or-later`. Licenze ricavate dalle intestazioni dei sorgenti: i metadati della ruota
+  usati da MakPhi, `LGPL-3.0-or-later`. Licenze ricavate dalle intestazioni dei sorgenti: i metadati della ruota
   indicano «Python Software Foundation License», che non vi corrisponde.
 - **pip** è quello di Ubuntu (`python3-pip-whl`) e incorpora librerie con licenze `MIT`, `Apache-2.0`, BSD, `MPL-2.0` e
   `LGPL-2.1-or-later` (chardet).
@@ -169,11 +169,11 @@ Altri 80 pacchetti sorgente, raggruppati per licenza principale (eccezioni e par
 - **Pubblico dominio**: libselinux, media-types, ncbi-tools6 (`ncbi-data`), sqlite3, tzdata, xz-utils (`liblzma`).
 - **Sleepycat**: db5.3 (Berkeley DB), che chiede di indicare come ottenere il sorgente ([§5](#5-software-gpl-e-lgpl-sorgente-corrispondente)).
 
-### 2.5 Codice e dati di BioLoom nell'immagine
+### 2.5 Codice e dati di MakPhi nell'immagine
 
-- `/app/backend`, `/app/frontend/dist`, `/entrypoint.sh`: BioLoom (`MIT`); l'interfaccia compilata contiene le librerie
+- `/app/backend`, `/app/frontend/dist`, `/entrypoint.sh`: MakPhi (`MIT`); l'interfaccia compilata contiene le librerie
   del [§4](#4-interfaccia-web).
-- `/app/backend/bioloom/assets/1UBQ.pdb`: struttura PDB 1UBQ (ubiquitina; Vijay-Kumar, Bugg e Cook, 1987) per la prova
+- `/app/backend/makphi/assets/1UBQ.pdb`: struttura PDB 1UBQ (ubiquitina; Vijay-Kumar, Bugg e Cook, 1987) per la prova
   degli strumenti, dati dell'archivio wwPDB (`CC0-1.0`).
 
 ### 2.6 Usati solo per costruire (non distribuiti)
@@ -185,14 +185,14 @@ Altri 80 pacchetti sorgente, raggruppati per licenza principale (eccezioni e par
   dipendenze di sviluppo typescript 5.9.3 (`Apache-2.0`), vite 7.3.6, @vitejs/plugin-react 5.2.0, vitest 3.2.7,
   @types/react e @types/react-dom 19.3.0 (`MIT`). Nell'immagine resta solo l'interfaccia compilata, in cui Vite può
   aggiungere piccole funzioni di supporto (`MIT`).
-- Stadio `impronta` (calcolo dell'impronta dei sorgenti) e immagine di prova `bioloom-test` di
+- Stadio `impronta` (calcolo dell'impronta dei sorgenti) e immagine di prova `makphi-test` di
   `programma/scripts/test.sh` (aggiunge pytest, pytest-timeout e ruff).
 
-## 3. Immagine bioloom-qmean
+## 3. Immagine makphi-qmean
 
 Base: immagine ufficiale di QMEAN del gruppo Schwede (SIB e Biozentrum, Università di Basilea),
 `registry.scicore.unibas.ch/schwede/qmean@sha256:640916f8714d79601ce5883f72e725d3bcf1856e930c8cb7ce7d972efe08c7b8`, su
-**CentOS Linux 7.9.2009**. BioLoom vi aggiunge solo i propri script in `/qmean/bioloom/` (`MIT`). Versioni dalle
+**CentOS Linux 7.9.2009**. MakPhi vi aggiunge solo i propri script in `/qmean/makphi/` (`MIT`). Versioni dalle
 variabili e dalle etichette dell'immagine:
 
 | Componente | Versione | Licenza | Sito |
@@ -240,17 +240,17 @@ Dipendenze di produzione di `programma/frontend/package.json` e quelle che richi
 | html-to-image | 1.11.13 | `MIT` | 2017-2025 W.Y. | <https://github.com/bubkoo/html-to-image> |
 | @fontsource-variable/inter (font Inter, file .woff2) | 5.3.0 | `OFL-1.1` | 2016 The Inter Project Authors | <https://github.com/rsms/inter>, <https://fontsource.org/fonts/inter> |
 
-L'icona `favicon.svg` e gli stili sono di BioLoom.
+L'icona `favicon.svg` e gli stili sono di MakPhi.
 
 ## 5. Software GPL e LGPL: sorgente corrispondente
 
 Le immagini contengono software sotto GPL o LGPL (e Berkeley DB, la cui licenza Sleepycat chiede le stesse
 indicazioni), in particolare:
 
-- `bioloom`: molti pacchetti di Ubuntu (§2.1 e §2.4, fra cui bash, coreutils, glibc, le librerie di esecuzione di GCC,
+- `makphi`: molti pacchetti di Ubuntu (§2.1 e §2.4, fra cui bash, coreutils, glibc, le librerie di esecuzione di GCC,
   Clustal Omega, MUSCLE, MMseqs2, wget, util-linux); PROPKA; i plugin OpenCL di OpenMM; FETK nel binario di APBS;
   libgfortran e libquadmath nella ruota di numpy; chardet in pip.
-- `bioloom-qmean`: OpenStructure, HH-suite, molti pacchetti di CentOS 7, libgfortran nelle ruote di numpy e scipy.
+- `makphi-qmean`: OpenStructure, HH-suite, molti pacchetti di CentOS 7, libgfortran nelle ruote di numpy e scipy.
 
 **Dove si trova il sorgente**, alle versioni contenute nell'immagine:
 
@@ -259,7 +259,7 @@ indicazioni), in particolare:
   dei pacchetti sorgente con il primo comando in alto.
 - Pacchetti CentOS 7: archivio <https://vault.centos.org/7.9.2009/> (`os/Source/SPackages/` e
   `updates/Source/SPackages/`); il pacchetto sorgente di ciascuno con il terzo comando in alto.
-- Programmi e librerie di BioLoom, alle versioni fissate nel Dockerfile e nei lock: US-align `20260527` (commit
+- Programmi e librerie di MakPhi, alle versioni fissate nel Dockerfile e nei lock: US-align `20260527` (commit
   `177cc8a2bbd3e2a6e9c5faaaa4ff5dfa1e6048f7`) e fpocket `4.2.3` (commit `4bb0d8447f62fee77e2c3c29f54b5fcaf5e2c066`),
   scaricati per commit del tag e verificati con SHA-256, APBS `v3.4.1` con i sottomoduli (fra cui FETK), OpenMM
   `8.6.1` (<https://github.com/openmm/openmm>), PROPKA `v3.5.1` (<https://github.com/jensengroup/propka>), pip 24.0
@@ -269,19 +269,19 @@ indicazioni), in particolare:
   (<https://github.com/soedinglab/hh-suite>) e QMEAN `4.3.0`, con la ricetta dell'immagine nella cartella `docker/` del
   repository di QMEAN.
 
-**Offerta scritta.** Le immagini Docker di BioLoom passano da una persona all'altra solo come file in `immagini/` di
+**Offerta scritta.** Le immagini Docker di MakPhi passano da una persona all'altra solo come file in `immagini/` di
 una copia portatile; chi le costruisce da sé riceve i pacchetti direttamente dagli archivi indicati sopra. Chi dà ad
 altri una copia con le immagini, a cominciare da foggy02 per le copie che distribuisce, offre a chiunque ne faccia
 richiesta, per almeno tre anni dall'ultima volta in cui distribuisce quella versione, il codice sorgente corrispondente
 completo, in forma leggibile da una macchina, del software sotto GPL o LGPL che contiene: gratuitamente da un server,
 oppure su un supporto fisico durevole al solo costo ragionevole del supporto e della spedizione. La richiesta va quindi
-a chi ti ha dato la copia, indicando la versione di BioLoom e l'identificativo dell'immagine
-(`docker image inspect --format '{{.Id}}' bioloom:<versione>`).
+a chi ti ha dato la copia, indicando la versione di MakPhi e l'identificativo dell'immagine
+(`docker image inspect --format '{{.Id}}' makphi:<versione>`).
 
 ## 6. Testi delle licenze
 
-- Pacchetti Ubuntu: `/usr/share/doc/<pacchetto>/copyright` e `/usr/share/common-licenses/` nell'immagine `bioloom`;
-  pacchetti CentOS: `/usr/share/licenses/` e `/usr/share/doc/` in `bioloom-qmean`.
+- Pacchetti Ubuntu: `/usr/share/doc/<pacchetto>/copyright` e `/usr/share/common-licenses/` nell'immagine `makphi`;
+  pacchetti CentOS: `/usr/share/licenses/` e `/usr/share/doc/` in `makphi-qmean`.
 - Pacchetti Python: cartelle `*.dist-info/` accanto a ciascun pacchetto.
 - Interfaccia web: le librerie `MIT` hanno lo stesso testo di [LICENSE](LICENSE), con i titolari indicati nel
   [§4](#4-interfaccia-web). L'interfaccia compilata non contiene i testi delle licenze: qui sotto quelli di 3Dmol.js

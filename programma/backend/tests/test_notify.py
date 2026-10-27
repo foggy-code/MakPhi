@@ -20,13 +20,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from bioloom.core.errors import AppError
-from bioloom.services import notify as notify_module
-from bioloom.services.notify import NotifyService, SmtpConfig
+from makphi.core.errors import AppError
+from makphi.services import notify as notify_module
+from makphi.services.notify import NotifyService, SmtpConfig
 
 from .conftest import HUMAN_UB, until, wait_job
 
-USER, PASSWORD = "bioloom", "pa55-segreta"
+USER, PASSWORD = "makphi", "pa55-segreta"
 
 
 class FakeSmtp(socketserver.ThreadingTCPServer):
@@ -96,13 +96,13 @@ def smtp():
     server.server_close()
 
 
-FIELDS = {"host": "BIOLOOM_SMTP_HOST", "port": "BIOLOOM_SMTP_PORT", "security": "BIOLOOM_SMTP_SECURITY",
-          "user": "BIOLOOM_SMTP_USER", "password": "BIOLOOM_SMTP_PASSWORD", "sender": "BIOLOOM_SMTP_FROM",
-          "public_url": "BIOLOOM_PUBLIC_URL"}
+FIELDS = {"host": "MAKPHI_SMTP_HOST", "port": "MAKPHI_SMTP_PORT", "security": "MAKPHI_SMTP_SECURITY",
+          "user": "MAKPHI_SMTP_USER", "password": "MAKPHI_SMTP_PASSWORD", "sender": "MAKPHI_SMTP_FROM",
+          "public_url": "MAKPHI_PUBLIC_URL"}
 
 
 def write_config(client, **values):
-    """Scrive licenses/posta.env come lo scriverebbe chi gestisce BioLoom (righe NOME=valore, con un commento)."""
+    """Scrive licenses/posta.env come lo scriverebbe chi gestisce MakPhi (righe NOME=valore, con un commento)."""
     path = client.app.state.core.notify.file
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["# posta di prova", ""] + [f"{FIELDS[k]}={v}" for k, v in values.items()]
@@ -112,7 +112,7 @@ def write_config(client, **values):
 
 def configure(client, smtp, **extra):
     values = {"host": "127.0.0.1", "port": smtp.server_address[1], "security": "none", "user": USER,
-              "sender": "bioloom@example.org", "password": PASSWORD, **extra}
+              "sender": "makphi@example.org", "password": PASSWORD, **extra}
     write_config(client, **values)
     status = client.get("/api/notify").json()
     assert status["configured"] and status["error"] is None, status
@@ -149,8 +149,8 @@ def notices(client, monkeypatch):
 def test_configuration_comes_only_from_the_file_and_never_returns_the_password(client, smtp):
     status = client.get("/api/notify").json()
     assert status["configured"] is False and status["source"] == "none" and status["file"] == "licenses/posta.env"
-    saved = configure(client, smtp, public_url='"https://bioloom.example.org/"')  # virgolette tolte, "/" finale anche
-    assert saved["source"] == "file" and saved["password_set"] and saved["public_url"] == "https://bioloom.example.org"
+    saved = configure(client, smtp, public_url='"https://makphi.example.org/"')  # virgolette tolte, "/" finale anche
+    assert saved["source"] == "file" and saved["password_set"] and saved["public_url"] == "https://makphi.example.org"
     assert PASSWORD not in client.get("/api/notify").text
     assert PASSWORD in client.app.state.core.licenses.secrets()  # mai in un pacchetto di riproducibilità
     # dall'interfaccia non si cambia nulla
@@ -160,9 +160,9 @@ def test_configuration_comes_only_from_the_file_and_never_returns_the_password(c
 
 @pytest.mark.parametrize("values,field", [({"host": "a b"}, "Server SMTP"), ({"port": "0"}, "Porta"),
                                           ({"security": "tls"}, "Sicurezza"), ({"sender": "non-email"}, "Mittente"),
-                                          ({"public_url": "ftp://x"}, "Indirizzo di BioLoom")])
+                                          ({"public_url": "ftp://x"}, "Indirizzo di MakPhi")])
 def test_invalid_file_is_explained_in_italian(client, values, field):
-    write_config(client, **{"host": "smtp.example.org", "sender": "bioloom@example.org", **values})
+    write_config(client, **{"host": "smtp.example.org", "sender": "makphi@example.org", **values})
     status = client.get("/api/notify").json()
     assert status["configured"] is False and field in status["error"] and status["error"].startswith("Configurazione")
 
@@ -174,8 +174,8 @@ def test_test_email_is_delivered(client, smtp):
     assert r.status_code == 200, r.text
     msg = until(lambda: smtp.messages)[0]
     assert smtp.logins == [(USER, PASSWORD)] and "<utente@example.org>" in msg["rcpt"][0]
-    assert msg["subject"] == "BioLoom: email di prova" and "Auto-Submitted: auto-generated" in msg["data"]
-    assert "I risultati restano su BioLoom e non sono allegati" in msg["body"]
+    assert msg["subject"] == "MakPhi: email di prova" and "Auto-Submitted: auto-generated" in msg["data"]
+    assert "I risultati restano su MakPhi e non sono allegati" in msg["body"]
 
 
 def test_wrong_password_and_refused_recipient_are_explained(client, smtp):
@@ -224,7 +224,7 @@ def test_pipeline_with_notice_needs_a_mail_server_and_a_valid_address(client, sm
 
 
 def test_pipeline_end_sends_one_notice_without_results(client, smtp, notices):
-    configure(client, smtp, public_url="https://bioloom.example.org")
+    configure(client, smtp, public_url="https://makphi.example.org")
     r = client.post("/api/pipeline", json={**PIPELINE, "notify_email": "utente@example.org"})
     assert r.status_code == 200, r.text
     job_id = r.json()["id"]
@@ -232,9 +232,9 @@ def test_pipeline_end_sends_one_notice_without_results(client, smtp, notices):
     msg = until(lambda: smtp.messages)[0]
     data = msg["body"]
     status_word = {"completed": "completata", "failed": "fallita"}[job["status"]]
-    assert msg["subject"] == f"BioLoom: pipeline «Prova avviso» {status_word}"
+    assert msg["subject"] == f"MakPhi: pipeline «Prova avviso» {status_word}"
     assert data.startswith(f"La pipeline «Prova avviso» è {status_word}.") and "Elementi: 1 (falliti 1)" in data
-    assert f"https://bioloom.example.org/pipeline?job={job_id}" in data and f"Identificativo del job: {job_id}" in data
+    assert f"https://makphi.example.org/pipeline?job={job_id}" in data and f"Identificativo del job: {job_id}" in data
     assert "proteina_riservata" not in msg["data"] and HUMAN_UB[:20] not in msg["data"]  # niente sequenze né nomi
     log = until(lambda: "Email di avviso" in (t := client.get(f"/api/jobs/{job_id}/log").json()["text"]) and t)
     assert "Email di avviso inviata a utente@example.org" in log
@@ -271,14 +271,14 @@ def test_environment_variables_take_precedence_over_the_file(tmp_path, monkeypat
 
     service = NotifyService(tmp_path, tmp_path / "licenses", Jobs(), server=True)
     service.file.parent.mkdir(parents=True)
-    service.file.write_text("BIOLOOM_SMTP_HOST=smtp.dal-file.example\nBIOLOOM_SMTP_FROM=a@dal-file.example\n"
-                            "BIOLOOM_SMTP_PASSWORD=del-file\n", encoding="utf-8")
+    service.file.write_text("MAKPHI_SMTP_HOST=smtp.dal-file.example\nMAKPHI_SMTP_FROM=a@dal-file.example\n"
+                            "MAKPHI_SMTP_PASSWORD=del-file\n", encoding="utf-8")
     assert service.status()["source"] == "file" and service.status()["host"] == "smtp.dal-file.example"
-    monkeypatch.setenv("BIOLOOM_SMTP_HOST", "smtp.universita.example")
-    monkeypatch.setenv("BIOLOOM_SMTP_PORT", "465")
-    monkeypatch.setenv("BIOLOOM_SMTP_SECURITY", "ssl")
-    monkeypatch.setenv("BIOLOOM_SMTP_FROM", "bioloom@universita.example")
-    monkeypatch.setenv("BIOLOOM_SMTP_PASSWORD", "dell-amministratore")
+    monkeypatch.setenv("MAKPHI_SMTP_HOST", "smtp.universita.example")
+    monkeypatch.setenv("MAKPHI_SMTP_PORT", "465")
+    monkeypatch.setenv("MAKPHI_SMTP_SECURITY", "ssl")
+    monkeypatch.setenv("MAKPHI_SMTP_FROM", "makphi@universita.example")
+    monkeypatch.setenv("MAKPHI_SMTP_PASSWORD", "dell-amministratore")
     status = service.status()
     assert status["source"] == "env" and status["configured"] and status["host"] == "smtp.universita.example"
     assert status["security"] == "ssl" and status["port"] == 465 and "dell-amministratore" not in str(status)

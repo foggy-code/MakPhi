@@ -7,8 +7,8 @@ import zipfile
 
 import pytest
 
-from bioloom.engines import remote
-from bioloom.services import pipeline as pipeline_service
+from makphi.engines import remote
+from makphi.services import pipeline as pipeline_service
 
 from .conftest import HUMAN_UB, YEAST_UB, until, wait_job
 from .test_pipeline_cross import FakeModeller
@@ -27,7 +27,7 @@ def setup(client, monkeypatch):
     fake = FakeModeller()
     monkeypatch.setattr(core.compute, "run_modeling", fake)
     monkeypatch.setattr(remote, "swissmodel_qmean", lambda *a, **k: dict(SCORES))
-    monkeypatch.delenv("BIOLOOM_QMEAN_URL", raising=False)
+    monkeypatch.delenv("MAKPHI_QMEAN_URL", raising=False)
     client.put("/api/settings", json=REMOTE)
     return client
 

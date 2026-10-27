@@ -4,9 +4,9 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bioloom"
-version = "4.4.0"
-description = "BioLoom v4 - suite per la modellazione di proteine per omologia"
+name = "makphi"
+version = "5.0.0"
+description = "MakPhi - suite per la modellazione di proteine per omologia"
 license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
@@ -24,10 +24,10 @@ dependencies = [
 dev = ["pytest>=7", "pytest-timeout==2.4.0", "pytest-cov==7.0.0", "ruff>=0.6"]
 
 [project.scripts]
-bioloom = "bioloom.__main__:main"
+makphi = "makphi.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["bioloom*"]
+include = ["makphi*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -47,9 +47,9 @@ filterwarnings = ["ignore::Bio.PDB.PDBExceptions.PDBConstructionWarning"]
 timeout = 1800
 
 # Copertura dei test (pytest-cov, dipendenza dev; nell'immagine di test e nella CI): `pytest --cov` misura il pacchetto
-# bioloom, righe eseguite su righe eseguibili. Nessuna soglia minima: il numero si legge nel riepilogo della CI.
+# makphi, righe eseguite su righe eseguibili. Nessuna soglia minima: il numero si legge nel riepilogo della CI.
 [tool.coverage.run]
-source = ["bioloom"]
+source = ["makphi"]
 
 [tool.coverage.report]
 skip_covered = true

@@ -18,14 +18,14 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from bioloom import __version__
-from bioloom.app import create_app
-from bioloom.config import Paths
-from bioloom.core import auth
-from bioloom.core.errors import AppError
-from bioloom.domain import reproducibility as repro
-from bioloom.engines import tools, versions
-from bioloom.services import reproducibility as service
+from makphi import __version__
+from makphi.app import create_app
+from makphi.config import Paths
+from makphi.core import auth
+from makphi.core.errors import AppError
+from makphi.domain import reproducibility as repro
+from makphi.engines import tools, versions
+from makphi.services import reproducibility as service
 from tests.conftest import DATA, YEAST_UB, requires_modeller, ubq_variant, wait_job
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,7 +33,7 @@ ACCESS_KEY = "chiave-accesso-di-prova-7Q2"
 EMAIL = "ricercatrice.prova@example.org"
 FAKE_MODELLER_KEY = "MODELFINTA9X4"
 requires_openmm = pytest.mark.skipif(not (tools.find_module("openmm") and tools.find_module("pdbfixer")),
-                                     reason="OpenMM o PDBFixer non installati (immagine bioloom:dev)")
+                                     reason="OpenMM o PDBFixer non installati (immagine makphi:dev)")
 
 
 # ------------------------------------------------------------------------------------------ aiuti
@@ -50,7 +50,7 @@ def _package(c, job_id: str) -> bytes:
     r = c.get(f"/api/jobs/{job_id}/package")
     assert r.status_code == 200, r.text
     assert r.headers["content-type"] == "application/zip"
-    assert "bioloom_riproducibile_" in r.headers["content-disposition"]
+    assert "makphi_riproducibile_" in r.headers["content-disposition"]
     return r.content
 
 
@@ -171,7 +171,7 @@ def test_check_archive_rejects_decompression_bombs_and_size_limits(monkeypatch):
 
 
 def test_manifest_seal_detects_any_change():
-    base = {"format": repro.FORMAT, "format_version": 1, "created_at": "x", "bioloom": {"version": "4.1.0"},
+    base = {"format": repro.FORMAT, "format_version": 1, "created_at": "x", "makphi": {"version": "4.1.0"},
             "environment": {}, "job": {"id": "abc", "kind": "quality"}, "params": {"dope": True},
             "files": [{"path": "inputs/params.json", "role": "params", "sha256": "0" * 64, "size": 2}]}
     sealed = repro.seal(base)
@@ -283,39 +283,39 @@ def test_score_tolerance_and_verdict():
 
 
 def test_environment_warnings_name_every_difference():
-    packaged = {"bioloom": {"version": "4.0.0", "image": "4.0.0"},
+    packaged = {"makphi": {"version": "4.0.0", "image": "4.0.0"},
                 "environment": {"python": "3.11.9", "machine": "aarch64", "libraries": {"numpy": "1.26.0"},
                                 "tools": {"modeller": {"label": "MODELLER", "available": True, "version": "10.4"},
                                           "dssp": {"label": "DSSP", "available": True, "version": "4.2.2"},
                                           "apbs": {"label": "APBS", "available": True, "version": "3.4.1"},
                                           "prosa": {"label": "ProSA", "available": False, "version": None}}}}
-    current = {"bioloom": {"version": "4.1.0", "image": "4.1.0"},
+    current = {"makphi": {"version": "4.1.0", "image": "4.1.0"},
                "environment": {"python": "3.12.3", "machine": "x86_64", "libraries": {"numpy": "2.5.3"},
                                "tools": {"modeller": {"available": True, "version": "10.8"},
                                          "dssp": {"available": True, "version": "4.2.2"}}}}
     codes = [w["code"] for w in repro.environment_warnings(packaged, current)]
-    assert codes == ["rerun_version_bioloom", "rerun_version_image", "rerun_tool_missing", "rerun_version_tool",
+    assert codes == ["rerun_version_makphi", "rerun_version_image", "rerun_tool_missing", "rerun_version_tool",
                      "rerun_version_library", "rerun_version_library", "rerun_platform"]
     assert repro.environment_warnings(current, current) == []
     # stessa versione, codice diverso (fra due rilasci): avviso sull'impronta, non sulla versione
-    same = {"bioloom": {"version": "4.3.0", "fingerprint": "a" * 64}, "environment": {}}
-    other = {"bioloom": {"version": "4.3.0", "fingerprint": "b" * 64}, "environment": {}}
+    same = {"makphi": {"version": "4.3.0", "fingerprint": "a" * 64}, "environment": {}}
+    other = {"makphi": {"version": "4.3.0", "fingerprint": "b" * 64}, "environment": {}}
     assert [w["code"] for w in repro.environment_warnings(same, other)] == ["rerun_version_code"]
-    assert repro.environment_warnings(same, {"bioloom": {"version": "4.3.0"}, "environment": {}}) == []
+    assert repro.environment_warnings(same, {"makphi": {"version": "4.3.0"}, "environment": {}}) == []
 
 
 def test_code_fingerprint_is_read_from_the_image_file(tmp_path, monkeypatch):
-    from bioloom.core import fingerprint
+    from makphi.core import fingerprint
     good = tmp_path / "IMPRONTA"
     good.write_text("AB" * 32 + "\n")
-    monkeypatch.setenv("BIOLOOM_FINGERPRINT_FILE", str(good))
+    monkeypatch.setenv("MAKPHI_FINGERPRINT_FILE", str(good))
     fingerprint.code_fingerprint.cache_clear()
     try:
-        assert fingerprint.code_fingerprint() == "ab" * 32 and versions.bioloom()["fingerprint"] == "ab" * 32
+        assert fingerprint.code_fingerprint() == "ab" * 32 and versions.makphi()["fingerprint"] == "ab" * 32
         good.write_text("non è un'impronta")
         fingerprint.code_fingerprint.cache_clear()
         assert fingerprint.code_fingerprint() is None
-        monkeypatch.setenv("BIOLOOM_FINGERPRINT_FILE", str(tmp_path / "assente"))
+        monkeypatch.setenv("MAKPHI_FINGERPRINT_FILE", str(tmp_path / "assente"))
         fingerprint.code_fingerprint.cache_clear()
         assert fingerprint.code_fingerprint() is None
     finally:
@@ -342,7 +342,7 @@ def test_quality_package_content_manifest_and_checksums(client_with_ubq):
     m = json.loads(files["manifest.json"])
     assert m["format"] == repro.FORMAT and m["format_version"] == repro.FORMAT_VERSION
     assert repro.validate_manifest(m) is m
-    assert m["bioloom"]["version"] == __version__ and m["job"]["id"] == job["id"] and m["job"]["kind"] == "quality"
+    assert m["makphi"]["version"] == __version__ and m["job"]["id"] == job["id"] and m["job"]["kind"] == "quality"
     assert m["params"] == job["params"] and m["rerun"] == {"supported": True, "reason": None}
     assert m["seeds"]["note"].startswith("calcolo deterministico")
     assert set(m["settings"]["values"]) == set(service.RELEVANT_SETTINGS)
@@ -361,11 +361,11 @@ def test_quality_package_content_manifest_and_checksums(client_with_ubq):
     assert declared["outputs/result.json"]["job_path"] == "result.json"
     assert not any(p.startswith("outputs/") and p.endswith(("params.json", "job.log")) for p in files)
     readme = files["LEGGIMI.txt"].decode()
-    assert "python programma/bioloom.py rerun" in readme and "POST /api/jobs/rerun" in readme
+    assert "python programma/makphi.py rerun" in readme and "POST /api/jobs/rerun" in readme
     # ambiente registrato all'avvio del job, non all'esportazione
     assert m["environment"]["detected"].startswith("all'avvio del job")
     recorded = c.app.state.core.jobs.environment(job["id"])
-    assert recorded["bioloom"] == m["bioloom"] and recorded["environment"]["tools"] == m["environment"]["tools"]
+    assert recorded["makphi"] == m["makphi"] and recorded["environment"]["tools"] == m["environment"]["tools"]
     assert ".environment.json" not in json.dumps(c.get(f"/api/jobs/{job['id']}").json().get("files"))
     # riaperto dal servizio: valido, con l'anteprima senza errori
     summary = _inspect(c, data).json()
@@ -447,7 +447,7 @@ def test_export_errors_unsupported_and_active_jobs(client_with_ubq):
 
 
 def test_search_package_declares_remote_inputs_and_is_not_rerunnable(client, monkeypatch):
-    from bioloom.engines import remote
+    from makphi.engines import remote
 
     monkeypatch.setattr(remote, "rcsb_sequence_search", lambda seq, **kw: [
         {"pdb_id": "1UBQ", "chain": "A", "template_id": "1UBQ_A", "identity": 96.0, "coverage": 100.0,
@@ -562,7 +562,7 @@ def test_traversal_symlink_and_bomb_packages_are_rejected_without_writing(client
 def test_scripts_in_a_package_are_never_extracted(client_with_ubq, tmp_path):
     c = client_with_ubq
     data = _package(c, _quality(c)["id"])
-    evil = b"import os\nos.system('touch /tmp/bioloom_eseguito')\n"
+    evil = b"import os\nos.system('touch /tmp/makphi_eseguito')\n"
 
     def add_script(m):
         m["files"].append({"path": "scripts/model.py", "role": "script", "sha256": _sha(evil), "size": len(evil),
@@ -630,16 +630,16 @@ def test_different_versions_are_a_warning_not_an_error(client_with_ubq):
     data = _package(c, _quality(c)["id"])
 
     def older(m):
-        m["bioloom"] = {"version": "4.0.0", "image": "4.0.0"}
+        m["makphi"] = {"version": "4.0.0", "image": "4.0.0"}
         m["environment"]["tools"]["dssp"] = {"label": "DSSP", "available": True, "version": "0.9.9"}
 
     summary = _inspect(c, _rebuild(data, manifest=older)).json()
     warn = {x["code"] for x in summary["checks"] if x["level"] == "warning"}
-    assert "rerun_version_bioloom" in warn and not [x for x in summary["checks"] if x["level"] == "error"]
+    assert "rerun_version_makphi" in warn and not [x for x in summary["checks"] if x["level"] == "error"]
     pre = c.post("/api/compute/preflight", json={"kind": "rerun", "params": {"package_id": summary["package_id"]}})
-    assert pre.json()["ok"] and "rerun_version_bioloom" in {x["code"] for x in pre.json()["checks"]}
+    assert pre.json()["ok"] and "rerun_version_makphi" in {x["code"] for x in pre.json()["checks"]}
     done = _rerun(c, _rebuild(data, manifest=older))
-    assert any("BioLoom 4.0.0" in w for w in done["result"]["warnings"])
+    assert any("MakPhi 4.0.0" in w for w in done["result"]["warnings"])
     assert done["result"]["verdict"] == "identico"
 
 
@@ -682,17 +682,17 @@ def test_cli_rerun_in_a_subprocess_with_a_temporary_data_folder(client_with_ubq,
     package.write_bytes(data)
     cli_data = tmp_path / "dati_cli"
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
-    env.pop("BIOLOOM_SCRATCH_DIR", None)
-    proc = subprocess.run([sys.executable, str(ROOT / "bioloom.py"), "rerun", str(package), "--data", str(cli_data)],
+    env.pop("MAKPHI_SCRATCH_DIR", None)
+    proc = subprocess.run([sys.executable, str(ROOT / "makphi.py"), "rerun", str(package), "--data", str(cli_data)],
                           capture_output=True, text=True, encoding="utf-8", timeout=600, env=env, cwd=str(tmp_path))
     assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-2000:]
     assert "Esito: IDENTICO" in proc.stdout and "Job di riesecuzione" in proc.stdout
-    assert (cli_data / "bioloom.db").is_file() and (cli_data / ".scratch").is_dir()
+    assert (cli_data / "makphi.db").is_file() and (cli_data / ".scratch").is_dir()
     jobs = [p for p in (cli_data / "jobs").iterdir() if p.is_dir() and not p.name.startswith(".")]
     assert len(jobs) == 1 and (jobs[0] / service.REPORT_TEXT).is_file() and (jobs[0] / "package.zip").is_file()
     broken = tmp_path / "rotto.zip"
     broken.write_bytes(_rebuild(data, change=lambda files: files.update({"outputs/result.json": b"{}"})))
-    proc = subprocess.run([sys.executable, str(ROOT / "bioloom.py"), "rerun", str(broken), "--data", str(cli_data)],
+    proc = subprocess.run([sys.executable, str(ROOT / "makphi.py"), "rerun", str(broken), "--data", str(cli_data)],
                           capture_output=True, text=True, encoding="utf-8", timeout=300, env=env, cwd=str(tmp_path))
     assert proc.returncode == 2 and "Checksum SHA-256" in proc.stderr
 
@@ -701,7 +701,7 @@ def test_cli_exit_codes_for_a_failed_or_different_rerun_with_italian_messages(cl
                                                                             capsys):
     """Codice 2 e «Riesecuzione non riuscita: …» (mai lo stato in inglese) per un job fallito, codice 1 per un esito
     diverso: i due casi del docstring di cli.py che il test del sottoprocesso non esercita."""
-    from bioloom import cli
+    from makphi import cli
 
     c = client_with_ubq
     package = tmp_path / "pacchetto.zip"
@@ -743,7 +743,7 @@ def test_model_package_and_rerun_with_the_same_seed(client_with_ubq):
         assert f"outputs/{model['file']}" in files
     assert files["inputs/alignment.ali"].decode() == done["result"]["alignment"]
     assert "rand_seed=-8123" in files["scripts/model.py"].decode()
-    assert "BIOLOOM_MODELLER_KEY" in files["scripts/model.py"].decode()  # la chiave arriva dall'ambiente, mai scritta
+    assert "MAKPHI_MODELLER_KEY" in files["scripts/model.py"].decode()  # la chiave arriva dall'ambiente, mai scritta
     rerun = _rerun(c, data)
     res = rerun["result"]
     # MODELLER è deterministico con lo stesso seme: modelli identici (a parte la data della riga EXPDTA)
@@ -839,8 +839,8 @@ def test_refine_package_and_rerun_is_identical_with_one_openmm_thread(client_wit
     """Con il seme anche per idrogeni e atomi aggiunti (PDBFixer, Modeller di OpenMM) e un solo thread della
     piattaforma CPU la rifinitura è identica byte per byte. Con più thread OpenMM somma le forze in un ordine che
     cambia da un'esecuzione all'altra: differenze piccole (misurate su 1UBQ: RMSD 0,016 Å) che il confronto quantifica."""
-    from bioloom.core import jobs as jobs_module
-    from bioloom.engines import refine as refine_engine
+    from makphi.core import jobs as jobs_module
+    from makphi.engines import refine as refine_engine
 
     jobs_module.set_subprocess_env("OPENMM_CPU_THREADS", "1")  # anche il contesto di Modeller.addHydrogens
     monkeypatch.setattr(refine_engine.os, "cpu_count", lambda: 2)  # richiesta di un solo slot: --threads 1
@@ -886,7 +886,7 @@ def test_mutate_package_and_rerun_with_the_same_seeds(client_with_ubq):
 def test_alascan_of_a_pocket_package_carries_the_pockets_and_reruns(client, monkeypatch):
     """Scansione della tasca di un job `pockets`: le tasche viaggiano nel pacchetto (inputs/jobs/<id>/pockets.json) e
     la riesecuzione le usa anche dopo l'eliminazione del job delle tasche."""
-    from bioloom.services import structure_tools
+    from makphi.services import structure_tools
 
     fake = {"summary": {"count": 1, "druggable": 1, "threshold": 0.5,
                         "best": {"id": 1, "druggability": 0.8, "volume": 300.0}},
@@ -918,7 +918,7 @@ def test_prediction_package_documents_the_remote_input_and_is_not_rerunnable(cli
     predizione come input remoto datato; la riesecuzione è rifiutata come non riproducibile localmente."""
     import httpx
 
-    from bioloom.engines import remote
+    from makphi.engines import remote
     from tests.test_predict import FakeServices, ubq_prediction
 
     fake = FakeServices()
@@ -1057,8 +1057,8 @@ def test_manifest_of_an_unexpected_shape_is_a_reasoned_refusal(client_with_ubq):
 def test_rerun_registration_and_packaged_compute_never_downloads(client, tmp_path, monkeypatch):
     from types import SimpleNamespace
 
-    from bioloom.engines import remote
-    from bioloom.engines.modeller import TemplateSpec
+    from makphi.engines import remote
+    from makphi.engines.modeller import TemplateSpec
 
     core = client.app.state.core
     registration = core.jobs._handlers["rerun"]

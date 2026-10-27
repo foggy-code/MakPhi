@@ -56,7 +56,7 @@ export function RefineDialog({ source, label, onClose }: { source: StructureSour
       footer={<><button type="button" className="btn" onClick={onClose}>Annulla</button><button type="button" className="btn btn-primary" disabled={!!missing || !req.body} onClick={submit}><Icon name="play" size={13} /> Avvia</button></>}>
       <div className="stack">
         {missing && <Alert tone="warn">{missing}</Alert>}
-        <p className="small text-2">{PROTOCOL_TEXT} Alla fine BioLoom confronta la qualità prima e dopo (Ramachandran, clashscore, DOPE) e lo spostamento della catena principale.</p>
+        <p className="small text-2">{PROTOCOL_TEXT} Alla fine MakPhi confronta la qualità prima e dopo (Ramachandran, clashscore, DOPE) e lo spostamento della catena principale.</p>
         <label className="check"><input type="checkbox" checked={md} onChange={(e) => setMd(e.target.checked)} /> Breve dinamica molecolare a 300 K con le stesse restrizioni, poi una seconda minimizzazione</label>
         {md && (
           <Field label="Durata della dinamica (ps)" hint={`Da 0,5 a ${MD_MAX_PS} ps; passo di 2 fs. Sulla CPU 10 ps di una proteina di 76 residui richiedono circa 2 minuti.`}>

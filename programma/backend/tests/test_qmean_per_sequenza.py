@@ -1,4 +1,4 @@
-"""QMEAN per sequenza: tutti i posti del servizio usati da BioLoom (pool "io" più largo, dispatcher che non riordina
+"""QMEAN per sequenza: tutti i posti del servizio usati da MakPhi (pool "io" più largo, dispatcher che non riordina
 code enormi a ogni risveglio) e una sola ricerca HHblits per sequenza fra calcoli contemporanei (blocco del wrapper,
 pulizia e stato dei profili senza rileggere ogni file a ogni calcolo)."""
 
@@ -12,10 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from bioloom.core import dispatch
-from bioloom.core.db import Database
-from bioloom.core.jobs import IO_WORKERS, QMEAN_LOCAL, JobManager
-from bioloom.config import UserSettings
+from makphi.core import dispatch
+from makphi.core.db import Database
+from makphi.core.jobs import IO_WORKERS, QMEAN_LOCAL, JobManager
+from makphi.config import UserSettings
 
 from .test_qmean_speed import qw  # noqa: F401 (fixture)
 from .test_scheduling import _Runs
@@ -23,7 +23,7 @@ from .test_scheduling import _Runs
 WRAPPER = Path(__file__).resolve().parents[2] / "docker" / "qmean" / "run_qmean_wrapper.py"
 
 
-# ---------------------------------------------------------------------------------------------- BioLoom
+# ---------------------------------------------------------------------------------------------- MakPhi
 def test_the_io_pool_grows_with_the_places_of_local_qmean(tmp_path):
     mgr = JobManager(Database(tmp_path / "b.db"), tmp_path / "jobs", workers=1, settings_provider=UserSettings)
     try:

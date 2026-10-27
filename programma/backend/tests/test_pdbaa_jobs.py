@@ -13,10 +13,10 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from bioloom.core.jobs import RESOURCE_STAGE
-from bioloom.engines import tools
-from bioloom.services import databases
-from bioloom.services.databases import PDBAA_FILES
+from makphi.core.jobs import RESOURCE_STAGE
+from makphi.engines import tools
+from makphi.services import databases
+from makphi.services.databases import PDBAA_FILES
 
 from .conftest import dispatcher_settled, until, wait_job
 

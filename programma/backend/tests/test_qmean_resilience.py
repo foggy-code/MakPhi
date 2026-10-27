@@ -1,4 +1,4 @@
-"""QMEAN locale che resiste a un worker occupato: BioLoom aspetta e riprova invece di far fallire il calcolo, rimanda
+"""QMEAN locale che resiste a un worker occupato: MakPhi aspetta e riprova invece di far fallire il calcolo, rimanda
 un calcolo perso dal worker riavviato, accorpa le richieste di stato; il worker serve le richieste con un numero
 fisso di thread, chiude quelle scadute e non rifà la scansione dei database a ogni calcolo.
 
@@ -16,9 +16,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from bioloom.core.errors import ToolUnavailable
-from bioloom.core.jobs import JobCancelled
-from bioloom.engines import qmean_local
+from makphi.core.errors import ToolUnavailable
+from makphi.core.jobs import JobCancelled
+from makphi.engines import qmean_local
 
 from .test_engines_extra import QMEAN_OUTPUT, Ctx
 from .test_qmean_speed import qw  # noqa: F401 (fixture: il modulo del worker)
@@ -62,7 +62,7 @@ class FlakyWorker:
 def flaky(monkeypatch):
     def install(w):
         qmean_local._status_cache.update({"at": 0.0, "key": None, "value": None})
-        monkeypatch.setenv("BIOLOOM_QMEAN_URL", "http://qmean:8080")
+        monkeypatch.setenv("MAKPHI_QMEAN_URL", "http://qmean:8080")
         monkeypatch.setattr(qmean_local, "_client", lambda: httpx.Client(
             base_url="http://qmean:8080", transport=httpx.MockTransport(w)))
         return w
@@ -77,7 +77,7 @@ class Sleeps:
         self.total += seconds
 
 
-# ------------------------------------------------------------------------------------------------- BioLoom
+# ------------------------------------------------------------------------------------------------- MakPhi
 def test_an_unreachable_worker_is_waited_for_instead_of_failing(flaky, ubq_path):
     w = flaky(FlakyWorker(down=3))
     ctx, sleeps = Ctx(), Sleeps()

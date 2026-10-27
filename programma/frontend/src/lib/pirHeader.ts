@@ -36,7 +36,7 @@ export function formatHeader(h: PirHeader): string {
 
 // residuo: numero con codice d'inserzione, +N (N residui dal primo, come in MODELLER), FIRST, LAST, "." o "@"
 const RES = /^(?:-?\d+[A-Za-z]?|\+\d+|FIRST|LAST|\.|@)?$/i;
-/** tipi letti da MODELLER e da BioLoom: anche "structure" senza lettera */
+/** tipi letti da MODELLER e da MakPhi: anche "structure" senza lettera */
 const KINDS = new Set<string>([...HEADER_KINDS, "structure"]);
 const CHAIN = /^[A-Za-z0-9@.]?$/;
 const NUM = /^(?:-?\d+(?:\.\d+)?)?$/;

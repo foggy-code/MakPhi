@@ -10,9 +10,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from bioloom.core import dispatch
-from bioloom.core.jobs import QMEAN_LOCAL, RESOURCE_STAGE
-from bioloom.engines import qmean_local
+from makphi.core import dispatch
+from makphi.core.jobs import QMEAN_LOCAL, RESOURCE_STAGE
+from makphi.engines import qmean_local
 
 from .conftest import until, wait_job
 from .test_engines_extra import QMEAN_OUTPUT
@@ -72,7 +72,7 @@ def test_without_capacity_a_resource_stays_exclusive():
         d.close()
 
 
-# ---------------------------------------------------------------------------------------------- BioLoom
+# ---------------------------------------------------------------------------------------------- MakPhi
 class TwoPlacesWorker(OneAtATimeWorker):
     """Worker con due posti (QMEAN_PARALLEL=2)."""
 
@@ -108,9 +108,9 @@ def test_local_qmean_uses_the_places_declared_by_the_service(client_with_ubq, wo
 
 def test_slots_need_the_local_service(monkeypatch):
     monkeypatch.setitem(qmean_local._slots, "value", 4)
-    monkeypatch.delenv("BIOLOOM_QMEAN_URL", raising=False)
+    monkeypatch.delenv("MAKPHI_QMEAN_URL", raising=False)
     assert qmean_local.slots() == 1
-    monkeypatch.setenv("BIOLOOM_QMEAN_URL", "http://qmean:8080")
+    monkeypatch.setenv("MAKPHI_QMEAN_URL", "http://qmean:8080")
     assert qmean_local.slots() == 4
 
 
@@ -118,9 +118,9 @@ class ReusedProfileWorker(Worker):
     def __call__(self, request: httpx.Request) -> httpx.Response:
         if request.url.path == "/jobs/j1" and request.method == "GET":
             return httpx.Response(200, json={"status": "completed", "result": {
-                **QMEAN_OUTPUT, "bioloom_database": {"name": "UniRef30_2023_02", "version": "2023-02"},
-                "bioloom_hhblits": {"cpu": 8, "memory": "ok", "seconds": 4, "parallel": 16},
-                "bioloom_profiles": {"reused": 1, "computed": 0}}})
+                **QMEAN_OUTPUT, "makphi_database": {"name": "UniRef30_2023_02", "version": "2023-02"},
+                "makphi_hhblits": {"cpu": 8, "memory": "ok", "seconds": 4, "parallel": 16},
+                "makphi_profiles": {"reused": 1, "computed": 0}}})
         return super().__call__(request)
 
 

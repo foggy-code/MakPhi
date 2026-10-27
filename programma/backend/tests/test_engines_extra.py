@@ -5,12 +5,12 @@ import json
 import httpx
 import pytest
 
-from bioloom.config import UserSettings
-from bioloom.core.db import Database
-from bioloom.core.errors import AppError, ToolUnavailable
-from bioloom.core.jobs import JobCancelled, JobManager
-from bioloom.domain import procheck as procheck_parser
-from bioloom.engines import prosa, qmean_local, quality, remote, search, tools
+from makphi.config import UserSettings
+from makphi.core.db import Database
+from makphi.core.errors import AppError, ToolUnavailable
+from makphi.core.jobs import JobCancelled, JobManager
+from makphi.domain import procheck as procheck_parser
+from makphi.engines import prosa, qmean_local, quality, remote, search, tools
 
 from .conftest import DATA, wait_job
 
@@ -110,7 +110,7 @@ class FakeWorker:
 def fake_worker(monkeypatch):
     def install(worker):
         qmean_local._status_cache.update({"at": 0.0, "key": None, "value": None})
-        monkeypatch.setenv("BIOLOOM_QMEAN_URL", "http://qmean:8080")
+        monkeypatch.setenv("MAKPHI_QMEAN_URL", "http://qmean:8080")
         monkeypatch.setattr(qmean_local, "_client",
                             lambda: httpx.Client(base_url="http://qmean:8080", transport=httpx.MockTransport(worker)))
         return worker
@@ -156,7 +156,7 @@ def test_qmean_local_failures_and_cancel(fake_worker, ubq_path):
 
 
 def test_qmean_not_configured(monkeypatch):
-    monkeypatch.delenv("BIOLOOM_QMEAN_URL", raising=False)
+    monkeypatch.delenv("MAKPHI_QMEAN_URL", raising=False)
     info = qmean_local.status()
     assert not info["configured"] and not info["available"]
 
@@ -169,7 +169,7 @@ def test_normalize_qmean_matches_remote_format():
 
 
 def test_qmean_job_without_any_backend_explains_what_to_do(client_with_ubq, monkeypatch):
-    monkeypatch.delenv("BIOLOOM_QMEAN_URL", raising=False)
+    monkeypatch.delenv("MAKPHI_QMEAN_URL", raising=False)
     job = client_with_ubq.post("/api/qmean", json={"source": {"type": "template", "id": "1UBQ"}}).json()
     done = wait_job(client_with_ubq, job["id"])
     assert done["status"] == "failed" and "SWISS-MODEL" in done["error"]

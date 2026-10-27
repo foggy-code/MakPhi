@@ -1,7 +1,7 @@
 #!/bin/bash
 # Crea un mini database in formato UniClust30 (HH-suite: a3m, hhm, cs219) per provare QMEAN locale
 # senza il disco esterno. Si esegue dentro l'immagine QMEAN, che contiene HH-suite:
-#   docker run --rm --entrypoint bash -v <cartella>:/out bioloom-qmean:<versione> /tests/make_mini_uniclust.sh /out
+#   docker run --rm --entrypoint bash -v <cartella>:/out makphi-qmean:<versione> /tests/make_mini_uniclust.sh /out
 # I punteggi ottenuti con questo database NON sono significativi: serve solo a verificare il flusso.
 set -euo pipefail
 out="${1:-/out}"

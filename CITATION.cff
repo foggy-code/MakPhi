@@ -1,10 +1,10 @@
-# Come citare BioLoom (Citation File Format 1.2.0, https://citation-file-format.github.io).
+# Come citare MakPhi (Citation File Format 1.2.0, https://citation-file-format.github.io).
 # GitHub mostra "Cite this repository" a partire da questo file; Zenodo legge invece .zenodo.json.
 # Al primo rilascio archiviato su Zenodo aggiungere il DOI in "identifiers" (e in "doi").
 # Autore: nome e cognome; l'alias è quello della licenza (LICENSE).
 cff-version: 1.2.0
-message: "Se usi BioLoom in un lavoro scientifico, citalo con questi metadati."
-title: "BioLoom"
+message: "Se usi MakPhi in un lavoro scientifico, citalo con questi metadati."
+title: "MakPhi"
 abstract: >-
   Suite per la modellazione di proteine per omologia: ricerca e punteggio dei template, allineamento,
   costruzione con MODELLER, validazione e voto dei modelli, rifinitura, mutagenesi, ligandi e complessi,
@@ -14,10 +14,10 @@ authors:
   - given-names: "Francesco"
     family-names: "Fogagnolo"
     alias: "foggy02"
-version: "4.4.0"
+version: "5.0.0"
 date-released: "2026-10-27"
 license: MIT
-repository-code: "https://github.com/foggy-code/BioLoom"
+repository-code: "https://github.com/foggy-code/MakPhi"
 keywords:
   - homology modelling
   - protein structure

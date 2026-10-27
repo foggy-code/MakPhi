@@ -24,11 +24,11 @@ from pathlib import Path
 
 import numpy as np
 
-from bioloom import __version__
-from bioloom.domain import reproducibility as repro
+from makphi import __version__
+from makphi.domain import reproducibility as repro
 from tests.conftest import YEAST_UB, requires_modeller, wait_job
 
-SEEDS = [int(s) for s in os.environ.get("BIOLOOM_EXPERIMENT_SEEDS", "-4321,-12312,-777").split(",")]
+SEEDS = [int(s) for s in os.environ.get("MAKPHI_EXPERIMENT_SEEDS", "-4321,-12312,-777").split(",")]
 OUT = Path(__file__).resolve().parents[1] / ".esperimento-serie-parallelo.json"
 
 
@@ -111,7 +111,7 @@ def test_serial_against_parallel(client_with_ubq):
         print(json.dumps(row, indent=1))
         assert all(r["identical_text"] for r in row["serial_vs_serial"])
         assert all(r["identical_text"] for r in row["parallel_1_vs_2"] + row["parallel_1_vs_3"])
-    OUT.write_text(json.dumps({"bioloom": __version__, "machine": platform.machine(), "cpu": os.cpu_count(),
+    OUT.write_text(json.dumps({"makphi": __version__, "machine": platform.machine(), "cpu": os.cpu_count(),
                                "date": time.strftime("%Y-%m-%dT%H:%M:%S"), "target": "yeast ubiquitin (YEAST_UB)",
                                "template": "1UBQ:A", "models": 3, "refinement": "fast", "rows": rows}, indent=1),
                    encoding="utf-8")

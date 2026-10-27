@@ -102,7 +102,7 @@ const ProjectCtx = createContext<ProjectApi | null>(null);
 
 export function ProjectProvider({ children }: { children: ReactNode }) {
   const [projects, setProjects] = useState<Project[]>([]);
-  const [projectId, setProjectId] = useLocalStorage<string | null>("bioloom.project", null);
+  const [projectId, setProjectId] = useLocalStorage<string | null>("makphi.project", null);
   // id attuale per `reload`: una rilettura partita prima di un cambio di progetto non lavora su un valore vecchio
   const current = useRef(projectId);
   current.current = projectId;

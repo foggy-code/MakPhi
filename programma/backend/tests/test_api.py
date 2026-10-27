@@ -28,7 +28,7 @@ def test_projects_sequences_documents(client):
 
 def test_path_traversal_rejected(client):
     assert client.get("/api/projects/..%2F..%2Fetc").status_code in (400, 404)
-    r = client.get("/api/jobs/abc/files/..%2F..%2Fbioloom.db")
+    r = client.get("/api/jobs/abc/files/..%2F..%2Fmakphi.db")
     assert r.status_code in (400, 404)
 
 

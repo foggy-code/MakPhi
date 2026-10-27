@@ -1,6 +1,6 @@
 """Tempi e memoria di un job in funzione della lunghezza della sequenza bersaglio (impostazione max_sequence_length).
 
-Gira dentro l'immagine di BioLoom con il codice montato in /src, come scripts/benchmark_mxn.py, una lunghezza per
+Gira dentro l'immagine di MakPhi con il codice montato in /src, come scripts/benchmark_mxn.py, una lunghezza per
 container (il picco di memoria vale per tutta la vita del container):
 
     python /src/scripts/benchmark_lunghezza.py --length 5000 --template-file /hostdata/templates/3IU0.pdb \
@@ -32,8 +32,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from bioloom.app import create_app
-from bioloom.config import Paths
+from makphi.app import create_app
+from makphi.config import Paths
 
 AA = "ACDEFGHIKLMNPQRSTVWY"
 THREE = {"ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C", "GLN": "Q", "GLU": "E", "GLY": "G", "HIS": "H",

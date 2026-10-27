@@ -6,9 +6,9 @@ import threading
 
 import pytest
 
-from bioloom.core.jobs import PRIORITY
-from bioloom.domain import report
-from bioloom.services.reports import ReportService
+from makphi.core.jobs import PRIORITY
+from makphi.domain import report
+from makphi.services.reports import ReportService
 
 from .conftest import DATA, HUMAN_UB, YEAST_UB, wait_job
 
@@ -197,7 +197,7 @@ def test_latest_by_source_and_fingerprint(client_with_ubq):
 def test_latest_reports_the_running_analysis(client_with_ubq, monkeypatch):
     """Un'analisi in corso sulla stessa struttura è `active_job_id` (la pagina Qualità la riprende invece di proporne
     un'altra); finita, diventa `job_id`."""
-    from bioloom.services import analysis as analysis_service
+    from makphi.services import analysis as analysis_service
 
     c = client_with_ubq
     first = _analysis(c, {"source": UBQ})
@@ -232,7 +232,7 @@ def test_latest_reads_only_the_source(client_with_ubq, monkeypatch):
     c = client_with_ubq
     job = _analysis(c, {"source": UBQ, "msa": {"text": _fasta(_aligned_rows())}})
     core = c.app.state.core
-    from bioloom.services.analysis import AnalysisService
+    from makphi.services.analysis import AnalysisService
 
     service = AnalysisService(core.jobs, core.compute)
     seen: list[str] = []
@@ -327,7 +327,7 @@ def test_report_lookup_for_job_models(client_with_ubq):
 
 
 def test_report_section_render_and_escape():
-    data = {"kind": "quality", "title": "t", "job_id": "abc", "tools": [("BioLoom", "4")], "warnings": [],
+    data = {"kind": "quality", "title": "t", "job_id": "abc", "tools": [("MakPhi", "4")], "warnings": [],
             "analysis": {"job_id": "j1", "finished_at": "2026-09-30T10:00:00+00:00", "disulfides": [
                 {"a": {"chain": "A", "resnum": "3", "resname": "CYS"}, "b": {"chain": "B", "resnum": "40",
                                                                             "resname": "<b>X</b>"},

@@ -1,4 +1,4 @@
-// Tipi delle risposte dell'API BioLoom v4 (specchio dei payload del backend).
+// Tipi delle risposte dell'API MakPhi (specchio dei payload del backend).
 
 export type JobStatus = "queued" | "running" | "cancelling" | "completed" | "failed" | "cancelled";
 export type JobKind =
@@ -285,14 +285,14 @@ export interface Settings {
 }
 
 /** Server di posta per l'avviso alla fine delle pipeline, in sola lettura: si configura nel file licenses/posta.env
- * della cartella dati o con le variabili BIOLOOM_SMTP_* (server.env), mai dall'interfaccia. La password non torna mai. */
+ * della cartella dati o con le variabili MAKPHI_SMTP_* (server.env), mai dall'interfaccia. La password non torna mai. */
 export interface NotifyStatus {
   host: string;
   port: number;
   security: "starttls" | "ssl" | "none";
   user: string;
   sender: string;
-  /** indirizzo di BioLoom per il link nel messaggio; vuoto = nessun link */
+  /** indirizzo di MakPhi per il link nel messaggio; vuoto = nessun link */
   public_url: string;
   password_set: boolean;
   /** server e mittente impostati: l'avviso si può chiedere */
@@ -2389,14 +2389,14 @@ export interface PackageEnvironment {
 
 export interface PackageVersion {
   version: string;
-  /** BIOLOOM_IMAGE_VERSION del container; null fuori da Docker */
+  /** MAKPHI_IMAGE_VERSION del container; null fuori da Docker */
   image: string | null;
 }
 
 /** Livello degli esiti dell'anteprima: come i controlli preventivi. */
 export interface PackageCheck {
   level: PreflightLevel;
-  /** rerun_not_reproducible, rerun_unsupported, rerun_version_bioloom, rerun_version_tool, rerun_remote_input, … */
+  /** rerun_not_reproducible, rerun_unsupported, rerun_version_makphi, rerun_version_tool, rerun_remote_input, … */
   code: string;
   message: string;
 }
@@ -2407,7 +2407,7 @@ export interface PackageSummary {
   package_id: string;
   format_version: number;
   created_at: string;
-  bioloom: PackageVersion;
+  makphi: PackageVersion;
   environment: PackageEnvironment;
   job: { id: string; kind: JobKind | string; title: string; status: string; created_at?: string | null;
     started_at?: string | null; finished_at?: string | null; duration_seconds?: number | null };
@@ -2424,7 +2424,7 @@ export interface PackageSummary {
   files: { count: number; bytes: number; by_role: Partial<Record<PackageRole, { count: number; bytes: number }>>;
     list: { path: string; role: PackageRole; size: number }[] };
   /** versioni di questa installazione, per il confronto */
-  current: { bioloom: PackageVersion; environment: PackageEnvironment };
+  current: { makphi: PackageVersion; environment: PackageEnvironment };
   checks: PackageCheck[];
   manifest_sha256: string;
 }
@@ -2502,7 +2502,7 @@ export interface RerunResult {
   verdict: RerunVerdict;
   summary: string;
   kind: JobKind | string;
-  original: { job_id: string; kind: string; title: string; finished_at: string | null; bioloom: string | null;
+  original: { job_id: string; kind: string; title: string; finished_at: string | null; makphi: string | null;
     image: string | null; package_created_at: string | null };
   counts: Record<RerunFileStatus, number>;
   structures: { path: string; coordinates: RerunCoordinates }[];
@@ -2511,7 +2511,7 @@ export interface RerunResult {
   tolerance: { coordinates_angstrom: number; score_abs: number; score_rel: number; ignored: string[] };
   /** tolleranze scientifiche del tipo di calcolo (null se non ne ha) */
   scientific?: RerunScientific | null;
-  bioloom: string;
+  makphi: string;
   image: string | null;
   created_at: string;
   duration_seconds: number;
@@ -2704,7 +2704,7 @@ export interface ProjectDeleteResult {
   jobs_deleted: number;
   freed_bytes: number;
   leftover: number;
-  /** progetto vuoto creato perché era l'ultimo (BioLoom ne richiede almeno uno), altrimenti null */
+  /** progetto vuoto creato perché era l'ultimo (MakPhi ne richiede almeno uno), altrimenti null */
   replacement: Project | null;
 }
 

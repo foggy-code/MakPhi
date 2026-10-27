@@ -16,12 +16,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from bioloom.core.errors import AppError
-from bioloom.core.jobs import JobCancelled
-from bioloom.domain import ligands, report, sequences, structure
-from bioloom.domain.sequences import PirEntry
-from bioloom.engines import modeller, quality
-from bioloom.services.compute import PreparedTemplates, _apply_ligand_options
+from makphi.core.errors import AppError
+from makphi.core.jobs import JobCancelled
+from makphi.domain import ligands, report, sequences, structure
+from makphi.domain.sequences import PirEntry
+from makphi.engines import modeller, quality
+from makphi.services.compute import PreparedTemplates, _apply_ligand_options
 from tests.conftest import DATA, HUMAN_UB, YEAST_UB, requires_modeller, wait_job
 
 ZN_PDB = DATA / "ubq_zn.pdb"
@@ -609,13 +609,13 @@ def test_quality_report_has_ligands_only_with_heteroatoms(ubq_path):
     assert rep["ligands"]["groups"][0]["resname"] == "ZN" and rep["ligands"]["status"] == "da controllare"
     assert "ligands" not in quality.analyze(ubq_path, with_dope=False)  # solo acque
     # il voto resta quello di Ramachandran e clash
-    from bioloom.domain import grading
+    from makphi.domain import grading
     assert rep["grade"] == grading.grade(rep["ramachandran"]["summary"]["outlier_pct"], rep["clashes"]["clashscore"])
 
 
 def test_report_has_ligand_section_only_with_ligands(ubq_path):
     base = {"kind": "quality", "title": "Qualità", "job_id": "j1", "generated_at": "2026-09-30T10:00:00+00:00",
-            "tools": [("BioLoom", "4")], "target": {"name": "ubq", "sequence": HUMAN_UB}}
+            "tools": [("MakPhi", "4")], "target": {"name": "ubq", "sequence": HUMAN_UB}}
     rep = quality.analyze(ZN_PDB, with_dope=False)
     rep["ligands"]["groups"][0]["description"] = "<script>x</script>"
     html = report.render({**base, "quality": rep})
@@ -662,7 +662,7 @@ def test_yeast_model_on_ubq_zn_transfers_only_the_zinc(client, tmp_path):
     pdb = client.get(f"/api/jobs/{job['id']}/files/{best['file']}").text
     hetatm = [ln for ln in pdb.splitlines() if ln.startswith("HETATM")]
     assert len(hetatm) == 1 and hetatm[0][17:20] == " ZN" and "SO4" not in pdb
-    assert "REMARK 999 BIOLOOM LIGANDS 1 ZN:A101" in pdb
+    assert "REMARK 999 MAKPHI LIGANDS 1 ZN:A101" in pdb
     # verifica nel rapporto di qualità: His68 coordina lo Zn come nel template
     rep = client.get(f"/api/jobs/{job['id']}/quality/{best['file']}").json()
     (group,) = rep["ligands"]["groups"]
@@ -717,7 +717,7 @@ def test_two_templates_with_the_same_zinc_give_one_zinc(client):
     pdb = client.get(f"/api/jobs/{job['id']}/files/{best['file']}").text
     hetatm = [ln for ln in pdb.splitlines() if ln.startswith("HETATM")]
     assert len(hetatm) == 1 and hetatm[0][17:20] == " ZN"
-    assert "REMARK 999 BIOLOOM LIGANDS 1 ZN:A101" in pdb
+    assert "REMARK 999 MAKPHI LIGANDS 1 ZN:A101" in pdb
     # verifica con il sito del template principale: His68 coordina lo Zn
     (group,) = res["ligands"]["verification"]["groups"]
     assert group["template"] == {"code": "ZNA_A", "group": "ZN A101"}

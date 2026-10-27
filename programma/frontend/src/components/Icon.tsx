@@ -1,4 +1,4 @@
-// Set di icone a tratto (24×24), disegnate per BioLoom: nessuna dipendenza esterna.
+// Set di icone a tratto (24×24), disegnate per MakPhi: nessuna dipendenza esterna.
 const PATHS: Record<string, string> = {
   home: "M3 11 12 4l9 7M5 10v10h5v-6h4v6h5V10",
   dna: "M7 3c0 6 10 6 10 12 0 3-2 5-5 6M17 3c0 6-10 6-10 12 0 3 2 5 5 6M8 7h8M8 17h8",

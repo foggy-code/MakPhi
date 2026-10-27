@@ -13,7 +13,7 @@ import time
 
 import pytest
 
-from bioloom.core import jobs as jobs_module
+from makphi.core import jobs as jobs_module
 
 from .test_jobs import _scratch_manager, wait
 

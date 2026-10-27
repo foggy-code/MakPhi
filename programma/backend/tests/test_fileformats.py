@@ -4,8 +4,8 @@ import gzip
 
 import pytest
 
-from bioloom.core.errors import AppError
-from bioloom.domain import fileformats
+from makphi.core.errors import AppError
+from makphi.domain import fileformats
 
 from .conftest import DATA, HUMAN_UB
 

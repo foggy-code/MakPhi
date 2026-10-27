@@ -1,17 +1,17 @@
 """Tasche con fpocket (F7b): lettura dell'uscita reale di 1UBQ, job `pockets`, rotte e degradazione senza fpocket.
 
-I test che eseguono fpocket si saltano nelle immagini senza il programma (bioloom:4.1.0); quelli del parser usano
+I test che eseguono fpocket si saltano nelle immagini senza il programma (makphi:4.1.0); quelli del parser usano
 l'uscita reale salvata in tests/data/fpocket_1ubq_out (fpocket 4.2.3 su 1UBQ, sola proteina)."""
 
 from __future__ import annotations
 
 import pytest
 
-from bioloom.core.errors import ToolUnavailable
-from bioloom.core.jobs import PRIORITY
-from bioloom.domain import pockets
-from bioloom.engines import pockets as engine
-from bioloom.engines import tools
+from makphi.core.errors import ToolUnavailable
+from makphi.core.jobs import PRIORITY
+from makphi.domain import pockets
+from makphi.engines import pockets as engine
+from makphi.engines import tools
 
 from .conftest import DATA, ubq_variant, wait_job
 

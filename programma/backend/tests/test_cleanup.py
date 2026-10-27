@@ -25,16 +25,16 @@ from typing import Optional
 import pytest
 from fastapi.testclient import TestClient
 
-from bioloom.app import create_app
-from bioloom.config import Paths
-from bioloom.core import auth, storage
-from bioloom.core import jobs as jobs_module
-from bioloom.core.container import build_core
-from bioloom.core.errors import AppError, Conflict, NotFound
-from bioloom.core.jobs import TOMBSTONE_PREFIX, Deleted
-from bioloom.services import housekeeping as housekeeping_module
-from bioloom.services import jobcleanup
-from bioloom.services.jobcleanup import STARRED
+from makphi.app import create_app
+from makphi.config import Paths
+from makphi.core import auth, storage
+from makphi.core import jobs as jobs_module
+from makphi.core.container import build_core
+from makphi.core.errors import AppError, Conflict, NotFound
+from makphi.core.jobs import TOMBSTONE_PREFIX, Deleted
+from makphi.services import housekeeping as housekeeping_module
+from makphi.services import jobcleanup
+from makphi.services.jobcleanup import STARRED
 from tests.conftest import HUMAN_UB
 
 HEX16 = re.compile(r"^[0-9a-f]{16}$")
@@ -589,9 +589,9 @@ def test_job_delete_treats_folder_left_in_tombstone_as_the_jobs(core):
     for job_id in (first, second):  # un rinomino inverso non riuscito in passato
         os.replace(core.jobs.jobs_dir / job_id, tomb_of(core, job_id))
     answers = [1, 0]  # condizione vera al controllo e falsa nel DELETE
-    core.db.create_function("bioloom_test_flip_tomb", 0, lambda: answers.pop(0) if answers else 0)
+    core.db.create_function("makphi_test_flip_tomb", 0, lambda: answers.pop(0) if answers else 0)
     with pytest.raises(Conflict, match="non corrisponde più"):
-        core.jobs.delete(first, only_if=("bioloom_test_flip_tomb()", ()))
+        core.jobs.delete(first, only_if=("makphi_test_flip_tomb()", ()))
     assert (core.jobs.jobs_dir / first / "result.json").exists() and not tomb_of(core, first).exists()
     assert core.jobs.delete(second) == Deleted(70, False)  # i suoi file erano nel tombstone: contano
     core.jobs.delete(first)
@@ -604,9 +604,9 @@ def test_job_delete_with_two_folders_touches_neither_until_the_delete(core):
     old.mkdir()
     (old / "model.pdb").write_bytes(b"y" * 30)
     answers = [1, 0]  # condizione vera al controllo e falsa nel DELETE
-    core.db.create_function("bioloom_test_flip_both", 0, lambda: answers.pop(0) if answers else 0)
+    core.db.create_function("makphi_test_flip_both", 0, lambda: answers.pop(0) if answers else 0)
     with pytest.raises(Conflict, match="non corrisponde più"):
-        core.jobs.delete(job, only_if=("bioloom_test_flip_both()", ()))
+        core.jobs.delete(job, only_if=("makphi_test_flip_both()", ()))
     assert (old / "model.pdb").exists() and (core.jobs.jobs_dir / job / "result.json").exists()
     assert core.jobs.delete(job) == Deleted(100, False)  # riuscito il DELETE, vanno via entrambe
     assert not old.exists() and not (core.jobs.jobs_dir / job).exists()
@@ -626,9 +626,9 @@ def test_job_delete_retries_the_reverse_rename(core, monkeypatch):
 
     monkeypatch.setattr(jobs_module.os, "replace", busy_once)
     answers = [1, 0]
-    core.db.create_function("bioloom_test_flip_undo", 0, lambda: answers.pop(0) if answers else 0)
+    core.db.create_function("makphi_test_flip_undo", 0, lambda: answers.pop(0) if answers else 0)
     with pytest.raises(Conflict, match="non corrisponde più"):
-        core.jobs.delete(job, only_if=("bioloom_test_flip_undo()", ()))
+        core.jobs.delete(job, only_if=("makphi_test_flip_undo()", ()))
     assert failures and (core.jobs.jobs_dir / job / "result.json").exists() and not tomb_of(core, job).exists()
     monkeypatch.undo()
     core.jobs.delete(job)
@@ -644,9 +644,9 @@ def test_delete_only_if_rejects_job_that_no_longer_matches(client, core):
     assert not list(core.jobs.jobs_dir.glob(f"{TOMBSTONE_PREFIX}*"))
     # condizione vera al controllo e falsa nel DELETE: il rinomino della cartella si annulla
     answers = [1, 0]
-    core.db.create_function("bioloom_test_flip", 0, lambda: answers.pop(0) if answers else 0)
+    core.db.create_function("makphi_test_flip", 0, lambda: answers.pop(0) if answers else 0)
     with pytest.raises(Conflict, match="non corrisponde più"):
-        core.jobs.delete(second, only_if=("bioloom_test_flip()", ()))
+        core.jobs.delete(second, only_if=("makphi_test_flip()", ()))
     assert core.jobs.get(second)["status"] == "failed" and (core.jobs.jobs_dir / second / "result.json").exists()
     assert not list(core.jobs.jobs_dir.glob(f"{TOMBSTONE_PREFIX}*")) and not core.jobs._removing
     assert core.jobs.delete(first, only_if=(STARRED, ())).freed_bytes == 4  # la condizione vale: eliminato
@@ -671,10 +671,10 @@ def test_housekeeping_never_removes_job_folders_without_row(core):
 def test_storage_reports_backups(client, core):
     backups = core.paths.db.parent / "backups"
     backups.mkdir(exist_ok=True)
-    (backups / "bioloom.schema1.prova.db").write_bytes(b"b" * 1234)
+    (backups / "makphi.schema1.prova.db").write_bytes(b"b" * 1234)
     assert client.get("/api/system/storage").json()["backups"] == 1234
     assert client.post("/api/system/cleanup").status_code == 200
-    assert (backups / "bioloom.schema1.prova.db").exists()  # le copie del database non si eliminano da sole
+    assert (backups / "makphi.schema1.prova.db").exists()  # le copie del database non si eliminano da sole
 
 
 def test_dir_size_until_stops_at_deadline(tmp_path, monkeypatch):
@@ -1387,7 +1387,7 @@ def test_cleanup_routes(client):
 
 @pytest.fixture
 def server_client(tmp_path, monkeypatch):
-    monkeypatch.delenv("BIOLOOM_ALLOW_SHUTDOWN", raising=False)
+    monkeypatch.delenv("MAKPHI_ALLOW_SHUTDOWN", raising=False)
     app = create_app(Paths(tmp_path / "data"), frontend_dist=None,
                      auth_config=auth.AuthConfig(enabled=True, key="segreto-12345"))
     with TestClient(app) as c:

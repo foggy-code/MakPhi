@@ -8,8 +8,8 @@ import math
 import numpy as np
 import pytest
 
-from bioloom.core.errors import AppError
-from bioloom.domain import conservation, structure
+from makphi.core.errors import AppError
+from makphi.domain import conservation, structure
 
 from .conftest import DATA, HUMAN_UB, YEAST_UB
 

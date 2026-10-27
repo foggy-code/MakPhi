@@ -12,7 +12,7 @@ import math
 import numpy as np
 import pytest
 
-from bioloom.domain import interactions, secondary, structure
+from makphi.domain import interactions, secondary, structure
 
 from .conftest import DATA
 

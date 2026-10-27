@@ -41,7 +41,7 @@ const REPORT = {
 const CONSENSUS = {
   version: 2, score: 64.4, band: "intermedia", methods_used: 2, methods_total: 6,
   methods: [
-    { key: "grade", label: "Voto BioLoom", raw: 79.2, normalized: 79.2, weight: 1, band: "buona", measures: "stereochimica", source: "domain/grading", points: [[0, 0], [55, 40], [70, 70], [100, 100]] },
+    { key: "grade", label: "Voto MakPhi", raw: 79.2, normalized: 79.2, weight: 1, band: "buona", measures: "stereochimica", source: "domain/grading", points: [[0, 0], [55, 40], [70, 70], [100, 100]] },
     { key: "zdope", label: "z-DOPE", raw: -1.4, normalized: 49.6, weight: 1, band: "intermedia", measures: "energia statistica", source: "Shen & Sali 2006", points: [[-2, 100], [-1, 70], [0, 40], [2, 0]] },
   ],
   missing: [{ key: "qmean", label: "QMEAN4 Z-score", reason: "non calcolato" }],
@@ -89,7 +89,7 @@ describe("consenso", () => {
     const html = renderToStaticMarkup(<ConsensusPanel report={REPORT} consensus={CONSENSUS} error={null} selected={null} onSelect={noop} onRegion={noop} />);
     expect(html).toContain("Punteggio di consenso");
     expect(html).toContain('class="stat stat-warn"');
-    expect(html).toContain('aria-label="Mostra dettagli di Voto BioLoom"');
+    expect(html).toContain('aria-label="Mostra dettagli di Voto MakPhi"');
     expect(html).toContain(">39,6<"); // 79,2 × 1 / 2
     expect(html).toContain("Scale e fonti");
     expect(html).toContain("Metodi non disponibili");

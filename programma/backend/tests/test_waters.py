@@ -1,5 +1,5 @@
 """Acque catalitiche e strutturali: candidate del template, scelta esplicita, copia preparata (acque in fondo alla
-catena come HOH), colonne del PIR ('.' dentro BioLoom, 'w' nel file per MODELLER), verifica dell'acqua nel modello e,
+catena come HOH), colonne del PIR ('.' dentro MakPhi, 'w' nel file per MODELLER), verifica dell'acqua nel modello e,
 con MODELLER, modellazione dell'ubiquitina di lievito su `ubq_zn.pdb` con lo Zn e una delle sue due acque.
 
 `tests/data/ubq_zn.pdb`: Zn²⁺ (ZN A101) a 2,10 Å da NE2 di His68 e da due acque (HOH A201 e A202), entrambe nella
@@ -12,10 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from bioloom.core.errors import AppError
-from bioloom.domain import ligands, sequences, structure
-from bioloom.domain.sequences import PirEntry
-from bioloom.engines import modeller
+from makphi.core.errors import AppError
+from makphi.domain import ligands, sequences, structure
+from makphi.domain.sequences import PirEntry
+from makphi.engines import modeller
 from tests.conftest import DATA, HUMAN_UB, YEAST_UB, requires_modeller, wait_job
 
 ZN_PDB = DATA / "ubq_zn.pdb"
@@ -136,7 +136,7 @@ def _entries(template_seq: str, target_seq: str) -> list[PirEntry]:
             PirEntry("yeast", "sequence", ["", "", "", "", "", "", "0.00", "0.00"], target_seq)]
 
 
-def test_water_columns_are_dots_in_bioloom_and_w_for_modeller(tmp_path):
+def test_water_columns_are_dots_in_makphi_and_w_for_modeller(tmp_path):
     spec = modeller.TemplateSpec("ZN", ["A"], hetatm=True, ligands=list(ZN_AND_WATER))
     info = {**modeller.prepare_template(ZN_PDB, spec, tmp_path), "code": "ZN_A"}
     entries, notes = ligands.pir_with_ligands(_entries(info["sequence"], YEAST_UB), [info])
@@ -145,7 +145,7 @@ def test_water_columns_are_dots_in_bioloom_and_w_for_modeller(tmp_path):
     text = ligands.modeller_pir(entries, [info])
     rows = [ln for ln in text.splitlines() if ln.endswith("*")]
     assert [r[-3:] for r in rows] == [".w*", ".w*"]
-    # il PIR di BioLoom resta valido e con i '.'; senza acque nessun file per MODELLER
+    # il PIR di MakPhi resta valido e con i '.'; senza acque nessun file per MODELLER
     assert sequences.validate_pir(sequences.format_pir(entries))["valid"]
     plain = {**info, "ligand_groups": info["ligand_groups"][:1]}
     entries, _ = ligands.pir_with_ligands(_entries(info["sequence"], YEAST_UB), [plain])
@@ -258,7 +258,7 @@ def test_yeast_model_keeps_the_zinc_and_its_catalytic_water(client):
     assert [(g["resname"], g["class"]) for g in res["ligands"]["transferred"]] == [("ZN", "metal"), ("HOH", "water")]
     assert res["templates"][0]["waters"] == 1 and res["templates"][0]["ligands"] == 1
     assert not any("Il modello migliore contiene" in w for w in res["warnings"])
-    # PIR di BioLoom con i '.', file per MODELLER con la 'w'
+    # PIR di MakPhi con i '.', file per MODELLER con la 'w'
     template_row, target_row = [e.sequence for e in sequences.parse_pir(res["alignment"])]
     assert template_row.endswith("..") and target_row.endswith("..")
     water_pir = client.get(f"/api/jobs/{job['id']}/files/{modeller.WATER_ALIGNMENT_FILE}").text
@@ -267,7 +267,7 @@ def test_yeast_model_keeps_the_zinc_and_its_catalytic_water(client):
     pdb = client.get(f"/api/jobs/{job['id']}/files/{best['file']}").text
     het = [ln for ln in pdb.splitlines() if ln.startswith("HETATM")]
     assert [ln[17:20] for ln in het] == [" ZN", "HOH"]
-    assert "REMARK 999 BIOLOOM LIGANDS 2 ZN:A101 HOH:A201" in pdb
+    assert "REMARK 999 MAKPHI LIGANDS 2 ZN:A101 HOH:A201" in pdb
     # l'acqua resta sullo Zn, come nel template
     zn = next(ln for ln in het if ln[17:20] == " ZN")
     hoh = next(ln for ln in het if ln[17:20] == "HOH")

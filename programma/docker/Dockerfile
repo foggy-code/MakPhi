@@ -1,14 +1,14 @@
 # syntax=docker/dockerfile:1
 # check=skip=FromPlatformFlagConstDisallowed
-# BioLoom v4: l'intero programma in un'immagine Linux con MODELLER e tutti gli strumenti di analisi.
-# Si costruisce dall'avviatore (o, dalla cartella di BioLoom, con `docker compose -f programma/launcher/compose.yml build`)
+# MakPhi: l'intero programma in un'immagine Linux con MODELLER e tutti gli strumenti di analisi.
+# Si costruisce dall'avviatore (o, dalla cartella di MakPhi, con `docker compose -f programma/launcher/compose.yml build`)
 # partendo dalla cartella programma/.
 #
 # Strumenti: MODELLER 10.8, DSSP (mkdssp), BLAST+, Clustal Omega, MAFFT, MUSCLE, MMseqs2, TM-align,
 # US-align, fpocket, APBS, PDB2PQR (con PROPKA), OpenMM e PDBFixer, PROCHECK e ProSA II (se i pacchetti con
 # licenza sono in docker/vendor/).
 # Le chiavi di licenza NON entrano nell'immagine: stanno nella cartella dati (data/licenses).
-# Versione: BIOLOOM_VERSION (l'avviatore e compose.yml la passano da programma/launcher/VERSION; il valore predefinito
+# Versione: MAKPHI_VERSION (l'avviatore e compose.yml la passano da programma/launcher/VERSION; il valore predefinito
 # qui sotto lo tiene allineato programma/scripts/versione.sh). In /app/IMPRONTA l'impronta dei sorgenti
 # (docker/impronta.sh), con cui l'avviatore si accorge che l'immagine non corrisponde più al codice.
 # L'immagine è solo linux/amd64 (MODELLER per amd64, ProSA a 32 bit): --platform=linux/amd64 è voluto, per questo
@@ -29,10 +29,10 @@
 #     riga; in *_SHA256 lo SHA-256 del tar non compresso: `curl -fsSL <URL del RUN> | gzip -dc | sha256sum`
 # poi una costruzione completa (e le versioni nuove in THIRD_PARTY_NOTICES.md).
 
-ARG BIOLOOM_VERSION=4.4.0
+ARG MAKPHI_VERSION=5.0.0
 
 # Immagini di base per digest dell'indice multi-architettura: node:22-slim (Node.js 22.23.3, Debian 12) e ubuntu:24.04
-# (24.04.5 del 2026-09-17). Il tag resta nel commento e non davanti al digest: Podman 2.2.1 (bioloom-podman.sh)
+# (24.04.5 del 2026-09-17). Il tag resta nel commento e non davanti al digest: Podman 2.2.1 (makphi-podman.sh)
 # rifiuta i riferimenti con tag e digest insieme.
 ARG NODE_IMAGE=node@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
 ARG UBUNTU_IMAGE=ubuntu@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
@@ -57,7 +57,7 @@ RUN npm run build
 FROM --platform=linux/amd64 ${UBUNTU_IMAGE} AS tools-build
 ARG UBUNTU_SNAPSHOT
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
-    && printf 'APT::Snapshot "%s";\n' "${UBUNTU_SNAPSHOT}" > /etc/apt/apt.conf.d/50bioloom-snapshot \
+    && printf 'APT::Snapshot "%s";\n' "${UBUNTU_SNAPSHOT}" > /etc/apt/apt.conf.d/50makphi-snapshot \
     && rm -rf /var/lib/apt/lists/*
 RUN apt-get update && apt-get install -y --no-install-recommends \
         g++ gfortran gcc make ca-certificates wget unzip \
@@ -79,7 +79,7 @@ RUN wget -q "https://github.com/pylelab/USalign/archive/${USALIGN_COMMIT}.tar.gz
     && /build/USalign -h | grep -q "(Version ${USALIGN_TAG})"
 # fpocket (tasche; Le Guilloux et al. 2009, licenza MIT): non è fra i pacchetti di Ubuntu 24.04, si compila dalla
 # release ufficiale, 4.2.3 (tag) = commit 4bb0d84. Senza la profilazione -pg del makefile, che scriverebbe gmon.out
-# nella cartella di ogni calcolo; niente cartella data/ (esempi e dizionario mmCIF: BioLoom passa a fpocket un PDB).
+# nella cartella di ogni calcolo; niente cartella data/ (esempi e dizionario mmCIF: MakPhi passa a fpocket un PDB).
 ARG FPOCKET_COMMIT=4bb0d8447f62fee77e2c3c29f54b5fcaf5e2c066
 ARG FPOCKET_SHA256=27d87a8aa2cf44b371c854cf7676e3db6af18ebc34be6e685fcbd995953488d4
 RUN wget -q "https://github.com/Discngine/fpocket/archive/${FPOCKET_COMMIT}.tar.gz" -O fpocket.tar.gz \
@@ -120,26 +120,26 @@ RUN tr -d '\r' < /ctx/docker/impronta.sh > /tmp/impronta.sh && sh /tmp/impronta.
 
 # ------------------------------------------------------------------ immagine finale
 FROM --platform=linux/amd64 ${UBUNTU_IMAGE}
-ARG BIOLOOM_VERSION
+ARG MAKPHI_VERSION
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    BIOLOOM_CONTAINER=1 \
-    BIOLOOM_IMAGE_VERSION=${BIOLOOM_VERSION} \
-    BIOLOOM_DATA_DIR=/data \
-    BIOLOOM_SCRATCH_DIR=/scratch \
-    BIOLOOM_CACHE_DIR=/cache \
-    BIOLOOM_HOST=0.0.0.0 \
-    BIOLOOM_PORT=8765 \
+    MAKPHI_CONTAINER=1 \
+    MAKPHI_IMAGE_VERSION=${MAKPHI_VERSION} \
+    MAKPHI_DATA_DIR=/data \
+    MAKPHI_SCRATCH_DIR=/scratch \
+    MAKPHI_CACHE_DIR=/cache \
+    MAKPHI_HOST=0.0.0.0 \
+    MAKPHI_PORT=8765 \
     prodir=/opt/procheck \
     PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/procheck:/opt/prosa/bin \
-    USER=bioloom \
-    LOGNAME=bioloom
+    USER=makphi \
+    LOGNAME=makphi
 
 # pacchetti dall'istantanea di UBUNTU_SNAPSHOT (la configurazione resta nell'immagine e vale anche per MODELLER)
 ARG UBUNTU_SNAPSHOT
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
-    && printf 'APT::Snapshot "%s";\n' "${UBUNTU_SNAPSHOT}" > /etc/apt/apt.conf.d/50bioloom-snapshot \
+    && printf 'APT::Snapshot "%s";\n' "${UBUNTU_SNAPSHOT}" > /etc/apt/apt.conf.d/50makphi-snapshot \
     && rm -rf /var/lib/apt/lists/*
 # ProSA II 2003 è un programma Linux a 32 bit: servono le librerie i386.
 RUN dpkg --add-architecture i386 && apt-get update && apt-get install -y --no-install-recommends \
@@ -150,7 +150,7 @@ RUN dpkg --add-architecture i386 && apt-get update && apt-get install -y --no-in
     && rm -rf /var/lib/apt/lists/*
 
 # MODELLER: .deb ufficiale verificato con SHA-256. La chiave fittizia serve solo all'installazione; quella vera arriva
-# da BioLoom a ogni calcolo. apt-get install del file (non dpkg -i) porta anche le dipendenze che il pacchetto dovesse
+# da MakPhi a ogni calcolo. apt-get install del file (non dpkg -i) porta anche le dipendenze che il pacchetto dovesse
 # dichiarare: per questo rilegge le liste dei pacchetti, cancellate dal livello precedente, e poi le ripulisce.
 ARG MODELLER_VERSION=10.8
 ARG MODELLER_SHA256=87d3d8edbf0035ee0d625999f64baa172c268c4abbaa181a65b6c96ffb470899
@@ -196,7 +196,7 @@ COPY backend/ backend/
 COPY --from=frontend /src/dist frontend/dist
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh && chmod 755 /entrypoint.sh \
-    && useradd -m -u 1000 -o bioloom 2>/dev/null || true \
+    && useradd -m -u 1000 -o makphi 2>/dev/null || true \
     && mkdir -p /data /scratch /cache && chmod -R a+rX /app
 
 # file temporanei e HOME nello scratch (creati dall'entrypoint a ogni avvio)
@@ -207,11 +207,11 @@ WORKDIR /app/backend
 
 # Impronta e versione per ultime: l'impronta cambia a ogni modifica del codice, i livelli sopra restano in cache.
 COPY --from=impronta /impronta /app/IMPRONTA
-LABEL bioloom.version=${BIOLOOM_VERSION}
+LABEL makphi.version=${MAKPHI_VERSION}
 
 EXPOSE 8765
 VOLUME ["/scratch", "/cache"]
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=6 \
     CMD python3 -c "import urllib.request,sys; urllib.request.urlopen('http://127.0.0.1:8765/api/health', timeout=4)" || exit 1
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["python3", "-m", "bioloom", "--no-browser"]
+CMD ["python3", "-m", "makphi", "--no-browser"]

@@ -17,10 +17,10 @@ import httpx
 import numpy as np
 import pytest
 
-from bioloom.core import cache
-from bioloom.core.errors import RemoteServiceError
-from bioloom.domain import geometry, multitemplate, sequences, template_rank
-from bioloom.engines import modeller, remote, search
+from makphi.core import cache
+from makphi.core.errors import RemoteServiceError
+from makphi.domain import geometry, multitemplate, sequences, template_rank
+from makphi.engines import modeller, remote, search
 
 from .conftest import DATA, HUMAN_UB, YEAST_UB, requires_modeller, wait_job
 
@@ -541,8 +541,8 @@ def test_old_search_cache_entries_are_not_read(client, halves):
 
 
 def test_local_search_with_stale_metadata_is_not_cached(client, monkeypatch, tmp_path):
-    from bioloom.core.jobs import JobContext, ProcessResult
-    from bioloom.engines import tools
+    from makphi.core.jobs import JobContext, ProcessResult
+    from makphi.engines import tools
 
     from .test_search import BLAST_XML
 
@@ -636,8 +636,8 @@ def test_pipeline_multi_validation(client):
     for bad in (1, 6):
         assert client.post("/api/pipeline", json={**body, "max_templates": bad}).status_code == 422
     assert client.post("/api/pipeline", json={**body, "template_mode": "boh"}).status_code == 422
-    from bioloom.core.errors import AppError
-    from bioloom.services import pipeline
+    from makphi.core.errors import AppError
+    from makphi.services import pipeline
 
     assert pipeline.max_templates({}) == 3 and pipeline.max_templates({"max_templates": "4"}) == 4
     for bad in (1, 6, "x", None, True):

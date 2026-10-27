@@ -59,16 +59,16 @@ describe("ricarica per i moduli obsoleti", () => {
   it("una volta, poi non prima di un minuto", () => {
     const data = memory();
     expect(claimStaleReload(STALE, 1_000_000)).toBe(true);
-    expect(data.get("bioloom.chunk-reload")).toBe("1000000");
+    expect(data.get("makphi.chunk-reload")).toBe("1000000");
     expect(claimStaleReload(STALE, 1_030_000)).toBe(false); // il modulo manca ancora dopo la ricarica: niente ciclo
     expect(claimStaleReload(STALE, 1_060_000)).toBe(true);
   });
 
   it("segno delle versioni precedenti («1») o illeggibile: si ricarica", () => {
     const data = memory();
-    data.set("bioloom.chunk-reload", "1");
+    data.set("makphi.chunk-reload", "1");
     expect(claimStaleReload(STALE, 1_000_000)).toBe(true);
-    data.set("bioloom.chunk-reload", "x");
+    data.set("makphi.chunk-reload", "x");
     expect(claimStaleReload(STALE, 2_000_000)).toBe(true);
   });
 

@@ -47,8 +47,8 @@ describe("interprete di MODELLER (esecuzione nativa)", () => {
     server({ container: false, auth: true });
     renderSettings();
     // la nota compare con le informazioni di sistema (modalità server): da lì il campo è bloccato
-    await screen.findByText(/In modalità server lo imposta l'amministratore sul server \(variabile d'ambiente BIOLOOM_MODELLER_PYTHON\)/);
-    expect(document.body.textContent).not.toMatch(/BIOLOOM_MODELLER_PYTHON in server\.env/); // in esecuzione nativa server.env non conta
+    await screen.findByText(/In modalità server lo imposta l'amministratore sul server \(variabile d'ambiente MAKPHI_MODELLER_PYTHON\)/);
+    expect(document.body.textContent).not.toMatch(/MAKPHI_MODELLER_PYTHON in server\.env/); // in esecuzione nativa server.env non conta
     const field = screen.getByDisplayValue("/opt/python/bin/python3");
     expect((field as HTMLInputElement).readOnly).toBe(true);
     expect((screen.getByPlaceholderText(/esm/i) as HTMLInputElement).readOnly).toBe(true);

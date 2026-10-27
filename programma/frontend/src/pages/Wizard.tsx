@@ -112,7 +112,7 @@ export default function Wizard() {
   // lunghezza massima della sequenza delle Impostazioni (finché non arriva, quella predefinita)
   const { data: limits } = useAsync<Settings | null>(() => api.settings().catch(() => null), []);
   const maxLength = limits?.max_sequence_length ?? MAX_LENGTH;
-  const draftKey = `bioloom.wizard.${projectId ?? "-"}`;
+  const draftKey = `makphi.wizard.${projectId ?? "-"}`;
   const [state, setState] = useState<WizardState>(() => restoreState(params, readDraft(draftKey)));
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -193,7 +193,7 @@ export default function Wizard() {
     <div className="page">
       <PageHead
         title="Nuovo modello guidato"
-        lead="Dalla sequenza al modello validato in sei passi: sequenza, ricerca dei template, allineamento, opzioni, avvio e risultati. Prima di ogni calcolo BioLoom controlla licenze, template, tempi e spazio. Lo stato resta nell'indirizzo della pagina e nel browser: si può ricaricare, tornare indietro o riprendere più tardi."
+        lead="Dalla sequenza al modello validato in sei passi: sequenza, ricerca dei template, allineamento, opzioni, avvio e risultati. Prima di ogni calcolo MakPhi controlla licenze, template, tempi e spazio. Lo stato resta nell'indirizzo della pagina e nel browser: si può ricaricare, tornare indietro o riprendere più tardi."
         actions={<button className="btn" onClick={reset}><Icon name="refresh" size={14} /> Ricomincia</button>}
       />
       <Stepper state={state} step={step} max={max} onGo={(s) => go(s)} />
@@ -633,7 +633,7 @@ function ResultsStep({ jobId, result, onNew, navigate }: { jobId: string; result
       <div className="grid grid-4">
         <Stat label="Modello migliore (DOPE minimo)" value={<span className="row" style={{ gap: 8 }}><Grade grade={summary.grade} large /> <span className="small">{summary.file}</span></span>}
           note={summary.gradeScore !== null ? `voto ${fmtNum(summary.gradeScore, 1)}/100` : "analisi di qualità non calcolata"} tone={gTone === "muted" ? undefined : gTone}
-          detail="Voto BioLoom sul modello con il DOPE più basso: 100 meno le penalità per outlier di Ramachandran, contatti sterici e DOPE normalizzato; A ≥ 85, B ≥ 70, C ≥ 55, altrimenti D. Il dettaglio è nella pagina Qualità." />
+          detail="Voto MakPhi sul modello con il DOPE più basso: 100 meno le penalità per outlier di Ramachandran, contatti sterici e DOPE normalizzato; A ≥ 85, B ≥ 70, C ≥ 55, altrimenti D. Il dettaglio è nella pagina Qualità." />
         <Stat label="Consenso fra i metodi" value={summary.consensus !== null ? <>{fmtNum(summary.consensus, 1)}<small>/100</small></> : "—"} note={summary.consensusBand ? `fascia ${summary.consensusBand}` : "senza analisi di qualità"}
           tone={summary.consensusBand ? RANK_BAND_TONE[summary.consensusBand as RankBand] : undefined}
           detail="Media pesata dei metodi di validazione disponibili, ciascuno riportato su una scala 0–100: fasce buona ≥ 70, intermedia 40–70, scarsa < 40." />

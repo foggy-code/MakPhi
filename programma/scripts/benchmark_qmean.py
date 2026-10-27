@@ -1,13 +1,13 @@
 """QMEAN locale con calcoli contemporanei su sequenze tutte diverse (dati grezzi, punto 23 dei lavori aperti).
 
-Dopo `0aa292a` BioLoom usa tutti i posti del worker QMEAN (QMEAN_PARALLEL) e fa una sola ricerca HHblits per
+Dopo `0aa292a` MakPhi usa tutti i posti del worker QMEAN (QMEAN_PARALLEL) e fa una sola ricerca HHblits per
 sequenza: misurare con la stessa sequenza ripetuta favorirebbe la cache dei profili. Qui ogni calcolo ha una
 sequenza nuova (mutazioni casuali con un seme che dipende dall'ora), quindi ogni calcolo fa la sua ricerca HHblits.
 
-Gira dentro l'immagine di BioLoom con il codice montato in /src, nella rete del container `bioloom` (dove il worker
-QMEAN risponde, come per BioLoom stesso):
+Gira dentro l'immagine di MakPhi con il codice montato in /src, nella rete del container `makphi` (dove il worker
+QMEAN risponde, come per MakPhi stesso):
 
-    podman run --network container:bioloom ... python /src/scripts/benchmark_qmean.py \
+    podman run --network container:makphi ... python /src/scripts/benchmark_qmean.py \
         --levels 1,8,16,32 --length 300 --template-file /hostdata/templates/3IU0.pdb --out /out/qmean.json
 
 1. costruisce con MODELLER tanti modelli quanti la somma dei livelli (un modello "fast" per sequenza, in parallelo);
@@ -34,9 +34,9 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from benchmark_lunghezza import chain_residues, mutate, tiled_template  # noqa: E402
 
-from bioloom import __version__  # noqa: E402
-from bioloom.app import create_app  # noqa: E402
-from bioloom.config import Paths  # noqa: E402
+from makphi import __version__  # noqa: E402
+from makphi.app import create_app  # noqa: E402
+from makphi.config import Paths  # noqa: E402
 
 
 def build_models(n: int, length: int, template_file: str, seed0: int, workers: int) -> list[str]:
@@ -93,8 +93,8 @@ def run_level(url: str, models: list[str], poll: float = 5.0) -> dict:
                     started[job_id] = time.time()
                 if job.get("status") in ("completed", "failed", "cancelled"):
                     result = job.get("result") or {}
-                    hh = result.get("bioloom_hhblits") or {}
-                    prof = result.get("bioloom_profiles") or {}
+                    hh = result.get("makphi_hhblits") or {}
+                    prof = result.get("makphi_profiles") or {}
                     done[job_id] = {"status": job["status"], "error": job.get("error"),
                                     "total_s": round(time.time() - sent[job_id], 1),
                                     "queued_s": round(started.get(job_id, sent[job_id]) - sent[job_id], 1),
@@ -118,14 +118,14 @@ def main() -> None:
     ap.add_argument("--host-label", default=platform.node())
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
-    url = os.environ.get("BIOLOOM_QMEAN_URL", "http://127.0.0.1:8080").rstrip("/")
+    url = os.environ.get("MAKPHI_QMEAN_URL", "http://127.0.0.1:8080").rstrip("/")
     levels = [int(x) for x in a.levels.split(",")]
     status = httpx.get(url + "/status", timeout=20).json()
     seed0 = int(time.time())  # sequenze mai viste dalla cache dei profili del worker
     t0 = time.time()
     models = build_models(sum(levels), a.length, a.template_file, seed0, a.build_workers)
     build_s = time.time() - t0
-    out = {"host": a.host_label, "cpu_count": os.cpu_count(), "bioloom": __version__,
+    out = {"host": a.host_label, "cpu_count": os.cpu_count(), "makphi": __version__,
            "date": datetime.now().astimezone().isoformat(timespec="seconds"), "length": a.length,
            "worker_status": status,
            "build_s": round(build_s, 1), "seed0": seed0, "levels": []}

@@ -8,10 +8,10 @@ import zipfile
 
 import pytest
 
-from bioloom.config import Paths, UserSettings
-from bioloom.core.db import Database, DatabaseInUse
-from bioloom.core.jobs import JobManager, is_intermediate
-from bioloom.services.housekeeping import Housekeeping
+from makphi.config import Paths, UserSettings
+from makphi.core.db import Database, DatabaseInUse
+from makphi.core.jobs import JobManager, is_intermediate
+from makphi.services.housekeeping import Housekeeping
 
 
 @pytest.fixture
@@ -143,7 +143,7 @@ def test_list_files_tolerates_files_vanishing(env, monkeypatch):
             raise FileNotFoundError(path)
         return real_stat(path, *args, **kwargs)
 
-    monkeypatch.setattr("bioloom.core.jobs.os.stat", flaky_stat)
+    monkeypatch.setattr("makphi.core.jobs.os.stat", flaky_stat)
     assert [f["path"] for f in mgr.list_files(job_id)] == ["ok.pdb"]
 
 
@@ -157,13 +157,13 @@ def test_recover_purges_scratch(env):
 
 
 def test_second_instance_on_same_data_dir_is_refused(tmp_path):
-    first = Database(tmp_path / "bioloom.db")
+    first = Database(tmp_path / "makphi.db")
     try:
         with pytest.raises(DatabaseInUse):
-            Database(tmp_path / "bioloom.db", busy_timeout=0.2)
+            Database(tmp_path / "makphi.db", busy_timeout=0.2)
     finally:
         first.close()
-    Database(tmp_path / "bioloom.db").close()  # chiusa la prima istanza, la cartella torna libera
+    Database(tmp_path / "makphi.db").close()  # chiusa la prima istanza, la cartella torna libera
 
 
 def test_housekeeping_removes_only_expired_files(tmp_path):

@@ -98,7 +98,7 @@ const CHAIN_ID = /^[A-Za-z0-9]$/;
 /**
  * Nomi delle `segments` catene di una voce (separate da "/"): la prima dal quarto campo della seconda riga PIR (catena
  * iniziale), l'ultima dal sesto (catena finale) se le catene sono due; le altre seguono in ordine alfabetico dalla prima
- * (A, B, C…). Senza indicazioni la prima è A, come nei modelli a più catene di BioLoom.
+ * (A, B, C…). Senza indicazioni la prima è A, come nei modelli a più catene di MakPhi.
  */
 export function chainIds(header: string, segments: number): string[] {
   const f = header.split(":");
@@ -123,7 +123,7 @@ export interface ResiduePosition {
 }
 
 /**
- * Numerazione di ogni colonna di una riga allineata (null su gap e marcatori): per catena, come i modelli di BioLoom
+ * Numerazione di ogni colonna di una riga allineata (null su gap e marcatori): per catena, come i modelli di MakPhi
  * (ogni catena numerata da 1, la prima dal primo residuo indicato nella seconda riga PIR).
  */
 export function residuePositions(seq: string, header: string): (ResiduePosition | null)[] {

@@ -9,8 +9,8 @@ import time
 
 import pytest
 
-from bioloom.core.errors import AppError, Conflict
-from bioloom.engines import search
+from makphi.core.errors import AppError, Conflict
+from makphi.engines import search
 from tests.conftest import HUMAN_UB, YEAST_UB, until, wait_job
 
 NAMES = ["a", "b", "c", "d", "e"]
@@ -445,7 +445,7 @@ def test_resume_redoes_completed_items_whose_model_was_never_saved(pipe):
 
 
 def test_pipeline_records_the_modeller_mode_and_old_resumed_pipelines_stay_serial(pipe):
-    from bioloom.services import pipeline as pipeline_service
+    from makphi.services import pipeline as pipeline_service
 
     client, _core, _fake, submit = pipe
     # le pipeline nuove scrivono la modalità nei parametri, anche quando la richiesta non la indica

@@ -10,11 +10,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from bioloom.core.errors import AppError
-from bioloom.domain import complexes, geometry, ligands, report, sequences, structure
-from bioloom.domain.sequences import PirEntry
-from bioloom.engines import modeller
-from bioloom.services.compute import ComputeService
+from makphi.core.errors import AppError
+from makphi.domain import complexes, geometry, ligands, report, sequences, structure
+from makphi.domain.sequences import PirEntry
+from makphi.engines import modeller
+from makphi.services.compute import ComputeService
 from tests.conftest import DATA, HUMAN_UB, YEAST_UB, requires_modeller, wait_job
 
 
@@ -324,7 +324,7 @@ def test_chain_of_the_span_aligned_only_to_gaps(tmp_path):
 def test_unexpected_interface_error_does_not_fail_the_modeling(tmp_path, monkeypatch):
     """Un errore inatteso dell'analisi delle interfacce di un modello diventa una riga del log (la funzione restituisce
     None), come promette `_complex_assessor`; l'annullamento del job invece passa."""
-    from bioloom.core.jobs import JobCancelled
+    from makphi.core.jobs import JobCancelled
 
     (tmp_path / "D_AB.pdb").write_bytes((DATA / "ubq_dimer.pdb").read_bytes())
     logs: list[str] = []
@@ -491,7 +491,7 @@ def test_homodimer_with_symmetry_restraints(client):
     quality = client.get(f"/api/jobs/{job['id']}/quality/{best['file']}").json()
     assert quality["complex"]["comparison"][0]["dockq"] == c["dockq"]
     pdb = path.read_text(encoding="utf-8")
-    assert "REMARK 999 BIOLOOM CHAINS 2 A=A B=B" in pdb and "REMARK 999 BIOLOOM SYMMETRY CA WEIGHT 1 A,B" in pdb
+    assert "REMARK 999 MAKPHI CHAINS 2 A=A B=B" in pdb and "REMARK 999 MAKPHI SYMMETRY CA WEIGHT 1 A,B" in pdb
     html = client.get(f"/api/jobs/{job['id']}/report/{best['file']}").text
     assert "Interfacce del complesso" in html and html.count("<section") == html.count("</section>")
 

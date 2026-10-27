@@ -67,7 +67,7 @@ describe("conferma dell'eliminazione di un progetto", () => {
   });
 
   it("nota sull'ultimo progetto solo se lo è", () => {
-    expect(render({ isLast: true })).toContain("È l&#x27;ultimo progetto: BioLoom ne creerà uno vuoto, perché ne serve sempre almeno uno.");
+    expect(render({ isLast: true })).toContain("È l&#x27;ultimo progetto: MakPhi ne creerà uno vuoto, perché ne serve sempre almeno uno.");
     expect(render()).not.toContain("ultimo progetto");
   });
 

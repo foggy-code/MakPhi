@@ -102,7 +102,7 @@ export default function Dashboard() {
       <section className="shell-hero" aria-label="Benvenuto">
         <div>
           <span className="shell-eyebrow">{greeting(new Date().getHours())} · Panoramica del progetto</span>
-          <h1>{project ? project.name : "BioLoom"}</h1>
+          <h1>{project ? project.name : "MakPhi"}</h1>
           <p className="lead">
             Modellazione di proteine per omologia: dalla sequenza al modello 3D validato. Ogni calcolo gira in background e resta consultabile
             nella sezione Job.
@@ -232,7 +232,7 @@ export default function Dashboard() {
                     ))}
                   </div>
                   <p className="small text-2">
-                    Senza strumenti esterni BioLoom usa i motori integrati: DSSP (Kabsch-Sander), allineamento multiplo center-star, sovrapposizione
+                    Senza strumenti esterni MakPhi usa i motori integrati: DSSP (Kabsch-Sander), allineamento multiplo center-star, sovrapposizione
                     Kabsch con TM-score e ricerca RCSB.
                   </p>
                 </div>
@@ -249,7 +249,7 @@ export default function Dashboard() {
                 note={<><Meter percent={stats.cpu_percent} />{stats.cpu_count} core · {info?.workers ?? "?"} job paralleli</>} />
               <Stat label="Memoria" value={<>{stats.memory.percent.toFixed(0)}<small>%</small></>}
                 note={<><Meter percent={stats.memory.percent} />{fmtBytes(stats.memory.used)} di {fmtBytes(stats.memory.total)}</>}
-                detail={<span>Server BioLoom: <b>{fmtBytes(stats.process_memory)}</b></span>} />
+                detail={<span>Server MakPhi: <b>{fmtBytes(stats.process_memory)}</b></span>} />
               <Stat label="Disco dati" value={<>{stats.disk.percent.toFixed(0)}<small>%</small></>}
                 note={<><Meter percent={stats.disk.percent} />{fmtBytes(stats.disk.free)} liberi di {fmtBytes(stats.disk.total)}</>}
                 detail={<span>File temporanei e cache si liberano in <Link to="/settings?tab=storage">Impostazioni → Spazio</Link>.</span>} />

@@ -372,10 +372,10 @@ describe("ciclo della pulizia a tempo", () => {
   it("un errore non si rilancia: totali parziali con il messaggio", async () => {
     const { call } = scripted([
       run({ deleted: 10, freed_bytes: 100, remaining: 50 }),
-      new ApiError("Server BioLoom non raggiungibile. È ancora in esecuzione?", 0, "network"),
+      new ApiError("Server MakPhi non raggiungibile. È ancora in esecuzione?", 0, "network"),
     ]);
     const t = await runCleanup(req, call);
-    expect(t).toMatchObject({ outcome: "error", deleted: 10, freedBytes: 100, calls: 1, error: "Server BioLoom non raggiungibile. È ancora in esecuzione?" });
+    expect(t).toMatchObject({ outcome: "error", deleted: 10, freedBytes: 100, calls: 1, error: "Server MakPhi non raggiungibile. È ancora in esecuzione?" });
   });
 
   it("risposta senza la forma attesa: esito error con i totali fin lì, mai un'eccezione né un «finito» inventato", async () => {
@@ -518,7 +518,7 @@ describe("eliminazione dei progetti", () => {
       .toBe("Progetto «Chinasi» eliminato (12 job, 1,4 GB liberati).");
     const replacement = { id: "p2", name: "Nuovo progetto", description: "", created_at: "", updated_at: "" };
     expect(projectDeleteToast("Chinasi", result({ jobs_deleted: 12, freed_bytes: Math.round(1.4 * GB), replacement }))).toBe(
-      "Progetto «Chinasi» eliminato (12 job, 1,4 GB liberati). Ne ho creato uno vuoto, «Nuovo progetto»: BioLoom ne richiede almeno uno.",
+      "Progetto «Chinasi» eliminato (12 job, 1,4 GB liberati). Ne ho creato uno vuoto, «Nuovo progetto»: MakPhi ne richiede almeno uno.",
     );
     expect(projectDeleteToast("Vuoto", result())).toBe("Progetto «Vuoto» eliminato.");
     // i job eliminati dallo svuotamento contano
@@ -657,7 +657,7 @@ describe("eliminazione dei progetti", () => {
   });
 
   it("rete (status 0) o errore generico del server (5xx) sul DELETE: esito sconosciuto, da verificare", async () => {
-    for (const err of [new ApiError("Server BioLoom non raggiungibile. È ancora in esecuzione?", 0, "network"), new ApiError("Errore 500", 500, "http_error"),
+    for (const err of [new ApiError("Server MakPhi non raggiungibile. È ancora in esecuzione?", 0, "network"), new ApiError("Errore 500", 500, "http_error"),
       new ApiError("Errore 503", 503, "http_error"), new TypeError("Failed to fetch")]) {
       const d = deps([], async () => {
         throw err;

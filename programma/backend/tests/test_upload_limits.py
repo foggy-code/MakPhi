@@ -9,14 +9,14 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from bioloom.api import files as files_api
-from bioloom.app import create_app
-from bioloom.config import MAX_UPLOAD_BYTES, Paths
-from bioloom.core import bodylimit, guard
-from bioloom.core.bodylimit import BodyLimit
-from bioloom.core.errors import AppError
-from bioloom.domain import fileformats
-from bioloom.domain.reproducibility import MAX_PACKAGE_BYTES
+from makphi.api import files as files_api
+from makphi.app import create_app
+from makphi.config import MAX_UPLOAD_BYTES, Paths
+from makphi.core import bodylimit, guard
+from makphi.core.bodylimit import BodyLimit
+from makphi.core.errors import AppError
+from makphi.domain import fileformats
+from makphi.domain.reproducibility import MAX_PACKAGE_BYTES
 
 from .conftest import DATA
 
@@ -107,7 +107,7 @@ def test_app_refuses_oversized_uploads_before_the_endpoint(small_client, monkeyp
     big = b"ATOM" * 100_000
     r = small_client.post("/api/files/structure", files={"file": ("big.pdb", big)})  # con Content-Length
     assert r.status_code == 413 and r.json()["error"]["code"] == "too_large", r.text
-    assert r.json()["error"]["message"] == "Richiesta troppo grande: BioLoom accetta al massimo 195 kB per richiesta."
+    assert r.json()["error"]["message"] == "Richiesta troppo grande: MakPhi accetta al massimo 195 kB per richiesta."
 
     def chunked():
         for _ in range(10):

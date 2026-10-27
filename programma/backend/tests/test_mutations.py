@@ -4,7 +4,7 @@ preventivi, rotte e job con MODELLER reale su 1UBQ e sulle strutture sintetiche 
 alanina ordinata, dimero, catena senza identificativo con un'interruzione, annullamento, energia con OpenMM).
 
 Nessun accesso alla rete: UniProt è simulato con httpx.MockTransport sul client condiviso di engines/remote. I test di
-MODELLER si saltano senza MODELLER, quello dell'energia anche senza OpenMM e PDBFixer (bioloom:4.1.0)."""
+MODELLER si saltano senza MODELLER, quello dell'energia anche senza OpenMM e PDBFixer (makphi:4.1.0)."""
 
 from __future__ import annotations
 
@@ -18,15 +18,15 @@ import httpx
 import numpy as np
 import pytest
 
-from bioloom.core.errors import AppError
-from bioloom.core.jobs import PRIORITY, JobManager
-from bioloom.domain import mutations, structure
-from bioloom.domain import preflight as rules
-from bioloom.engines import mutate as engine
-from bioloom.engines import quality, remote, tools
-from bioloom.services import preflight as preflight_module
-from bioloom.services.licenses import LicenseService
-from bioloom.services.mutations import scan_csv
+from makphi.core.errors import AppError
+from makphi.core.jobs import PRIORITY, JobManager
+from makphi.domain import mutations, structure
+from makphi.domain import preflight as rules
+from makphi.engines import mutate as engine
+from makphi.engines import quality, remote, tools
+from makphi.services import preflight as preflight_module
+from makphi.services.licenses import LicenseService
+from makphi.services.mutations import scan_csv
 
 from .conftest import DATA, HUMAN_UB, requires_modeller, ubq_variant, wait_job
 
@@ -146,7 +146,7 @@ def test_canonical_notation_round_trip_with_a_blank_chain_and_another_chain(tmp_
     r = c.post("/api/mutate", json={"source": {"type": "template", "id": "BLANKDIMER"}, "mutations": "_:K6R"})
     assert r.status_code == 200, r.text
     assert captured["params"]["mutations"] == "_:K6R" and captured["title"].endswith("BLANKDIMER K6R")
-    from bioloom.services.mutations import MutationService
+    from makphi.services.mutations import MutationService
 
     service = MutationService(c.app.state.core.jobs, c.app.state.core.compute)
     assert service.validate_mutate(captured["params"])[0].chain == " "  # come all'esecuzione
@@ -223,7 +223,7 @@ def _two_letter_chain(dest):
 def test_sites_of_a_chain_with_a_two_character_name(tmp_path):
     """Catena «AA»: MODELLER la chiama A e i modelli costruiti restano così (formato PDB). Indicatori, residui
     ottimizzati ed energia cercano il sito con la lettera dei modelli; etichetta, sito e partner restano «AA»."""
-    from bioloom.services.mutations import MutationService
+    from makphi.services.mutations import MutationService
 
     model = _model(_two_letter_chain(tmp_path / "ubq_aa.cif"))
     (m,) = mutations.resolve(mutations.parse("AA:K48R"), model)
@@ -643,8 +643,8 @@ def test_routes_validate_before_queueing(client_with_ubq):
 def test_pocket_scan_refuses_pockets_of_a_replaced_file(client, monkeypatch, tmp_path):
     """Tasche calcolate su un template poi sostituito con lo stesso nome (altro file): la scansione della tasca le
     rifiuta invece di usare residui di un'altra struttura; con il file invariato la selezione registra l'impronta."""
-    from bioloom.services import structure_tools
-    from bioloom.services.mutations import MutationService
+    from makphi.services import structure_tools
+    from makphi.services.mutations import MutationService
 
     fake = {"summary": {"count": 1, "druggable": 1, "threshold": 0.5,
                         "best": {"id": 1, "druggability": 0.8, "volume": 300.0}},
@@ -806,7 +806,7 @@ def test_k48r_on_1ubq(client_with_ubq):
             "mutate_params.json", "mutate_input.pdb", "mutate_models.json"} <= files
     assert not any(re.fullmatch(r"(wt|mut)_\d\.pdb", f) for f in files)  # i modelli non scelti si tolgono
     text = c.get(f"/api/jobs/{job['id']}/files/1UBQ_K48R.pdb").text
-    assert "REMARK 999 BIOLOOM MUTANT OF 1UBQ A:K48R" in text and "NOT A DDG" in text
+    assert "REMARK 999 MAKPHI MUTANT OF 1UBQ A:K48R" in text and "NOT A DDG" in text
     assert c.get(f"/api/jobs/{job['id']}/quality/1UBQ_K48R.pdb").json()["structure"]["residues"] == 76
     html = c.get(f"/api/jobs/{job['id']}/report/1UBQ_K48R.pdb")
     assert html.status_code == 200 and "Mutagenesi in silico" in html.text and "Feyfant E." in html.text

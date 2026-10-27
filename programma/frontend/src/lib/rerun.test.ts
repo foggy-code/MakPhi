@@ -9,7 +9,7 @@ import {
 function summary(extra: Partial<PackageSummary> = {}): PackageSummary {
   return {
     package_id: "a".repeat(32), format_version: 1, created_at: "2026-10-01T10:00:00+00:00",
-    bioloom: { version: "4.1.0", image: "4.1.0" },
+    makphi: { version: "4.1.0", image: "4.1.0" },
     environment: { python: "3.12.3", libraries: { biopython: "1.88", numpy: "2.5.3" },
       tools: { modeller: { label: "MODELLER", available: true, version: "10.8" }, dssp: { label: "DSSP", available: true, version: "4.2.2" },
         prosa: { label: "ProSA II 2003", available: false, version: null } } },
@@ -20,7 +20,7 @@ function summary(extra: Partial<PackageSummary> = {}): PackageSummary {
     files: { count: 9, bytes: 123456, by_role: { params: { count: 1, bytes: 10 }, template: { count: 1, bytes: 50000 },
       template_prepared: { count: 1, bytes: 40000 }, alignment: { count: 1, bytes: 300 }, output: { count: 3, bytes: 30000 },
       script: { count: 2, bytes: 3000 }, log: { count: 1, bytes: 100 } }, list: [] },
-    current: { bioloom: { version: "4.1.0", image: "4.1.0" },
+    current: { makphi: { version: "4.1.0", image: "4.1.0" },
       environment: { python: "3.12.3", libraries: { biopython: "1.88", numpy: "2.5.3" },
         tools: { modeller: { label: "MODELLER", available: true, version: "10.8" }, dssp: { label: "DSSP", available: true, version: "4.2.2" } } } },
     checks: [], manifest_sha256: "f".repeat(64), ...extra,
@@ -65,10 +65,10 @@ describe("anteprima del pacchetto", () => {
   it("confronta le versioni riga per riga", () => {
     const same = versionRows(summary(), summary().current);
     expect(same.every((r) => r.same)).toBe(true);
-    expect(same.map((r) => r.label)).toEqual(["BioLoom", "Immagine Docker", "Python", "Biopython", "NumPy", "MODELLER", "DSSP", "ProSA II 2003"]);
-    const current = { bioloom: { version: "4.2.0", image: null }, environment: { python: "3.12.3", libraries: { biopython: "1.88", numpy: "2.5.3" }, tools: { dssp: { label: "DSSP", available: true, version: "4.4.0" } } } };
+    expect(same.map((r) => r.label)).toEqual(["MakPhi", "Immagine Docker", "Python", "Biopython", "NumPy", "MODELLER", "DSSP", "ProSA II 2003"]);
+    const current = { makphi: { version: "4.2.0", image: null }, environment: { python: "3.12.3", libraries: { biopython: "1.88", numpy: "2.5.3" }, tools: { dssp: { label: "DSSP", available: true, version: "4.4.0" } } } };
     const rows = Object.fromEntries(versionRows(summary(), current).map((r) => [r.label, r]));
-    expect(rows.BioLoom).toMatchObject({ packaged: "4.1.0", current: "4.2.0", same: false });
+    expect(rows.MakPhi).toMatchObject({ packaged: "4.1.0", current: "4.2.0", same: false });
     expect(rows["Immagine Docker"]).toMatchObject({ packaged: "4.1.0", current: "—", same: true });
     expect(rows.MODELLER).toMatchObject({ current: "non installato", same: false });
     expect(rows.DSSP).toMatchObject({ packaged: "4.2.2", current: "4.4.0", same: false });
@@ -90,7 +90,7 @@ describe("anteprima del pacchetto", () => {
   });
 
   it("divide gli esiti per livello", () => {
-    const by = checksByLevel([{ level: "error", code: "rerun_unsupported", message: "x" }, { level: "warning", code: "rerun_version_bioloom", message: "y" }, { level: "info", code: "rerun_remote_input", message: "z" }]);
+    const by = checksByLevel([{ level: "error", code: "rerun_unsupported", message: "x" }, { level: "warning", code: "rerun_version_makphi", message: "y" }, { level: "info", code: "rerun_remote_input", message: "z" }]);
     expect([by.error.length, by.warning.length, by.info.length]).toEqual([1, 1, 1]);
     expect(checksByLevel(undefined).error).toEqual([]);
   });
@@ -135,7 +135,7 @@ describe("confronto", () => {
   });
 
   it("nome di riserva del pacchetto e nota sulle tolleranze", () => {
-    expect(packageFallbackName("model", "abc")).toBe("bioloom_riproducibile_model_abc.zip");
+    expect(packageFallbackName("model", "abc")).toBe("makphi_riproducibile_model_abc.zip");
     const text = toleranceText({ coordinates_angstrom: 0.002, score_abs: 0.001, score_rel: 1e-6, ignored: ["cached", "timings"] });
     expect(text).toContain("coordinate 0.002 Å per atomo");
     expect(text).toContain("|Δ| ≤ max(0.001; 1e-6·|valore|)");

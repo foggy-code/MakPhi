@@ -13,18 +13,18 @@ from pathlib import Path
 
 import pytest
 
-from bioloom.config import UserSettings
-from bioloom.core import budget as budget_module
-from bioloom.core import dispatch
-from bioloom.core.budget import CpuBudget
-from bioloom.core.db import Database
-from bioloom.core.errors import AppError
-from bioloom.core.events import IDLE, JOB
-from bioloom.core.jobs import PRIORITY, WAIT_STAGE, JobCancelled, JobManager
-from bioloom.services.compute import ComputeService
-from bioloom.services.live import LiveService, _ListState
-from bioloom.services.pipeline import PipelineService
-from bioloom.services.templates import TemplateLibrary
+from makphi.config import UserSettings
+from makphi.core import budget as budget_module
+from makphi.core import dispatch
+from makphi.core.budget import CpuBudget
+from makphi.core.db import Database
+from makphi.core.errors import AppError
+from makphi.core.events import IDLE, JOB
+from makphi.core.jobs import PRIORITY, WAIT_STAGE, JobCancelled, JobManager
+from makphi.services.compute import ComputeService
+from makphi.services.live import LiveService, _ListState
+from makphi.services.pipeline import PipelineService
+from makphi.services.templates import TemplateLibrary
 
 from .conftest import dispatcher_settled, until
 

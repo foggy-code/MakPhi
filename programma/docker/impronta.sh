@@ -1,5 +1,5 @@
 #!/bin/sh
-# Impronta del codice di BioLoom: un SHA-256 che cambia a ogni modifica dei sorgenti che entrano nell'immagine.
+# Impronta del codice di MakPhi: un SHA-256 che cambia a ogni modifica dei sorgenti che entrano nell'immagine.
 # La build la salva in /app/IMPRONTA; l'avviatore la ricalcola sulla cartella programma/ e, se differisce, sa che
 # l'immagine non corrisponde al codice anche a parità di versione (codice aggiornato senza ricostruire l'immagine).
 #

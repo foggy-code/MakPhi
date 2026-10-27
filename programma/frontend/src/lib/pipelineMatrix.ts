@@ -42,7 +42,7 @@ export const MATRIX_METRICS: Record<MatrixMetric, MatrixMetricDef> = {
     scale: { kind: "continuous", stops: [{ value: 0, color: BAD }, { value: 40, color: MID }, { value: 100, color: GOOD }] },
   },
   grade_score: {
-    key: "grade_score", label: "Voto", digits: 0, note: "punteggio del voto BioLoom (Ramachandran, clash, zDOPE): più alto è migliore",
+    key: "grade_score", label: "Voto", digits: 0, note: "punteggio del voto MakPhi (Ramachandran, clash, zDOPE): più alto è migliore",
     scale: { kind: "continuous", stops: [{ value: 40, color: BAD }, { value: 55, color: BAD }, { value: 70, color: MID }, { value: 85, color: GOOD }, { value: 100, color: GOOD }] },
   },
 };

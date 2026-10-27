@@ -2,7 +2,7 @@
 
 Sul server lo ZIP di una pipeline di 139.296 coppie, generato dentro la richiesta, avrebbe impiegato circa 5 giorni
 (4 ricerche nel database per report) e i report non avevano il QMEAN: la ricerca guardava solo i 200 QMEAN più recenti
-di tutto BioLoom."""
+di tutto MakPhi."""
 
 import io
 import json
@@ -10,10 +10,10 @@ import zipfile
 
 import pytest
 
-from bioloom.core import db as db_module
-from bioloom.services import reports as reports_service
-from bioloom.services.pipeline_export import ItemContext, ZipBuilder
-from bioloom.services.reports import ReportService
+from makphi.core import db as db_module
+from makphi.services import reports as reports_service
+from makphi.services.pipeline_export import ItemContext, ZipBuilder
+from makphi.services.reports import ReportService
 
 from .conftest import until, wait_job
 from .test_qmean_auto import REMOTE, all_done, modeller, pipeline, qmean_jobs, swissmodel  # noqa: F401 (fixture)
@@ -161,10 +161,10 @@ def test_cancelled_export_stops(client, modeller, swissmodel, workers):  # noqa:
     def check():
         calls.append(1)
         if len(calls) > 2:
-            from bioloom.core.jobs import JobCancelled
+            from makphi.core.jobs import JobCancelled
             raise JobCancelled()
 
-    from bioloom.core.jobs import JobCancelled
+    from makphi.core.jobs import JobCancelled
     with pytest.raises(JobCancelled):
         ZipBuilder(core.pipeline, job_id, core.paths.scratch_tmp / "annullato.zip", workers=workers,
                    check=check).run()

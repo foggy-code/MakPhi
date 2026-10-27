@@ -6,9 +6,9 @@ import threading
 import pytest
 from Bio.PDB import MMCIFIO, PDBParser
 
-from bioloom.core.errors import RemoteServiceError
-from bioloom.engines import remote
-from bioloom.services.templates import STAGING_PREFIX, TemplateLibrary
+from makphi.core.errors import RemoteServiceError
+from makphi.engines import remote
+from makphi.services.templates import STAGING_PREFIX, TemplateLibrary
 
 from .conftest import DATA, WatchedLock, ubq_variant
 

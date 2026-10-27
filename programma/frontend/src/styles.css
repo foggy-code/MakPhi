@@ -1,5 +1,5 @@
 /*
- * BioLoom v4 — foglio di stile.
+ * MakPhi — foglio di stile.
  * Contrasto: ogni coppia testo/sfondo dei due temi (testo, testo secondario, attenuato, accento, stati) supera 4,5:1
  * (WCAG AA); lo verifica lib/contrast.test.ts leggendo questi token. I colori che portano dati nei grafici (--sig-*,
  * --trk-*) e l'anello del focus superano 3:1 sui pannelli (lib/chartTokens.test.ts).

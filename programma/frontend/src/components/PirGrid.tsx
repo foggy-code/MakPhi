@@ -26,7 +26,7 @@ const BG = 14;
 
 /** altezza dell'istogramma della conservazione sotto il righello */
 const HH = 14;
-const COLOR_PREF = "bioloom.pir.colors";
+const COLOR_PREF = "makphi.pir.colors";
 
 // tinte di fondo delle altre colorazioni (testo nel colore del tema, come le tinte tenui delle classi)
 const IDENT: CSSProperties = { background: "#22c55e55" };

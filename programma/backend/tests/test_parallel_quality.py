@@ -22,16 +22,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from bioloom.config import UserSettings
-from bioloom.core import jobs as jobs_module
-from bioloom.core.db import Database
-from bioloom.core.errors import AppError, ToolUnavailable
-from bioloom.core.jobs import JobCancelled, JobManager
-from bioloom.core.parallel import Steps
-from bioloom.domain import structure
-from bioloom.engines import modeller, procheck, prosa, quality, tools
-from bioloom.services import compute as compute_module
-from bioloom.services.compute import PreparedTemplates
+from makphi.config import UserSettings
+from makphi.core import jobs as jobs_module
+from makphi.core.db import Database
+from makphi.core.errors import AppError, ToolUnavailable
+from makphi.core.jobs import JobCancelled, JobManager
+from makphi.core.parallel import Steps
+from makphi.domain import structure
+from makphi.engines import modeller, procheck, prosa, quality, tools
+from makphi.services import compute as compute_module
+from makphi.services.compute import PreparedTemplates
 
 from .conftest import DATA, YEAST_UB, blocked_in, requires_modeller, until, wait_job
 from .test_alphafold import af_pdb
@@ -309,7 +309,7 @@ def test_cancelling_a_parallel_analysis_stops_every_step_and_process(manager, ub
     assert time.perf_counter() - t0 < 10
     assert all(p.poll() is not None for p in procs)  # nessun processo sopravvive
     assert sum(1 for p in procs if p.args == SLEEP) == started  # chi aspettava lo slot non parte più
-    assert not [t for t in threading.enumerate() if t.name.startswith("bioloom-qualita")]
+    assert not [t for t in threading.enumerate() if t.name.startswith("makphi-qualita")]
 
 
 # ------------------------------------------------------------------------------------------ mkdssp da ctx.run

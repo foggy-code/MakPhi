@@ -63,7 +63,7 @@ def test_mock_transports_and_local_servers_still_work():
 
 @pytest.mark.parametrize("host, local", [
     ("127.0.0.1", True), ("127.0.1.1", True), ("::1", True), ("[::1]", True), ("::ffff:127.0.0.1", True),
-    ("0.0.0.0", True), ("localhost", True), ("LOCALHOST.", True), ("bioloom.localhost", True), (None, True),
+    ("0.0.0.0", True), ("localhost", True), ("LOCALHOST.", True), ("makphi.localhost", True), (None, True),
     (b"localhost", True), ("", True),
     ("192.168.1.10", False), ("10.0.0.1", False), ("8.8.8.8", False), ("2001:db8::1", False),
     ("rest.uniprot.org", False), ("qmean", False), ("localhost.example.org", False),

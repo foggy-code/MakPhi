@@ -189,6 +189,6 @@ describe("pagina Confronto", () => {
     expect(compareJobView(null, false, null)).toBe("empty");
     expect(compareJobView("0123456789abcdef", false, null)).toBe("job"); // in caricamento
     expect(compareJobView("0123456789abcdef", false, "Job 0123456789abcdef non trovato.")).toBe("missing");
-    expect(compareJobView("0123456789abcdef", true, "Server BioLoom non raggiungibile.")).toBe("job"); // già mostrato
+    expect(compareJobView("0123456789abcdef", true, "Server MakPhi non raggiungibile.")).toBe("job"); // già mostrato
   });
 });

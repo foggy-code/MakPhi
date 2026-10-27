@@ -3,26 +3,26 @@
 Programmi con licenza accademica che l'immagine Docker compila o installa se trova qui il pacchetto. La procedura
 completa per l'utente (licenze, pacchetti, ricostruzione, `LicenseDB`, verifica, server) è nella Guida:
 [Licenze → Installare e attivare PROCHECK e ProSA](../../../Guida/6%20-%20Licenze.md#installare-e-attivare-procheck-e-prosa).
-Se un pacchetto manca, la build prosegue e BioLoom mostra lo strumento come "non installato".
+Se un pacchetto manca, la build prosegue e MakPhi mostra lo strumento come "non installato".
 
 | File | Programma | Licenza |
 |---|---|---|
 | `procheck/procheck.tar.gz` | PROCHECK 3.5.4 (sorgenti) | gratuita per uso accademico, previa registrazione (EBI, R. Laskowski) |
-| `prosa/prosa2003.linux.tar.gz` | ProSA II 2003 (Linux x86, 32 bit) | licenza personale da <https://prosa.services.came.sbg.ac.at>; il file `LicenseDB` si carica da BioLoom (Impostazioni → Licenze), non va messo qui |
+| `prosa/prosa2003.linux.tar.gz` | ProSA II 2003 (Linux x86, 32 bit) | licenza personale da <https://prosa.services.came.sbg.ac.at>; il file `LicenseDB` si carica da MakPhi (Impostazioni → Licenze), non va messo qui |
 
 Dopo aver aggiunto o tolto un pacchetto l'immagine va ricostruita a mano: questa cartella non entra nell'impronta del
 codice (`docker/impronta.sh`), quindi l'avviatore non se ne accorge e la sua azione «aggiorna» non la ricostruisce.
-Dalla cartella di BioLoom:
+Dalla cartella di MakPhi:
 
 ```bash
-docker compose -f programma/launcher/compose.yml build bioloom
+docker compose -f programma/launcher/compose.yml build makphi
 # con Podman, al posto di <versione> quella di programma/launcher/VERSION:
-podman build --build-arg BIOLOOM_VERSION=<versione> -t bioloom:<versione> -f programma/docker/Dockerfile programma
+podman build --build-arg MAKPHI_VERSION=<versione> -t makphi:<versione> -f programma/docker/Dockerfile programma
 ```
 
-poi riavvia BioLoom con l'avviatore (**R**, oppure `./avvia-bioloom.sh server` sul server). Viceversa, ogni
+poi riavvia MakPhi con l'avviatore (**R**, oppure `./avvia-makphi.sh server` sul server). Viceversa, ogni
 ricostruzione fatta senza i pacchetti (dall'avviatore all'avvio, con «aggiorna» o con «prepara») dà un'immagine senza
-PROCHECK e ProSA. Per questo, quando aggiorni BioLoom sostituendo `programma/` con una versione nuova (copia portatile o
+PROCHECK e ProSA. Per questo, quando aggiorni MakPhi sostituendo `programma/` con una versione nuova (copia portatile o
 GitHub, che non li contengono), metti da parte i pacchetti e rimettili qui prima di avviare.
 
 Questi file sono di chi ha ottenuto la licenza: non vanno pubblicati né distribuiti ad altri.

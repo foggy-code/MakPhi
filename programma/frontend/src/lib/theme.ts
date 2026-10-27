@@ -4,14 +4,14 @@ import { useEffect, useState } from "react";
  * Tema dell'interfaccia: scelta dell'utente (`ThemePref`) e tema effettivo (`Theme`).
  *
  * "Sistema" segue `prefers-color-scheme` del sistema operativo e cambia insieme a lui (evento `change` della media
- * query). La scelta resta in localStorage con la chiave di sempre (`bioloom.theme`, valore JSON come
- * `useLocalStorage`): i valori salvati dalle versioni precedenti ("dark", "light") restano validi, uno sconosciuto o
- * illeggibile vale il predefinito. Il tema effettivo va su `<html data-theme>`, che sceglie le variabili CSS.
+ * query). La scelta resta in localStorage con la chiave `makphi.theme` (`bioloom.theme` fino alla 4.4.0, spostata da
+ * lib/legacyStorage.ts), valore JSON come `useLocalStorage`: i valori salvati dalle versioni precedenti ("dark",
+ * "light") restano validi, uno sconosciuto o illeggibile vale il predefinito. Il tema effettivo va su `<html data-theme>`, che sceglie le variabili CSS.
  */
 export type Theme = "dark" | "light";
 export type ThemePref = Theme | "system";
 
-export const THEME_KEY = "bioloom.theme";
+export const THEME_KEY = "makphi.theme";
 /** Predefinito senza una scelta salvata: il tema scuro di sempre (chi non ha mai scelto non vede cambiare nulla). */
 export const DEFAULT_THEME: ThemePref = "dark";
 export const DARK_QUERY = "(prefers-color-scheme: dark)";
@@ -57,7 +57,7 @@ function darkQuery(): MediaQueryList | null {
   return typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia(DARK_QUERY) : null;
 }
 
-/** Il sistema chiede il tema scuro (senza matchMedia: scuro, il predefinito di BioLoom). */
+/** Il sistema chiede il tema scuro (senza matchMedia: scuro, il predefinito di MakPhi). */
 export function systemPrefersDark(): boolean {
   return darkQuery()?.matches ?? true;
 }

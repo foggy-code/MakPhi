@@ -1,65 +1,65 @@
-# BioLoom v4 in Docker. Di solito lo avvia l'avviatore ("Avvia BioLoom"), che scrive le variabili in
-# ../../.env.locale; su un server (dalla cartella di BioLoom): docker compose -f programma/launcher/compose.yml --env-file server.env up -d
+# MakPhi in Docker. Di solito lo avvia l'avviatore ("Avvia MakPhi"), che scrive le variabili in
+# ../../.env.locale; su un server (dalla cartella di MakPhi): docker compose -f programma/launcher/compose.yml --env-file server.env up -d
 #
 # Variabili principali (tutte facoltative):
-#   BIOLOOM_PORT        porta sul computer (8765)
-#   BIOLOOM_BIND        127.0.0.1 = solo questo computer; 0.0.0.0 = rete (server, con BIOLOOM_AUTH=on), ma in HTTP e
+#   MAKPHI_PORT        porta sul computer (8765)
+#   MAKPHI_BIND        127.0.0.1 = solo questo computer; 0.0.0.0 = rete (server, con MAKPHI_AUTH=on), ma in HTTP e
 #                       con la porta che scavalca il firewall: meglio 127.0.0.1 dietro un reverse proxy HTTPS
-#   BIOLOOM_ALLOWED_HOSTS  senza BIOLOOM_AUTH: nomi con cui aprire BioLoom oltre a localhost e 127.0.0.1 ("*" = tutti)
-#   BIOLOOM_DATA_PATH   cartella dati (progetti, risultati, licenze, database); predefinita ../../data (la cartella data accanto a programma)
+#   MAKPHI_ALLOWED_HOSTS  senza MAKPHI_AUTH: nomi con cui aprire MakPhi oltre a localhost e 127.0.0.1 ("*" = tutti)
+#   MAKPHI_DATA_PATH   cartella dati (progetti, risultati, licenze, database); predefinita ../../data (la cartella data accanto a programma)
 #   UNICLUST_PATH       cartella (disco esterno) con UniClust30/UniRef30, qualunque versione → QMEAN locale
 #   QMTL_PATH           cartella QMTL (facoltativa) → QMEANDisCo
-#   BIOLOOM_MAC         MAC del container (licenza ProSA II); l'avviatore lo legge da LicenseDB
+#   MAKPHI_MAC         MAC del container (licenza ProSA II); l'avviatore lo legge da LicenseDB
 #   COMPOSE_PROFILES    "qmean" per avviare il servizio QMEAN locale
-# BIOLOOM_VERSION (versione delle immagini) la esporta l'avviatore leggendola da programma/launcher/VERSION; i valori
+# MAKPHI_VERSION (versione delle immagini) la esporta l'avviatore leggendola da programma/launcher/VERSION; i valori
 # predefiniti qui sotto (per compose a mano) li tiene allineati programma/scripts/versione.sh.
-# Nome uguale per tutte le copie di BioLoom (il volume cache con l'indice MMseqs2 non va perso): due copie sullo stesso
+# Nome uguale per tutte le copie di MakPhi (il volume cache con l'indice MMseqs2 non va perso): due copie sullo stesso
 # computer userebbero gli stessi container, quindi gli avviatori ne avviano una alla volta.
-name: bioloom
+name: makphi
 
 services:
-  bioloom:
-    image: bioloom:${BIOLOOM_VERSION:-4.4.0}
+  makphi:
+    image: makphi:${MAKPHI_VERSION:-5.0.0}
     build:
       context: ..
       dockerfile: docker/Dockerfile
       args:
-        # senza valore: quello di BIOLOOM_VERSION (ENV BIOLOOM_IMAGE_VERSION e LABEL bioloom.version dell'immagine);
+        # senza valore: quello di MAKPHI_VERSION (ENV MAKPHI_IMAGE_VERSION e LABEL makphi.version dell'immagine);
         # se non è impostata vale il predefinito del Dockerfile, uguale a quello di image
-        - BIOLOOM_VERSION
+        - MAKPHI_VERSION
     platform: linux/amd64
     init: true
     ports:
-      - "${BIOLOOM_BIND:-127.0.0.1}:${BIOLOOM_PORT:-8765}:8765"
-    mac_address: "${BIOLOOM_MAC:-02:42:b1:00:00:01}"
+      - "${MAKPHI_BIND:-127.0.0.1}:${MAKPHI_PORT:-8765}:8765"
+    mac_address: "${MAKPHI_MAC:-02:42:b1:00:00:01}"
     environment:
-      BIOLOOM_AUTH: "${BIOLOOM_AUTH:-off}"
-      BIOLOOM_ACCESS_KEY: "${BIOLOOM_ACCESS_KEY:-}"
-      BIOLOOM_ALLOWED_HOSTS: "${BIOLOOM_ALLOWED_HOSTS:-}"   # header Host ammessi senza BIOLOOM_AUTH (DNS rebinding)
-      # solo con BIOLOOM_AUTH=on: reverse proxy fidati, da cui X-Forwarded-For conta per il freno ai tentativi d'accesso
-      BIOLOOM_TRUSTED_PROXIES: "${BIOLOOM_TRUSTED_PROXIES:-}"
-      BIOLOOM_ALLOW_SHUTDOWN: "${BIOLOOM_ALLOW_SHUTDOWN:-1}"
+      MAKPHI_AUTH: "${MAKPHI_AUTH:-off}"
+      MAKPHI_ACCESS_KEY: "${MAKPHI_ACCESS_KEY:-}"
+      MAKPHI_ALLOWED_HOSTS: "${MAKPHI_ALLOWED_HOSTS:-}"   # header Host ammessi senza MAKPHI_AUTH (DNS rebinding)
+      # solo con MAKPHI_AUTH=on: reverse proxy fidati, da cui X-Forwarded-For conta per il freno ai tentativi d'accesso
+      MAKPHI_TRUSTED_PROXIES: "${MAKPHI_TRUSTED_PROXIES:-}"
+      MAKPHI_ALLOW_SHUTDOWN: "${MAKPHI_ALLOW_SHUTDOWN:-1}"
       MODELLER_KEY: "${MODELLER_KEY:-}"
-      BIOLOOM_MODELLER_PYTHON: "${BIOLOOM_MODELLER_PYTHON:-}"   # interprete con MODELLER (server); vuoto = automatico
-      BIOLOOM_QMEAN_URL: "${BIOLOOM_QMEAN_URL:-}"   # http://qmean:8080 quando il profilo qmean è attivo
-      BIOLOOM_ESMFOLD_URL: "${BIOLOOM_ESMFOLD_URL:-}"   # solo con BIOLOOM_AUTH=on: servizio ESMFold; vuoto = pubblico
+      MAKPHI_MODELLER_PYTHON: "${MAKPHI_MODELLER_PYTHON:-}"   # interprete con MODELLER (server); vuoto = automatico
+      MAKPHI_QMEAN_URL: "${MAKPHI_QMEAN_URL:-}"   # http://qmean:8080 quando il profilo qmean è attivo
+      MAKPHI_ESMFOLD_URL: "${MAKPHI_ESMFOLD_URL:-}"   # solo con MAKPHI_AUTH=on: servizio ESMFold; vuoto = pubblico
       # server di posta per l'avviso alla fine delle pipeline (vuoto = dal file licenses/posta.env della cartella dati)
-      BIOLOOM_SMTP_HOST: "${BIOLOOM_SMTP_HOST:-}"
-      BIOLOOM_SMTP_PORT: "${BIOLOOM_SMTP_PORT:-587}"
-      BIOLOOM_SMTP_SECURITY: "${BIOLOOM_SMTP_SECURITY:-starttls}"
-      BIOLOOM_SMTP_USER: "${BIOLOOM_SMTP_USER:-}"
-      BIOLOOM_SMTP_PASSWORD: "${BIOLOOM_SMTP_PASSWORD:-}"
-      BIOLOOM_SMTP_FROM: "${BIOLOOM_SMTP_FROM:-}"
-      BIOLOOM_PUBLIC_URL: "${BIOLOOM_PUBLIC_URL:-}"
+      MAKPHI_SMTP_HOST: "${MAKPHI_SMTP_HOST:-}"
+      MAKPHI_SMTP_PORT: "${MAKPHI_SMTP_PORT:-587}"
+      MAKPHI_SMTP_SECURITY: "${MAKPHI_SMTP_SECURITY:-starttls}"
+      MAKPHI_SMTP_USER: "${MAKPHI_SMTP_USER:-}"
+      MAKPHI_SMTP_PASSWORD: "${MAKPHI_SMTP_PASSWORD:-}"
+      MAKPHI_SMTP_FROM: "${MAKPHI_SMTP_FROM:-}"
+      MAKPHI_PUBLIC_URL: "${MAKPHI_PUBLIC_URL:-}"
     volumes:
-      - "${BIOLOOM_DATA_PATH:-../../data}:/data"   # progetti e risultati: viaggiano con la cartella
+      - "${MAKPHI_DATA_PATH:-../../data}:/data"   # progetti e risultati: viaggiano con la cartella
       - scratch:/scratch                         # lavoro temporaneo dei calcoli, svuotato a ogni avvio
       - cache:/cache                             # indici ricostruibili locali a questo computer
-    restart: "${BIOLOOM_RESTART:-no}"
+    restart: "${MAKPHI_RESTART:-no}"
 
   qmean:
     profiles: ["qmean"]
-    image: bioloom-qmean:${BIOLOOM_VERSION:-4.4.0}
+    image: makphi-qmean:${MAKPHI_VERSION:-5.0.0}
     build:
       context: ../docker/qmean
     platform: linux/amd64
@@ -73,7 +73,7 @@ services:
       - "${UNICLUST_PATH:-./vuoto}:/uniclust_src:ro"   # cartella con una o più versioni di UniClust30/UniRef30
       - "${QMTL_PATH:-qmtl_vuota}:/qmtl:ro"
       - qmean_cache:/cache                              # copie locali degli indici e cs219 ricreati (HH-suite 2)
-    restart: "${BIOLOOM_RESTART:-no}"
+    restart: "${MAKPHI_RESTART:-no}"
 
 volumes:
   scratch:

@@ -2,8 +2,8 @@
 
 import pytest
 
-from bioloom.core.errors import AppError
-from bioloom.engines import modeller
+from makphi.core.errors import AppError
+from makphi.engines import modeller
 from tests.conftest import YEAST_UB, requires_modeller, wait_job
 
 
@@ -66,7 +66,7 @@ def test_model_script_assesses_ga341_with_warm_up(parallel):
     assert "assess_methods=(assess.DOPE, ga341_stable, assess.normalized_dope))" in script
     assert "assess.GA341," not in script
     # in parallelo i worker importano la funzione dal modulo della classe, come il processo principale
-    assert ("from bioloom_model import BioLoomModel, ga341_stable" in script) == parallel
+    assert ("from makphi_model import MakPhiModel, ga341_stable" in script) == parallel
     assert "def ga341_stable(atmsel):" in script
 
 
@@ -148,4 +148,4 @@ def test_end_to_end_modeling(client_with_ubq):
     pml =c.get(f"/api/jobs/{job['id']}/pymol/{best['file']}").text
     assert "cmd.read_pdbstr" in pml
     pdb = c.get(f"/api/jobs/{job['id']}/files/{best['file']}").text
-    assert "REMARK 999 BIOLOOM" in pdb
+    assert "REMARK 999 MAKPHI" in pdb

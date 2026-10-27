@@ -15,11 +15,11 @@ from concurrent.futures import Future
 
 import pytest
 
-from bioloom.core import offload
-from bioloom.core.errors import AppError
-from bioloom.domain import clashes, qa_steps, ramachandran, structure
-from bioloom.engines import quality
-from bioloom.services import pipeline as pipeline_service
+from makphi.core import offload
+from makphi.core.errors import AppError
+from makphi.domain import clashes, qa_steps, ramachandran, structure
+from makphi.engines import quality
+from makphi.services import pipeline as pipeline_service
 
 from .conftest import DATA, HUMAN_UB, wait_job
 from .test_parallel_quality import log_text, manager, run_job  # noqa: F401 (fixture)
@@ -129,7 +129,7 @@ def test_program_output_goes_to_the_item_file_not_to_the_job_log(manager, tmp_pa
         sub.run([sys.executable, "-c", "print('riga di MODELLER'); print('seconda riga')"], cpu=False)
         inner = sub.sub("DOPE", tmp_path / "elemento" / "dope")  # i figli ereditano il file
         result = inner.run([sys.executable, "-c", "print('riga del DOPE')"], cpu=False)
-        sub.log("messaggio di BioLoom")
+        sub.log("messaggio di MakPhi")
         return {"output": result.output}
 
     job = run_job(manager, fn)
@@ -140,7 +140,7 @@ def test_program_output_goes_to_the_item_file_not_to_the_job_log(manager, tmp_pa
     assert text.count("=====") == 2 and "[elemento] [DOPE] " in text and "(uscita 0)" in text
     log = log_text(manager, job["id"])
     assert "riga di MODELLER" not in log and "riga del DOPE" not in log
-    assert "[elemento] messaggio di BioLoom" in log
+    assert "[elemento] messaggio di MakPhi" in log
 
 
 def test_without_output_log_the_job_log_keeps_the_program_output(manager, tmp_path):  # noqa: F811
@@ -170,7 +170,7 @@ def test_pipeline_params_are_read_once(client, monkeypatch):
 
 
 def test_job_detail_lists_at_most_the_shown_files(client, monkeypatch):
-    from bioloom.api import jobs as jobs_api
+    from makphi.api import jobs as jobs_api
 
     core = client.app.state.core
     core.jobs.register("molti_file", lambda ctx, _p: [ctx.path(f"f{i:02d}.txt").write_text("x") for i in range(7)]

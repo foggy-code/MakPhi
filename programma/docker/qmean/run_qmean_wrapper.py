@@ -1,10 +1,10 @@
-"""Esegue run_qmean.py con il database UniClust30/UniRef30 scelto da BioLoom.
+"""Esegue run_qmean.py con il database UniClust30/UniRef30 scelto da MakPhi.
 
 run_qmean.py accetta solo una cartella /uniclust30 con esattamente un database completo di tutti e 6 i
-file (compresi gli HMM). Qui il prefisso arriva da BIOLOOM_UNICLUST_PREFIX: così funzionano qualunque
+file (compresi gli HMM). Qui il prefisso arriva da MAKPHI_UNICLUST_PREFIX: così funzionano qualunque
 versione, i database senza HMM (HHblits li calcola dagli allineamenti) e più versioni sullo stesso disco.
-Con BIOLOOM_HHBLITS_CPU HHblits usa più processori (run_qmean.py ne chiede 1): il risultato non cambia.
-Con BIOLOOM_PROFILE_CACHE (cartella del database in uso) il profilo HHblits di ogni sequenza si conserva e una
+Con MAKPHI_HHBLITS_CPU HHblits usa più processori (run_qmean.py ne chiede 1): il risultato non cambia.
+Con MAKPHI_PROFILE_CACHE (cartella del database in uso) il profilo HHblits di ogni sequenza si conserva e una
 sequenza già vista non rifà la ricerca: run_qmean.py usa da sé un a3m già presente nella sua cartella di lavoro
 (`<md5 della sequenza>/hhblits.a3m`), e il profilo dipende solo da sequenza e database, quindi il risultato è lo
 stesso. Profili riusati e calcolati vanno in `$TMPDIR/profile_cache.json`.
@@ -113,11 +113,11 @@ def _more_cpu(cpu):
 
 
 def main():
-    prefix = os.environ.get("BIOLOOM_UNICLUST_PREFIX", "")
+    prefix = os.environ.get("MAKPHI_UNICLUST_PREFIX", "")
     if not prefix or not os.path.exists(prefix + "_a3m.ffindex"):
-        sys.stderr.write("BIOLOOM_UNICLUST_PREFIX non indica un database valido: %r\n" % prefix)
+        sys.stderr.write("MAKPHI_UNICLUST_PREFIX non indica un database valido: %r\n" % prefix)
         sys.exit(2)
-    cpu = int(os.environ.get("BIOLOOM_HHBLITS_CPU") or 1)
+    cpu = int(os.environ.get("MAKPHI_HHBLITS_CPU") or 1)
     if cpu > 1:
         _more_cpu(cpu)
     spec = importlib.util.spec_from_file_location("run_qmean", RUN_QMEAN)
@@ -125,7 +125,7 @@ def main():
     sys.argv[0] = RUN_QMEAN
     spec.loader.exec_module(module)
     module._get_uniclust30 = lambda: prefix
-    folder = os.environ.get("BIOLOOM_PROFILE_CACHE", "")
+    folder = os.environ.get("MAKPHI_PROFILE_CACHE", "")
     if folder:
         _profile_cache(module, folder)
     module._main()

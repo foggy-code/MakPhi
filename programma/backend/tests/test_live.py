@@ -23,13 +23,13 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
-from bioloom.app import create_app
-from bioloom.config import Paths, UserSettings
-from bioloom.core import auth, eta
-from bioloom.core.db import Database
-from bioloom.core.events import ChangeFeed
-from bioloom.core.jobs import JobManager
-from bioloom.services import live
+from makphi.app import create_app
+from makphi.config import Paths, UserSettings
+from makphi.core import auth, eta
+from makphi.core.db import Database
+from makphi.core.events import ChangeFeed
+from makphi.core.jobs import JobManager
+from makphi.services import live
 from tests.conftest import HUMAN_UB, YEAST_UB, until, wait_job
 from tests.test_pipeline_resume import FakeModeller, cancel_at
 

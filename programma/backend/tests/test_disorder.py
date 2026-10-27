@@ -16,11 +16,11 @@ import xml.etree.ElementTree as ET
 import httpx
 import pytest
 
-from bioloom.core.errors import AppError
-from bioloom.domain import consensus, disorder, report, sequences
-from bioloom.engines import quality, remote
-from bioloom.services.coverage import CoverageService, local_pairs, pir_coverage
-from bioloom.services.templates import TemplateLibrary
+from makphi.core.errors import AppError
+from makphi.domain import consensus, disorder, report, sequences
+from makphi.engines import quality, remote
+from makphi.services.coverage import CoverageService, local_pairs, pir_coverage
+from makphi.services.templates import TemplateLibrary
 
 from .conftest import DATA, HUMAN_UB
 from .test_alphafold import af_pdb

@@ -15,7 +15,7 @@ export function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
 }
 
-/** Errore del server nel formato di BioLoom. */
+/** Errore del server nel formato di MakPhi. */
 export function apiError(status: number, code: string, message: string): Response {
   return json({ error: { code, message } }, status);
 }
@@ -51,6 +51,6 @@ export function systemInfo(runtime: Record<string, unknown> = {}) {
     workers: 2,
     python: "3.12",
     modeller: { available: true, version: "10.5", python: "/usr/bin/python3", python_version: "3.12", attempts: [] },
-    runtime: { container: true, image: "bioloom:test", arch: "x86_64", auth: false, allow_shutdown: true, modeller_key: "file", ...runtime },
+    runtime: { container: true, image: "makphi:test", arch: "x86_64", auth: false, allow_shutdown: true, modeller_key: "file", ...runtime },
   };
 }

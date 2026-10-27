@@ -15,13 +15,13 @@ import httpx
 import numpy as np
 import pytest
 
-from bioloom.config import SettingsStore, UserSettings
-from bioloom.core.errors import AppError, RemoteServiceError
-from bioloom.core.jobs import PRIORITY
-from bioloom.domain import consensus, plddt, prediction, report, structure
-from bioloom.engines import modeller, quality, remote
-from bioloom.engines.modeller import TemplateSpec
-from bioloom.services.predict import PredictService
+from makphi.config import SettingsStore, UserSettings
+from makphi.core.errors import AppError, RemoteServiceError
+from makphi.core.jobs import PRIORITY
+from makphi.domain import consensus, plddt, prediction, report, structure
+from makphi.engines import modeller, quality, remote
+from makphi.engines.modeller import TemplateSpec
+from makphi.services.predict import PredictService
 
 from .conftest import DATA, HUMAN_UB, ubq_variant, wait_job
 from .test_alphafold import af_entry, af_pdb
@@ -106,8 +106,8 @@ def test_client_normalizes_plddt_from_unit_scale(services):
     assert out["info"]["residues"] == 76 and out["info"]["plddt"]["mean"] == 90.0
     lines = out["pdb"].splitlines()
     assert lines[1].startswith("TITLE     ESMFOLD V1 PREDICTION FOR INPUT")  # intestazione del servizio conservata
-    assert "REMARK 999 BIOLOOM PREDICTOR ESMFOLD api.esmatlas.com" in out["pdb"]
-    assert "REMARK 999 BIOLOOM PLDDT SCALE 0-1 X100 TO 0-100" in out["pdb"]
+    assert "REMARK 999 MAKPHI PREDICTOR ESMFOLD api.esmatlas.com" in out["pdb"]
+    assert "REMARK 999 MAKPHI PLDDT SCALE 0-1 X100 TO 0-100" in out["pdb"]
     atoms = [ln for ln in lines if ln.startswith("ATOM")]
     assert {ln[60:66] for ln in atoms} == {" 90.00"} and lines[-1] == "END"
     values = [float(ln[60:66]) for ln in atoms]
@@ -124,7 +124,7 @@ def test_client_keeps_plddt_already_on_0_100(services):
 def test_client_adds_a_recognizable_title_when_missing(services):
     services.esm = [(200, ubq_prediction(header=[]))]
     out = remote.esmfold_predict(HUMAN_UB, name="mia_seq")
-    assert out["pdb"].startswith("TITLE     ESMFOLD PREDICTION, MIA_SEQ SAVED BY BIOLOOM")
+    assert out["pdb"].startswith("TITLE     ESMFOLD PREDICTION, MIA_SEQ SAVED BY MAKPHI")
     assert plddt.is_esmfold_text(out["pdb"])
 
 
@@ -263,11 +263,11 @@ def server_client(tmp_path, monkeypatch, services):
     dato e un indirizzo della rete interna."""
     from fastapi.testclient import TestClient
 
-    from bioloom.app import create_app
-    from bioloom.config import Paths
-    from bioloom.core import auth
+    from makphi.app import create_app
+    from makphi.config import Paths
+    from makphi.core import auth
 
-    monkeypatch.delenv("BIOLOOM_ESMFOLD_URL", raising=False)
+    monkeypatch.delenv("MAKPHI_ESMFOLD_URL", raising=False)
     data = tmp_path / "data"
     data.mkdir()
     (data / "settings.json").write_text(json.dumps({"esmfold_remote": True, "esmfold_url": INTERNAL}))
@@ -279,13 +279,13 @@ def server_client(tmp_path, monkeypatch, services):
 def test_server_mode_esmfold_url_is_set_by_the_administrator_only(server_client, services, monkeypatch):
     """Con l'accesso con chiave, chi ha la chiave non sceglie dove il server invia richieste: PUT /api/settings rifiuta
     un altro indirizzo (403), quello salvato in settings.json non vale e si usa quello dell'amministratore
-    (BIOLOOM_ESMFOLD_URL, vuoto = servizio pubblico)."""
+    (MAKPHI_ESMFOLD_URL, vuoto = servizio pubblico)."""
     c = server_client
     assert c.get("/api/settings").json()["esmfold_url"] == ""  # servizio pubblico, non l'indirizzo salvato
     for url in (INTERNAL, "http://127.0.0.1:8080/fold", "https://esm.example.org/fold"):
         r = c.put("/api/settings", json={"esmfold_url": url})
         assert r.status_code == 403 and r.json()["error"]["code"] == "esmfold_url_locked", url
-        assert "BIOLOOM_ESMFOLD_URL" in r.json()["error"]["message"]
+        assert "MAKPHI_ESMFOLD_URL" in r.json()["error"]["message"]
     # la pagina rimanda il valore in uso insieme alle altre impostazioni: si salva tutto il resto
     r = c.put("/api/settings", json={"esmfold_url": "", "contact_email": "a@b.it"})
     assert r.status_code == 200 and r.json()["esmfold_url"] == "" and r.json()["contact_email"] == "a@b.it"
@@ -293,7 +293,7 @@ def test_server_mode_esmfold_url_is_set_by_the_administrator_only(server_client,
     assert wait_job(c, job["id"])["status"] == "completed"
     assert [str(r.url) for r in services.esm_calls()] == [remote.ESMFOLD_URL]
     # indirizzo dell'amministratore
-    monkeypatch.setenv("BIOLOOM_ESMFOLD_URL", "https://esm.example.org/fold")
+    monkeypatch.setenv("MAKPHI_ESMFOLD_URL", "https://esm.example.org/fold")
     assert c.get("/api/settings").json()["esmfold_url"] == "https://esm.example.org/fold"
     assert c.put("/api/settings", json={"esmfold_url": "https://esm.example.org/fold"}).status_code == 200
     job = c.post("/api/predict", json={"sequence": {"name": "ubq", "sequence": HUMAN_UB}}).json()
@@ -436,7 +436,7 @@ def test_esmfold_template_is_named_esmfold_in_logs_notes_remarks_report_and_chec
     predetto»."""
     from types import SimpleNamespace
 
-    from bioloom.domain import preflight as rules
+    from makphi.domain import preflight as rules
 
     pdb, _info = prediction.normalize_pdb(ubq_prediction(value=lambda n: 0.4 if n in SEGMENT else 0.9), HUMAN_UB)
     r = client.post("/api/templates/upload", files={"file": ("pred.pdb", pdb.encode())}, data={"template_id": "ESMUBQ"})
@@ -453,7 +453,7 @@ def test_esmfold_template_is_named_esmfold_in_logs_notes_remarks_report_and_chec
     assert note.startswith("ESMUBQ_A: modello predetto (ESMFold), non una struttura sperimentale")
     assert plddt.predictor_tag("esmfold") == "ESMFOLD" and plddt.predictor_tag(None, "AF-P0CG48-F1") == "ALPHAFOLD"
     assert plddt.predicted_text(None, "MIOMODELLO") == "modello predetto"
-    assert report.model_trims("REMARK 999 BIOLOOM TEMPLATE ESMUBQ_A ESMFOLD PLDDT<70 REMOVED 7\n") == {
+    assert report.model_trims("REMARK 999 MAKPHI TEMPLATE ESMUBQ_A ESMFOLD PLDDT<70 REMOVED 7\n") == {
         "ESMUBQ_A": {"threshold": 70.0, "removed": 7}}
     checks = rules.plddt_checks([{"template": "ESMUBQ", "threshold": None, "total": 76, "low": 7,
                                   "predictor": "esmfold"}])
@@ -468,7 +468,7 @@ def test_esmfold_template_is_named_esmfold_in_logs_notes_remarks_report_and_chec
 # ------------------------------------------------------------------------------------------ plausibilità
 def _comparison(tmp_path, **kw) -> tuple[dict, dict]:
     """Confronto integrato 1UBQ (A) contro la finta predizione (B) e il pLDDT della predizione."""
-    from bioloom.engines import align
+    from makphi.engines import align
 
     pdb, _info = prediction.normalize_pdb(ubq_prediction(**kw), HUMAN_UB)
     path = tmp_path / "pred.pdb"
@@ -825,7 +825,7 @@ def test_report_section_render_and_escape():
              "regions": [{"chain": "A", "start": "31", "end": "37", "divergent": 7, "length": 7, "lddt_mean": 0.24,
                           "plddt_mean": 90.0, "confidence": "sicura", "consensus": ["DOPE & co"]}],
              "notes": ["nota"], "limits": "limiti"}
-    data = {"kind": "quality", "title": "t", "job_id": "abc", "tools": [("BioLoom", "4")], "warnings": [],
+    data = {"kind": "quality", "title": "t", "job_id": "abc", "tools": [("MakPhi", "4")], "warnings": [],
             "prediction": {"job_id": "p1", "finished_at": "2026-10-01T10:00:00+00:00", "predictor": "esmfold",
                            "label": "ESMFold", "origin": {"service": "https://api.esmatlas.com/x", "scale": "0-1"},
                            "plddt": {"mean": 90.0}, "chain": "A", "sequence": {"length": 76},

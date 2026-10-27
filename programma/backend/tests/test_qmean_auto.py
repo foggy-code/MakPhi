@@ -3,8 +3,8 @@
 
 import pytest
 
-from bioloom.engines import remote
-from bioloom.services.autoqmean import AutoQmean, unavailable
+from makphi.engines import remote
+from makphi.services.autoqmean import AutoQmean, unavailable
 
 from .conftest import until, wait_job
 from .test_pipeline_cross import FakeModeller
@@ -24,7 +24,7 @@ def swissmodel(monkeypatch):
         return dict(REMOTE_RESULT)
 
     monkeypatch.setattr(remote, "swissmodel_qmean", fake)
-    monkeypatch.delenv("BIOLOOM_QMEAN_URL", raising=False)
+    monkeypatch.delenv("MAKPHI_QMEAN_URL", raising=False)
     return calls
 
 
@@ -65,15 +65,15 @@ def model_job(client, **extra) -> dict:
 
 
 def test_unavailable_reasons(monkeypatch):
-    from bioloom.config import UserSettings
+    from makphi.config import UserSettings
 
-    monkeypatch.delenv("BIOLOOM_QMEAN_URL", raising=False)
+    monkeypatch.delenv("MAKPHI_QMEAN_URL", raising=False)
     assert "non è attivo" in unavailable(UserSettings())
     assert "non è consentito" in unavailable(UserSettings(qmean_mode="remote"))
     assert "email" in unavailable(UserSettings(qmean_mode="remote", qmean_remote=True))
     assert unavailable(UserSettings(**REMOTE)) is None
     assert unavailable(UserSettings(qmean_remote=True, contact_email="a@b.it", qmean_fallback_remote=True)) is None
-    monkeypatch.setenv("BIOLOOM_QMEAN_URL", "http://qmean:8080")
+    monkeypatch.setenv("MAKPHI_QMEAN_URL", "http://qmean:8080")
     assert unavailable(UserSettings()) is None
 
 
@@ -135,7 +135,7 @@ def test_pipeline_queues_qmean_on_the_best_model_of_each_sequence(client, modell
 
 
 def test_preflight_of_modeling_and_pipeline(client_with_ubq, env, monkeypatch):  # noqa: F811 (fixture)
-    monkeypatch.delenv("BIOLOOM_QMEAN_URL", raising=False)
+    monkeypatch.delenv("MAKPHI_QMEAN_URL", raising=False)
     assert "qmean_auto" not in codes(run(client_with_ubq, "model", model_params()))
     out = run(client_with_ubq, "model", {**model_params(), "qmean": True})
     assert "qmean_auto" in codes(out) and "qmean_unavailable" in codes(out, "error")
@@ -173,7 +173,7 @@ def gate(monkeypatch):
         return dict(REMOTE_RESULT)
 
     monkeypatch.setattr(remote, "swissmodel_qmean", fake)
-    monkeypatch.delenv("BIOLOOM_QMEAN_URL", raising=False)
+    monkeypatch.delenv("MAKPHI_QMEAN_URL", raising=False)
     yield event
     event.set()
 
@@ -239,7 +239,7 @@ def test_notice_waits_for_the_qmean_jobs(client, modeller, gate, smtp):  # noqa:
     assert smtp.messages == []  # pipeline completata, QMEAN in corso: ancora nessun avviso
     gate.set()
     msg = until(lambda: smtp.messages)[0]
-    assert msg["subject"].startswith("BioLoom: pipeline «") and msg["subject"].endswith("» completata")
+    assert msg["subject"].startswith("MakPhi: pipeline «") and msg["subject"].endswith("» completata")
     assert "QMEAN automatico: 2 calcoli (completati 2), tutti terminati." in msg["body"]
     assert all(q["status"] == "completed" for q in qmean_jobs(client))  # inviato dopo l'ultimo QMEAN
     until(lambda: "Email di avviso inviata a utente@example.org" in job_log(client, job_id))
@@ -255,7 +255,7 @@ def test_notice_without_usable_qmean_is_sent_at_once(client, modeller, swissmode
 
 
 def test_failed_qmean_are_requeued_on_request(client, modeller, monkeypatch):
-    from bioloom.core.errors import ToolUnavailable
+    from makphi.core.errors import ToolUnavailable
 
     state = {"down": True}
 
@@ -265,7 +265,7 @@ def test_failed_qmean_are_requeued_on_request(client, modeller, monkeypatch):
         return dict(REMOTE_RESULT)
 
     monkeypatch.setattr(remote, "swissmodel_qmean", fake)
-    monkeypatch.delenv("BIOLOOM_QMEAN_URL", raising=False)
+    monkeypatch.delenv("MAKPHI_QMEAN_URL", raising=False)
     client.put("/api/settings", json=REMOTE)
     job_id = pipeline(client, qmean_scope="all")
     until(lambda: (s := auto_status(client, job_id)) and not s["pending"] and s["counts"] == {"failed": 6})

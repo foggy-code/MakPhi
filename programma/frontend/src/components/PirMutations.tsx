@@ -96,7 +96,7 @@ export function PirMutations({ report, onGo, onRevert, onResetReference }: {
           </div>
         )}
         <p className="small text-2">
-          Numerazione per catena, come nei modelli di BioLoom: la prima catena parte dal primo residuo indicato nella seconda riga PIR (1 se manca),
+          Numerazione per catena, come nei modelli di MakPhi: la prima catena parte dal primo residuo indicato nella seconda riga PIR (1 se manca),
           le successive (dopo «/») da 1. Con più catene la sostituzione porta il nome della catena (B:K2R): la prima e l'ultima vengono dalla seconda
           riga PIR, quelle in mezzo si presumono in ordine alfabetico. Per i template, se la numerazione del file della struttura salta, i numeri
           successivi sono solo progressivi.

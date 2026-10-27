@@ -16,11 +16,11 @@ import zipfile
 
 import pytest
 
-from bioloom.core.errors import AppError
-from bioloom.domain import consensus, sequences
-from bioloom.engines import quality
-from bioloom.services import pipeline as pipeline_service
-from bioloom.services.compute import model_remarks
+from makphi.core.errors import AppError
+from makphi.domain import consensus, sequences
+from makphi.engines import quality
+from makphi.services import pipeline as pipeline_service
+from makphi.services.compute import model_remarks
 from tests.conftest import DATA, HUMAN_UB, YEAST_UB, wait_job
 
 TEMPLATES = [{"id": "T1", "chains": ["A"]}, {"id": "T2", "chains": ["A"]}, {"id": "T3", "chains": ["B"]}]
@@ -120,7 +120,7 @@ def test_every_sequence_is_modelled_on_every_template(cross):
     assert rows[3]["identity"] == pytest.approx(96.1, abs=0.1)
     # cartella <idx>_<sequenza>__<template> e riga della coppia nel PDB
     model = core.jobs.workdir(job_id) / "items" / "0001_a__T2_A" / "a.B99990001.pdb"
-    assert "REMARK 999 BIOLOOM PIPELINE SEQUENCE a TEMPLATE T2_A" in model.read_text()
+    assert "REMARK 999 MAKPHI PIPELINE SEQUENCE a TEMPLATE T2_A" in model.read_text()
 
 
 def test_every_pair_is_analysed_and_the_best_is_chosen_by_zdope(cross):
@@ -140,7 +140,7 @@ def test_every_pair_is_analysed_and_the_best_is_chosen_by_zdope(cross):
     assert [r["metrics"]["zdope"] for r in rows] == [ZDOPE[(n, t["id"])] for n in NAMES for t in TEMPLATES]
     # REMARK della coppia accanto a quelle dell'analisi (voto compreso)
     text = (core.jobs.workdir(job_id) / "items" / "0001_a__T2_A" / "a.B99990001.pdb").read_text()
-    assert "PIPELINE SEQUENCE a TEMPLATE T2_A" in text and "BIOLOOM GRADE" in text
+    assert "PIPELINE SEQUENCE a TEMPLATE T2_A" in text and "MAKPHI GRADE" in text
     # filtri: per sequenza, per template, solo i migliori
     assert [r["name"] for r in _items(client, job_id, "&sequence=1")] == ["b__T1_A", "b__T2_A", "b__T3_B"]
     assert [r["name"] for r in _items(client, job_id, "&template=2")] == ["a__T3_B", "b__T3_B"]

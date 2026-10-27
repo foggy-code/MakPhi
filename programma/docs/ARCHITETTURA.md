@@ -1,4 +1,4 @@
-# Architettura di BioLoom v4
+# Architettura di MakPhi
 
 Questo documento è per
 chi sviluppa: come è fatto il programma e perché, con le misure e i valori di riferimento dei test. L'uso è descritto nella
@@ -6,7 +6,7 @@ chi sviluppa: come è fatto il programma e perché, con le misure e i valori di 
 implementazione](PIANO_IMPLEMENTAZIONE.md).
 
 I percorsi di questo documento (`backend/`, `docker/`, `launcher/`, `scripts/`…) sono relativi alla cartella
-`programma/`, e da lì partono anche i comandi; la cartella di BioLoom che la contiene ha gli avviatori, `LEGGIMI.txt`,
+`programma/`, e da lì partono anche i comandi; la cartella di MakPhi che la contiene ha gli avviatori, `LEGGIMI.txt`,
 `Guida/`, `data/` e `immagini/` (vedi [Backend](#backend)).
 
 **Obiettivi:**
@@ -23,7 +23,7 @@ I percorsi di questo documento (`backend/`, `docker/`, `launcher/`, `scripts/`�
   [flusso dei dati e file temporanei](#flusso-dei-dati-e-file-temporanei) ·
   [versione, impronta e aggiornamento delle immagini](#versione-impronta-e-aggiornamento-delle-immagini) ·
   [costruzione riproducibile dell'immagine](#costruzione-riproducibile-dellimmagine) ·
-  [avviatori: un BioLoom alla volta e controlli all'avvio](#avviatori-un-bioloom-alla-volta-e-controlli-allavvio)
+  [avviatori: un MakPhi alla volta e controlli all'avvio](#avviatori-un-makphi-alla-volta-e-controlli-allavvio)
 - [Backend](#backend): [pacchetti](#pacchetti) · [job](#job) ·
   [coda con priorità e budget di CPU](#coda-con-priorità-e-budget-di-cpu) ·
   [ripresa delle pipeline](#ripresa-delle-pipeline) ·
@@ -64,12 +64,12 @@ I percorsi di questo documento (`backend/`, `docker/`, `launcher/`, `scripts/`�
 
 ```
 Computer ospite (Windows, macOS, Linux; Apple Silicon in emulazione x86)
-  Avvia BioLoom.bat/.command, avvia-bioloom.sh ─▶ programma/launcher/bioloom.ps1 | bioloom.sh ─▶ docker compose (progetto "bioloom")
+  Avvia MakPhi.bat/.command, avvia-makphi.sh ─▶ programma/launcher/makphi.ps1 | makphi.sh ─▶ docker compose (progetto "makphi")
     · trova UniClust30/QMTL sui dischi · legge il MAC da LicenseDB · porta libera · carica immagini/ o le costruisce
     · versione da launcher/VERSION · impronta del codice confrontata con /app/IMPRONTA · ProSA un computer alla volta
-    · un BioLoom alla volta per computer (le copie hanno gli stessi container)
+    · un MakPhi alla volta per computer (le copie hanno gli stessi container)
 
-Container "bioloom" (Ubuntu 24.04, Python 3.12, utente = proprietario di /data)
+Container "makphi" (Ubuntu 24.04, Python 3.12, utente = proprietario di /data)
   Browser ──HTTP──▶ FastAPI (8765; pubblicata su 127.0.0.1, anche sul server; in rete solo con chiave d'accesso)
                      ├─ /api/*   rotte REST (OpenAPI su /docs)      ├─ /*  interfaccia React compilata
                      ├─ JobManager: code con priorità "cpu" (core−1) + "io" (8 + posti QMEAN) · budget di CPU condiviso · stato su SQLite · lavoro in /scratch
@@ -77,7 +77,7 @@ Container "bioloom" (Ubuntu 24.04, Python 3.12, utente = proprietario di /data)
                      │                      TM-align, US-align, PROCHECK, ProSA II, fpocket, PDB2PQR, APBS, OpenMM
                      └─ servizi remoti: RCSB · UniProt · InterPro · NCBI QBlast · AlphaFold DB (EBI) · SWISS-MODEL (opt-in)
                                         · ESMFold (ESM Atlas, opt-in)
-  /data     ◀─ bind mount  cartella data/ (chiavetta, cartella o server): viaggia con BioLoom
+  /data     ◀─ bind mount  cartella data/ (chiavetta, cartella o server): viaggia con MakPhi
   /scratch  ◀─ volume      lavoro dei job e file temporanei (veloce, svuotato a ogni avvio)
   /cache    ◀─ volume      indici ricostruibili di questo computer (MMseqs2)
 
@@ -95,8 +95,8 @@ nelle immagini costruite senza.
 
 ```
 data/
-  bioloom.db          progetti, sequenze, documenti, job, elementi di pipeline, etichette e preferiti (SQLite, WAL esclusivo, schema versionato)
-  backups/            copie di sicurezza di bioloom.db fatte prima di ogni migrazione dello schema (mai eliminate da sole)
+  makphi.db          progetti, sequenze, documenti, job, elementi di pipeline, etichette e preferiti (SQLite, WAL esclusivo, schema versionato)
+  backups/            copie di sicurezza di makphi.db fatte prima di ogni migrazione dello schema (mai eliminate da sole)
   jobs/<id>/          params.json, job.log, result.json e i soli risultati (niente intermedi MODELLER)
   jobs/.deleting-<id>/   resto di un job eliminato (o mai accodato) con file ancora in uso, tolto dalla pulizia automatica
   jobs/.rerun-incoming/  pacchetti di riproducibilità in arrivo, spostati nel job alla sua creazione
@@ -109,19 +109,19 @@ data/
   databases/          pdbaa (BLAST+), pdbaa_mmseqs (database MMseqs2 senza indice); durante un aggiornamento
                       anche le cartelle di lavoro <nome>.new-<job> e <nome>.old-<job>
   tools/              facoltativa: eseguibili aggiunti ai percorsi in cui `engines/tools` cerca gli strumenti
-  access_key          chiave d'accesso generata in modalità server, se BIOLOOM_ACCESS_KEY è vuota
+  access_key          chiave d'accesso generata in modalità server, se MAKPHI_ACCESS_KEY è vuota
   session_epoch       epoca delle sessioni della modalità server (un intero; «Esci da tutti i dispositivi» la incrementa)
   settings.json       impostazioni utente
 ```
 
-Nel container `BIOLOOM_DATA_DIR=/data`, `BIOLOOM_SCRATCH_DIR=/scratch` e `BIOLOOM_CACHE_DIR=/cache`. Fuori da Docker
-(sviluppo con `python bioloom.py`) la cartella dati è `data/` accanto a `programma/`, lo scratch `data/.scratch` e la cache locale
+Nel container `MAKPHI_DATA_DIR=/data`, `MAKPHI_SCRATCH_DIR=/scratch` e `MAKPHI_CACHE_DIR=/cache`. Fuori da Docker
+(sviluppo con `python makphi.py`) la cartella dati è `data/` accanto a `programma/`, lo scratch `data/.scratch` e la cache locale
 `data/.localcache`, salvo le stesse variabili.
 
 I risultati dei job (`jobs/<id>`) si eliminano solo a mano: dal dettaglio del job, con «Pulisci job…» nella pagina
 Job o «Elimina job…» in Impostazioni → Spazio e file temporanei, oppure eliminando il progetto (vedi [Eliminazione di
 progetti e pulizia dei job](#eliminazione-di-progetti-e-pulizia-dei-job)). `backups/` non si elimina mai da sola: lo
-spazio occupato la mostra. Il file `bioloom.db` non si restringe dopo un'eliminazione di massa: nessun VACUUM, per
+spazio occupato la mostra. Il file `makphi.db` non si restringe dopo un'eliminazione di massa: nessun VACUUM, per
 scelta (servirebbe circa il doppio dello spazio del database e bloccherebbe l'unica connessione); SQLite riusa le
 pagine liberate per i dati nuovi.
 
@@ -189,37 +189,37 @@ pagine liberate per i dati nuovi.
 
 ### Versione, impronta e aggiornamento delle immagini
 
-**Versione unica.** La fonte è `launcher/VERSION` (4.2.0). Gli avviatori (`bioloom.sh`, `bioloom.ps1`,
-`bioloom-podman.sh`) e `scripts/test.sh` la leggono da lì, senza numeri di riserva: se il file manca si fermano con un
-errore (`test.sh` no, se ha `BIOLOOM_BASE_IMAGE`). Gli avviatori la esportano come `BIOLOOM_VERSION` prima di ogni `docker compose`: nell'interpolazione di compose
-le variabili della shell prevalgono su `--env-file`, quindi una `BIOLOOM_VERSION` rimasta in `.env.locale` o in un
+**Versione unica.** La fonte è `launcher/VERSION` (4.2.0). Gli avviatori (`makphi.sh`, `makphi.ps1`,
+`makphi-podman.sh`) e `scripts/test.sh` la leggono da lì, senza numeri di riserva: se il file manca si fermano con un
+errore (`test.sh` no, se ha `MAKPHI_BASE_IMAGE`). Gli avviatori la esportano come `MAKPHI_VERSION` prima di ogni `docker compose`: nell'interpolazione di compose
+le variabili della shell prevalgono su `--env-file`, quindi una `MAKPHI_VERSION` rimasta in `.env.locale` o in un
 `server.env` di una versione precedente non conta (per `server.env` l'avviatore avvisa che è ignorata);
-`bioloom-podman.sh` legge `server.env` variabile per variabile e fa prevalere `VERSION`. `server.env.example` non ha più
+`makphi-podman.sh` legge `server.env` variabile per variabile e fa prevalere `VERSION`. `server.env.example` non ha più
 la variabile. Le copie letterali, per chi non passa dagli avviatori:
 
 | File | Copia |
 |---|---|
-| `backend/pyproject.toml`, `backend/bioloom/__init__.py` | `version`, `__version__` |
+| `backend/pyproject.toml`, `backend/makphi/__init__.py` | `version`, `__version__` |
 | `frontend/package.json`, `frontend/package-lock.json` | `version` del progetto (nel lock i due del progetto, in cima e nel pacchetto `""`, non quelli delle dipendenze) |
-| `docker/Dockerfile` | `ARG BIOLOOM_VERSION=…`, predefinito delle costruzioni senza `--build-arg` |
-| `docker/test/Dockerfile` | `ARG BASE=bioloom:…` |
-| `launcher/compose.yml` | i due `${BIOLOOM_VERSION:-…}` delle immagini `bioloom` e `bioloom-qmean` |
+| `docker/Dockerfile` | `ARG MAKPHI_VERSION=…`, predefinito delle costruzioni senza `--build-arg` |
+| `docker/test/Dockerfile` | `ARG BASE=makphi:…` |
+| `launcher/compose.yml` | i due `${MAKPHI_VERSION:-…}` delle immagini `makphi` e `makphi-qmean` |
 
 `bash scripts/versione.sh` stampa la versione e controlla le copie (se differiscono le elenca su stderr ed esce con 1);
 `bash scripts/versione.sh X.Y.Z` porta `VERSION` e tutte le copie a X.Y.Z conservando i fine riga, e scrive solo se
 in ogni file trova il numero di copie atteso (altrimenti non tocca nulla). Si lancia con `bash` davanti perché il bit
 eseguibile manca se lo script entra nel repository da Windows (`core.filemode`). `tests/test_version.py` e la CI
-ripetono il controllo. `compose.yml` passa `BIOLOOM_VERSION` all'immagine `bioloom` come build arg senza valore
-(se non è impostata vale il predefinito del Dockerfile), così `ENV BIOLOOM_IMAGE_VERSION` (in `/api/system/info` e
-nel manifest dei pacchetti di riproducibilità) e `LABEL bioloom.version` sono quelli veri anche costruendo con compose;
-`bioloom-podman.sh` usa `podman build --build-arg` (con `BUILDPLATFORM=linux/amd64`, vedi [Costruzione riproducibile
+ripetono il controllo. `compose.yml` passa `MAKPHI_VERSION` all'immagine `makphi` come build arg senza valore
+(se non è impostata vale il predefinito del Dockerfile), così `ENV MAKPHI_IMAGE_VERSION` (in `/api/system/info` e
+nel manifest dei pacchetti di riproducibilità) e `LABEL makphi.version` sono quelli veri anche costruendo con compose;
+`makphi-podman.sh` usa `podman build --build-arg` (con `BUILDPLATFORM=linux/amd64`, vedi [Costruzione riproducibile
 dell'immagine](#costruzione-riproducibile-dellimmagine)). La versione entra nella chiave della
 [cache dei calcoli](#cache-dei-calcoli), che quindi riparte a ogni nuova versione.
 
 **Impronta del codice.** Riconosce un'immagine che non corrisponde al codice anche a parità di versione (`programma/`
 sostituito o modificato senza ricostruire). Definizione, identica nell'implementazione di riferimento
 `docker/impronta.sh` (sh POSIX: dash nella build, bash 3.2 di macOS, Git Bash) e in `launcher/impronta.ps1`
-(`Get-BioLoomImpronta([string]$Root)`, Windows PowerShell 5.1 e pwsh 7, `$null` se non può calcolarla; `bioloom.ps1` la
+(`Get-MakPhiImpronta([string]$Root)`, Windows PowerShell 5.1 e pwsh 7, `$null` se non può calcolarla; `makphi.ps1` la
 carica con dot-source):
 
 1. radice `programma/` (il contesto della build);
@@ -240,7 +240,7 @@ con `sha256sum`, `shasum -a 256` o `openssl dgst -sha256` (27 s in Git Bash, dov
 da 1 MiB saltando i CR (0,4 s). Nessuno dei due segue collegamenti simbolici o giunzioni.
 
 Nella build lo stadio `impronta` (`UBUNTU_IMAGE`, Ubuntu 24.04 per digest, `COPY . /ctx`, script letto senza CR come
-`entrypoint.sh`) scrive `/impronta`; l'immagine finale la copia in `/app/IMPRONTA` con `LABEL bioloom.version`, per
+`entrypoint.sh`) scrive `/impronta`; l'immagine finale la copia in `/app/IMPRONTA` con `LABEL makphi.version`, per
 ultime, così una modifica del codice non invalida la cache dei livelli sopra. L'impronta c'è comunque si costruisca
 l'immagine (avviatore, compose a mano, CI); la `.dockerignore` esclude solo cose che la definizione esclude già, quindi
 il valore della build è quello dell'host (verificato con un albero Windows in CRLF). `docker/vendor/` non conta: dopo
@@ -253,34 +253,34 @@ precedenti: `cat` esce con 1) = impronta diversa; container che non parte = non 
 assente = nessun `run`, che la cercherebbe su Docker Hub. L'impronta del codice si calcola una volta per esecuzione
 dell'avviatore; se non si può calcolare (strumenti assenti) i controlli si saltano in silenzio.
 
-**Controllo all'avvio** (desktop, `bioloom.sh server`, `bioloom-podman.sh avvia`), dopo aver assicurato
-`bioloom:<versione>`: con impronte diverse, sul desktop in modo interattivo l'avviatore chiede «Aggiornarla ora? [S/n]»
+**Controllo all'avvio** (desktop, `makphi.sh server`, `makphi-podman.sh avvia`), dopo aver assicurato
+`makphi:<versione>`: con impronte diverse, sul desktop in modo interattivo l'avviatore chiede «Aggiornarla ora? [S/n]»
 (Invio = sì; «[s/N]», Invio = no, con un avviso prima, quando ricostruirebbe senza i pacchetti di PROCHECK o ProSA:
 nessun tar da caricare e pacchetti assenti in `docker/vendor/`) ed esegue il passo 1 di `aggiorna`; con no o se l'aggiornamento non riesce, con `--no-menu` / `-NoMenu` e
 sul server avvisa con il comando da usare e parte con l'immagine esistente.
 
-**Azione `aggiorna`**: `bioloom.sh aggiorna` (anche da `avvia-bioloom.sh`), `bioloom.ps1 -Azione aggiorna`,
-`bioloom-podman.sh aggiorna`. `bioloom.sh` la inoltra a `bioloom-podman.sh` (con `--sposta-prosa`, se c'è) quando c'è
-`podman` senza `docker compose` e la cartella di BioLoom ha `server.env`. Con Docker il riavvio usa il file con cui
-BioLoom è partito (etichetta `com.docker.compose.project.environment_file` del container; un `.env.locale` minimo
+**Azione `aggiorna`**: `makphi.sh aggiorna` (anche da `avvia-makphi.sh`), `makphi.ps1 -Azione aggiorna`,
+`makphi-podman.sh aggiorna`. `makphi.sh` la inoltra a `makphi-podman.sh` (con `--sposta-prosa`, se c'è) quando c'è
+`podman` senza `docker compose` e la cartella di MakPhi ha `server.env`. Con Docker il riavvio usa il file con cui
+MakPhi è partito (etichetta `com.docker.compose.project.environment_file` del container; un `.env.locale` minimo
 senza porta vale come server; senza etichetta e con entrambi i file nessun riavvio automatico, con un messaggio).
 Prima di ogni ricostruzione, se mancano i pacchetti di PROCHECK o ProSA, l'avviatore avvisa che la nuova immagine
 non li avrà. L'avviatore PowerShell ha solo il desktop.
 
-1. Immagine `bioloom`: se corrisponde già, nulla. Altrimenti carica `immagini/bioloom-<versione>.tar` (se non è già
+1. Immagine `makphi`: se corrisponde già, nulla. Altrimenti carica `immagini/makphi-<versione>.tar` (se non è già
    stato caricato nella stessa esecuzione) e, se ora l'impronta coincide, ha finito; altrimenti, se c'è
-   `docker/Dockerfile`, la ricostruisce (`compose build bioloom` con `BIOLOOM_VERSION` esportata; Podman
-   `podman build --build-arg BIOLOOM_VERSION`) e ricontrolla. Se alla fine non coincide avvisa, e l'azione esce con 1.
+   `docker/Dockerfile`, la ricostruisce (`compose build makphi` con `MAKPHI_VERSION` esportata; Podman
+   `podman build --build-arg MAKPHI_VERSION`) e ricontrolla. Se alla fine non coincide avvisa, e l'azione esce con 1.
    L'immagine sostituita resta senza nome.
-2. Immagine `bioloom-qmean`, solo se c'è già, se c'è il suo tar o se UniClust è configurato: carica il tar,
+2. Immagine `makphi-qmean`, solo se c'è già, se c'è il suo tar o se UniClust è configurato: carica il tar,
    altrimenti (o se il caricamento fallisce) `compose --profile qmean build qmean`. Un fallimento è solo un avviso.
 3. Riavvio solo se un container in esecuzione usa un'immagine diversa da quella che ora ha il nome (`{{.Image}}` del
    container contro `{{.Id}}` dell'immagine), così i calcoli non si interrompono se non è cambiato nulla: desktop
-   `compose up -d` con `.env.locale`, server come `bioloom.sh server`, Podman come `avvia`; prima, il controllo del
-   BioLoom partito da un'altra cartella (vedi [Avviatori](#avviatori-un-bioloom-alla-volta-e-controlli-allavvio)). Con
-   BioLoom fermo e un'immagine cambiata dice che verrà usata al prossimo avvio.
+   `compose up -d` con `.env.locale`, server come `makphi.sh server`, Podman come `avvia`; prima, il controllo del
+   MakPhi partito da un'altra cartella (vedi [Avviatori](#avviatori-un-makphi-alla-volta-e-controlli-allavvio)). Con
+   MakPhi fermo e un'immagine cambiata dice che verrà usata al prossimo avvio.
 
-**`prepara`** salva le immagini prima di copiare i file: se `bioloom:<versione>` non corrisponde al codice la aggiorna
+**`prepara`** salva le immagini prima di copiare i file: se `makphi:<versione>` non corrisponde al codice la aggiorna
 come al passo 1 (senza riavvio) e, se non ci riesce, si ferma prima di copiare, perché una copia portatile con immagine
 vecchia e codice nuovo non deve uscire. Crea `.env.locale` se manca, che serve alla costruzione con compose.
 
@@ -288,7 +288,7 @@ vecchia e codice nuovo non deve uscire. Crea `.env.locale` se manca, che serve a
 
 `docker/Dockerfile` fissa tutto ciò che scarica, così due costruzioni dello stesso codice partono dagli stessi byte.
 Anche i pacchetti di Ubuntu (4.3.0): vengono dall'istantanea dell'archivio alla data di `UBUNTU_SNAPSHOT`
-(`snapshot.ubuntu.com`, `APT::Snapshot` di apt 2.8 in `/etc/apt/apt.conf.d/50bioloom-snapshot`), quindi due costruzioni
+(`snapshot.ubuntu.com`, `APT::Snapshot` di apt 2.8 in `/etc/apt/apt.conf.d/50makphi-snapshot`), quindi due costruzioni
 con la stessa data installano le stesse versioni; le correzioni di sicurezza arrivano spostando la data. L'istantanea si
 legge solo in HTTPS (un indirizzo `http://` viene rediretto) e l'immagine di base non ha i certificati: `ca-certificates`
 si installa prima dall'archivio corrente, l'unico pacchetto non fissato (i pacchetti sono comunque firmati
@@ -303,7 +303,7 @@ dall'archivio). Le versioni rilevate sono in `THIRD_PARTY_NOTICES.md`.
 | pacchetti di Ubuntu (apt), tranne `ca-certificates` | istantanea dell'archivio del 15 ottobre 2026 | `UBUNTU_SNAPSHOT` (`20261015T000000Z`) |
 | immagine di base di QMEAN (`docker/qmean/Dockerfile`) | digest di `registry.scicore.unibas.ch/schwede/qmean` | — |
 
-- **Tag e digest:** il tag non sta davanti al digest perché Podman 2.2.1 (server RHEL 8, `bioloom-podman.sh`) rifiuta i
+- **Tag e digest:** il tag non sta davanti al digest perché Podman 2.2.1 (server RHEL 8, `makphi-podman.sh`) rifiuta i
   riferimenti con tutti e due («Docker references with both a tag and digest are currently not supported»); resta nel
   commento, come già in `docker/qmean/Dockerfile`.
 - **US-align e fpocket per commit:** le loro release non hanno file allegati, solo gli archivi dei sorgenti che GitHub
@@ -322,8 +322,8 @@ dall'archivio). Le versioni rilevate sono in `THIRD_PARTY_NOTICES.md`.
   valore e `ARG FRONTEND_PLATFORM=${BUILDPLATFORM:-linux/amd64}`. BuildKit e Podman (anche 2.2.1, provato: `linux/amd64`)
   danno `BUILDPLATFORM` da sé; `linux/amd64` vale per un costruttore che non lo dà. Non un predefinito di
   `BUILDPLATFORM` stesso: con BuildKit scavalcherebbe il valore automatico (con `ARG BUILDPLATFORM=linux/s390x` lo stadio
-  veniva costruito per s390x, quindi su un Mac ARM l'interfaccia si compilerebbe in emulazione). `bioloom-podman.sh`
-  passa comunque `--build-arg BUILDPLATFORM=linux/amd64` all'immagine di BioLoom, per i buildah vecchi che non lo
+  veniva costruito per s390x, quindi su un Mac ARM l'interfaccia si compilerebbe in emulazione). `makphi-podman.sh`
+  passa comunque `--build-arg BUILDPLATFORM=linux/amd64` all'immagine di MakPhi, per i buildah vecchi che non lo
   valorizzano.
 - **`docker buildx build --check -f docker/Dockerfile .`:** nessun avviso. La seconda riga del file,
   `# check=skip=FromPlatformFlagConstDisallowed`, salta la regola sul `--platform=linux/amd64` costante, voluto perché
@@ -334,75 +334,75 @@ dall'archivio). Le versioni rilevate sono in `THIRD_PARTY_NOTICES.md`.
   'refs/tags/<tag>^{}'`: con il solo nome del tag esce solo l'oggetto di un tag annotato; se c'è la riga che finisce con
   `^{}`, il commit è quello) e `curl -fsSL <URL> | gzip -dc | sha256sum`. Poi una costruzione completa e le versioni
   nuove in `THIRD_PARTY_NOTICES.md`.
-- **QMEAN:** l'immagine di base di `bioloom-qmean` sta solo nel registro del gruppo Schwede: se sparisse, `bioloom-qmean`
+- **QMEAN:** l'immagine di base di `makphi-qmean` sta solo nel registro del gruppo Schwede: se sparisse, `makphi-qmean`
   non si potrebbe più costruire. La copia di sicurezza è il tar della copia portatile o un `docker save`, che
   `aggiorna` e l'avvio caricano da `immagini/` ([Guida → Copia di sicurezza dell'immagine
   QMEAN](../../Guida/5%20-%20Chiavetta%20e%20server.md#copia-di-sicurezza-dellimmagine-qmean)).
 
-### Avviatori: un BioLoom alla volta e controlli all'avvio
+### Avviatori: un MakPhi alla volta e controlli all'avvio
 
-**Un BioLoom alla volta.** Tutte le copie di BioLoom hanno lo stesso progetto compose (`name: bioloom` in
+**Un MakPhi alla volta.** Tutte le copie di MakPhi hanno lo stesso progetto compose (`name: makphi` in
 `compose.yml`), quindi gli stessi container e volumi: avviarne una ricreerebbe i container dell'altra con un'altra
 cartella dati. Il nome non cambia da una copia all'altra, perché il volume `cache` con l'indice MMseqs2 resterebbe
-orfano; gli avviatori guardano invece da dove è partito il BioLoom in esecuzione.
+orfano; gli avviatori guardano invece da dove è partito il MakPhi in esecuzione.
 
-- **Docker** (`bioloom.sh`, `bioloom.ps1`): etichetta `com.docker.compose.project.working_dir` del container in
-  esecuzione (`bioloom`, altrimenti uno del profilo `qmean`), cioè la cartella di `compose.yml` come la scrive compose
+- **Docker** (`makphi.sh`, `makphi.ps1`): etichetta `com.docker.compose.project.working_dir` del container in
+  esecuzione (`makphi`, altrimenti uno del profilo `qmean`), cioè la cartella di `compose.yml` come la scrive compose
   sul computer (Docker Desktop: `C:\…\programma\launcher`), confrontata con il proprio `programma/launcher`. In bash con
   `-ef` dopo `cygpath -u` (Git Bash) o `wslpath -u` (WSL), quindi a meno di maiuscole e collegamenti; in PowerShell con
   `GetFullPath` e `-ieq`, che ignora maiuscole, `/` contro `\` e la barra finale. PowerShell legge etichette e mount con
   `{{json …}}`, perché la 5.1 toglie le virgolette interne agli argomenti dei programmi e `{{index … "etichetta"}}`
   non arriverebbe intero. La cartella dati dell'altra copia è il `Source` del mount su `/data`.
-- **Podman** (`bioloom-podman.sh`): i container hanno nomi fissi e quelli creati dall'avviatore l'etichetta
-  `bioloom.cartella=<cartella di BioLoom>`. Per quelli delle versioni precedenti, senza etichetta, si confronta la
-  cartella montata su `/data` con `BIOLOOM_DATA_PATH` (nei messaggi: `<cartella dati> (cartella dati)`).
+- **Podman** (`makphi-podman.sh`): i container hanno nomi fissi e quelli creati dall'avviatore l'etichetta
+  `makphi.cartella=<cartella di MakPhi>`. Per quelli delle versioni precedenti, senza etichetta, si confronta la
+  cartella montata su `/data` con `MAKPHI_DATA_PATH` (nei messaggi: `<cartella dati> (cartella dati)`).
 
 Il controllo si fa prima di avviare: dal desktop subito dopo la verifica della cartella dati (prima di ProSA e della
-ricerca dei dischi), con `server` e, in `aggiorna`, solo quando c'è un riavvio. Il BioLoom di un'altra cartella si
+ricerca dei dischi), con `server` e, in `aggiorna`, solo quando c'è un riavvio. Il MakPhi di un'altra cartella si
 arresta solo con il consenso: «Arrestarlo e continuare? [s/N]», chiesto come gli altri prompt se non c'è `--no-menu` /
 `-NoMenu`. Invio, input chiuso o la modalità senza domande escono con 1 («[!] Avvio annullato: resta in esecuzione il
-BioLoom di <cartella>. Per usare questa copia arrestalo prima (<comando> arresta) e riprova.», in `aggiorna` «Riavvio
+MakPhi di <cartella>. Per usare questa copia arrestalo prima (<comando> arresta) e riprova.», in `aggiorna` «Riavvio
 annullato»), così la finestra del `.bat`/`.command` resta aperta. Con «sì» `compose --profile qmean down
 --remove-orphans`; con Podman lo stop delle unità systemd di `servizio` (dell'utente, non della copia: l'avvio le
 rigenera) e la rimozione dei container. In `aggiorna` dal desktop, arrestata l'altra copia, questa parte come un avvio
 normale (porta, licenze, UniClust), perché il suo `.env.locale` può non venire da un avvio.
 
-`arresta` ferma invece comunque il BioLoom in esecuzione e dice da quale cartella era partito («Il BioLoom in esecuzione
+`arresta` ferma invece comunque il MakPhi in esecuzione e dice da quale cartella era partito («Il MakPhi in esecuzione
 è partito da un'altra cartella: …», poi la cartella dati di quella copia): i container sono gli stessi, «Arresta
-BioLoom» non fa domande, la cartella dell'altra copia può non esserci più (chiavetta tolta) e arrestare non cancella
-nulla. `stato`, `log` e `verifica` danno lo stesso avviso. Limite noto: un BioLoom avviato da WSL (`/mnt/c/…`) e
+MakPhi» non fa domande, la cartella dell'altra copia può non esserci più (chiavetta tolta) e arrestare non cancella
+nulla. `stato`, `log` e `verifica` danno lo stesso avviso. Limite noto: un MakPhi avviato da WSL (`/mnt/c/…`) e
 controllato da Git Bash o PowerShell risulta di un'altra cartella anche se è la stessa; il contrario funziona.
 
-**Rete del server (`BIOLOOM_BIND`).** `server.env.example` ha `BIOLOOM_BIND=127.0.0.1` (prima `0.0.0.0`), quindi anche
-il `server.env` creato da `bioloom.sh server`; `bioloom-podman.sh` lo forzava già e ora lo prende dall'esempio.
+**Rete del server (`MAKPHI_BIND`).** `server.env.example` ha `MAKPHI_BIND=127.0.0.1` (prima `0.0.0.0`), quindi anche
+il `server.env` creato da `makphi.sh server`; `makphi-podman.sh` lo forzava già e ora lo prende dall'esempio.
 Dagli altri computer si arriva con un reverse proxy HTTPS o un tunnel SSH. Sono locali `127.*`, `localhost` e `::1` (in
 bash anche il valore vuoto, che per compose vale 127.0.0.1; la variabile della shell prevale su `server.env`, come per
-compose). Alla creazione di `server.env` l'avviatore dice che BioLoom ascolterà solo su 127.0.0.1; a ogni avvio, con un
+compose). Alla creazione di `server.env` l'avviatore dice che MakPhi ascolterà solo su 127.0.0.1; a ogni avvio, con un
 valore locale, stampa il comando del tunnel (`ssh -N -L <porta>:127.0.0.1:<porta> utente@server`), altrimenti avvisa
 senza fermarsi: HTTP con chiave e cookie in chiaro e, con Docker o con Podman da root, porta pubblicata con regole NAT
 che passano prima di firewalld e ufw. Con Podman senza root la porta è aperta da un processo dell'utente e il firewall
 la filtra: la riga sul firewall manca. I `server.env` esistenti con `0.0.0.0` restano così, con l'avviso.
 
-**Porta.** Dal desktop (`bioloom.sh`, `bioloom.ps1`) la prima libera partendo da quella dell'ultimo avvio
-(`BIOLOOM_PORT` di `.env.locale`), poi le successive fino alla 8800 e da 8765: prima la ricerca partiva dall'ultima
-usata e non tornava più alle porte libere più basse. La porta del BioLoom in esecuzione conta come libera (la dice
-`compose port bioloom 8765`; se compose non la dice si suppone quella salvata). Un valore guasto in `.env.locale` vale
+**Porta.** Dal desktop (`makphi.sh`, `makphi.ps1`) la prima libera partendo da quella dell'ultimo avvio
+(`MAKPHI_PORT` di `.env.locale`), poi le successive fino alla 8800 e da 8765: prima la ricerca partiva dall'ultima
+usata e non tornava più alle porte libere più basse. La porta del MakPhi in esecuzione conta come libera (la dice
+`compose port makphi 8765`; se compose non la dice si suppone quella salvata). Un valore guasto in `.env.locale` vale
 8765 (prima il cast `[int]` mandava in errore lo script PowerShell).
 
-- **Tutte occupate:** l'avviatore si ferma prima di compose, con «Nessuna porta libera per BioLoom: [la N e ]le porte da
+- **Tutte occupate:** l'avviatore si ferma prima di compose, con «Nessuna porta libera per MakPhi: [la N e ]le porte da
   8765 a 8800 sono tutte usate da altri programmi…» e il comando per vedere chi ascolta (`netstat -ano | findstr
   LISTENING`, `lsof -nP -iTCP -sTCP:LISTEN`, `ss -ltnp`). Prima proseguiva comunque e compose falliva con «address
   already in use» o «ports are not available».
-- **`BIOLOOM_PORT` nell'ambiente:** porta fissa. Occupata → «La porta N (BIOLOOM_PORT) è già usata da un altro
-  programma…»; non un numero da 1 a 65535 → «BIOLOOM_PORT=x non è una porta valida…». Finisce in `.env.locale` come
+- **`MAKPHI_PORT` nell'ambiente:** porta fissa. Occupata → «La porta N (MAKPHI_PORT) è già usata da un altro
+  programma…»; non un numero da 1 a 65535 → «MAKPHI_PORT=x non è una porta valida…». Finisce in `.env.locale` come
   porta dell'ultimo avvio, e l'avviatore la toglie poi dall'ambiente: compose preferirebbe la variabile della shell alla
-  porta scritta in `.env.locale`, e prima BioLoom partiva su una porta mentre l'avviatore lo aspettava su un'altra, e
+  porta scritta in `.env.locale`, e prima MakPhi partiva su una porta mentre l'avviatore lo aspettava su un'altra, e
   `aggiorna` non lo riavviava com'era.
-- **Server** (`bioloom.sh server`, `bioloom-podman.sh`): la porta fissa di `server.env` (o di `BIOLOOM_PORT`
+- **Server** (`makphi.sh server`, `makphi-podman.sh`): la porta fissa di `server.env` (o di `MAKPHI_PORT`
   nell'ambiente, che per compose prevale, come prima) si controlla prima di caricare o costruire le immagini, con lo
-  stesso messaggio («… (BIOLOOM_PORT in server.env) è già usata da un altro programma su <bind>…») e il valore
-  validato. Per `BIOLOOM_BIND=0.0.0.0` (o vuoto, `localhost`, `::`) si guarda 127.0.0.1, dove risponde anche chi
-  ascolta su tutte le interfacce. La porta del BioLoom acceso conta come libera anche qui.
+  stesso messaggio («… (MAKPHI_PORT in server.env) è già usata da un altro programma su <bind>…») e il valore
+  validato. Per `MAKPHI_BIND=0.0.0.0` (o vuoto, `localhost`, `::`) si guarda 127.0.0.1, dove risponde anche chi
+  ascolta su tutte le interfacce. La porta del MakPhi acceso conta come libera anche qui.
 - **Come si controlla in bash:** una connessione a `/dev/tcp/<host>/<porta>`, libera se nessuno accetta. In locale con
   `timeout 3` quando c'è: una porta chiusa rifiuta subito, mentre un programma bloccato con la coda piena terrebbe ferma
   la connessione per minuti (Linux scarta le richieste in più invece di rifiutarle). Allo scadere la porta conta come
@@ -418,62 +418,62 @@ usata e non tornava più alle porte libere più basse. La porta del BioLoom in e
 - **Limiti noti:** in Git Bash le porte riservate da Hyper-V non si vedono (solo la connessione); l'uscita di
   `podman port` su Podman 2.2.1 non è verificata (se non si legge, si suppone la porta del container stesso: nessun falso
   blocco).
-- **Prove** (con docker finto, fuori dalla suite): 22 scenari di `bioloom.sh` nell'immagine `bash:3.2`, con porte occupate
-  da listener veri (desktop, server, Podman, tutte occupate, `BIOLOOM_PORT` libera, occupata o non valida, ritorno da
-  8800 a 8765, listener su 0.0.0.0, BioLoom già in esecuzione); 11 di `bioloom.ps1` con `docker.bat`. Sul codice
-  precedente «tutte occupate», «`BIOLOOM_PORT` occupata», server e Podman arrivavano a compose, e in PowerShell non si
+- **Prove** (con docker finto, fuori dalla suite): 22 scenari di `makphi.sh` nell'immagine `bash:3.2`, con porte occupate
+  da listener veri (desktop, server, Podman, tutte occupate, `MAKPHI_PORT` libera, occupata o non valida, ritorno da
+  8800 a 8765, listener su 0.0.0.0, MakPhi già in esecuzione); 11 di `makphi.ps1` con `docker.bat`. Sul codice
+  precedente «tutte occupate», «`MAKPHI_PORT` occupata», server e Podman arrivavano a compose, e in PowerShell non si
   vedeva il listener su 0.0.0.0.
 
-**Attesa dell'avvio da server** (`start_server` di `bioloom.sh`, anche da `aggiorna` quando riavvia da server).
-`compose up -d` non aspetta BioLoom: prima l'avviatore stampava subito «BioLoom (server) avviato…» anche con un backend
-che usciva all'avvio (chiave troppo corta, `BIOLOOM_TRUSTED_PROXIES` non valida) e che `BIOLOOM_RESTART=unless-stopped`
-faceva ripartire di continuo. Ora, dopo `compose up`, «Attesa della risposta di BioLoom su http://<host>:<porta> ...» e
+**Attesa dell'avvio da server** (`start_server` di `makphi.sh`, anche da `aggiorna` quando riavvia da server).
+`compose up -d` non aspetta MakPhi: prima l'avviatore stampava subito «MakPhi (server) avviato…» anche con un backend
+che usciva all'avvio (chiave troppo corta, `MAKPHI_TRUSTED_PROXIES` non valida) e che `MAKPHI_RESTART=unless-stopped`
+faceva ripartire di continuo. Ora, dopo `compose up`, «Attesa della risposta di MakPhi su http://<host>:<porta> ...» e
 `wait_healthy <porta> <host> 1`: `/api/health` una volta al secondo per 2 minuti su `probe_host "$bind"` (127.0.0.1 per
-`0.0.0.0`, `::`, `[::]`, `localhost` o vuoto; `::1` per `[::1]`; altrimenti l'indirizzo di `BIOLOOM_BIND`, con gli IPv6
+`0.0.0.0`, `::`, `[::]`, `localhost` o vuoto; `::1` per `[::1]`; altrimenti l'indirizzo di `MAKPHI_BIND`, con gli IPv6
 fra `[]` nell'URL, `url_host`) e la porta già validata. Con il terzo argomento a 1 guarda anche il container
-(`compose ps -a -q bioloom`, poi `docker inspect` di stato, `RestartCount` e politica di riavvio):
+(`compose ps -a -q makphi`, poi `docker inspect` di stato, `RestartCount` e politica di riavvio):
 
 - uscita 2: container `exited` o `dead` senza politica di riavvio;
 - uscita 3: `restarting`, `exited` o `dead` con una politica attiva (fra un'uscita e il riavvio), oppure `RestartCount`
   cresciuto dal primo controllo (un container che compose non ha ricreato può avere riavvii vecchi);
 - uscita 1: nessuna risposta in 2 minuti.
 
-In tutti e tre i casi `compose logs --tail 30 bioloom` e `fail` (uscita 1) con «BioLoom non risponde su
-http://<host>:<porta> dopo 2 minuti…» oppure «BioLoom si è fermato durante l'avvio: il motivo è nelle righe qui sopra
-(spesso un valore di server.env, per esempio BIOLOOM_ACCESS_KEY più corta di 16 caratteri)…», e per l'uscita 3 in più
-«intanto Docker continua a riavviarlo (BIOLOOM_RESTART), per fermarlo: … arresta»: l'avviatore non ferma il container da
+In tutti e tre i casi `compose logs --tail 30 makphi` e `fail` (uscita 1) con «MakPhi non risponde su
+http://<host>:<porta> dopo 2 minuti…» oppure «MakPhi si è fermato durante l'avvio: il motivo è nelle righe qui sopra
+(spesso un valore di server.env, per esempio MAKPHI_ACCESS_KEY più corta di 16 caratteri)…», e per l'uscita 3 in più
+«intanto Docker continua a riavviarlo (MAKPHI_RESTART), per fermarlo: … arresta»: l'avviatore non ferma il container da
 sé. Dal desktop (`start_local`, ramo desktop di `aggiorna`) `wait_healthy "$port"` resta com'era: 127.0.0.1, senza
 controllo del container.
 
-- **Con curl** (`health_ok`, e `wait_healthy` di `bioloom-podman.sh`): `curl -fsS --noproxy '*' --max-time 5`. curl
+- **Con curl** (`health_ok`, e `wait_healthy` di `makphi-podman.sh`): `curl -fsS --noproxy '*' --max-time 5`. curl
   usa `http_proxy` anche per 127.0.0.1 (provato con curl 8.19 su Windows), e sui server degli
-  enti la variabile è spesso impostata: prima un proxy che rifiutava la richiesta faceva dire «BioLoom non risponde…»
+  enti la variabile è spesso impostata: prima un proxy che rifiutava la richiesta faceva dire «MakPhi non risponde…»
   dopo 2 minuti con il container sano, e uno irraggiungibile faceva aspettare a ogni tentativo tutto il timeout di
   connessione (21 s su Windows, ~130 s su Linux). `--max-time 5` vale come il `read -t 5` del ramo senza curl.
 - **Senza curl** (`health_ok`): una vera `GET /api/health HTTP/1.0` su `/dev/tcp`, con `read -t 5` della riga di stato,
   che deve essere 200. Prima bastava aprire la connessione, che la porta pubblicata da Docker accetta anche quando
-  BioLoom non ascolta: senza curl l'attesa finiva subito.
-- **Prove** (docker finto, copia di prova, `BIOLOOM_RESTART=unless-stopped`): risposta con bind 127.0.0.1 e 0.0.0.0,
+  MakPhi non ascolta: senza curl l'attesa finiva subito.
+- **Prove** (docker finto, copia di prova, `MAKPHI_RESTART=unless-stopped`): risposta con bind 127.0.0.1 e 0.0.0.0,
   anche senza curl (uscita 0); container uscito (log e «si è fermato durante l'avvio…»); container in riavvio (riavvii
   che crescono, stato `restarting`, `exited` con la politica attiva: messaggio con «Docker continua a riavviarlo…
   arresta»); nessuna risposta con il ciclo accorciato, bind 127.0.0.1 e `[::1]`. La sonda senza curl dà esito negativo
   su una porta che accetta e chiude subito, su una che risponde 503, su una muta (dopo 5 s) e su una chiusa.
-- **Limiti noti:** `bioloom-podman.sh` non ha avuto lo stesso intervento: aspetta 2 minuti senza accorgersi che il
-  container è uscito e senza mostrare il log («BioLoom non risponde: controlla con '… log'.»), senza curl gli basta la
+- **Limiti noti:** `makphi-podman.sh` non ha avuto lo stesso intervento: aspetta 2 minuti senza accorgersi che il
+  container è uscito e senza mostrare il log («MakPhi non risponde: controlla con '… log'.»), senza curl gli basta la
   connessione, e con bind `::` o `[::]` costruisce un URL sbagliato (tratta come caso speciale solo `0.0.0.0`).
 
-**Docker Desktop.** Quando Docker manca, `bioloom.ps1` e `bioloom.sh` (su macOS e Windows, e su macOS anche quando c'è
+**Docker Desktop.** Quando Docker manca, `makphi.ps1` e `makphi.sh` (su macOS e Windows, e su macOS anche quando c'è
 solo Podman) aggiungono la licenza e le alternative: gratuito per uso personale, didattico e nelle aziende piccole (meno
 di 250 dipendenti e meno di 10 milioni di dollari di fatturato annuo); negli enti pubblici, anche piccoli, e nelle altre
 organizzazioni, se l'uso non è didattico, «verifica la licenza» con il link ai prezzi (secondo i termini di Docker serve
 un abbonamento per l'uso professionale negli enti pubblici di qualunque dimensione e dove si raggiunge almeno una delle
-due soglie). Poi i programmi che danno i comandi `docker` e `docker compose`, dichiarati non provati con BioLoom: Rancher
-Desktop, Podman Desktop con la compatibilità Docker e, su macOS, Colima. Prima solo `bioloom.ps1` ne parlava, con
+due soglie). Poi i programmi che danno i comandi `docker` e `docker compose`, dichiarati non provati con MakPhi: Rancher
+Desktop, Podman Desktop con la compatibilità Docker e, su macOS, Colima. Prima solo `makphi.ps1` ne parlava, con
 «gratuito per uso personale e accademico». Su Linux l'avviatore indica Docker Engine con il plugin compose, gratuito. La
 copia portatile finisce con «Sul computer di destinazione serve solo Docker (Docker Desktop o un programma con i comandi
 docker e docker compose)».
 
-**Mac con processore Apple.** Il riepilogo dell'avvio dal desktop (`bioloom.sh`) aggiunge due righe (container amd64 in
+**Mac con processore Apple.** Il riepilogo dell'avvio dal desktop (`makphi.sh`) aggiunge due righe (container amd64 in
 emulazione, ProSA x86 a 32 bit che potrebbe non funzionare, l'opzione «Use Rosetta for x86_64/amd64 emulation on Apple
 Silicon» di Docker Desktop) se `uname -m` è `arm64`, oppure se `sysctl -n hw.optional.arm64` è 1: in una shell in
 Rosetta `uname -m` dice `x86_64`. ProSA con Rosetta non è verificato su un Mac vero.
@@ -484,19 +484,19 @@ Rosetta `uname -m` dice `x86_64`. ProSA con Rosetta non è verificato su un Mac 
   '{{.Store.GraphDriverName}}'` (provato con la 2.2.1; se il formato non va, `graphDriverName:` dall'uscita YAML). Con
   `vfs` (senza root e senza fuse-overlayfs ogni strato è una copia intera) un avviso che rimanda alla Guida
   (fuse-overlayfs e `storage.conf`); non blocca mai.
-- **Senza compose:** `bioloom.sh` passa sempre a `bioloom-podman.sh` (con `--sposta-prosa` e `--no-menu`) `server`,
-  `arresta`, `stato`, `log` e `verifica`, anche senza `server.env` (bastano i predefiniti; `arresta` ferma il BioLoom
+- **Senza compose:** `makphi.sh` passa sempre a `makphi-podman.sh` (con `--sposta-prosa` e `--no-menu`) `server`,
+  `arresta`, `stato`, `log` e `verifica`, anche senza `server.env` (bastano i predefiniti; `arresta` ferma il MakPhi
   acceso da qualunque cartella); `aggiorna` solo con `server.env`, perché senza il riavvio creerebbe il file e
   uscirebbe. L'avvio dal desktop finisce con un messaggio che dà le due strade (Docker con compose sul PC, `server` su
   un server con solo Podman). Prima queste azioni arrivavano a `docker compose` con «Docker non è installato», «unknown
-  command: docker compose», un falso «BioLoom è arrestato» o l'uscita 127.
-- **`--no-menu`** (nuova in `bioloom-podman.sh`): nessuna domanda.
+  command: docker compose», un falso «MakPhi è arrestato» o l'uscita 127.
+- **`--no-menu`** (nuova in `makphi-podman.sh`): nessuna domanda.
 
 ## Backend
 
 ### Pacchetti
 
-| Pacchetto (`backend/bioloom/`) | Ruolo |
+| Pacchetto (`backend/makphi/`) | Ruolo |
 |---|---|
 | radice | avvio, applicazione, configurazione, comandi da riga di comando |
 | `core/` | infrastruttura: persistenza, job, coda, budget di CPU, cache, eventi |
@@ -517,42 +517,42 @@ con gli avviatori, `impronta.ps1`, `compose.yml`, `server.env.example` e `VERSIO
 aggiornamento delle immagini](#versione-impronta-e-aggiornamento-delle-immagini)); `scripts/test.sh` e
 `scripts/versione.sh`.
 
-Tutto questo sta in `programma/`. La cartella di BioLoom, quella che si copia sulla chiavetta, contiene solo ciò che
-serve all'utente: gli avviatori (`Avvia BioLoom.bat`/`.command`, `Arresta BioLoom.bat`/`.command`, `avvia-bioloom.sh`,
+Tutto questo sta in `programma/`. La cartella di MakPhi, quella che si copia sulla chiavetta, contiene solo ciò che
+serve all'utente: gli avviatori (`Avvia MakPhi.bat`/`.command`, `Arresta MakPhi.bat`/`.command`, `avvia-makphi.sh`,
 che richiamano `programma/launcher/`), `LEGGIMI.txt`, `LICENSE` (MIT) e `THIRD_PARTY_NOTICES.md`, il manuale `Guida/`,
 `data/` e `immagini/`; più `.env.locale` e `server.env`, scritti dall'avviatore. Gli avviatori calcolano due radici:
-`ROOT`/`$Root` = `programma/` (compose, Dockerfile, versione) e `BASE`/`$Base` = la cartella di BioLoom (dati, immagini,
+`ROOT`/`$Root` = `programma/` (compose, Dockerfile, versione) e `BASE`/`$Base` = la cartella di MakPhi (dati, immagini,
 configurazione della macchina).
 `compose.yml` costruisce l'immagine con contesto `programma/` (la `.dockerignore` è lì) e monta `../../data`.
 
-**Server con Podman senza compose** (RHEL 8, Podman 2.x senza root): `bioloom.sh server`, se c'è `podman` e manca
-`docker compose`, passa a `launcher/bioloom-podman.sh`, che ripete `compose.yml` con `podman run` e legge lo stesso
+**Server con Podman senza compose** (RHEL 8, Podman 2.x senza root): `makphi.sh server`, se c'è `podman` e manca
+`docker compose`, passa a `launcher/makphi-podman.sh`, che ripete `compose.yml` con `podman run` e legge lo stesso
 `server.env` (variabile per variabile, non con `--env-file`, così nel container entrano solo quelle di compose).
-Differenze: QMEAN gira con `--network container:bioloom` e BioLoom lo chiama su `127.0.0.1:8080` (un pod vorrebbe
+Differenze: QMEAN gira con `--network container:makphi` e MakPhi lo chiama su `127.0.0.1:8080` (un pod vorrebbe
 l'immagine `pause` da internet); `--security-opt label=disable` evita di rietichettare con SELinux le cartelle
 montate, che possono essere dischi condivisi; `--health-cmd none` perché il controllo di salute di Podman 2.x passa da
 systemd, e l'attesa la fa l'avviatore; senza root il root del container è l'utente del server, quindi l'avviatore
-passa `BIOLOOM_UID=0` e l'entrypoint resta root invece di passare all'utente 1000 (che sul server sarebbe un subuid
+passa `MAKPHI_UID=0` e l'entrypoint resta root invece di passare all'utente 1000 (che sul server sarebbe un subuid
 estraneo, senza permessi sulla cartella dati); il MAC non si può assegnare, quindi ProSA non trova una licenza valida.
-`bioloom-podman.sh servizio` genera le unità systemd dell'utente (`podman generate systemd --name`), che partono
-con il server solo con il linger attivo. Etichetta `bioloom.cartella`, driver di archiviazione e azioni senza compose:
-vedi [Avviatori](#avviatori-un-bioloom-alla-volta-e-controlli-allavvio).
+`makphi-podman.sh servizio` genera le unità systemd dell'utente (`podman generate systemd --name`), che partono
+con il server solo con il linger attivo. Etichetta `makphi.cartella`, driver di archiviazione e azioni senza compose:
+vedi [Avviatori](#avviatori-un-makphi-alla-volta-e-controlli-allavvio).
 
 **Radice**
 
 | Modulo | Contenuto |
 |---|---|
-| `__main__` | avvio del server (`python -m bioloom`, `--host`, `--port`, `--no-browser`; uscita 3 se l'avvio non riesce, per esempio con una chiave d'accesso troppo corta) e comando `rerun` |
+| `__main__` | avvio del server (`python -m makphi`, `--host`, `--port`, `--no-browser`; uscita 3 se l'avvio non riesce, per esempio con una chiave d'accesso troppo corta) e comando `rerun` |
 | `app` | applicazione FastAPI: rotte, middleware (Host e origine, chiave d'accesso, CORS dello sviluppo, limite del corpo), errori interni con un codice, interfaccia compilata (`frontend/dist`) |
-| `cli` | comandi oltre al server: `python bioloom.py rerun` (vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione)) |
+| `cli` | comandi oltre al server: `python makphi.py rerun` (vedi [Riproducibilità](#riproducibilità-pacchetti-e-riesecuzione)) |
 | `config` | percorsi (`Paths`), impostazioni utente (`UserSettings`, `SettingsStore`), limite degli upload |
-| `selftest` | verifica dell'installazione da riga di comando (`python -m bioloom.selftest`) |
+| `selftest` | verifica dell'installazione da riga di comando (`python -m makphi.selftest`) |
 
 **`core/`**
 
 | Modulo | Contenuto |
 |---|---|
-| `auth` | chiave d'accesso della modalità server (`BIOLOOM_AUTH=on`): lunghezza minima, sessioni revocabili con l'epoca, freno ai tentativi (`LoginLimiter`), indirizzo del client dietro un proxy fidato (vedi [Sicurezza e privacy](#sicurezza-e-privacy)) |
+| `auth` | chiave d'accesso della modalità server (`MAKPHI_AUTH=on`): lunghezza minima, sessioni revocabili con l'epoca, freno ai tentativi (`LoginLimiter`), indirizzo del client dietro un proxy fidato (vedi [Sicurezza e privacy](#sicurezza-e-privacy)) |
 | `bodylimit` | limite della dimensione del corpo delle richieste, prima che Starlette lo legga (`BodyLimit`, `request_limit`; vedi [Sicurezza e privacy](#sicurezza-e-privacy)) |
 | `budget` | budget di CPU condiviso fra i job (vedi [Coda con priorità e budget di CPU](#coda-con-priorità-e-budget-di-cpu)) |
 | `cache` | cache dei calcoli (vedi [Cache dei calcoli](#cache-dei-calcoli)) |
@@ -703,7 +703,7 @@ Tutti i calcoli passano dal `JobManager` (priorità di ogni tipo nella [coda](#c
 - coda con priorità per tipo di job e budget di CPU condiviso dai processi esterni di tutti i job (vedi [Coda con
   priorità e budget di CPU](#coda-con-priorità-e-budget-di-cpu)), con la posizione in coda `queue_position`;
 - log incrementale (`GET /api/jobs/{id}/log?offset=`) con l'output dei sottoprocessi in tempo reale;
-- progresso e fase aggiornati dagli handler (per MODELLER tramite marcatori `@@BIOLOOM` stampati dallo script),
+- progresso e fase aggiornati dagli handler (per MODELLER tramite marcatori `@@MAKPHI` stampati dallo script),
   con la stima del tempo residuo `eta_seconds` e gli aggiornamenti in tempo reale via Server-Sent Events (vedi
   [Tempo residuo e aggiornamenti in tempo reale](#tempo-residuo-e-aggiornamenti-in-tempo-reale));
 - annullamento immediato (i processi registrati vengono terminati) e timeout configurabile (`job_timeout_minutes`,
@@ -744,12 +744,12 @@ Tutti i calcoli passano dal `JobManager` (priorità di ogni tipo nella [coda](#c
   togliere (file in uso) passa in `.deleting-<id>` e lo toglie la pulizia automatica. L'errore originale arriva sempre
   al chiamante, anche se questa pulizia non riesce;
 - **ambiente dei programmi esterni** (`default_env`): quello del server senza i suoi segreti
-  (`core/sensitive.subprocess_env`: `BIOLOOM_ACCESS_KEY`, `MODELLER_KEY`, `KEY_MODELLER` e tutte le `BIOLOOM_SMTP_*`,
+  (`core/sensitive.subprocess_env`: `MAKPHI_ACCESS_KEY`, `MODELLER_KEY`, `KEY_MODELLER` e tutte le `MAKPHI_SMTP_*`,
   con utente e password della posta; i nomi senza distinguere maiuscole, come su Windows), più le variabili di
-  `set_subprocess_env` (`BIOLOOM_MODELLER_KEY`, la chiave attiva, con cui MODELLER continua a funzionare). Nessun
+  `set_subprocess_env` (`MAKPHI_MODELLER_KEY`, la chiave attiva, con cui MODELLER continua a funzionare). Nessun
   programma esterno usa le variabili tolte. Lo usano anche i processi lanciati fuori da un job (sonde delle versioni in
   `engines/versions.py`, passi di qualità senza `ctx`, prova di MODELLER), che prima ereditavano tutto `os.environ`.
-  Limite: `BIOLOOM_MODELLER_KEY` arriva a tutti i programmi esterni, non solo a MODELLER;
+  Limite: `MAKPHI_MODELLER_KEY` arriva a tutti i programmi esterni, non solo a MODELLER;
 - **chiavi nell'output dei processi:** `JobContext._popen` maschera riga per riga le chiavi MODELLER (`output_secrets`:
   quella attiva, quella dell'ambiente del processo e `MODELLER_KEY`) prima del log del job, del file dell'output e
   dell'esito restituito a chi ha lanciato il processo, che finisce nei messaggi d'errore: MODELLER ripete la chiave
@@ -806,7 +806,7 @@ confronto strutturale usa il job `align` (vedi [Confronto strutturale](#confront
   "In coda: il servizio QMEAN locale sta eseguendo un altro calcolo", e il worker passa al successivo: il pool "io"
   continua a servire gli altri job. La risorsa si calcola al momento della scelta: `mode` del job o delle
   Impostazioni; un QMEAN su SWISS-MODEL non la chiede, e nemmeno uno in modalità locale senza servizio QMEAN
-  (`BIOLOOM_QMEAN_URL` assente: l'avviatore non ha trovato UniClust30), che fallisce subito o va al fallback. Si tiene
+  (`MAKPHI_QMEAN_URL` assente: l'avviatore non ha trovato UniClust30), che fallisce subito o va al fallback. Si tiene
   fino alla chiusura dell'esecuzione, salvo che il job la restituisca prima con `JobContext.release_resource` (il
   dispatcher gliela passa all'avvio): `handle_qmean` lo fa appena finisce la parte locale, riuscita o no, così un
   fallback su SWISS-MODEL (minuti di attesa) non tiene in coda il QMEAN locale successivo, e più fallback partono
@@ -879,10 +879,10 @@ controlla (`notify.EMAIL_RE`, nessun a capo né separatore) e serve un server di
 (`notify_not_configured`, `invalid_email`, 400). `JobManager.on_finish` chiama gli ascoltatori dopo la scrittura di uno
 stato finale; `NotifyService.on_finish` legge i parametri del job e, se c'è l'indirizzo, invia in un thread suo:
 
-- **Messaggio** (testo semplice, `Auto-Submitted: auto-generated`): oggetto «BioLoom: pipeline «titolo» completata |
+- **Messaggio** (testo semplice, `Auto-Submitted: auto-generated`): oggetto «MakPhi: pipeline «titolo» completata |
   fallita | annullata»; titolo, esito, elementi per stato (`pipeline_items`), avvio, fine e durata (UTC), motivo
   dell'errore (300 caratteri) per fallite e annullate, link `<public_url>/pipeline?job=<id>` se c'è l'indirizzo di
-  BioLoom, identificativo del job. Nessun risultato, sequenza, nome di sequenza o file.
+  MakPhi, identificativo del job. Nessun risultato, sequenza, nome di sequenza o file.
 - **Invio:** `smtplib`, timeout 30 s, STARTTLS o SSL/TLS con il contesto predefinito (certificato verificato) oppure
   nessuna sicurezza; accesso solo con un utente. Errori temporanei (connessione, risposte 4xx) riprovati dopo 10 e 60 s;
   utente o password rifiutati e destinatario rifiutato non si riprovano. L'esito («Email di avviso inviata a …» o «non
@@ -890,12 +890,12 @@ stato finale; `NotifyService.on_finish` legge i parametri del job e, se c'è l'i
   ancora (`JobManager.log_if_present`: un job eliminato durante l'invio non si vede ricreare la cartella). Ogni
   esecuzione (anche una ripresa) avvisa una volta, alla sua fine.
 - **Configurazione, mai dall'interfaccia** (`GET /api/notify` in sola lettura, `POST /api/notify/test`; nessun `PUT`):
-  in qualunque modalità le variabili `BIOLOOM_SMTP_*` e `BIOLOOM_PUBLIC_URL` dell'ambiente (server.env), se c'è
-  `BIOLOOM_SMTP_HOST`, altrimenti le stesse righe `NOME=valore` nel file `licenses/posta.env` della cartella dati
+  in qualunque modalità le variabili `MAKPHI_SMTP_*` e `MAKPHI_PUBLIC_URL` dell'ambiente (server.env), se c'è
+  `MAKPHI_SMTP_HOST`, altrimenti le stesse righe `NOME=valore` nel file `licenses/posta.env` della cartella dati
   (`read_env_file`: commenti `#`, virgolette esterne tolte; modello in `programma/launcher/posta.env.example`), riletto a
   ogni uso. Lo stato dice la fonte (`env`, `file`, `none`) e, per valori non validi, il motivo in italiano (`error`:
   l'avviso resta spento). La password non torna mai (`password_set`) ed è fra i segreti oscurati nei pacchetti di
-  riproducibilità (`LicenseService.extra_secrets`). Chi usa BioLoom non può né cambiare il server di posta né far
+  riproducibilità (`LicenseService.extra_secrets`). Chi usa MakPhi non può né cambiare il server di posta né far
   contattare al server un host della sua rete; sceglie solo se ricevere l'avviso e a quale indirizzo.
 - **Intestazioni:** nessun a capo in utente, mittente e destinatario (validatori); l'oggetto si ricompone su una riga
   e si tronca a 150 caratteri.
@@ -1058,7 +1058,7 @@ ricerche. Il pairwise è istantaneo e non passa dalla cache.
   la tratta come le risposte remote (30 giorni) e in più la tiene sotto il tetto (sotto). In Impostazioni → Spazio
   l'occupazione è mostrata a parte.
 - **Chiave:** SHA-256 del JSON canonico (chiavi ordinate) con operazione, versione del formato della cache e di
-  BioLoom, input normalizzati, parametri e timbro delle dipendenze:
+  MakPhi, input normalizzati, parametri e timbro delle dipendenze:
 
   | Operazione | Input e parametri | Timbro |
   |---|---|---|
@@ -1173,10 +1173,10 @@ delle migrazioni) e `MIGRATIONS` elenca i passaggi successivi (`Migration(versio
 All'apertura `Database._migrate`:
 
 1. esegue lo schema di base (`IF NOT EXISTS`, come ha sempre fatto) e legge la versione; un database **di una versione
-   più recente** di BioLoom non si apre (`MigrationError`: le sue tabelle potrebbero avere vincoli che questa versione
+   più recente** di MakPhi non si apre (`MigrationError`: le sue tabelle potrebbero avere vincoli che questa versione
    non conosce);
 2. se ci sono migrazioni da applicare a un database esistente, fa prima una **copia di sicurezza** in
-   `backups/bioloom.schema<N>.<data>.db` con l'API di backup di SQLite: la copia passa dalla connessione e contiene anche
+   `backups/makphi.schema<N>.<data>.db` con l'API di backup di SQLite: la copia passa dalla connessione e contiene anche
    le pagine ancora nel WAL (una copia del solo file le perderebbe; verificato con un database della versione 1 lasciato
    con le righe solo nel WAL) e funziona con il lock esclusivo. Si scrive con un nome temporaneo, si verifica con
    `PRAGMA quick_check` e solo dopo prende il nome definitivo; se non riesce (disco pieno, cartella non scrivibile) la
@@ -1200,7 +1200,7 @@ cancellare a mano. Il log dell'avvio riporta le migrazioni applicate e la copia.
 Servizio `services/licenses.py`.
 
 - **MODELLER:** la chiave viene da `data/licenses/modeller.key` oppure da `MODELLER_KEY`.
-  - Arriva ai soli sottoprocessi tramite `BIOLOOM_MODELLER_KEY`; `MODELLER_KEY` del server non passa ai programmi
+  - Arriva ai soli sottoprocessi tramite `MAKPHI_MODELLER_KEY`; `MODELLER_KEY` del server non passa ai programmi
     esterni (`core/sensitive.subprocess_env`).
   - Il preambolo degli script (`engines/tools.LICENSE_PREAMBLE`) esegue il `config.py` dell'installazione e
     registra `modeller.config` con la chiave in `sys.modules` prima di `import modeller`. L'installazione
@@ -1215,13 +1215,13 @@ Servizio `services/licenses.py`.
 - **ProSA II 2003:** `LicenseDB` ha righe `programma scadenza MAC codice`. L'avviatore imposta quel MAC sul
   container (`mac_address`), e l'interfaccia confronta il MAC richiesto con quello effettivo. La licenza vale per un
   solo computer e vieta di cambiarne la configurazione per aggirarla, mentre la cartella dati gira su più computer
-  (chiavetta, copia con `--con-licenze`): gli avviatori (`bioloom.sh`, `bioloom.ps1`, `bioloom-podman.sh`) applicano
+  (chiavetta, copia con `--con-licenze`): gli avviatori (`makphi.sh`, `makphi.ps1`, `makphi-podman.sh`) applicano
   il MAC un computer alla volta.
   - **Identificativo del computer:** Windows `MachineGuid` di `HKLM\SOFTWARE\Microsoft\Cryptography` (PowerShell
     `Get-ItemProperty`, poi la vista del registro a 64 bit, che serve a un PowerShell a 32 bit; Git Bash `reg query`);
     macOS `IOPlatformUUID` (`ioreg -rd1 -c IOPlatformExpertDevice`); Linux `/etc/machine-id`, poi
     `/var/lib/dbus/machine-id` (sotto WSL il `MachineGuid` di Windows con `reg.exe`). Stringa senza spazi ai lati e in
-    minuscolo; `id_computer` = primi 16 caratteri dell'SHA-256 esadecimale di `bioloom-computer:<stringa>` (UTF-8,
+    minuscolo; `id_computer` = primi 16 caratteri dell'SHA-256 esadecimale di `makphi-computer:<stringa>` (UTF-8,
     senza a capo): Git Bash, PowerShell e WSL sullo stesso Windows danno lo stesso valore. Senza identificativo nessun
     controllo: il MAC si applica (stato `senza-id`, «computer non identificato»).
   - **Legami:** `data/licenses/prosa/computer`, una riga `<mac> <id_computer>` per licenza (MAC `aa:bb:cc:dd:ee:ff`
@@ -1234,13 +1234,13 @@ Servizio `services/licenses.py`.
     il messaggio «ProSA: la licenza è attiva su un altro computer…». In modo interattivo chiede «Spostare la licenza
     ProSA su questo computer? [s/N]»; `--sposta-prosa` / `-SpostaProsa` sposta senza chiedere; con sì riscrive il
     legame e applica il MAC (`spostata`), altrimenti stato `altro`. La riga «ProSA:» del menu dice quale caso vale.
-  - **Server:** il MAC viene da `BIOLOOM_MAC` di `server.env`, e il controllo vale solo se coincide con quello del
-    `LicenseDB` nella cartella dati (`BIOLOOM_DATA_PATH`, relativa a `compose.yml` come per compose); con la licenza su
+  - **Server:** il MAC viene da `MAKPHI_MAC` di `server.env`, e il controllo vale solo se coincide con quello del
+    `LicenseDB` nella cartella dati (`MAKPHI_DATA_PATH`, relativa a `compose.yml` come per compose); con la licenza su
     un altro computer il container prende `02:42:b1:00:00:01`, il predefinito di `compose.yml`. Sul server non si chiede
     mai: serve `--sposta-prosa`. Con Podman senza root il MAC non si assegna, e non si controlla né registra nulla.
 - **PROCHECK:** licenza accademica senza chiave.
 
-Il codice di BioLoom ha licenza MIT (`LICENSE` nella cartella di BioLoom; `license = "MIT"` in `backend/pyproject.toml`,
+Il codice di MakPhi ha licenza MIT (`LICENSE` nella cartella di MakPhi; `license = "MIT"` in `backend/pyproject.toml`,
 espressione SPDX che richiede setuptools 77 o successivo, e in `frontend/package.json`). I componenti di terzi delle
 immagini e dell'interfaccia, con le licenze e il sorgente del software GPL e LGPL, sono in `THIRD_PARTY_NOTICES.md`.
 
@@ -1387,9 +1387,9 @@ ha `rank_score`, `rank_band`, `rank_twilight` e `rank_reasons` (per componente `
 | Identità | 30 | 0 → 0; curva di Rost pI(L) → 40; max(50%, pI + 10) → 70; 100% → 100 | Rost 1999, Protein Eng 12:85 (eq. 2, n = 0: pI = 480 · L^(−0,32(1+e^(−L/1000))), 100% fino a 11 residui, 19,5% oltre 450); Baker & Šali 2001 (oltre il 50% modelli di alta accuratezza) |
 | Copertura del bersaglio | 30 | lineare 0–100% | frazione del modello con vincoli dal template; 40% (soglia predefinita della pipeline) = confine della fascia scarsa |
 | E-value | 5 | −log10 E: 0 → 0, 2 → 40, 3 → 70, ≥ 10 → 100 | Pearson 2013 (E < 10⁻³ omologia affidabile) |
-| Risoluzione | 12 | raggi X e crio-EM: 1,0 Å → 100, 2,5 → 70, 3,5 → 40, 5,0 → 0; NMR: 60 fisso; predetti: pLDDT 50 → 0, 70 → 40, 90 → 70, 100 → 100 | Wlodawer et al. 2008; fasce di AlphaFold DB (Tunyasuvunakool et al. 2021); NMR scelta BioLoom |
-| R-free | 5 | 0,20 → 100, 0,25 → 70, 0,30 → 40, 0,40 → 0 (solo diffrazione) | Brünger 1992; Kleywegt & Brünger 1996 (oltre 0,40 errori gravi); punti intermedi scelta BioLoom |
-| Metodo | 8 | diffrazione 100, crio-EM 90, NMR 80, altri sperimentali 50, predetto 40 | scelta BioLoom: pesa solo ciò che la risoluzione non dice |
+| Risoluzione | 12 | raggi X e crio-EM: 1,0 Å → 100, 2,5 → 70, 3,5 → 40, 5,0 → 0; NMR: 60 fisso; predetti: pLDDT 50 → 0, 70 → 40, 90 → 70, 100 → 100 | Wlodawer et al. 2008; fasce di AlphaFold DB (Tunyasuvunakool et al. 2021); NMR scelta MakPhi |
+| R-free | 5 | 0,20 → 100, 0,25 → 70, 0,30 → 40, 0,40 → 0 (solo diffrazione) | Brünger 1992; Kleywegt & Brünger 1996 (oltre 0,40 errori gravi); punti intermedi scelta MakPhi |
+| Metodo | 8 | diffrazione 100, crio-EM 90, NMR 80, altri sperimentali 50, predetto 40 | scelta MakPhi: pesa solo ciò che la risoluzione non dice |
 | Lacune dell'allineamento | 7 | lacuna più lunga 0 → 100, 4 → 90, 8 → 70, 15 → 40, 30 → 0; −2 per ogni lacuna oltre la seconda | Fiser, Do & Šali 2000 (errore dei loop crescente con la lunghezza) |
 | Data di rilascio | 3 | 1990 → 40, 2008 → 80, 2014 → 100 | R-free dal 1992, dati sperimentali obbligatori dal 2008, rapporti di validazione wwPDB dal 2014 (Read et al. 2011; Gore et al. 2017) |
 | Ligandi e cofattori | 0 | informativo: olo (codici senza acqua e additivi di cristallizzazione) o apo | — |
@@ -1403,7 +1403,7 @@ ha `rank_score`, `rank_band`, `rank_twilight` e `rank_reasons` (per componente `
   un residuo in entrambe le righe, come in Rost), che per allineamenti con lacune è un po' più alta di quella della
   tabella (sulla lunghezza dell'allineamento); la motivazione riporta il valore e i residui allineati. La formula
   pubblicata scende fino a circa 420 residui e poi risale di pochi centesimi verso 19,5%.
-- **Regola della zona crepuscolare** (scelta BioLoom): sotto la curva la copertura conta al più quanto l'identità;
+- **Regola della zona crepuscolare** (scelta MakPhi): sotto la curva la copertura conta al più quanto l'identità;
   un template in zona crepuscolare resta al massimo intermedio (0,3 × 40 + 0,3 × 40 + 0,4 × 100 = 64).
 - **Valori di riferimento** (test): ubiquitina di lievito su 1UBQ (73 identici su 76, 1,8 Å, 1987, senza R-free):
   identità 97,6 (curva di Rost 33,2% per 76 residui), risoluzione 84, data 40, **punteggio 95,3**; lo stesso
@@ -1480,7 +1480,7 @@ M sequenze e N template danno M × N elementi; nessun limite su N (resta quello 
 - **Pipeline grandi** (decine di migliaia di elementi, su un server):
   - l'output dei programmi esterni di ogni elemento (MODELLER, DOPE, PROCHECK, ProSA, mkdssp: ~1500 righe, ~100 KB per
     coppia) va in `items/<elemento>/programmi.log`, un blocco per processo con orario, programma e codice di uscita
-    (`JobContext.sub(output_log=...)`); nel `job.log` restano i messaggi di BioLoom;
+    (`JobContext.sub(output_log=...)`); nel `job.log` restano i messaggi di MakPhi;
   - i parametri del job (con il FASTA: ~8 MB per 20.000 sequenze) si leggono una volta e restano in una cache di 32
     pipeline (`PipelineService._params`; non cambiano dopo la sottomissione): tempo residuo, pagine e matrice non li
     rileggono dal database;
@@ -1516,7 +1516,7 @@ M sequenze e N template danno M × N elementi; nessun limite su N (resta quello 
 - **Modellazione:** `run_modeling` con il solo template della coppia e il nome della sequenza come bersaglio; con
   l'analisi di qualità richiesta, ogni coppia analizza il proprio modello migliore per DOPE, come la pipeline normale.
   Identità e copertura dall'allineamento (`report.alignment_identity`), zona crepuscolare solo segnalata. Nel PDB la
-  riga `REMARK 999 BIOLOOM PIPELINE SEQUENCE <s> TEMPLATE <t>`, aggiunta alle REMARK dell'analisi (`model_remarks`).
+  riga `REMARK 999 MAKPHI PIPELINE SEQUENCE <s> TEMPLATE <t>`, aggiunta alle REMARK dell'analisi (`model_remarks`).
   Nelle metriche lo zDOPE resta quello di MODELLER anche dopo l'analisi.
 - **Migliore della sequenza:** quando tutte le coppie di una sequenza sono concluse (`_close_sequences`, una volta per
   esecuzione, sotto un lock) il modello con lo zDOPE di MODELLER più basso (a parità il DOPE, poi l'ordine dei template)
@@ -1581,7 +1581,7 @@ riferimento. È sempre segnato come **modello predetto, non struttura sperimenta
   mai presi per pLDDT. Un file di AlphaFold caricato dall'utente diventa `predicted` con lo stesso criterio. Il
   predittore riconosciuto (`predictor`: `alphafold` o `esmfold`) si salva nei metadati e dà il nome nei testi
   (`plddt.predicted_text`: log della preparazione, note dei risultati, controlli preventivi del ritaglio, report,
-  distintivi dell'interfaccia; riga `REMARK 999 BIOLOOM TEMPLATE <codice> ALPHAFOLD|ESMFOLD|PREDICTED …` del
+  distintivi dell'interfaccia; riga `REMARK 999 MAKPHI TEMPLATE <codice> ALPHAFOLD|ESMFOLD|PREDICTED …` del
   modello): una predizione di ESMFold usata come template non si chiama mai AlphaFold, e un modello predetto senza
   predittore noto né nome di AlphaFold DB è «modello predetto». I
   metadati registrati prima di questi campi (senza `predicted`) si completano alla prima lettura (`_meta`: elenco,
@@ -1619,7 +1619,7 @@ riferimento. È sempre segnato come **modello predetto, non struttura sperimenta
   lo scheletro non è affidabile e, come template, trasferirebbe vincoli su conformazioni non predette con confidenza.
   - Si tolgono i residui con pLDDT < soglia; il template preparato, la sua sequenza e primo/ultimo residuo sono
     quelli ritagliati, con i record descrittivi di AlphaFold (o un TITLE "ALPHAFOLD … PREDICTION" se il file non li
-    ha, come un mmCIF) e una riga `REMARK 999 BIOLOOM PLDDT_TRIM`: la copia resta riconoscibile come modello
+    ha, come un mmCIF) e una riga `REMARK 999 MAKPHI PLDDT_TRIM`: la copia resta riconoscibile come modello
     AlphaFold qualunque sia il nome. La copia di una struttura non AlphaFold conserva invece il suo EXPDTA (o lo
     riceve dal `_exptl.method` del mmCIF), così i suoi B-factor non passano per pLDDT.
   - **Frammenti isolati** (`plddt.MIN_FRAGMENT = 5`): dopo la soglia si tolgono anche i tratti sopra soglia più
@@ -1636,7 +1636,7 @@ riferimento. È sempre segnato come **modello predetto, non struttura sperimenta
     resta com'è; una riga diversa da entrambe è un errore chiaro. `align2d` (Editor PIR) allinea sul modello intero.
   - Log ("rimossi 11 residui con pLDDT < 70 (1–5:A, 71–76:A), restano 65 di 76", con "… e 4 in frammenti isolati
     di meno di 5 residui" se ce ne sono), risultato (`templates[].plddt`,
-    `plddt_removed`, avviso "modello predetto"), `REMARK 999 BIOLOOM TEMPLATE … ALPHAFOLD PLDDT<70 REMOVED 11` nel
+    `plddt_removed`, avviso "modello predetto"), `REMARK 999 MAKPHI TEMPLATE … ALPHAFOLD PLDDT<70 REMOVED 11` nel
     modello e, nella pipeline, `template_predicted`/`plddt_removed` nelle metriche dell'elemento.
   - Le strutture sperimentali non si ritagliano mai.
 
@@ -1652,10 +1652,10 @@ riferimento. È sempre segnato come **modello predetto, non struttura sperimenta
 
 Il server non importa mai `modeller`: ogni operazione è uno script generato ed eseguito in un
 sottoprocesso. Nel container è MODELLER 10.8 del pacchetto .deb; in esecuzione nativa di sviluppo si può
-indicare un altro interprete (impostazione `modeller_python` o `BIOLOOM_MODELLER_PYTHON`). In modalità server vale solo
+indicare un altro interprete (impostazione `modeller_python` o `MAKPHI_MODELLER_PYTHON`). In modalità server vale solo
 la variabile, come `esmfold_url`: `SettingsStore` con `server` la usa al posto del valore salvato e `PUT /api/settings`
 rifiuta un altro valore (403 `modeller_python_locked`), perché è un programma che il server esegue; anche la verifica da
-riga di comando (`selftest`) usa le impostazioni del server. `compose.yml` e `bioloom-podman.sh` passano al container
+riga di comando (`selftest`) usa le impostazioni del server. `compose.yml` e `makphi-podman.sh` passano al container
 la variabile di `server.env`, un percorso nel container; vuota vale il rilevamento automatico, cioè l'interprete
 dell'immagine, che si usa anche quando a quel percorso non c'è un Python con MODELLER (`modeller_candidates`). Flusso
 di un job `model`:
@@ -1674,7 +1674,7 @@ di un job `model`:
    di loop, seme casuale. I risultati (`molpdf`, DOPE, GA341,
    zDOPE) sono scritti in `models.json` direttamente da `a.outputs`.
 4. **Selezione e qualità**: modello migliore = DOPE minimo; analisi completa sul migliore (o su tutti, fino a 3
-   modelli insieme), con righe `REMARK 999 BIOLOOM` di tracciabilità nel PDB.
+   modelli insieme), con righe `REMARK 999 MAKPHI` di tracciabilità nel PDB.
 
 Con un bersaglio a più catene (modalità Complesso o PIR a più catene) l'allineamento è per catena, le catene del modello
 prendono i nomi del template e l'analisi comprende le interfacce: vedi [Complessi e
@@ -1701,7 +1701,7 @@ identici al bersaglio con `salign` e con `align2d`:
 - template a più catene o con ligandi ('/' e '.' da tenere in colonna) non si uniscono: resta `salign`; se un template
   risulta spostato (`displaced` nella scelta) il messaggio è un **avviso** del job (`warnings` del risultato della
   modellazione e dell'allineamento align2d, pagina Modellazione, sezione Avvisi del report), non solo una riga del log:
-  il modello è costruito su un allineamento che BioLoom sa probabilmente spostato (con i frammenti di 1UBQ, TM-score
+  il modello è costruito su un allineamento che MakPhi sa probabilmente spostato (con i frammenti di 1UBQ, TM-score
   0,35). Il job non fallisce: l'allineamento si può correggere nell'Editor PIR.
 
 La scelta è nel log del job. Misurato con due frammenti di 1UBQ come template dell'ubiquitina di lievito
@@ -1719,7 +1719,7 @@ collega: la posizione reciproca delle regioni (fra domini, per esempio) non vien
 arbitraria. Avviso nel risultato, nel log e nel report («Orientamento relativo non vincolato: UBQN_A (residui 1–40 del
 bersaglio) e UBQR_A (residui 41–76 del bersaglio) vengono da strutture diverse…»; test con MODELLER su 1–40 di 1UBQ e
 41–76 di una sua copia ruotata e traslata). Due frammenti dello stesso file caricati come template diversi (come nel
-test dei frammenti disgiunti sopra) hanno l'avviso anche se in realtà condividono le coordinate: BioLoom non può
+test dei frammenti disgiunti sopra) hanno l'avviso anche se in realtà condividono le coordinate: MakPhi non può
 saperlo.
 
 ### Ligandi, cofattori e metalli
@@ -1800,7 +1800,7 @@ Il trasferimento dei gruppi eteroatomici dal template al modello è selettivo e 
   - **Copia preparata:** le acque scelte dopo i gruppi eteroatomici della loro catena, rinominate HOH (MODELLER non
     riconosce WAT, DOD…); `_Selector` accetta l'insieme delle acque da tenere. `ligand_groups` le descrive (classe
     `water`, `hbonds`, `coordinates`), `waters` le conta.
-  - **PIR:** dentro BioLoom un'acqua è una colonna «.» come un ligando (si unisce solo a un'acqua di un altro
+  - **PIR:** dentro MakPhi un'acqua è una colonna «.» come un ligando (si unisce solo a un'acqua di un altro
     template: nome HOH e sito dai residui dei legami H). Una «w» minuscola non sopravvive a `sequences.parse_pir`
     (maiuscolo: diventerebbe W, triptofano), quindi solo il file letto da MODELLER, `alignment_modeller.ali`
     (`ligands.modeller_pir`), ha «w» nelle colonne delle acque, e lo script imposta `env.io.water = True` e
@@ -1834,7 +1834,7 @@ Il trasferimento dei gruppi eteroatomici dal template al modello è selettivo e 
   - Na, Mg, K, Ca, Mn, Fe, Co, Cu, Zn: tabella «Metal-donor atom target distances (revised July 2006)» di Harding
     (2006, Acta Cryst. D62:678–682), dal sito dell'autrice (`tanna.bch.ed.ac.uk/newtargs_06.html`, copia del
     29/04/2009 nell'Internet Archive; il PDF della rivista non era raggiungibile), basata sul CSD e sulle strutture
-    proteiche a ≤ 1,25 Å. Tutti i valori coincidono con quelli di BioLoom. Le stelle (★) sono l'affidabilità indicata
+    proteiche a ≤ 1,25 Å. Tutti i valori coincidono con quelli di MakPhi. Le stelle (★) sono l'affidabilità indicata
     dalla tabella (`REFERENCE_RELIABILITY`): ★★★ deviazione standard ~0,05 Å, ★★ 0,10, ★ 0,15–0,20, nessuna stella la
     meno affidabile.
   - Ni (assente in Harding): Tabella 3 di Zheng et al. (2017, CheckMyMetal, distanze del CSD), letta nel testo
@@ -1843,10 +1843,10 @@ Il trasferimento dei gruppi eteroatomici dal template al modello è selettivo e 
   - Bazayeva et al. (2024, Acta Cryst. D80:362–376, MetalPDB a < 1,5 Å) non trovano differenze significative con
     Harding et al. (2010) entro la dispersione (carbonile dello scheletro dei metalli alcalini e alcalino-terrosi
     entro 0,05 Å; Zn–N(His) 2,05 ± 0,06 per Nδ1 e 2,03 ± 0,07 Å per Nε2). I loro valori per residuo sono nel
-    materiale supplementare, non consultato: nessun valore di BioLoom viene da lì.
+    materiale supplementare, non consultato: nessun valore di MakPhi viene da lì.
   - Donatori senza colonna propria, dalle note della tabella di Harding: Asn/Gln come Asp/Glu monodentato (prima di
-    questa verifica BioLoom usava lo scheletro); O, N e S dei ligandi come l'O dell'Asn (quindi Asp/Glu), l'N dell'His
-    e l'S della Cys. Scelte di BioLoom non verificate su una fonte: Ser/Thr/Tyr con il valore dell'acqua (per Harding
+    questa verifica MakPhi usava lo scheletro); O, N e S dei ligandi come l'O dell'Asn (quindi Asp/Glu), l'N dell'His
+    e l'S della Cys. Scelte di MakPhi non verificate su una fonte: Ser/Thr/Tyr con il valore dell'acqua (per Harding
     Ser/Thr stanno fra acqua e carbossilato, Tyr circa 0,1 Å sotto il carbossilato) e Met con quello della Cys.
 
   | Metallo | O acqua | O Asp/Glu | O scheletro | N His | S Cys | Numero di coordinazione tipico |
@@ -1864,7 +1864,7 @@ Il trasferimento dei gruppi eteroatomici dal template al modello è selettivo e 
 
   Gli intervalli del numero di coordinazione seguono quanto riportano le fonti (Zheng et al. 2017: Mg ottaedrico
   stretto, siti con meno o più di 6 donatori rari; Na di solito 6, a volte 5 o 4; K di solito ottaedrico. Bazayeva et
-  al. 2024: Zn con 4 donatori nel 61% dei siti); gli estremi sono una scelta di BioLoom. Altri metalli (Cd, Hg…): donatori entro 3,0 Å, geometria, esito
+  al. 2024: Zn con 4 donatori nel 61% dei siti); gli estremi sono una scelta di MakPhi. Altri metalli (Cd, Hg…): donatori entro 3,0 Å, geometria, esito
   al più «da controllare».
 - **Geometria** (`geometry`, come CheckMyMetal, Zheng et al. 2017, con le geometrie ideali confrontate per angoli di
   Kuppuraj et al. 2009): per le geometrie ideali con m posizioni, da n a n + 2 (al massimo 7: lineare, trigonale
@@ -1882,7 +1882,7 @@ Il trasferimento dei gruppi eteroatomici dal template al modello è selettivo e 
 - **Dove:** `quality.analyze` aggiunge `ligands` (senza template) se la struttura ha gruppi eteroatomici non d'acqua;
   `run_modeling` lo ricalcola con il confronto per ogni modello analizzato, mette il riepilogo nel modello
   (`models[].ligands`: gruppi, esito peggiore, conteggi) e nel risultato `ligands` (`transferred`, `verification` del
-  modello migliore anche senza analisi di qualità), scrive `REMARK 999 BIOLOOM LIGANDS n ZN:A101 …` e avvisa se il
+  modello migliore anche senza analisi di qualità), scrive `REMARK 999 MAKPHI LIGANDS n ZN:A101 …` e avvisa se il
   modello ha meno gruppi di quelli trasferiti. `transferred`, il REMARK e l'avviso contano i gruppi del modello (i `.`
   del bersaglio, `ligands.model_groups`): un gruppo di più template compare una volta, con `template` = i codici
   separati da virgole, il numero del template principale e i gruppi di ciascun template in `sources`. Il confronto
@@ -1927,7 +1927,7 @@ seguono una regola nota (quelli di RCSB, "A-2", non sono identificativi PDB di u
 - **Nomi delle catene:** copie nell'ordine dei generatori, degli operatori e delle catene del file; la prima copia di ogni
   catena dell'autore tiene il nome (se di un carattere), le altre prendono il primo carattere libero di A–Z, a–z, 0–9 non
   tenuto da una prima copia (catene A e B, due operatori per A: A, C = A·2, B). Ogni catena ha origine, operatore e
-  `identity` (coordinate del file così come sono) nel risultato e nelle righe `REMARK 999 BIOLOOM ASSEMBLY CHAIN`.
+  `identity` (coordinate del file così come sono) nel risultato e nelle righe `REMARK 999 MAKPHI ASSEMBLY CHAIN`.
 - **Limiti:** 62 catene (identificativi di un carattere) e 99 999 atomi (numerazione del PDB); oltre, l'assemblaggio si
   elenca con il motivo ma non si importa. Prima posizione alternativa degli atomi, primo modello del file.
 - **Libreria** (`TemplateLibrary.assemblies`, `import_assembly`): `GET /api/templates/{id}/assemblies` (stato oligomerico,
@@ -1961,7 +1961,7 @@ dell'ultima. Il log riporta per catena residui allineati e identità. La stessa 
 
 **PIR a più catene** (`complexes.check_chains`, `sequences.validate_pir`): MODELLER 10.8 tollera i '/' in colonne diverse e
 perfino una voce di template senza '/' su due catene (verificato: il modello si costruisce, con le catene fuse o un residuo
-di una catena allineato all'altra). BioLoom quindi:
+di una catena allineato all'altra). MakPhi quindi:
 
 - nella modalità Complesso rifiuta (400 `invalid_pir`) '/' in colonne diverse fra template e bersaglio e una voce di
   template con un numero di tratti diverso dalle catene del suo intervallo; con un PIR dell'utente nella modalità
@@ -1976,7 +1976,7 @@ catena in tutte le righe, i '/' non si spostano.
 PIR) le catene del modello prendono i nomi del template principale (il primo con una catena di fronte a ogni catena del
 bersaglio e i '/' nelle stesse colonne; altrimenti A, B, C… con un avviso), con i residui numerati da 1 in ogni catena
 (`rename_segments` in `special_patches`; MODELLER di suo numera di seguito, 77–152 per la seconda catena). Un bersaglio a
-catena singola non cambia (catena A, come prima). `REMARK 999 BIOLOOM CHAINS 2 A=A B=B` nei modelli analizzati.
+catena singola non cambia (catena A, come prima). `REMARK 999 MAKPHI CHAINS 2 A=A B=B` nei modelli analizzati.
 
 **Simmetria** (opzioni `symmetry`, `symmetry_weight` da 0 escluso a 10, predefinito 1): le catene del bersaglio con la
 stessa sequenza formano un gruppo e ogni catena è vincolata alla prima con `restraints.symmetry.append(Symmetry(s1, s2,
@@ -1985,7 +1985,7 @@ MODELLER ("Building a model with symmetry restraints", peso 1,0). La restrizione
 interne corrispondenti delle due selezioni (Šali & Blundell 1993): rende uguali le catene, non impone la disposizione, che
 viene dal template. Le selezioni devono avere gli stessi atomi: per questo solo catene identiche (MODELLER altrimenti
 fallisce, "Number of selected atoms … is not the same", verificato). Richiesta senza catene uguali: avviso, nessuna
-restrizione. `REMARK 999 BIOLOOM SYMMETRY CA WEIGHT 1 A,B`.
+restrizione. `REMARK 999 MAKPHI SYMMETRY CA WEIGHT 1 A,B`.
 
 **Confronto delle interfacce** (`complexes.assess`, in `<modello>.quality.json` → `complex` e, per il modello migliore
 anche senza analisi di qualità, nel risultato `complex.assessment`; `models[].complex` = esito e DockQ minimo):
@@ -2093,7 +2093,7 @@ integrato se mkdssp manca), su un pool di thread del singolo calcolo. QMEAN rest
 - **Processi di appoggio** (`core/offload.py`, `domain/qa_steps.py`): con molti job in parallelo i calcoli Python
   (Ramachandran, clash, SASA: ~1 s di CPU per una proteina di 420 residui) occupano il GIL del processo principale, e su
   ~30 s di calcolo per coppia di una pipeline M × N lo saturano oltre 15–20 coppie in parallelo (misura del
-  benchmark `scripts/benchmark_mxn.py`: ~1,6 s di CPU del processo di BioLoom per coppia). Da 8 job di calcolo in
+  benchmark `scripts/benchmark_mxn.py`: ~1,6 s di CPU del processo di MakPhi per coppia). Da 8 job di calcolo in
   parallelo nelle Impostazioni (`offload.MIN_WORKERS`) un pool di processi avviati con "spawn" (uno ogni 4 job,
   60–100 MB ciascuno) esegue `qa_steps.python_steps` sul file della struttura, mentre i sottoprocessi partono come
   prima; i passi di `Steps` aspettano quell'esito. Un passo non riuscito nel processo di appoggio (o un pool rotto, o
@@ -2119,7 +2119,7 @@ Worker HTTP nel container `qmean` (`docker/qmean/qmean_worker.py`, database in `
 QMEAN in `run_qmean_wrapper.py`); client in `engines/qmean_local.py`, job `qmean` in `services/compute.py`.
 
 - **Ricerca:** l'avviatore accetta un database fino a 3 livelli sotto `UNICLUST_PATH` (`uniclust_below` in
-  `bioloom.sh`, `Get-UniclustBelow` in `bioloom.ps1`): è il limite indicato all'utente nella Guida. Il worker
+  `makphi.sh`, `Get-UniclustBelow` in `makphi.ps1`): è il limite indicato all'utente nella Guida. Il worker
   esplora la cartella montata su `/uniclust_src` fino a 4 livelli, uno in più, quindi trova sempre ciò che l'avviatore
   ha accettato. La ricerca automatica sui dischi è un'altra cosa: scorre 4 livelli di cartelle per trovare la radice
   (3 sul disco di sistema). Il worker riconosce ogni
@@ -2129,7 +2129,7 @@ QMEAN in `run_qmean_wrapper.py`); client in `engines/qmean_local.py`, job `qmean
 - **Controlli:** un controllo rapido di coerenza (voci dell'indice entro il file dati) segnala le copie
   interrotte. Vengono segnalati anche gli archivi `.tar.gz` non estratti e i database MMseqs2 di ColabFold,
   che HHblits non può usare.
-- **Scelta del database:** quello indicato in BioLoom (impostazione `qmean_uniclust`), altrimenti il più
+- **Scelta del database:** quello indicato in MakPhi (impostazione `qmean_uniclust`), altrimenti il più
   recente pronto. Non c'è mai un ripiego silenzioso su un'altra versione.
 - **Vista per il calcolo:** per ogni calcolo si crea una vista con i nomi standard (collegamenti simbolici,
   nessuna scrittura sul disco).
@@ -2168,7 +2168,7 @@ QMEAN in `run_qmean_wrapper.py`); client in `engines/qmean_local.py`, job `qmean
       - `ok` se il consigliato sta nel 90% della memoria;
       - `swap` (parte ma lento, con avviso e memoria consigliata) se il minimo sta in memoria + swap;
       - altrimenti `insufficient`: HHblits non parte e il backend passa al fallback, se attivo.
-    - **Controllo di BioLoom prima di partire** (`qmean_local.memory_problem`, nello stato: `available`, `message`,
+    - **Controllo di MakPhi prima di partire** (`qmean_local.memory_problem`, nello stato: `available`, `message`,
       `memory_required`): con `swap` il calcolo partiva e, come nella misura sopra, di solito si fermava a metà per il
       timeout. Ora la memoria del container (`memory.total` del worker, senza lo swap: il cs219 va tenuto nella cache)
       si confronta con il requisito del database scelto; se non basta, il job fallisce subito con il motivo in italiano
@@ -2203,7 +2203,7 @@ QMEAN in `run_qmean_wrapper.py`); client in `engines/qmean_local.py`, job `qmean
     memoria (il cs219 nella cache del sistema conta una volta). Copie locali e conversioni restano da sole (`Gate`: un
     calcolo nuovo non sorpassa una copia in attesa). Ogni calcolo ha la sua vista del database nella propria cartella di
     lavoro: la vista condivisa, ricreata da un calcolo che partiva, toglieva i collegamenti sotto un HHblits in corso
-    (`File exists` alla prima prova con 16 calcoli). Lo stato dichiara i posti (`slots`) e BioLoom li usa come
+    (`File exists` alla prima prova con 16 calcoli). Lo stato dichiara i posti (`slots`) e MakPhi li usa come
     capacità della risorsa `QMEAN_LOCAL` del dispatcher (`set_resource_capacity`, letta senza I/O dall'ultimo stato:
     1 finché il worker non è stato interrogato, poi i posti dichiarati). I job `qmean` stanno nel pool "io", che ha
     `IO_WORKERS` (8) più i posti oltre il primo di questa risorsa (`JobManager.io_workers`): con 8 fissi il server
@@ -2240,7 +2240,7 @@ QMEAN in `run_qmean_wrapper.py`); client in `engines/qmean_local.py`, job `qmean
   - **Worker occupato o bloccato:** il 25 ottobre 2026 sul server una pipeline ha perso 107.918 QMEAN in 5 ore. Il
     worker apriva un thread per richiesta. Ogni calcolo chiedeva `/status?refresh=1`, che rifà la scansione dei
     database, e l'invio la rifaceva ancora. Con i profili riusati i calcoli durano pochi secondi e le richieste si
-    sono moltiplicate. Quelle scadute (BioLoom aspetta 20 s) lasciavano il loro thread nel worker: a 1096 thread fermi
+    sono moltiplicate. Quelle scadute (MakPhi aspetta 20 s) lasciavano il loro thread nel worker: a 1096 thread fermi
     sul GIL il worker non rispondeva più. Ogni calcolo falliva in 4 s con "QMEAN locale non attivo" e lasciava
     partire subito il seguente. Dalla versione successiva alla 4.3.1:
     - **Server del worker:** `HTTP_THREADS` thread fissi (16, `QMEAN_HTTP_THREADS`) con una coda; una richiesta in
@@ -2249,7 +2249,7 @@ QMEAN in `run_qmean_wrapper.py`); client in `engines/qmean_local.py`, job `qmean
       solo una scansione cominciata dopo la richiesta, quindi tante richieste insieme ne fanno al più due. Invio e
       calcolo usano la scansione in cache (30 s): copie e conversioni la rifanno appena finiscono. Il conteggio dei
       profili è uno alla volta e la pulizia dei risultati scaduti gira al più ogni 30 s.
-    - **BioLoom:** lo stato viene dalla cache di 15 s, con una richiesta al worker alla volta. Se il worker non
+    - **MakPhi:** lo stato viene dalla cache di 15 s, con una richiesta al worker alla volta. Se il worker non
       risponde, il calcolo aspetta (`_Patience`: un tentativo ogni 15 s, al più 30 minuti, poi `ToolUnavailable`
       con "Il servizio QMEAN locale non risponde", che può passare al fallback). Anche le letture dell'avanzamento e
       l'invio riprovano. Un job che il worker non conosce più (404 dopo un riavvio) si invia di nuovo, al più 3
@@ -2268,13 +2268,13 @@ QMEAN in `run_qmean_wrapper.py`); client in `engines/qmean_local.py`, job `qmean
     insieme aspettano il primo e riusano il suo profilo. Il kernel libera il blocco anche se il processo viene ucciso
     (timeout, annullamento). La pulizia toglie i profili meno usati oltre il massimo (fino all'80%), al più una volta
     al minuto (`PRUNE_SECONDS`), e lo stato dei profili si rilegge al più ogni 30 s: contarli vuol dire leggere ogni
-    file (0,09 s ogni 14.000 sul server) e BioLoom chiede lo stato prima di ogni calcolo. Sul server il massimo è 100 GB
-    (`bioloom-podman.sh`, `server.env.example`): un profilo occupa circa 0,8 MB, e con 10 GB una pipeline M × N di
+    file (0,09 s ogni 14.000 sul server) e MakPhi chiede lo stato prima di ogni calcolo. Sul server il massimo è 100 GB
+    (`makphi-podman.sh`, `server.env.example`): un profilo occupa circa 0,8 MB, e con 10 GB una pipeline M × N di
     23.000 sequenze cancellava i profili dei migliori prima che le altre coppie li riusassero (misurato il 2026-10-20:
-    13.917 profili, 10,71 GB su 10,74). Il worker riporta `bioloom_profiles` (riusati, calcolati) e BioLoom lo scrive
+    13.917 profili, 10,71 GB su 10,74). Il worker riporta `makphi_profiles` (riusati, calcolati) e MakPhi lo scrive
     nel log.
   - **Risorse nell'uscita:** il worker riporta processori, giudizio sulla memoria (`ok` | `swap`) e secondi dell'intero
-    calcolo (`bioloom_hhblits`). `engines/qmean_local.score` li porta nel risultato del job come `hhblits` e li scrive nel
+    calcolo (`makphi_hhblits`). `engines/qmean_local.score` li porta nel risultato del job come `hhblits` e li scrive nel
     log («QMEAN locale concluso in … s nel worker»). Il campo è `null` con SWISS-MODEL e con un worker che non li riporta.
   - **Codifica:** l'immagine QMEAN (CentOS 7) non ha `C.UTF-8`. Senza `LANG=en_US.UTF-8` Python 3.6 usa ASCII
     e un messaggio con lettere accentate fermava il worker all'avvio.
@@ -2294,12 +2294,12 @@ Logica in `domain/consensus.py` e `domain/perresidue.py` (F6). Il voto A–D non
 
   | Metodo | Punti (valore → punteggio) | Peso | Fonte |
   |---|---|---|---|
-  | Voto BioLoom | 0 → 0, 55 → 40, 70 → 70, 100 → 100 | 1 | soglie del voto (D sotto 55, B da 70) |
+  | Voto MakPhi | 0 → 0, 55 → 40, 70 → 70, 100 → 100 | 1 | soglie del voto (D sotto 55, B da 70) |
   | z-DOPE | −2 → 100, −1 → 70, 0 → 40, 2 → 0 | 1 | Shen & Sali 2006; manuale MODELLER: sotto −1 simile a strutture native, positivo probabilmente scarso |
   | GA341 | 0 → 0, 0,7 → 70, 1 → 100 | 0,5 | Melo et al. 2002; John & Sali 2003: ripiegamento affidabile sopra 0,7 |
   | QMEAN4 Z-score | −8 → 0, −4 → 40, −2 → 70, 0 → 100 | 1,5 | Benkert et al. 2011; SWISS-MODEL: −4 o meno bassa qualità, vicino a 0 ottimo |
-  | ProSA z-score | 2 → 0, −2 → 40, −6 → 70, −8 → 100 | 1 | Sippl 1993; Wiederstein & Sippl 2007: positivo o vicino a zero = errore (−0,60 "troppo alto"), −8,29 nativo; −6 scelta BioLoom |
-  | PROCHECK core | 50 → 0, 70 → 40, 90 → 70, 100 → 100 | 0,75 | Laskowski et al. 1993: oltre il 90% atteso a 2 Å o meglio; 70% scelta BioLoom |
+  | ProSA z-score | 2 → 0, −2 → 40, −6 → 70, −8 → 100 | 1 | Sippl 1993; Wiederstein & Sippl 2007: positivo o vicino a zero = errore (−0,60 "troppo alto"), −8,29 nativo; −6 scelta MakPhi |
+  | PROCHECK core | 50 → 0, 70 → 40, 90 → 70, 100 → 100 | 0,75 | Laskowski et al. 1993: oltre il 90% atteso a 2 Å o meglio; 70% scelta MakPhi |
   | Accordo con una predizione (F9.3, solo con il confronto) | lDDT-Cα sui residui a predizione sicura: 0 → 0, 0,5 → 40, 0,7 → 70, 1 → 100 | 0,25 | Mariani et al. 2013; fasce del pLDDT (lDDT-Cα predetto) di Tunyasuvunakool et al. 2021; vedi [Confronto con un predittore esterno](#confronto-con-un-predittore-esterno) |
 
   Pesi: QMEAN combina quattro potenziali ed è già riferito a strutture sperimentali di pari dimensione; GA341 valuta
@@ -2343,7 +2343,7 @@ Logica in `domain/consensus.py` e `domain/perresidue.py` (F6). Il voto A–D non
   consenso fuorviante. Un job che non è QMEAN dà 400 `qmean_job_invalid`, un QMEAN non completato 409. I rapporti
   delle versioni precedenti, senza consenso, funzionano: la rotta lo calcola.
 - **pLDDT (`perresidue.bfactor_kind`):** `report.structure.bfactor_kind = "plddt"` se il file è un modello
-  predetto secondo `plddt.predictor` (nome storico `is_alphafold_model`), l'unico criterio di BioLoom, lo stesso della
+  predetto secondo `plddt.predictor` (nome storico `is_alphafold_model`), l'unico criterio di MakPhi, lo stesso della
   libreria dei template e della copia preparata per MODELLER (vedi [Modelli AlphaFold DB](#modelli-alphafold-db)):
   segni certi di AlphaFold DB o di ESMFold nell'intestazione, oppure il nome `AF-<ACC>-F<n>` senza un'altra origine
   dichiarata, e valori in 0–100 non tutti nulli; `report.structure.predictor` dice quale (`alphafold`, `esmfold`).
@@ -2400,8 +2400,8 @@ residui è quella dell'allineamento ed è fissata; nessuna metrica la cambia.
   allineati (verificato con un tratto spostato di 12 Å: 69 coppie, come "Aligned length"). Le coordinate di B vengono
   dalla matrice di `-m` (formato di TM-align, righe da 1, e di US-align, righe da 0: X = t + U·x); senza matrice
   (versioni vecchie) si ricalcola la sovrapposizione del TM-score sulle stesse coppie, con una nota. Con la matrice
-  BioLoom riottiene il TM-score stampato dal programma (test).
-- **PDB per il viewer:** in entrambi i percorsi lo costruisce BioLoom con la sovrapposizione del TM-score: catena A = A,
+  MakPhi riottiene il TM-score stampato dal programma (test).
+- **PDB per il viewer:** in entrambi i percorsi lo costruisce MakPhi con la sovrapposizione del TM-score: catena A = A,
   catena B = B sovrapposta, numerazione originale. Prima, con US-align il file conteneva solo B e con TM-align le catene
   erano invertite rispetto al percorso integrato.
 
@@ -2417,7 +2417,7 @@ residui è quella dell'allineamento ed è fissata; nessuna metrica la cambia.
 | `lddt`, `lddt_distances` | Cα, raggio di inclusione 15 Å su A, conservata se \|d_B − d_A\| < 0,5, 1, 2, 4 Å; media delle quattro frazioni | Mariani et al., Bioinformatics 29:2722, 2013 |
 | `transform` | rotazione e traslazione che portano B su A (x' = R·x + t) | |
 
-- **GDT: ricerca per soglia.** Il GDT di LGA massimizza separatamente ogni Pd su sovrapposizioni diverse. BioLoom fa
+- **GDT: ricerca per soglia.** Il GDT di LGA massimizza separatamente ogni Pd su sovrapposizioni diverse. MakPhi fa
   lo stesso con sottoinsiemi iterativi: semi = frammenti contigui delle coppie di lunghezza L, L/2, L/4… fino a 4 (passo
   di mezzo frammento, come `tm_score_search`; al massimo 48 frammenti per lunghezza, un limite che conta solo oltre i
   ~100 residui) più la sovrapposizione del TM-score; da ogni
@@ -2543,7 +2543,7 @@ passa dalla cache dei calcoli: costa pochi secondi e resta nel job. Nessuna colo
   dei 20 amminoacidi fra le sequenze con un residuo nella colonna (lettere non standard = gap), H = −Σ p ln p
   normalizzata con ln(min(20, N)), N = sequenze. Conservazione = (1 − H/H_max) × (1 − g), g = frazione pesata di gap:
   1 per una colonna invariante senza gap. Colonne con più del 30% di gap (frazione semplice): nessun punteggio, come il
-  `gap_cutoff` di Capra & Singh 2007. Con meno di 10 sequenze un avviso (scelta BioLoom).
+  `gap_cutoff` di Capra & Singh 2007. Con meno di 10 sequenze un avviso (scelta MakPhi).
 - **Mappatura:** la sequenza della catena (residui della struttura, X per i non standard) si allinea (Needleman-Wunsch,
   BLOSUM62, gap 10/0,5, gap terminali gratuiti, come `align.pairwise`) alla riga senza gap: residuo → residuo della
   riga → colonna. Residui mancanti, code in più e inserzioni non spostano la numerazione. Le lettere che BLOSUM62 non
@@ -2628,7 +2628,7 @@ librerie Python `openmm` e `pdbfixer` (`MODULES`, con `importlib.util.find_spec`
 compaiono in `/api/system/info` (Impostazioni → Strumenti, Panoramica) e nella verifica dell'installazione (1UBQ:
 tasche, carica netta e potenziale, minimizzazione). Senza uno strumento il job fallisce subito con `ToolUnavailable` e
 il messaggio di `tools.missing_message` ("Ricerca delle tasche non disponibile: manca fpocket in questa installazione…");
-le schede dell'interfaccia lo dicono prima di proporre il calcolo e disattivano il pulsante. L'immagine bioloom:4.1.0,
+le schede dell'interfaccia lo dicono prima di proporre il calcolo e disattivano il pulsante. L'immagine makphi:4.1.0,
 senza questi strumenti, continua a funzionare.
 
 **Tasche (fpocket 4.2.3, `pockets`, priorità 0).**
@@ -2699,12 +2699,12 @@ senza questi strumenti, continua a funzionare.
 5. Minimizzazione L-BFGS fino a 10 kJ·mol⁻¹·nm⁻¹ (al massimo 5000 iterazioni); facoltativa una dinamica di Langevin a
    300 K (attrito 1 ps⁻¹, passo 2 fs, legami con H vincolati, seme fisso) di 0,5–50 ps (10 proposti nell'interfaccia)
    con le stesse restrizioni, seguita da una seconda minimizzazione.
-6. Uscita: `<nome>_refined.pdb` (idrogeni facoltativi, catene e numerazione originali, righe `REMARK 999 BIOLOOM` con
+6. Uscita: `<nome>_refined.pdb` (idrogeni facoltativi, catene e numerazione originali, righe `REMARK 999 MAKPHI` con
    protocollo, energie, RMSD e voto), `refine_result.json` del processo.
 
 - **Processo separato:** il server non importa OpenMM. `refine_worker.py` gira con lo stesso interprete del server
   (`sys.executable`) da `ctx.run`, con richiesta di CPU elastica (da 1 a core − 1 slot, altrettanti thread della
-  piattaforma CPU, `OMP_NUM_THREADS=1`); avanzamento con i marcatori `@@BIOLOOM progress <frazione> <fase>`
+  piattaforma CPU, `OMP_NUM_THREADS=1`); avanzamento con i marcatori `@@MAKPHI progress <frazione> <fase>`
   ("Minimizzazione…", "Dinamica molecolare: 3,5 di 10 ps"). Annullamento e timeout terminano il processo anche a metà
   di una minimizzazione o di una dinamica.
 - **Energie:** potenziale del campo di forza senza il termine delle restrizioni (riportato a parte), con le componenti
@@ -2778,7 +2778,7 @@ La mappa si scarica da `/api/jobs/{id}/files/potential.dx?download=true`.
 | APBS 3.4.1 (BSD) | binario ufficiale della release GitHub, verificato con SHA-256 | il pacchetto `apbs` di Ubuntu (stessa versione) porta circa 340 MB di dipendenze (OpenMPI con ROCm/LLVM, MathJax); il binario usa solo libc e libstdc++ | 29,9 MB |
 | PDB2PQR 3.7.1 (BSD), PROPKA 3.5.1 (LGPL 2.1), OpenMM 8.6.1 (MIT/LGPL), PDBFixer 1.12.0 (MIT) | pip nella venv dell'applicazione da `backend/requirements-tools.lock` (con le dipendenze non già fissate), `pip check` | PDB2PQR e OpenMM 8.6 di PyPI sono le versioni correnti; i pacchetti di Ubuntu (OpenMM 8.0, PDBFixer 1.9) sono legati al numpy di sistema | 107 MB |
 
-Totale: circa 139 MB in più nei livelli dell'immagine (bioloom:4.1.0 869 MB, immagine di sviluppo 1,04 GB; contenuto
+Totale: circa 139 MB in più nei livelli dell'immagine (makphi:4.1.0 869 MB, immagine di sviluppo 1,04 GB; contenuto
 compresso 215 → 244 MB). I test di questi strumenti si saltano, con il motivo, nelle immagini che non li hanno.
 
 ### Mutagenesi in silico e scansione di alanina
@@ -2822,7 +2822,7 @@ risultato porta `model_chain` per il 3D dei modelli.
    interne dove mancano, numerazione originale (`res_num_from`);
 2. restrizioni statistiche: stereochimica, φ/ψ binormali, diedri ω e χ1–χ4;
 3. residuo mutato randomizzato di 4 Å e ottimizzato da solo (coppie non legate interne alla selezione), poi con le
-   catene laterali dei residui entro 5 Å (estensione di BioLoom: lo script originale ottimizza solo il residuo mutato):
+   catene laterali dei residui entro 5 Å (estensione di MakPhi: lo script originale ottimizza solo il residuo mutato):
    gradienti coniugati sul programma dei loop, ricottura (150 → 1000 → 300 K) e gradienti coniugati finali. Il resto
    della struttura non si muove: la catena principale fuori dai residui mutati è identica (test: RMSD 0,000 Å, atomi
    oltre 10 Å identici);
@@ -2837,7 +2837,7 @@ risultato porta `model_chain` per il 3D dei modelli.
    ripartirebbe e la selezione locale fallirebbe): totale, **locale** (`assess_dope` sui residui entro 8 Å dai siti:
    conta le coppie con almeno un atomo selezionato) e, con più catene, **fra le catene** (per un gruppo g:
    DOPE(g) + DOPE(resto) − DOPE(tutto), cioè le sole coppie fra g e le altre catene). Risultati in `mutate_models.json`,
-   progressi con `@@BIOLOOM model k/n`. Un processo per variante (selvatico e mutante insieme, 6 modelli), da
+   progressi con `@@MAKPHI model k/n`. Un processo per variante (selvatico e mutante insieme, 6 modelli), da
    `JobContext.run` con uno slot.
 
 **Energia con OpenMM** (facoltativa, `energy`): selvatico e mutante scelti passano dalla minimizzazione con restrizioni
@@ -2857,12 +2857,12 @@ residuo esposto. Ogni risultato porta le motivazioni in italiano e l'avvertenza 
 
 | Indicatore | Segnale | Fonte o motivo |
 |---|---|---|
-| ΔDOPE in residui equivalenti = ΔDOPE / (\|DOPE del selvatico\| / residui) | ≥ 2 forte, ≥ 1 moderato, ≤ −1 possibile guadagno | DOPE (Shen & Sali 2006); scala per residuo per proteine di dimensioni diverse; soglie oltre il rumore misurato (scelta BioLoom). Un residuo più grande aggiunge contatti: un ΔDOPE negativo non dimostra una stabilizzazione |
-| ΔΔE di OpenMM | ≥ 100 kJ/mol forte, ≥ 50 moderato, ≤ −50 possibile guadagno | soglie oltre lo scarto di 36 kJ/mol fra due selvatici (scelta BioLoom) |
+| ΔDOPE in residui equivalenti = ΔDOPE / (\|DOPE del selvatico\| / residui) | ≥ 2 forte, ≥ 1 moderato, ≤ −1 possibile guadagno | DOPE (Shen & Sali 2006); scala per residuo per proteine di dimensioni diverse; soglie oltre il rumore misurato (scelta MakPhi). Un residuo più grande aggiunge contatti: un ΔDOPE negativo non dimostra una stabilizzazione |
+| ΔΔE di OpenMM | ≥ 100 kJ/mol forte, ≥ 50 moderato, ≤ −50 possibile guadagno | soglie oltre lo scarto di 36 kJ/mol fra due selvatici (scelta MakPhi) |
 | prolina in α-elica (DSSP H) oltre il primo giro | forte | propensione per l'elica, Pace & Scholtz 1998 (Pro +3,16 kcal/mol rispetto ad Ala); nel primo giro solo informativa (MacArthur & Thornton 1991) |
 | altra sostituzione in α-elica con ΔP ≥ 0,5 kcal/mol (non agli estremi) | moderato | Pace & Scholtz 1998 |
 | prolina o glicina in un filamento β | forte se si perde il legame H dell'NH, altrimenti moderato | Minor & Kim 1994; Smith, Withka & Regan 1994 |
-| conformazione φ/ψ del selvatico fuori dalle regioni del nuovo residuo | forte | regioni di Ramachandran di BioLoom (Lovell et al. 2003): es. una glicina con φ > 0 |
+| conformazione φ/ψ del selvatico fuori dalle regioni del nuovo residuo | forte | regioni di Ramachandran di MakPhi (Lovell et al. 2003): es. una glicina con φ > 0 |
 | ponte disolfuro perso | forte | Betz 1993 |
 | legami idrogeno persi del residuo (criteri di `domain/interactions`) | moderato se sepolto o almeno 2 | circa 1 kcal/mol ciascuno (Myers & Pace 1996) |
 | ponte salino perso | moderato se sepolto, altrimenti informativo | Strop & Mayo 2000 |
@@ -2912,7 +2912,7 @@ Risultato di `mutate`: `mutations`, `notation`, `files` (selvatico riottimizzato
 `<nome>_K48R.pdb`, con `.quality.json`; con l'energia i minimizzati), `models` (DOPE di tutti i modelli, `chosen`),
 `dope`, `energy`, `sites` (indicatori), `assessment` (classe, motivazioni, segnali, punteggio, effetto sul legame),
 `quality` e `comparison` (`refinement.compare` fra selvatico riottimizzato e mutante), `rmsd` (catena principale fuori dai
-residui ottimizzati e totale), `protocol`, `warnings`, `caveat`. Righe `REMARK 999 BIOLOOM` nel mutante (mutazioni,
+residui ottimizzati e totale), `protocol`, `warnings`, `caveat`. Righe `REMARK 999 MAKPHI` nel mutante (mutazioni,
 protocollo, ΔDOPE, classe "QUALITATIVE, NOT A DDG").
 
 **Controlli preventivi** (`kind` `mutate` e `alascan`): stessa validazione delle rotte, MODELLER, OpenMM se chiesta
@@ -2979,7 +2979,7 @@ Nessuna dipendenza nuova, nessuna colonna né tabella SQLite nuova; due impostaz
 | Verifica della risposta | coordinate presenti, lettere dei Cα uguali alla sequenza inviata e nello stesso ordine, al più 20 MB | |
 | Errori | 404 → `esmfold_unavailable` («potrebbe essere stato dismesso, oppure l'indirizzo è sbagliato»); 413 → `sequence_too_long`; altri 4xx (429 con «troppe richieste») → `esmfold_rejected`; rete, tempo scaduto (300 s) e 5xx dopo 3 tentativi (pause di 5 e 10 s, annullabili) → `esmfold_unavailable`; reindirizzamento (3xx, non seguito) → `esmfold_unavailable`; risposta non valida → `esmfold_invalid_response`. Il testo della risposta d'errore entra nel messaggio solo dal servizio pubblico | test con il servizio simulato |
 | Cache | `data/cache/esmfold`, chiave = indirizzo + sequenza, 30 giorni (come la pulizia della cache remota); nessuna voce per una risposta non valida; scritture atomiche, anche con più job insieme | |
-| File salvato | intestazione del servizio conservata (oppure un TITLE «ESMFOLD PREDICTION, … SAVED BY BIOLOOM»), `REMARK 999 BIOLOOM PREDICTOR ESMFOLD <servizio>` e `… PLDDT SCALE 0-1 X100 TO 0-100`, pLDDT su 0–100, END | |
+| File salvato | intestazione del servizio conservata (oppure un TITLE «ESMFOLD PREDICTION, … SAVED BY MAKPHI»), `REMARK 999 MAKPHI PREDICTOR ESMFOLD <servizio>` e `… PLDDT SCALE 0-1 X100 TO 0-100`, pLDDT su 0–100, END | |
 
 Se il servizio pubblico venisse dismesso, l'indirizzo si cambia nelle Impostazioni (un servizio compatibile: POST della
 sequenza, risposta PDB); il limite di 400 residui resta.
@@ -3029,7 +3029,7 @@ dell'allineamento strutturale, `mode: structural`, per StructuralComparison), `p
 | Livello | Regola | Fonte |
 |---|---|---|
 | ripiegamento | TM-score normalizzato sul modello ≥ 0,5 | Xu & Zhang, Bioinformatics 26:889, 2010; due strutture casuali circa 0,17 (Zhang & Skolnick, Proteins 57:702, 2004) |
-| residuo divergente | lDDT-Cα del residuo del modello rispetto alla predizione < 0,5 | Mariani et al. 2013; confine della fascia «molto bassa» del pLDDT, che è un lDDT-Cα predetto (scelta BioLoom) |
+| residuo divergente | lDDT-Cα del residuo del modello rispetto alla predizione < 0,5 | Mariani et al. 2013; confine della fascia «molto bassa» del pLDDT, che è un lDDT-Cα predetto (scelta MakPhi) |
 | regione divergente | almeno 3 residui divergenti, uno non divergente tollerato fra due, stessa catena e numerazione contigua | come le regioni problematiche del consenso |
 | predizione sicura | pLDDT medio della regione ≥ 70; incerta da 50 a 70; molto incerta sotto 50 | fasce di AlphaFold DB (Tunyasuvunakool et al. 2021), valide per ESMFold (Lin et al. 2023: stesso lDDT-Cα predetto) |
 | conclusivo | almeno 30 residui (o tutti, per una catena più corta) con pLDDT ≥ 70 | come `plddt.MIN_TRIMMED_RESIDUES`: i più piccoli domini che si ripiegano da soli |
@@ -3099,7 +3099,7 @@ preventivi](#controlli-preventivi)).
   nella pagina Job).
 - **Impostazioni → Generale**: riquadro «Predizione di struttura (ESMFold)» con il consenso e l'indirizzo del servizio
   (vuoto = servizio pubblico; un indirizzo non valido è un 400 `invalid_esmfold_url` della rotta delle impostazioni).
-  In modalità server l'indirizzo è in sola lettura: lo imposta l'amministratore con `BIOLOOM_ESMFOLD_URL` (vedi
+  In modalità server l'indirizzo è in sola lettura: lo imposta l'amministratore con `MAKPHI_ESMFOLD_URL` (vedi
   [Sicurezza e privacy](#sicurezza-e-privacy)).
 
 ### Report del modello
@@ -3130,9 +3130,9 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
 
   | Sezione | Da dove |
   |---|---|
-  | Intestazione | job (titolo, progetto, date); versione di BioLoom; MODELLER dall'`EXPDTA THEORETICAL MODEL, MODELLER 10.8` del modello; metodo DSSP, PROCHECK e ProSA dal rapporto; QMEAN (versione, metodo, locale o SWISS-MODEL) dal job qmean |
+  | Intestazione | job (titolo, progetto, date); versione di MakPhi; MODELLER dall'`EXPDTA THEORETICAL MODEL, MODELLER 10.8` del modello; metodo DSSP, PROCHECK e ProSA dal rapporto; QMEAN (versione, metodo, locale o SWISS-MODEL) dal job qmean |
   | Bersaglio | voce `sequence` del PIR (catene separate da '/'); pipeline: riga dell'elemento; loop e quality: residui del rapporto |
-  | Template | job model: template preparati del risultato e metadati della libreria (sorgente, titolo, metodo, risoluzione, pLDDT medio); pipeline: voci del PIR, copia preparata nella cartella dell'elemento (catene, intervallo, `REMARK 999 BIOLOOM PLDDT_TRIM`), righe `TEMPLATE … ALPHAFOLD` del modello e ricerca (motore, identità, copertura, E-value, zona crepuscolare) |
+  | Template | job model: template preparati del risultato e metadati della libreria (sorgente, titolo, metodo, risoluzione, pLDDT medio); pipeline: voci del PIR, copia preparata nella cartella dell'elemento (catene, intervallo, `REMARK 999 MAKPHI PLDDT_TRIM`), righe `TEMPLATE … ALPHAFOLD` del modello e ricerca (motore, identità, copertura, E-value, zona crepuscolare) |
   | Identità e copertura | ricalcolate sull'allineamento usato da MODELLER: residui identici / colonne con un residuo in entrambe le righe, come `validate_pir` e il `% SEQ ID` di MODELLER (ubiquitina di lievito su 1UBQ: 96,05%); copertura = quelle colonne / residui del bersaglio |
   | Allineamento | PIR del risultato o `alignment.ali` dell'elemento, a blocchi di 60 colonne: righello, primo e ultimo residuo di ogni riga, residui identici al bersaglio evidenziati, riga di conservazione Clustal (`sequences.consensus_line`) |
   | Parametri | `options` del risultato; pipeline: `parse_options` dei parametri più motore, E-value e soglie della zona crepuscolare; loop: regione, modelli e dinamica |
@@ -3182,7 +3182,7 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
   li apre nei browser che supportano lo pseudo-elemento (verificato su Chrome; quelli senza stampano solo il titolo del
   blocco, che va aperto prima di stampare). Sugli
   schermi stretti le tabelle scorrono in orizzontale invece di allargare la pagina.
-- **Legenda e fonti:** solo le metriche presenti, con le soglie usate da BioLoom, e solo le fonti dei metodi presenti
+- **Legenda e fonti:** solo le metriche presenti, con le soglie usate da MakPhi, e solo le fonti dei metodi presenti
   (Šali & Blundell 1993, Shen & Sali 2006, Melo et al. 2002, John & Sali 2003, Benkert et al. 2011, Sippl 1993,
   Wiederstein & Sippl 2007, Laskowski et al. 1993, Jumper et al. 2021, Tunyasuvunakool et al. 2021, Mariani et al.
   2013, Ramachandran et al. 1963, Lovell et al. 2003, Word et al. 1999, Kabsch & Sander 1983, Shrake & Rupley 1973,
@@ -3226,7 +3226,7 @@ stampabile in PDF dal browser, generato al volo dai file già salvati del job, s
     più 4 report per processo sono in volo e l'archivio si scrive nell'ordine degli elementi. Il 26 ottobre 2026 lo
     ZIP di 139.296 coppie, generato dentro la richiesta, avanzava di una coppia ogni 3 s (circa 5 giorni): ogni
     report faceva 4 ricerche nella tabella dei job, e la ricerca del QMEAN guardava solo i 200 più recenti di tutto
-    BioLoom, quindi i report non lo avevano. Misurato sul server senza le ricerche: 117 ms per report e 14 ms di
+    MakPhi, quindi i report non lo avevano. Misurato sul server senza le ricerche: 117 ms per report e 14 ms di
     scrittura per coppia, circa 98 KB compressi per coppia.
   - **Ricerca per struttura (`compute.job_sources`):** per il modello di un job si filtra in SQL per job e file
     (indice sulle espressioni JSON `idx_jobs_source`, più `idx_jobs_kind`); per le altre sorgenti per tipo. Gli
@@ -3299,14 +3299,14 @@ message, suggestion}` più `group: "coverage"` per gli avvisi di copertura e `te
 | `plddt_untrimmed` | warning | ritaglio spento e residui con pLDDT < 70 | vincoli da conformazioni predette con bassa confidenza |
 | `procheck_unavailable`, `prosa_unavailable` | warning se nessuno degli strumenti chiesti gira, altrimenti info | PROCHECK assente; ProSA assente, senza licenza, licenza illeggibile o MAC diverso | l'opzione non avrebbe effetto / l'analisi prosegue |
 | `estimated_time` / `timeout_risk` | info / warning | stima del tempo; costruzione dei modelli (un solo processo) oltre metà del timeout dei processi | incertezza della stima di un fattore 2 |
-| `disk_full_data`, `disk_full_scratch` / `disk_low_*` | error / warning | spazio libero sotto la stima / sotto il massimo fra 1 GiB e 10 volte la stima; dati e scratch sullo stesso disco: una voce con la somma | il salvataggio finale fallirebbe a calcolo finito; 1 GiB per database SQLite con il WAL, cache (fino a 20 MB per voce) e download degli altri job (scelta BioLoom) |
+| `disk_full_data`, `disk_full_scratch` / `disk_low_*` | error / warning | spazio libero sotto la stima / sotto il massimo fra 1 GiB e 10 volte la stima; dati e scratch sullo stesso disco: una voce con la somma | il salvataggio finale fallirebbe a calcolo finito; 1 GiB per database SQLite con il WAL, cache (fino a 20 MB per voce) e download degli altri job (scelta MakPhi) |
 | `qmean_memory`, `qmean_unavailable` | error, warning con il fallback consentito | `qmean_local.memory_problem` (12 GB per UniRef30_2020_06) o servizio assente; fallback attivo senza consenso o email = errore | come il controllo del job QMEAN |
 | `qmean_remote_disabled`, `email_required` / `qmean_remote`, `qmean_local`, `qmean_busy` | error / info | SWISS-MODEL senza consenso o email; dove si calcola, servizio occupato | |
 | `blast_missing`, `pdbaa_missing`, `mmseqs_missing`, `mmseqs_database_missing` | error | motore locale senza programma o database | |
 | `mmseqs_no_index`, `remote_ncbi`, `ncbi_email`, `alphafold_blast`, `remote_alphafold` | info | ricerca più lenta senza l'indice (12 s invece di 2,3); dati che vanno a NCBI o EBI | misure di MMseqs2 in [Flusso dei dati](#flusso-dei-dati-e-file-temporanei) |
 | `ncbi_many_searches` / `ncbi_parallel` | warning / info | pipeline con oltre 50 ricerche NCBI (motore NCBI, o AlphaFold DB senza accessione) / più ricerche NCBI insieme | linee guida di NCBI per l'interfaccia URL di BLAST: oltre 50 ricerche di sera o nel fine settimana, una richiesta ogni 10 s |
 | `pipeline_too_long` / `pipeline_alphafold`, `pipeline_disorder` | warning / info | sequenze oltre `max_sequence_length` residui (falliranno); sequenze con e senza accessione; sequenze con regioni disordinate lunghe (FoldIndex, fino a 500 000 residui in tutto) | |
-| `rerun_not_reproducible`, `rerun_unsupported`, `package_*`, `rerun_tool_unavailable` / `rerun_version_bioloom`, `rerun_version_image`, `rerun_version_tool`, `rerun_version_library`, `rerun_tool_missing`, `rerun_platform` / `rerun_remote_input`, `package_note` | error / warning / info | riesecuzione (`kind: "rerun"`): calcolo che dipende da servizi remoti o non rieseguibile, pacchetto non valido o scaduto, parametri che la rotta di avvio rifiuterebbe, strumento obbligatorio assente / versioni diverse da quelle del pacchetto / input remoti con la data e note del pacchetto; più licenza MODELLER, PROCHECK e ProSA, durata del calcolo originale, spazio e coda come gli altri calcoli | versioni diverse: avvisi, mai errori (F9.4) |
+| `rerun_not_reproducible`, `rerun_unsupported`, `package_*`, `rerun_tool_unavailable` / `rerun_version_makphi`, `rerun_version_image`, `rerun_version_tool`, `rerun_version_library`, `rerun_tool_missing`, `rerun_platform` / `rerun_remote_input`, `package_note` | error / warning / info | riesecuzione (`kind: "rerun"`): calcolo che dipende da servizi remoti o non rieseguibile, pacchetto non valido o scaduto, parametri che la rotta di avvio rifiuterebbe, strumento obbligatorio assente / versioni diverse da quelle del pacchetto / input remoti con la data e note del pacchetto; più licenza MODELLER, PROCHECK e ProSA, durata del calcolo originale, spazio e coda come gli altri calcoli | versioni diverse: avvisi, mai errori (F9.4) |
 | `esmfold_remote_disabled` / `sequence_too_long`, `invalid_sequence`, `accession_required`, `invalid_chain`, `predict_input_required` | error | predizione (F9.3): ESMFold senza il consenso all'invio; la stessa validazione della rotta `POST /api/predict` (sequenza oltre 400 residui o con lettere non standard, accessione mancante per AlphaFold DB, catena assente) | il consenso è un esito a sé, con il suggerimento |
 | `remote_esmfold`, `esmfold_cached`, `remote_alphafold`, `alphafold_in_library`, `predict_no_compare` | info | la sequenza andrà al servizio (rete); predizione già in cache (nessuna richiesta); a EBI va solo l'accessione, o il modello è già in libreria; nessuna struttura da confrontare | nessuna richiesta remota dai controlli: la cache si legge dal disco |
 | `predict_sequence_gaps` / `predict_sequence_seqres` | warning / info | ESMFold con la sequenza della catena: catena interrotta senza una sequenza completa utilizzabile nel file (i tratti si unirebbero; residui vicini alle giunzioni non informativi) / catena interrotta, si invia il SEQRES | suggerimento: incollare la sequenza completa nella finestra |
@@ -3367,7 +3367,7 @@ la logica dei passi è in `lib/wizard.ts` (pura, testata).
 | 6 Risultati | modello migliore (DOPE minimo), voto, consenso (dal rapporto di qualità), DOPE, zDOPE, GA341, 3D; Qualità, Confronta con il template, Report, Tutti i modelli | |
 
 - **Stato:** passo e job nell'URL (`?step=&search=&align=&doc=&model=`), il resto (bersaglio, accessione, motore, template,
-  opzioni, scelta dei ligandi) nel browser (`localStorage`, `bioloom.wizard.<progetto>`, letto con `sanitizeDraft`: un
+  opzioni, scelta dei ligandi) nel browser (`localStorage`, `makphi.wizard.<progetto>`, letto con `sanitizeDraft`: un
   valore non valido torna al predefinito). All'apertura la bozza, poi l'URL, che prevale; un link senza bozza (altro
   browser) riprende bersaglio, motore, template e opzioni dai parametri dei job (`fillFromJobs`).
 - **Passaggi:** un cambio invalida i passi successivi (sequenza diversa → ricerca, template, allineamento e modello;
@@ -3418,10 +3418,10 @@ l'id normalizzato della libreria, maiuscolo); un vincolo CHECK ammette solo i qu
 
 - **FTS5:** la build di SQLite dell'immagine (3.45.1 di Ubuntu 24.04, `ENABLE_FTS5` fra le opzioni di compilazione:
   verificato) lo ha; si controlla comunque all'avvio creando una tabella temporanea, e senza FTS5 si usa LIKE
-  (`BIOLOOM_SEARCH_FTS=0` lo forza). L'indice è **temporaneo**: una tabella FTS5 per tipo (`temp.search_<tipo>`, rowid =
+  (`MAKPHI_SEARCH_FTS=0` lo forza). L'indice è **temporaneo**: una tabella FTS5 per tipo (`temp.search_<tipo>`, rowid =
   rowid della riga) riempita all'avvio e tenuta allineata da trigger temporanei su inserimenti, eliminazioni (anche in
   cascata) e modifiche dei soli campi indicizzati (gli aggiornamenti di progresso dei job non lo toccano). Nulla di FTS5
-  finisce in `bioloom.db`: una build senza FTS5 apre e scrive la stessa cartella dati, cosa impossibile con tabelle
+  finisce in `makphi.db`: una build senza FTS5 apre e scrive la stessa cartella dati, cosa impossibile con tabelle
   virtuali o trigger FTS5 salvati nello schema. Costo misurato: 0,04 s per 10 000 job all'avvio.
 - **Campi:** progetti (nome; descrizione), sequenze (nome; accessione, proteina e organismo dai metadati), documenti
   (nome; tipo), job (titolo; tipo e sua etichetta italiana, "modellazione" trova i job `model`, "rifinitura" i `refine`,
@@ -3434,7 +3434,7 @@ l'id normalizzato della libreria, maiuscolo); un vincolo CHECK ammette solo i qu
 - **Corrispondenza:** ogni parola della richiesta deve essere l'inizio di una parola di un campo, con le parole divise
   come il tokenizer `unicode61 remove_diacritics 2` (lettere e cifre; minuscole; senza accenti): «p6990» trova
   «sp_P69905_HBA_HUMAN», «proteina» trova «Proteína», «ubq» non trova «1UBQ» (non è l'inizio di una parola). FTS5 (query
-  `"p6990"* "hba"*`) o LIKE (`bioloom_fold(campo) LIKE '%p6990%'`, funzione SQL della connessione che toglie accenti e
+  `"p6990"* "hba"*`) o LIKE (`makphi_fold(campo) LIKE '%p6990%'`, funzione SQL della connessione che toglie accenti e
   maiuscole) selezionano i candidati; la stessa regola in Python decide e dà la pertinenza, così FTS5, LIKE e template
   danno gli stessi risultati (provato sugli stessi dati).
 - **Pertinenza** (pesatura per campo come in BM25F, Robertson, Zaragoza e Taylor 2004: il nome vale il doppio degli altri
@@ -3470,7 +3470,7 @@ l'id normalizzato della libreria, maiuscolo); un vincolo CHECK ammette solo i qu
 
 ### Riproducibilità: pacchetti e riesecuzione
 
-Un job completato si esporta in un **pacchetto di riproducibilità** (ZIP) che lo documenta per intero e che BioLoom sa
+Un job completato si esporta in un **pacchetto di riproducibilità** (ZIP) che lo documenta per intero e che MakPhi sa
 **rieseguire**, confrontando poi i risultati con quelli del pacchetto (F9.4). Regole pure in `domain/reproducibility.py`
 (limiti e controlli dell'archivio, impronta del manifest, oscuramento, confronto, testi), versioni degli strumenti in
 `engines/versions.py`, pacchetti e job `rerun` in `services/reproducibility.py`, rotte in `api/reproducibility.py`,
@@ -3482,7 +3482,7 @@ temporaneo dello scratch e inviato con `FileResponse` come gli altri archivi; ne
 
 | Percorso | Ruolo | Contenuto |
 |---|---|---|
-| `manifest.json` | — | formato e versione del formato; versione di BioLoom, dell'immagine (`BIOLOOM_IMAGE_VERSION`) e impronta del codice (`/app/IMPRONTA`, 4.3.0); Python, sistema, architettura, Biopython e NumPy; versioni degli strumenti usati dal calcolo; job (tipo, titolo, date, durata); **parametri completi**; semi casuali; impostazioni che influiscono sul risultato; provenienza dalla cache dei calcoli; input remoti con la data; timbro dei database locali (ricerca); possibilità di riesecuzione con il motivo; note; elenco dei file con ruolo, SHA-256, dimensione e percorso nel job; `manifest_sha256`; firma HMAC facoltativa (`signature`, 4.3.0) |
+| `manifest.json` | — | formato e versione del formato; versione di MakPhi, dell'immagine (`MAKPHI_IMAGE_VERSION`) e impronta del codice (`/app/IMPRONTA`, 4.3.0); Python, sistema, architettura, Biopython e NumPy; versioni degli strumenti usati dal calcolo; job (tipo, titolo, date, durata); **parametri completi**; semi casuali; impostazioni che influiscono sul risultato; provenienza dalla cache dei calcoli; input remoti con la data; timbro dei database locali (ricerca); possibilità di riesecuzione con il motivo; note; elenco dei file con ruolo, SHA-256, dimensione e percorso nel job; `manifest_sha256`; firma HMAC facoltativa (`signature`, 4.3.0) |
 | `LEGGIMI.txt` | `documentation` | contenuto e istruzioni per rieseguire (interfaccia, comando, API), tolleranze, input remoti, note |
 | `inputs/params.json`, `inputs/sequences.fasta` | `params`, `sequences` | parametri e sequenze (bersaglio, catene del complesso, sequenze dell'allineamento, query) |
 | `inputs/library/<ID>.pdb\|cif`, `<ID>.meta.json` | `template`, `template_meta` | file originale del template nella libreria e metadati (sorgente, data, modello predetto); se il template non è più in libreria, la copia preparata del job, con una nota |
@@ -3496,7 +3496,7 @@ temporaneo dello scratch e inviato con `FileResponse` come gli altri archivi; ne
 | `log/job.log` | `log` | log del calcolo, oscurato |
 
 **Ambiente all'avvio del job** (4.3.0). Il `JobManager` registra all'avvio di ogni esecuzione l'ambiente di calcolo
-(versioni di BioLoom, immagine e impronta del codice, Python, librerie, strumenti del tipo di job: lo stesso
+(versioni di MakPhi, immagine e impronta del codice, Python, librerie, strumenti del tipo di job: lo stesso
 `ReproducibilityService.current`) in `.environment.json` nella cartella del job: nascosto, quindi fuori dall'elenco dei
 file, dal pacchetto e dal confronto; una ripresa lo riscrive. Il manifest usa quello (`environment.detected`: «all'avvio
 del job (data)») e, se l'esportazione avviene con un'altra versione o un'altra impronta, lo annota fra le note; per i job
@@ -3542,7 +3542,7 @@ yeast_ub su 1UBQ con 5 modelli e la qualità estesa 36 file, 3,3 MB e 0,5 MB, es
   che lo scarica) e un file analizzato con un'impronta diversa da `source_sha256` del risultato sono annotati; il
   secondo rende la riesecuzione non disponibile (l'input non è più quello del job).
 - **Segreti** (`Redactor`): chiave MODELLER (file, `MODELLER_KEY`, chiave attiva dei sottoprocessi), codici delle licenze
-  ProSA, email di contatto e chiave d'accesso del server (impostazione, `BIOLOOM_ACCESS_KEY`, `data/access_key`, quella
+  ProSA, email di contatto e chiave d'accesso del server (impostazione, `MAKPHI_ACCESS_KEY`, `data/access_key`, quella
   attiva) diventano «[rimosso]» in ogni file testuale e nel manifest, senza distinguere le maiuscole; cartella dati,
   scratch, cache locale, installazione e home diventano segnaposti (`<cartella dati>/jobs/…`), solo all'inizio di un
   percorso: «https://data.rcsb.org» non contiene «/data». Ogni file oscurato è segnato (`redacted`) e ricontrollato: un
@@ -3574,7 +3574,7 @@ yeast_ub su 1UBQ con 5 modelli e la qualità estesa 36 file, 3,3 MB e 0,5 MB, es
 | stesso nome due volte, anche solo per maiuscole o forma Unicode (all'estrazione su Windows o macOS uno coprirebbe l'altro) | `package_duplicate` |
 | cifratura, metodo diverso da stored e deflate | `package_encrypted`, `package_compression` |
 | oltre 256 MB compressi, 512 MB per file o 1 GB decompressi, oltre 5000 file; un file più lungo di quanto dichiara | `package_too_large` (413), `package_too_many_files`, `package_bomb` |
-| rapporto di compressione oltre 100:1 per un file oltre 1 MB (deflate arriva a 1032:1; i file di BioLoom fino a 35:1, misurato) | `package_bomb` |
+| rapporto di compressione oltre 100:1 per un file oltre 1 MB (deflate arriva a 1032:1; i file di MakPhi fino a 35:1, misurato) | `package_bomb` |
 | manifest assente, non JSON, di un altro formato o di una versione più recente del formato; campi mancanti; percorsi o checksum non validi; campi letti dopo di forma inattesa (`environment.tools`/`libraries` non oggetti, `python`/`machine` non testi, `notes`, `remote`, `databases` non elenchi, `seeds`, `settings`, `cache`, `rerun` non oggetti, `job.duration_seconds` non numerico, date e titolo non testi): l'impronta si ricalcola, quindi un manifest risigillato di forma inattesa è un rifiuto motivato in anteprima, controlli preventivi e avvio, mai un errore interno | `package_invalid`, `package_manifest_invalid`, `package_format` |
 | impronta del manifest diversa (SHA-256 del JSON canonico senza `manifest_sha256` e `signature`): parametri, checksum o versioni modificati dopo l'esportazione | `package_manifest_altered` |
 | firma HMAC non valida con la chiave di questa installazione (manifest modificato e risigillato) | `package_signature_invalid` |
@@ -3584,7 +3584,7 @@ yeast_ub su 1UBQ con 5 modelli e la qualità estesa 36 file, 3,3 MB e 0,5 MB, es
 - **Nessun codice del pacchetto:** si estraggono solo gli ingressi (mai `scripts/` né `log/`), nella cartella
   temporanea del job (`.tmp/pacchetto`, eliminata a fine job). Gli script si rigenerano dai parametri validati, come
   per un calcolo nuovo; i valori finiscono negli script con le stesse regole (regex, `repr()`).
-- **Versioni diverse** (`environment_warnings`): BioLoom, immagine, strumenti, Python, Biopython, NumPy, architettura
+- **Versioni diverse** (`environment_warnings`): MakPhi, immagine, strumenti, Python, Biopython, NumPy, architettura
   diversi da quelli del pacchetto sono **avvisi** (anteprima, controlli preventivi, log e risultato della riesecuzione),
   mai errori; uno strumento usato dal calcolo e assente qui è un avviso, e se è indispensabile (OpenMM, fpocket,
   APBS…) un errore dei controlli preventivi.
@@ -3612,8 +3612,8 @@ yeast_ub su 1UBQ con 5 modelli e la qualità estesa 36 file, 3,3 MB e 0,5 MB, es
 5. Confronto e rapporto: `confronto.json` e `RAPPORTO_RIESECUZIONE.txt` nella cartella del job; il risultato del job
    ha esito, conteggi, strutture, metriche, avvisi, tolleranze e i file non identici.
 
-**Comando** `python bioloom.py rerun <pacchetto.zip> [--data <cartella>]` (anche `python -m bioloom rerun`): crea il job
-nella cartella dati indicata (predefinita: quella di BioLoom), ne mostra le fasi, stampa il rapporto ed esce con 0
+**Comando** `python makphi.py rerun <pacchetto.zip> [--data <cartella>]` (anche `python -m makphi rerun`): crea il job
+nella cartella dati indicata (predefinita: quella di MakPhi), ne mostra le fasi, stampa il rapporto ed esce con 0
 (identico, equivalente o compatibile), 1 (diverso) o 2 (pacchetto non valido, calcolo non rieseguibile, job fallito o
 annullato, con il messaggio in italiano «Riesecuzione non riuscita: …», cartella dati in uso da un server:
 `DatabaseInUse`). Con `--data` scratch e cache locale stanno dentro quella cartella: il comando non
@@ -3845,7 +3845,7 @@ alla fine, comunque vada: id tolto dalla guardia
 `ProjectService.delete_if_unused` lavora in una sola transazione, che tiene il lock del database:
 `DELETE FROM projects WHERE id=? AND NOT EXISTS (SELECT 1 FROM jobs WHERE project_id=?)`; se non elimina nulla, 404 se
 il progetto non c'è più, altrimenti una nuova passata; se elimina l'ultimo progetto ne inserisce uno vuoto, «Nuovo
-progetto» («Creato automaticamente: BioLoom richiede almeno un progetto.»), restituito come `replacement`. Sequenze e
+progetto» («Creato automaticamente: MakPhi richiede almeno un progetto.»), restituito come `replacement`. Sequenze e
 documenti vanno via in cascata, etichette e stella con i trigger. `ensure_default` resta all'avvio.
 
 - **Nulla eliminato con job attivi all'inizio:** il controllo SQL, su tutti i job del progetto, precede il primo
@@ -3889,7 +3889,7 @@ componenti; `JobManager.delete` non si chiama mai dentro `db.transaction()`.
   all'avvio e pulizia automatica); gli upload (globali, a età, senza legame con job o progetti: la conferma lo dice);
   `cache/compute` (testi, non percorsi; scade dopo 30 giorni); i template (nessun riferimento ai job); `backups/` (rete
   di sicurezza, solo mostrata nello spazio occupato);
-- il file `bioloom.db` e il WAL non si restringono (nessun VACUUM automatico, vedi [Cartella dati](#cartella-dati));
+- il file `makphi.db` e il WAL non si restringono (nessun VACUUM automatico, vedi [Cartella dati](#cartella-dati));
 - i job completati possono essere la sorgente di altri job (strutture `{type: "job"}`, consenso con `qmean_job` e
   `predict_job`): la conferma lo dice e i completati richiedono «Ho capito»;
 - le cartelle `jobs/<id>` già senza riga restano dove sono: nessuna scansione, né automatica né manuale (con un database
@@ -3976,11 +3976,11 @@ Lo strumento è `tests/perf_timing.py`, fuori dalla suite: `scripts/test.sh back
 
 - **Cosa misura:** `test_profile` avvolge con monkeypatch le funzioni dei passi (nessuna modifica al codice misurato)
   e misura il tempo reale del job dall'avvio alla chiusura dell'esecuzione (`JobManager._execute`); i tempi dei
-  singoli modelli vengono dai marcatori `@@BIOLOOM` di `model.py`. `test_paired` alterna due varianti nello stesso
+  singoli modelli vengono dai marcatori `@@MAKPHI` di `model.py`. `test_paired` alterna due varianti nello stesso
   processo (A B A B …), così il carico della macchina pesa allo stesso modo su entrambe. `test_profile_modeller_startup`
   misura il costo fisso di un processo MODELLER.
 - **Condizioni:**
-  - container di test `bioloom-test:4.1.0` (MODELLER 10.8, mkdssp 4.2.2, PROCHECK; ProSA senza licenza, quindi si
+  - container di test `makphi-test:4.1.0` (MODELLER 10.8, mkdssp 4.2.2, PROCHECK; ProSA senza licenza, quindi si
     ferma subito con l'avviso);
   - Docker Desktop su Windows 11, 4 CPU logiche (Intel i3-1115G4: 2 core con hyper-threading) e 5,7 GB per Docker;
   - template 1UBQ (catena A) e bersaglio ubiquitina di lievito (76 residui, 96 % di identità), ricerca simulata
@@ -4114,7 +4114,7 @@ dell'ottimizzazione VTFM non cambia il tempo in modo misurabile, la dinamica sì
 MODELLER (il livello proposto dall'interfaccia, che quindi non cambia) e "normal" ha la ricottura più lunga
 `refine.fast`. "very_fast" è `a.very_fast()`, che non perturba le coordinate iniziali (`rand_method = None`): nella
 stessa prova i modelli erano identici (stesso DOPE, RMSD 0 Å), e con la perturbazione rimessa erano diversi ma molto
-peggiori (DOPE −6853 contro −7621) perché 50 iterazioni non bastano a recuperarla; BioLoom lascia il metodo di MODELLER
+peggiori (DOPE −6853 contro −7621) perché 50 iterazioni non bastano a recuperarla; MakPhi lascia il metodo di MODELLER
 e avvisa (controlli preventivi e risultato) che i modelli sono uguali. "thorough" segue l'esempio del manuale senza
 `max_molpdf = 1e6`, più basso del predefinito di MODELLER 10.8 (1e7). Tutti i livelli scrivono le impostazioni per
 esteso nello script (`REFINEMENT_SCRIPT`), così non dipendono dai predefiniti di una versione futura.
@@ -4144,7 +4144,7 @@ template è sintetico (catena di 3IU0 ripetuta e affiancata su una griglia), il 
 mutazioni: i tempi misurano la lunghezza, non la difficoltà del bersaglio. ProSA senza licenza valida (Podman senza
 root), quindi quasi gratis.
 
-| Residui | Modello + qualità | QMEAN | Memoria di BioLoom (RSS) |
+| Residui | Modello + qualità | QMEAN | Memoria di MakPhi (RSS) |
 |---|---|---|---|
 | 500 | 50 s | 2,0 min | 156 MB |
 | 1000 | 2,2 min | 2,4 min | 187 MB |
@@ -4270,7 +4270,7 @@ interfaccia delle singole funzioni sono descritte nelle loro sezioni (paragrafi 
   colonna.
 - **Tema** (`lib/theme.ts`): Scuro, Chiaro o Sistema nella barra laterale. "Sistema" segue `prefers-color-scheme` e
   cambia con il sistema operativo (evento `change` della media query); il tema si applica prima del primo render
-  (`initialTheme` in `main.tsx`). La scelta resta in `bioloom.theme` come prima: i valori salvati "dark" e "light" valgono
+  (`initialTheme` in `main.tsx`). La scelta resta in `makphi.theme` come prima: i valori salvati "dark" e "light" valgono
   ancora, uno illeggibile vale il predefinito (scuro). Anche il visualizzatore 3D segue il tema (sotto).
 - **Scorciatoie** (`lib/shortcuts.ts`, pannello «Tasti» o `?`): Ctrl+K / ⌘K anche dentro un campo; `/`, `?` e `g` più
   una lettera (`g s` Sequenze, `g j` Job, `g q` Qualità… entro 1,5 s) solo fuori dai campi di testo e senza dialoghi
@@ -4289,7 +4289,7 @@ della pagina bianca.
 
 - **Moduli obsoleti:** un import dinamico non riuscito (`dynamically imported module`, `Importing a module script
   failed`, `Failed to fetch`: i moduli di una build precedente dopo un aggiornamento) ricarica la pagina da sé al più una
-  volta al minuto per scheda (`claimStaleReload`). Il segno `bioloom.chunk-reload` in sessionStorage conserva l'ora
+  volta al minuto per scheda (`claimStaleReload`). Il segno `makphi.chunk-reload` in sessionStorage conserva l'ora
   dell'ultima ricarica e non si cancella mai; un segno delle versioni precedenti («1») o illeggibile vale come assente.
 - **Perché così:** prima il segno si toglieva in `render()`, e con i dati del sito bloccati già leggere `sessionStorage`
   lancia SecurityError, quindi pagina bianca. Toglierlo in `componentDidMount`/`componentDidUpdate` avrebbe creato un
@@ -4368,7 +4368,7 @@ della pagina bianca.
     `#fee090` della scala delle distanze. Con la deuteranopia «1 metodo» dista 12 (ΔE CIE76) da «3 o più», contro circa
     20 della coppia più vicina nel tema scuro: per fare meglio servirebbe una scala del consenso per il tema chiaro con
     «3 o più» molto più scuro, ma `#dc2626` è condiviso con la scala dei clash. Contorno e colori nuovi non sono stati
-    provati dentro BioLoom avviato; nella pagina di prova le sfere semitrasparenti sembravano senza contorno, e a
+    provati dentro MakPhi avviato; nella pagina di prova le sfere semitrasparenti sembravano senza contorno, e a
     struttura intera le linee di coordinazione tratteggiate sembrano quasi continue. Il grigio di contesto è vicino a
     «senza valore» (`#6b7280`): oggi non compaiono insieme in consenso, clash, tasche e scansione, ma potrebbero nella
     vista dell'interfaccia con valori mancanti.
@@ -4392,8 +4392,8 @@ della pagina bianca.
   sessione non cambia.
 - **Impostazioni:** l'interprete di MODELLER (campo presente solo in esecuzione nativa, `!container`) è in sola lettura
   in modalità server, con la nota «In modalità server lo imposta l'amministratore sul server (variabile d'ambiente
-  BIOLOOM_MODELLER_PYTHON); vuoto = rilevamento automatico.»: la variabile e non `server.env`, che conta solo nei
-  container (lo passano `compose.yml` e `bioloom-podman.sh`), dove il campo non c'è. Nella scheda Spazio, accanto alla
+  MAKPHI_MODELLER_PYTHON); vuoto = rilevamento automatico.»: la variabile e non `server.env`, che conta solo nei
+  container (lo passano `compose.yml` e `makphi-podman.sh`), dove il campo non c'è. Nella scheda Spazio, accanto alla
   cache dei calcoli, «Spazio massimo della cache dei calcoli (MB)» (da 100 a 102400, predefinito 2048); il campo è
   obbligatorio nel tipo `Settings`.
 
@@ -4445,30 +4445,30 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 
 **Protezioni.**
 
-- **Porta:** pubblicata solo su `127.0.0.1`, in locale e, per default, anche sul server (`BIOLOOM_BIND` di
+- **Porta:** pubblicata solo su `127.0.0.1`, in locale e, per default, anche sul server (`MAKPHI_BIND` di
   `server.env.example`), dove gli altri computer arrivano con un reverse proxy HTTPS o un tunnel SSH. `0.0.0.0` espone
   HTTP in chiaro e, con Docker, una porta che scavalca il firewall: l'avviatore lo segnala a ogni avvio (vedi
-  [Avviatori](#avviatori-un-bioloom-alla-volta-e-controlli-allavvio)).
-- **Server:** con `BIOLOOM_AUTH=on` tutte le API (e `/docs`) richiedono la chiave d'accesso, tramite
+  [Avviatori](#avviatori-un-makphi-alla-volta-e-controlli-allavvio)).
+- **Server:** con `MAKPHI_AUTH=on` tutte le API (e `/docs`) richiedono la chiave d'accesso, tramite
   cookie HttpOnly firmato o header Bearer, con il freno ai tentativi anche per la chiave come Bearer (sotto,
   **Accesso con chiave**); il middleware controlla anche le rotte di streaming prima che il flusso parta.
-- **Richieste di altri siti (CSRF):** la porta su `127.0.0.1` non basta, perché il browser che apre BioLoom apre anche
+- **Richieste di altri siti (CSRF):** la porta su `127.0.0.1` non basta, perché il browser che apre MakPhi apre anche
   altri siti, e un `fetch` con `mode: "no-cors"` o un form arrivano senza preflight CORS (arresto, aggiornamento dei
   database, upload). `core/guard`, il middleware più esterno (rifiuta prima della chiave d'accesso), controlla in
   entrambe le modalità le richieste che modificano (tutti i metodi tranne GET, HEAD e OPTIONS), in quest'ordine:
   `Origin` dello sviluppo con Vite (`dev_origins` di `create_app`, le stesse di CORS; solo fuori dal container,
-  dove `BIOLOOM_CONTAINER=1` le spegne) → ammessa; con `Sec-Fetch-Site` passano solo `same-origin` e `none` (punto di
+  dove `MAKPHI_CONTAINER=1` le spegne) → ammessa; con `Sec-Fetch-Site` passano solo `same-origin` e `none` (punto di
   vista del browser: vale anche dietro un reverse proxy); altrimenti con `Origin` servono nome e porta dell'header
   `Host` o del primo `X-Forwarded-Host`, con la porta predefinita dello schema se manca (`null` mai); senza nessuno
   dei due (curl, script, avviatori, test) la richiesta passa. Rifiuto: 403 `cross_origin`. Il frontend usa percorsi
   relativi, quindi la stessa origine, anche con `npm run dev` (il proxy di Vite conserva l'header `Host`).
 - **DNS rebinding:** senza accesso protetto un dominio ostile risolto su 127.0.0.1 diventerebbe «stessa origine» e
   leggerebbe tutta l'API. `core/guard` ammette solo l'header `Host` con nome (la porta non conta: il proxy di Vite
-  inoltra `localhost:5173`) `127.0.0.1`, `localhost`, `::1` o in `BIOLOOM_ALLOWED_HOSTS` (virgole o spazi, senza
-  maiuscole, anche come URL; `*` = tutti; letta all'avvio, come `BIOLOOM_AUTH`), altrimenti 400 `host_not_allowed`;
-  `Host` assente (client non browser) e `/api/health` passano. Con `BIOLOOM_AUTH=on` il controllo è spento:
+  inoltra `localhost:5173`) `127.0.0.1`, `localhost`, `::1` o in `MAKPHI_ALLOWED_HOSTS` (virgole o spazi, senza
+  maiuscole, anche come URL; `*` = tutti; letta all'avvio, come `MAKPHI_AUTH`), altrimenti 400 `host_not_allowed`;
+  `Host` assente (client non browser) e `/api/health` passano. Con `MAKPHI_AUTH=on` il controllo è spento:
   proteggono già chiave e cookie, e il server si raggiunge per IP, nome o reverse proxy.
-- **Iframe (clickjacking):** una pagina di BioLoom in un iframe trasparente di un altro sito invierebbe le richieste
+- **Iframe (clickjacking):** una pagina di MakPhi in un iframe trasparente di un altro sito invierebbe le richieste
   come stessa origine e passerebbe il controllo dell'origine (due clic su «Arresta»). `core/guard` aggiunge a ogni
   risposta, anche ai rifiuti, `X-Frame-Options: DENY` e `Content-Security-Policy: frame-ancestors 'none'`, salvo una
   CSP con `frame-ancestors` già presente (report HTML). Il frontend non mette mai in un iframe le proprie pagine.
@@ -4476,20 +4476,20 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   quando un proxy TLS lo dichiara con `X-Forwarded-Proto: https` (`api/auth._https`). uvicorn si fida degli header
   inoltrati solo da 127.0.0.1, e il proxy raggiunge il container dalla rete di Docker. L'header conta solo per
   questo flag: se falso, rende il cookie più restrittivo. Gli header inoltrati non sono fidati in generale:
-  `X-Forwarded-For` conta solo per il freno ai tentativi e solo dai proxy di `BIOLOOM_TRUSTED_PROXIES` (sotto),
+  `X-Forwarded-For` conta solo per il freno ai tentativi e solo dai proxy di `MAKPHI_TRUSTED_PROXIES` (sotto),
   altrimenti chiunque lo scriverebbe per aggirarlo.
-- **Arresto dall'interfaccia:** solo con `BIOLOOM_ALLOW_SHUTDOWN=1` (preset locale).
+- **Arresto dall'interfaccia:** solo con `MAKPHI_ALLOW_SHUTDOWN=1` (preset locale).
 - **Container:** gira senza root (`setpriv` all'utente proprietario di `/data`). QMEAN non ha accesso al
   socket di Docker e usa i database in sola lettura.
 - **Licenze:** in `data/licenses` con permessi 0600, mascherate nelle risposte API, mai nelle immagini. Il
   messaggio d'errore di MODELLER, che ripete la chiave, viene mascherato ovunque arrivi: risposte delle licenze,
   `/api/system/info`, verifica dell'installazione, log, output ed errori dei processi dei job (vedi
   [Licenze](#licenze-dei-programmi-esterni)).
-- **Segreti e programmi esterni:** i programmi esterni non ricevono `BIOLOOM_ACCESS_KEY`, `MODELLER_KEY`,
-  `KEY_MODELLER` né le `BIOLOOM_SMTP_*` (vedi [Job](#job)); ricevono `BIOLOOM_MODELLER_KEY`, la chiave MODELLER attiva,
+- **Segreti e programmi esterni:** i programmi esterni non ricevono `MAKPHI_ACCESS_KEY`, `MODELLER_KEY`,
+  `KEY_MODELLER` né le `MAKPHI_SMTP_*` (vedi [Job](#job)); ricevono `MAKPHI_MODELLER_KEY`, la chiave MODELLER attiva,
   anche quelli diversi da MODELLER.
 - **Errori interni** (`app.unexpected`): al client 500 `internal_error` con «Errore interno (codice xxxxxxxx): i dettagli
-  sono nel log di BioLoom.» (`secrets.token_hex(4)`); nel log «[BioLoom] Errore interno (codice xxxxxxxx) su METODO
+  sono nel log di MakPhi.» (`secrets.token_hex(4)`); nel log «[MakPhi] Errore interno (codice xxxxxxxx) su METODO
   percorso:» e il traceback. Prima il messaggio conteneva `str(exc)`, con percorsi, parametri o pezzi di file. Limite:
   uvicorn stampa anche il suo traceback, senza codice, quindi nel log l'errore compare due volte. Le due tracce
   superano insieme le 60 righe di `compose logs --tail 60` (tasto **L** degli avviatori: misurato con uvicorn, riga del
@@ -4514,7 +4514,7 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     `..`, percorsi assoluti o link, che il ripiego rifiuta: le garanzie sono quelle di prima;
   - **limite:** se è la radice stessa a essere in eliminazione, si risolve ancora nella forma strana; il risultato resta
     confinato lì dentro e il file non esiste, quindi la risposta è 404 invece di 400.
-- **Upload:** limitati (50 MB, `BIOLOOM_MAX_UPLOAD_MB`; 200 MB per i file di sequenze e allineamenti, 1 GB
+- **Upload:** limitati (50 MB, `MAKPHI_MAX_UPLOAD_MB`; 200 MB per i file di sequenze e allineamenti, 1 GB
   decompressi, al più 100.000 sequenze lette; 256 MB per un pacchetto di riproducibilità; 64 kB per `LicenseDB`) e validati come strutture prima
   dell'uso. Oltre il limite dell'endpoint `read_upload` risponde 413 `too_large` («File troppo grande: massimo N MB.»;
   prima il codice era `bad_request`). Gli archivi pdbaa si estraggono con filtro `data` e solo file senza percorso.
@@ -4523,13 +4523,13 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   temporanea, quindi un corpo di qualche GB la riempirebbe prima del 413. Il middleware rifiuta le richieste oltre
   `request_limit()`, il più grande dei caricamenti legittimi più 1 MB per confini e campi del multipart
   (`max(MAX_UPLOAD_BYTES, MAX_PACKAGE_BYTES, MAX_BYTES delle sequenze) + MULTIPART_MARGIN`: 257 MB con le impostazioni
-  predefinite, di più se `BIOLOOM_MAX_UPLOAD_MB` supera 256), così un caricamento accettato dall'endpoint non si ferma
+  predefinite, di più se `MAKPHI_MAX_UPLOAD_MB` supera 256), così un caricamento accettato dall'endpoint non si ferma
   mai qui.
   - Con `Content-Length` oltre il limite: 413 subito, senza leggere un byte del corpo (misurato con uvicorn: 10 GB
     dichiarati → 413 in 0,01 s).
   - Senza (corpo chunked): conta i byte che l'app legge e oltre il limite smette di passarli e sostituisce con il 413
     la risposta dell'app (FastAPI darebbe 400 al corpo interrotto).
-  - Risposta: 413 `too_large` «Richiesta troppo grande: BioLoom accetta al massimo 257 MB per richiesta.», con
+  - Risposta: 413 `too_large` «Richiesta troppo grande: MakPhi accetta al massimo 257 MB per richiesta.», con
     `Connection: close`, perché il resto del corpo non si legge.
   - Ordine dei middleware, dal più esterno: `core/guard` → chiave d'accesso → CORS → `BodyLimit` → rotte. Richieste di
     altri siti e senza chiave si rifiutano prima, e nessuno dei due controlli legge il corpo; dentro CORS il 413 resta
@@ -4558,19 +4558,20 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
 
 **Accesso con chiave (modalità server).**
 
-- **Chiave:** `BIOLOOM_ACCESS_KEY` di almeno 16 caratteri (`MIN_KEY_LENGTH`; quella generata e quelle scritte dagli
+- **Chiave:** `MAKPHI_ACCESS_KEY` di almeno 16 caratteri (`MIN_KEY_LENGTH`; quella generata e quelle scritte dagli
   avviatori in `server.env` ne hanno 24). Più corta: `AccessKeyError` nel lifespan, il motivo stampato ben visibile
-  («ERRORE: BIOLOOM_ACCESS_KEY è troppo corta: N caratteri, ne servono almeno 16 …», con le due soluzioni: una chiave più
-  lunga in `server.env`, per esempio `openssl rand -hex 12`, oppure la variabile vuota, così BioLoom ne genera una in
+  («ERRORE: MAKPHI_ACCESS_KEY è troppo corta: N caratteri, ne servono almeno 16 …», con le due soluzioni: una chiave più
+  lunga in `server.env`, per esempio `openssl rand -hex 12`, oppure la variabile vuota, così MakPhi ne genera una in
   `data/access_key`) e uscita con codice 3 (`__main__`, `server.started` falso; prima usciva con 0). Limiti: una chiave
   scritta a mano in `data/access_key` si controlla solo contro il minimo di 8 caratteri (sotto, `load` ne genera una
   nuova di 24, `secrets.token_urlsafe(18)`, e la stampa nel log; da 8 a 15 è accettata). Con Docker `start_server` di
-  `bioloom.sh` aspetta la risposta e, se il container esce o riparte, mostra le ultime 30 righe del log e si ferma con
-  l'errore ([Avviatori](#avviatori-un-bioloom-alla-volta-e-controlli-allavvio), **Attesa dell'avvio da server**); con
+  `makphi.sh` aspetta la risposta e, se il container esce o riparte, mostra le ultime 30 righe del log e si ferma con
+  l'errore ([Avviatori](#avviatori-un-makphi-alla-volta-e-controlli-allavvio), **Attesa dell'avvio da server**); con
   Podman `wait_healthy` ferma l'avviatore dopo 2 minuti, senza il log.
-- **Sessioni revocabili:** il segreto della firma è lo SHA-256 di `bioloom-session:<chiave>`, più `:epoch:<n>` quando
-  l'epoca non è 0. L'epoca sta in `data/session_epoch` (un intero, creato a 0): all'epoca 0 il segreto è quello delle
-  versioni precedenti, quindi aggiornare BioLoom non chiude le sessioni aperte. `POST /api/auth/logout-all` (sessione
+- **Sessioni revocabili:** il segreto della firma è lo SHA-256 di `bioloom-session:<chiave>` (il testo è rimasto
+  quello di BioLoom, il nome fino alla 4.4.0, perché le sessioni aperte restino valide; si accetta anche il cookie
+  `bioloom_session` oltre a `makphi_session`), più `:epoch:<n>` quando l'epoca non è 0. L'epoca sta in `data/session_epoch` (un intero, creato a 0): all'epoca 0 il segreto è quello delle
+  versioni precedenti, quindi aggiornare MakPhi non chiude le sessioni aperte. `POST /api/auth/logout-all` (sessione
   valida o chiave come Bearer, attraverso il freno) salva l'epoca successiva con una scrittura atomica prima di usarla
   (`revoke_all`): tutti i cookie emessi prima, compreso quello di chi chiede, non valgono più, anche dopo un riavvio.
   Risponde `{"ok": true}` e cancella il cookie; gli script con la chiave continuano a funzionare. Errori: 400
@@ -4599,7 +4600,7 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     richieste in parallelo la scavalcavano) e la chiave come Bearer senza freno. `AuthConfig.request_allowed` e
     `authenticated` non ci sono più: al loro posto `requires_auth`, `session_valid`, `bearer_key` e
     `api/auth.authenticate` / `access_denied`, usati dal middleware, da `/status` e da `logout-all`.
-- **Indirizzo del client** (`client_address`): quello della connessione. Con `BIOLOOM_TRUSTED_PROXIES` (indirizzi o
+- **Indirizzo del client** (`client_address`): quello della connessione. Con `MAKPHI_TRUSTED_PROXIES` (indirizzi o
   reti CIDR separati da virgole o spazi; una voce non valida ferma l'avvio con il motivo, `AccessKeyError`) e una
   connessione da uno di quei proxy, il primo indirizzo di `X-Forwarded-For` partendo da destra che non è un proxy fidato:
   l'ultimo aggiunto è quello che il proxy ha visto collegarsi, quelli più a sinistra li può scrivere il client; una voce
@@ -4608,21 +4609,21 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
   `login` della schermata d'accesso o una chiave come Bearer in `authenticate`; non quelle con un cookie di sessione
   valido né quelle senza chiave, come `/api/auth/status` e i file statici) fa scrivere nel log, una volta per indirizzo
   (al più 16), che il freno tratta tutti i client come uno solo, con il valore da mettere nella variabile.
-  Con `BIOLOOM_BIND=127.0.0.1` il container vede lo stesso indirizzo (il gateway della rete di Docker, da
+  Con `MAKPHI_BIND=127.0.0.1` il container vede lo stesso indirizzo (il gateway della rete di Docker, da
   docker-proxy; con Podman senza root di solito quello del port forwarder di rootlessport) per tutte le connessioni,
   sia dal reverse proxy sia dal tunnel SSH. Con il tunnel non c'è `X-Forwarded-For`: niente avviso nel log, e il
-  freno vale per tutti i client anche con `BIOLOOM_TRUSTED_PROXIES`: chi sbaglia la chiave fa aspettare gli altri fino a
+  freno vale per tutti i client anche con `MAKPHI_TRUSTED_PROXIES`: chi sbaglia la chiave fa aspettare gli altri fino a
   10 s a ogni errore, e ritentando di continuo (ogni errore rinnova l'attesa) li tiene fuori finché non smette.
-  - **Dal file al container:** `compose.yml` (`BIOLOOM_TRUSTED_PROXIES: "${BIOLOOM_TRUSTED_PROXIES:-}"`) e
-    `bioloom-podman.sh` (ciclo dei `-e`) la passano da `server.env`. `server.env.example` la elenca vuota dopo
-    `BIOLOOM_ALLOWED_HOSTS`, con il commento: solo dietro un reverse proxy che invia `X-Forwarded-For`; indirizzi o reti
+  - **Dal file al container:** `compose.yml` (`MAKPHI_TRUSTED_PROXIES: "${MAKPHI_TRUSTED_PROXIES:-}"`) e
+    `makphi-podman.sh` (ciclo dei `-e`) la passano da `server.env`. `server.env.example` la elenca vuota dopo
+    `MAKPHI_ALLOWED_HOSTS`, con il commento: solo dietro un reverse proxy che invia `X-Forwarded-For`; indirizzi o reti
     CIDR separati da virgole; il valore giusto lo suggerisce il log al primo inserimento della chiave arrivato dal
     proxy (schermata d'accesso o Bearer; con una sessione già aperta bisogna uscire prima), di solito il gateway della
     rete dei container (es. `172.18.0.1`: compose crea la rete del progetto, mentre `172.17.0.1` è quello della rete
-    `bridge` predefinita); tutta la rete `172.16.0.0/12` solo con `BIOLOOM_BIND=127.0.0.1`, perché con `0.0.0.0` Docker
+    `bridge` predefinita); tutta la rete `172.16.0.0/12` solo con `MAKPHI_BIND=127.0.0.1`, perché con `0.0.0.0` Docker
     conserva l'indirizzo dei client diretti (DNAT) e un computer della LAN in 172.16–31.x.x, o un altro container
     sull'host, diventerebbe fidato e potrebbe scrivere `X-Forwarded-For`; vuota = header ignorato; un valore sbagliato
-    ferma l'avvio. Il backend la legge solo con `BIOLOOM_AUTH=on` (`app.state.trusted_proxies`, vuota in locale), e
+    ferma l'avvio. Il backend la legge solo con `MAKPHI_AUTH=on` (`app.state.trusted_proxies`, vuota in locale), e
     con Docker l'errore lo mostra l'attesa di `start_server` (log e uscita 1). Prima nessuno dei due la passava: dietro
     un reverse proxy il freno valeva per tutti i client insieme anche se il log suggeriva la variabile.
   - **Limiti:** risolve solo il caso del reverse proxy, non quello del tunnel SSH. Con la variabile impostata anche le
@@ -4630,11 +4631,11 @@ Lo stato di navigazione (job aperto, sequenza, template) vive nell'URL: ogni ris
     scrivere da sé `X-Forwarded-For`: chi ha un account sul server può cambiare indirizzo a ogni tentativo e non subire
     l'attesa. Non c'è un limite globale (con IPv6 un client ha molti indirizzi).
 - **Impostazioni dell'amministratore** (`api/system.SERVER_LOCKED`): in modalità server `esmfold_url` e
-  `modeller_python` vengono da `BIOLOOM_ESMFOLD_URL` e `BIOLOOM_MODELLER_PYTHON`; la pagina rimanda il valore in uso, che
+  `modeller_python` vengono da `MAKPHI_ESMFOLD_URL` e `MAKPHI_MODELLER_PYTHON`; la pagina rimanda il valore in uso, che
   si accetta, e un valore diverso dà 403 `esmfold_url_locked` o `modeller_python_locked`. La verifica da riga di comando
-  usa le stesse impostazioni (`auth.server_mode()`). Nei container `BIOLOOM_MODELLER_PYTHON` arriva da `server.env`
-  (`compose.yml`, `bioloom-podman.sh`; `server.env.example` la elenca vuota dopo `MODELLER_KEY`), come percorso nel
-  container. `engines/tools.modeller_candidates` prova in ordine il valore in uso, `BIOLOOM_MODELLER_PYTHON` e
+  usa le stesse impostazioni (`auth.server_mode()`). Nei container `MAKPHI_MODELLER_PYTHON` arriva da `server.env`
+  (`compose.yml`, `makphi-podman.sh`; `server.env.example` la elenca vuota dopo `MODELLER_KEY`), come percorso nel
+  container. `engines/tools.modeller_candidates` prova in ordine il valore in uso, `MAKPHI_MODELLER_PYTHON` e
   `sys.executable`: un percorso inesistente o senza MODELLER si salta e vale il Python dell'immagine. Dal desktop compose
   la passa se è esportata nella shell, e lì è solo una candidata in più.
 - **Limiti delle email:** email di prova e avvisi di fine job hanno limiti di frequenza anche in locale (vedi [Avviso per
@@ -4649,7 +4650,7 @@ analisi strutturali, la rifinitura e la mutagenesi non usano la rete; l'interfac
 |---|---|---|---|
 | RCSB Search (`search.rcsb.org`) | sequenza | motore `rcsb` | nuovi tentativi sui 5xx |
 | RCSB file e GraphQL (`files.rcsb.org`, `data.rcsb.org`) | codici PDB | download dei template, metadati degli hit di tutti i motori sul PDB (`rcsb_metadata`, anche per BLAST+ e MMseqs2) | metadati in cache 30 giorni |
-| NCBI QBlast (`blast.ncbi.nlm.nih.gov`) | sequenza, `tool=BioLoom` e l'email di contatto se impostata | motore `ncbi`; motore `alphafold` senza accessione (database `swissprot`); nella pipeline le sequenze senza intestazione FASTA di UniProt | linee guida di NCBI (stato al più una volta al minuto, attesa massima 45 min); avvisi dei controlli preventivi oltre 50 ricerche |
+| NCBI QBlast (`blast.ncbi.nlm.nih.gov`) | sequenza, `tool=MakPhi` e l'email di contatto se impostata | motore `ncbi`; motore `alphafold` senza accessione (database `swissprot`); nella pipeline le sequenze senza intestazione FASTA di UniProt | linee guida di NCBI (stato al più una volta al minuto, attesa massima 45 min); avvisi dei controlli preventivi oltre 50 ricerche |
 | UniProt (`rest.uniprot.org`) | accessione o testo cercato | importazione, annotazioni, domini sul bersaglio, varianti della mutagenesi | cache 7 giorni |
 | InterPro (`www.ebi.ac.uk/interpro`) | accessione UniProt, mai la sequenza | domini (pagina Sequenze, `/api/bio/coverage`, controlli preventivi) | cache 7 giorni; disordine e bassa complessità si calcolano nel container |
 | AlphaFold DB (`alphafold.ebi.ac.uk`) | accessione UniProt, mai la sequenza né le coordinate | importazione nella libreria, motore `alphafold`, predizione `alphafold` | file scaricati solo da URL `https://alphafold.ebi.ac.uk/files/…`, qualunque URL contenga la risposta; cache 7 giorni |
@@ -4660,7 +4661,7 @@ analisi strutturali, la rifinitura e la mutagenesi non usano la rete; l'interfac
 - **ESMFold (F9.3):** il consenso (`esmfold_remote`) è spento per default, anche per le cartelle dati esistenti; il
   pulsante lo chiede prima dei controlli e dell'avvio spiegando che cosa parte e verso dove, la rotta lo verifica (403,
   nessuna richiesta) e l'handler di nuovo all'esecuzione; si revoca in Impostazioni → Generale. In modalità server
-  l'indirizzo lo sceglie l'amministratore (`BIOLOOM_ESMFOLD_URL` in `server.env`, vuoto = servizio pubblico):
+  l'indirizzo lo sceglie l'amministratore (`MAKPHI_ESMFOLD_URL` in `server.env`, vuoto = servizio pubblico):
   `PUT /api/settings` rifiuta un altro `esmfold_url` (403 `esmfold_url_locked`) e quello salvato in `settings.json` non
   vale (`SettingsStore` con `server`). Il corpo di una risposta d'errore entra nel messaggio del job solo dal servizio
   pubblico (gli altri vanno nel log del server). I dati della libreria di ESM Atlas sono distribuiti con licenza CC-BY 4.0
@@ -4678,9 +4679,9 @@ in `frontend/`):
 | frontend, `frontend/src/**/*.test.ts(x)` (vitest) | 102 | 818 |
 | interfaccia nel browser, `frontend/e2e/*.spec.ts` (Playwright) | 1 | 29: 14 pagine × tema scuro e chiaro, più navigazione e tastiera |
 
-**Ultima esecuzione completa** (21 ottobre 2026, branch `lavori-aperti`, immagine `bioloom:4.3.0` con MODELLER 10.8,
+**Ultima esecuzione completa** (21 ottobre 2026, branch `lavori-aperti`, immagine `makphi:4.3.0` con MODELLER 10.8,
 PROCHECK e ProSA della cartella dati, portatile i3-1115G4): backend **1533 passati, 3 saltati**, 0 falliti in 14 min 41 s
-(`scripts/test.sh backend --cov`), copertura **91,4 %** delle righe di `bioloom` (22.865 righe, 1970 non eseguite);
+(`scripts/test.sh backend --cov`), copertura **91,4 %** delle righe di `makphi` (22.865 righe, 1970 non eseguite);
 frontend 818 passati, copertura 52,3 % delle istruzioni e 83,6 % dei rami (`npm run coverage`); 29 test Playwright su
 29 contro un container 4.3.0. Registro completo in `bench_out/pytest_4.3.0.log` (fuori dal repository). La prima
 esecuzione dei test nel browser ha trovato due difetti veri di accessibilità (nome accessibile del pulsante della
@@ -4688,7 +4689,7 @@ ricerca globale diverso dal testo visibile, `select` dei selettori senza nome), 
 
 **Copertura e browser in CI** (4.3.0): il job `docker` esegue i test nell'immagine con `--cov` e scrive il totale nel
 riepilogo del job; il job `frontend` usa `npm run coverage` (`@vitest/coverage-v8`). Nessuna soglia minima: il numero si
-legge e si confronta. Dopo gli avviatori il job `docker` avvia BioLoom e lancia Playwright con Chromium (`npm run e2e`,
+legge e si confronta. Dopo gli avviatori il job `docker` avvia MakPhi e lancia Playwright con Chromium (`npm run e2e`,
 `playwright.config.ts`): ogni pagina si carica senza errori in console e senza violazioni WCAG 2.1 A/AA gravi o
 critiche secondo axe-core (`@axe-core/playwright`), in tema scuro e chiaro; le violazioni minori si stampano. Rapporti
 e tracce nelle cartelle nascoste `.coverage/` e `.playwright/`, fuori dall'impronta del codice.
@@ -4704,9 +4705,9 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
 
 - `scripts/test.sh`: ruff, pytest nell'immagine con MODELLER reale, eslint, typecheck e vitest (`test.sh frontend`:
   eslint, typecheck e vitest, senza Docker né `launcher/VERSION`, che servono solo ai comandi con l'immagine: backend e
-  `lint`, cioè ruff nel container). L'immagine di test `bioloom-test:<base>` (pytest, pytest-timeout, ruff) si
-  ricostruisce quando cambia l'immagine di base o `docker/test/Dockerfile`: l'etichetta `bioloom.test.base` contiene
-  l'id dell'immagine di base e la somma `cksum` del Dockerfile senza CR (prima solo l'id, quindi un `bioloom-test`
+  `lint`, cioè ruff nel container). L'immagine di test `makphi-test:<base>` (pytest, pytest-timeout, ruff) si
+  ricostruisce quando cambia l'immagine di base o `docker/test/Dockerfile`: l'etichetta `makphi.test.base` contiene
+  l'id dell'immagine di base e la somma `cksum` del Dockerfile senza CR (prima solo l'id, quindi un `makphi-test`
   esistente non prendeva i pacchetti nuovi finché non cambiava la base).
 - **Limite per test:** `timeout = 1800` in `[tool.pytest.ini_options]`, con pytest-timeout 2.4.0 (la 2.5.0 è stata
   ritirata da PyPI) nelle dipendenze dev di `pyproject.toml`, nell'immagine di test e nella CI. Un test bloccato
@@ -4740,23 +4741,23 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
   1,3 s in `test_scheduling.py`. `wait_job` mostra codice e corpo di una risposta d'errore invece di un `KeyError`.
 - **CI** (`.github/workflows/ci.yml`), quattro job più uno manuale:
   - **backend:** «Versione unica» (`scripts/versione.sh`: le copie devono coincidere con `launcher/VERSION`) e «Impronta
-    del codice» (`impronta.sh`, `impronta.sh` con `IMPRONTA_SENZA_PERL=1` e `Get-BioLoomImpronta` in pwsh devono dare lo
+    del codice» (`impronta.sh`, `impronta.sh` con `IMPRONTA_SENZA_PERL=1` e `Get-MakPhiImpronta` in pwsh devono dare lo
     stesso valore su `programma/`), poi ruff e pytest in Python puro senza strumenti esterni, con pytest-timeout;
   - **frontend:** eslint, typecheck, vitest, build;
   - **avviatori:** shellcheck con `-S warning` (il livello che oggi passa; restano due note SC2015 di livello info, in
-    `bioloom.sh` e `bioloom-podman.sh`) su `launcher/*.sh`, `avvia-bioloom.sh`, `docker/*.sh`, `scripts/*.sh`, gli
+    `makphi.sh` e `makphi-podman.sh`) su `launcher/*.sh`, `avvia-makphi.sh`, `docker/*.sh`, `scripts/*.sh`, gli
     script dei test di QMEAN e i due `.command`; PSScriptAnalyzer con `-Severity Error, ParseError` sugli script
     PowerShell di `launcher/`; bit di esecuzione 100755 di ogni `.sh` e `.command` tracciato, altrimenti «Script senza
     il bit di esecuzione nel repository (git update-index --chmod=+x <file>):» con l'elenco;
-  - **docker** (dopo backend e frontend): immagine completa con `BIOLOOM_VERSION` come build arg e i test al suo
+  - **docker** (dopo backend e frontend): immagine completa con `MAKPHI_VERSION` come build arg e i test al suo
     interno; nel passo «Impronta nell'immagine» `/app/IMPRONTA` deve essere l'impronta del codice da cui l'immagine è
     costruita. Poi un controllo che i test non abbiano cambiato l'impronta (altrimenti `prepara` ricostruirebbe
     l'immagine), l'avviatore vero (`--no-menu --no-browser`, `/api/health`, `arresta`) e la copia portatile:
-    `prepara "$RUNNER_TEMP/copia BioLoom" --no-menu --senza-qmean --senza-dati`, `bioloom:<versione>` tolta da Docker,
+    `prepara "$RUNNER_TEMP/copia MakPhi" --no-menu --senza-qmean --senza-dati`, `makphi:<versione>` tolta da Docker,
     avvio dalla copia, che la carica da `immagini/`, salute e arresto. Se un passo fallisce, l'ultimo mostra container e
     log;
   - **qmean**, solo da Actions → CI → Run workflow con l'opzione «qmean» (l'immagine di base pesa circa 2 GB):
-    costruzione di `bioloom-qmean` e `/status` del worker, che risponde anche senza database.
+    costruzione di `makphi-qmean` e `/status` del worker, che risponde anche senza database.
 
   `ci.yml` passa actionlint 1.7.12 (verificato prima del passaggio agli SHA, che cambia solo gli 11 `uses`); gli script
   passano shellcheck 0.11.0 e 0.9.0 (la versione dei runner) a livello warning e PSScriptAnalyzer 1.25.0 senza errori.
@@ -4785,10 +4786,10 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
   `dependabot.yml` è valido rispetto allo schema di SchemaStore, ma `cooldown` e `groups` non sono verificati sul parser
   di GitHub: dopo il push si controllano in Insights → Dependency graph → Dependabot.
 - **Immagine di sviluppo:** per provare strumenti nuovi senza toccare l'immagine dell'avviatore,
-  `docker build -f docker/Dockerfile -t bioloom:dev .` e `BIOLOOM_BASE_IMAGE=bioloom:dev scripts/test.sh` (test in
-  `bioloom-test:bioloom-dev`).
+  `docker build -f docker/Dockerfile -t makphi:dev .` e `MAKPHI_BASE_IMAGE=makphi:dev scripts/test.sh` (test in
+  `makphi-test:makphi-dev`).
 - **Profilazione:** `scripts/test.sh backend tests/perf_timing.py -s` (fuori dalla suite, vedi [Prestazioni](#prestazioni)).
-- **Verifica nel container:** `python -m bioloom.selftest` (o Impostazioni → Strumenti).
+- **Verifica nel container:** `python -m makphi.selftest` (o Impostazioni → Strumenti).
 - **Verifica di QMEAN senza il disco reale:** mini-database creato con
   `docker/qmean/tests/make_mini_uniclust.sh` (punteggi non significativi).
 
@@ -4867,7 +4868,7 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
   `modeller_python` fissato dal server e verifica da riga di comando con le impostazioni del server; limiti delle email
   di prova (anche gli invii falliti contano, anche dall'API) e degli avvisi di fine job.
 - **Richieste di altri siti** (`test_guard.py`, 17): header Host (loopback con qualunque porta, IPv6,
-  `BIOLOOM_ALLOWED_HOSTS` anche come URL, `*`, spento con l'accesso protetto, `/api/health` esente), origine
+  `MAKPHI_ALLOWED_HOSTS` anche come URL, `*`, spento con l'accesso protetto, `/api/health` esente), origine
   (`Sec-Fetch-Site`, `Origin` uguale all'Host o a `X-Forwarded-Host`, `null`, origini dello sviluppo solo fuori dal
   container), arresto da un altro sito rifiutato senza arrestare, intestazioni contro gli iframe, guardia più esterna
   della chiave d'accesso.
@@ -4892,13 +4893,13 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
   estranee lasciate); build e indice MMseqs2 che aspettano la fine dell'aggiornamento; estrazione non riuscita senza
   cartelle rimaste.
 - **Versione unica e impronta del codice** (`test_version.py`, 10; saltati senza `launcher/VERSION`, cioè con il backend
-  copiato da solo): `bioloom.__version__`, `pyproject.toml` (anche `license = "MIT"`), `package.json` e i due campi
+  copiato da solo): `makphi.__version__`, `pyproject.toml` (anche `license = "MIT"`), `package.json` e i due campi
   del progetto in `package-lock.json` (con la licenza), `ARG` dei due Dockerfile, stadio `impronta` con
-  `COPY --from=impronta` e `LABEL bioloom.version`, i due predefiniti e il build arg di `compose.yml`,
-  `server.env.example` senza `BIOLOOM_VERSION`; la definizione dell'impronta riscritta in Python su una cartella
+  `COPY --from=impronta` e `LABEL makphi.version`, i due predefiniti e il build arg di `compose.yml`,
+  `server.env.example` senza `MAKPHI_VERSION`; la definizione dell'impronta riscritta in Python su una cartella
   `programma/` sintetica con tutti i casi da includere ed escludere (nomi con spazi, ordine per byte, CR isolati, file
   binari, `node_modules` annidati, prefissi simili come `docker/tested/` e `frontend/distribuzione.txt`) e
-  `impronta.sh` uguale a quella, con perl e solo in sh, sulla stessa cartella in CRLF, come `Get-BioLoomImpronta` di
+  `impronta.sh` uguale a quella, con perl e solo in sh, sulla stessa cartella in CRLF, come `Get-MakPhiImpronta` di
   `impronta.ps1` (con Windows PowerShell o pwsh; saltato senza).
 - **Strumenti esterni** (`test_engines_extra.py`, 10): parser di PROCHECK e ProSA tarati su output reali di 1UBQ,
   MMseqs2, QMEAN locale con worker simulato, strumenti mancanti come avvisi, verifica dell'installazione (anche fpocket,
@@ -5195,7 +5196,7 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
   il Ramachandran complessivo, nessuno) con le stesse metriche; impostazione salvata e validata dall'API.
 - **Acque catalitiche e strutturali** (`test_waters.py`, 15; `tests/data/ubq_zn.pdb`): acque suggerite sullo zinco e a
   ponte con un ligando vero, solvente lontano escluso, trasferite solo se scelte, copia preparata con le acque dopo i
-  ligandi (WAT scritta come HOH), colonne '.' in BioLoom e 'w' per MODELLER (stessa colonna per la stessa acqua di due
+  ligandi (WAT scritta come HOH), colonne '.' in MakPhi e 'w' per MODELLER (stessa colonna per la stessa acqua di due
   template), verifica dell'acqua nel modello e dell'acqua che ha perso il metallo, acque nell'analisi del template,
   esempi con template HETATM; con MODELLER, ubiquitina di lievito su `ubq_zn.pdb` con lo Zn e la sua acqua catalitica.
 - **Sessione PyMOL** (`test_exports.py`, 28): il blocco `python … python end` della sessione eseguito davvero, con un
@@ -5209,7 +5210,7 @@ sintetiche generate da `make_synthetic.py`: `ubq_dimer.pdb` (omodimero C2 con in
   si salta su Windows). Il codice: `domain/exports.pymol_script` incorpora il testo con `ascii()` (`repr()` con gli
   escape anche per i caratteri non ASCII) in una sola riga `cmd.read_pdbstr(…)`, quindi nessuna riga del file può
   chiudere il blocco `python` prima del tempo né aggiungere comandi, e lo script `.pml` è tutto ASCII;
-  `api/jobs.py::model_pymol` passa il nome da `report.safe_filename(name, ".pml", "bioloom_model")`. Prima le barre
+  `api/jobs.py::model_pymol` passa il nome da `report.safe_filename(name, ".pml", "makphi_model")`. Prima le barre
   rovesciate arrivavano a PyMOL come sequenze di escape, `C:\Users\…` o una virgoletta finale davano SyntaxError, le tre
   virgolette diventavano tre apici, e un nome con `"` o non codificabile nell'intestazione (anche su Windows, per
   esempio `modello finale;€ (1).pdb`) dava 500. Limiti: il `.pml` non è stato provato con un PyMOL vero (la riga è lunga

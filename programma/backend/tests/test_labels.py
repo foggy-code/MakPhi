@@ -6,8 +6,8 @@ import threading
 
 import pytest
 
-from bioloom.core.errors import AppError, NotFound
-from bioloom.domain.labels import MAX_TAGS_PER_ENTITY, TAG_MAX_LENGTH, normalize_tag
+from makphi.core.errors import AppError, NotFound
+from makphi.domain.labels import MAX_TAGS_PER_ENTITY, TAG_MAX_LENGTH, normalize_tag
 
 from .conftest import DATA, HUMAN_UB, YEAST_UB, wait_job
 

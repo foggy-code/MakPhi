@@ -104,7 +104,7 @@ export function parseRestraints(text: string): { restraints: RestraintRow[]; err
 }
 
 export function formatRestraints(rows: RestraintRow[]): string {
-  const lines = ["# Vincoli BioLoom: tipo inizio fine  |  distance atomo1 atomo2 distanza deviazione"];
+  const lines = ["# Vincoli MakPhi: tipo inizio fine  |  distance atomo1 atomo2 distanza deviazione"];
   for (const r of rows) {
     if (r.type === "distance") lines.push(`distance ${r.atom1 ?? ""} ${r.atom2 ?? ""} ${r.mean ?? ""} ${r.stdev ?? 0.5}`);
     else lines.push(`${r.type} ${r.start ?? ""} ${r.end ?? ""}`);

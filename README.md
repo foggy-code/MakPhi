@@ -1,4 +1,4 @@
-# BioLoom v4
+# MakPhi
 
 Suite per la **modellazione di proteine per omologia**: dalla sequenza bersaglio al modello 3D validato,
 con MODELLER come motore di costruzione.
@@ -16,9 +16,9 @@ da una cartella qualsiasi o da un server. Sul computer serve solo Docker.
 
    | Sistema | Avvio | Arresto |
    |---|---|---|
-   | Windows | `Avvia BioLoom.bat` | `Arresta BioLoom.bat` |
-   | macOS | `Avvia BioLoom.command` | `Arresta BioLoom.command` |
-   | Linux | `./avvia-bioloom.sh` | `./avvia-bioloom.sh arresta` |
+   | Windows | `Avvia MakPhi.bat` | `Arresta MakPhi.bat` |
+   | macOS | `Avvia MakPhi.command` | `Arresta MakPhi.command` |
+   | Linux | `./avvia-makphi.sh` | `./avvia-makphi.sh arresta` |
 
 3. Si apre il browser su `http://127.0.0.1:8765` (se la porta è occupata, un'altra fino alla 8800:
    [Porta occupata](Guida/1%20-%20Primo%20avvio.md#porta-occupata)). Al primo avvio inserisci la chiave di licenza di
@@ -30,18 +30,18 @@ da una cartella qualsiasi o da un server. Sul computer serve solo Docker.
 Su macOS, se il doppio clic su un avviatore scaricato da internet è bloccato, vedi
 [Primo avvio → macOS](Guida/1%20-%20Primo%20avvio.md#macos-doppio-clic-bloccato).
 
-## La cartella di BioLoom
+## La cartella di MakPhi
 
 ```
-BioLoom/
-├── Avvia BioLoom.bat / .command, avvia-bioloom.sh    avvio
-├── Arresta BioLoom.bat / .command                    arresto
+MakPhi/
+├── Avvia MakPhi.bat / .command, avvia-makphi.sh    avvio
+├── Arresta MakPhi.bat / .command                    arresto
 ├── LEGGIMI.txt                                       istruzioni in breve
-├── LICENSE, THIRD_PARTY_NOTICES.md                   licenza di BioLoom (MIT) e componenti di terze parti
+├── LICENSE, THIRD_PARTY_NOTICES.md                   licenza di MakPhi (MIT) e componenti di terze parti
 ├── Guida/                                            manuale d'uso
 ├── data/                                             i tuoi dati: progetti, risultati, licenze, database
 ├── immagini/                                         immagini Docker della copia portatile (se c'è)
-└── programma/                                        il codice: non serve aprirlo per usare BioLoom
+└── programma/                                        il codice: non serve aprirlo per usare MakPhi
 ```
 
 `data/` e `immagini/` compaiono al primo avvio o con la copia portatile.
@@ -55,7 +55,7 @@ BioLoom/
 | [3. QMEAN e UniClust](Guida/3%20-%20QMEAN%20e%20UniClust.md) | QMEAN locale con UniClust30/UniRef30, memoria, fallback su SWISS-MODEL |
 | [4. Dati e privacy](Guida/4%20-%20Dati%20e%20privacy.md) | dove stanno i dati, pulizia, cache, che cosa lascia il computer |
 | [5. Chiavetta e server](Guida/5%20-%20Chiavetta%20e%20server.md) | copia portatile, installazione e aggiornamento su server, accesso, HTTPS, backup |
-| [6. Licenze](Guida/6%20-%20Licenze.md) | licenza MIT di BioLoom, MODELLER, installare e attivare PROCHECK e ProSA II (un computer alla volta), strumenti open source |
+| [6. Licenze](Guida/6%20-%20Licenze.md) | licenza MIT di MakPhi, MODELLER, installare e attivare PROCHECK e ProSA II (un computer alla volta), strumenti open source |
 
 ## Sviluppo e test
 
@@ -63,11 +63,11 @@ Il codice è in `programma/`: `backend/` (Python, FastAPI), `frontend/` (React, 
 `launcher/` (avviatori e `compose.yml`), `scripts/`, `docs/`. I comandi qui sotto partono dalla cartella principale.
 
 ```bash
-# tutto: ruff, pytest nell'immagine di BioLoom (MODELLER reale), eslint, typecheck e vitest del frontend
+# tutto: ruff, pytest nell'immagine di MakPhi (MODELLER reale), eslint, typecheck e vitest del frontend
 programma/scripts/test.sh
 # solo il backend, con argomenti per pytest
 programma/scripts/test.sh backend -k pipeline -x
-# backend senza Docker, dalla cartella programma/backend/: un ambiente virtuale con BioLoom e le dipendenze di
+# backend senza Docker, dalla cartella programma/backend/: un ambiente virtuale con MakPhi e le dipendenze di
 # sviluppo (pytest, pytest-timeout, ruff); i test di MODELLER e degli strumenti esterni vengono saltati
 python -m venv .venv && . .venv/bin/activate       # Windows (PowerShell): .venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
@@ -84,15 +84,15 @@ bash programma/scripts/versione.sh
 sh programma/docker/impronta.sh programma
 ```
 
-- `programma/scripts/test.sh` costruisce `bioloom-test:<immagine>` sopra l'immagine locale `bioloom:<versione>` (con
+- `programma/scripts/test.sh` costruisce `makphi-test:<immagine>` sopra l'immagine locale `makphi:<versione>` (con
   pytest, pytest-timeout e ruff; la ricostruisce quando cambia l'immagine di base o `docker/test/Dockerfile`) e monta
   `programma/`. La versione viene da `programma/launcher/VERSION`: se il file manca lo script si ferma, salvo
-  `BIOLOOM_BASE_IMAGE`. La chiave di MODELLER viene da `MODELLER_KEY` oppure da `data/licenses/modeller.key`; da un
-  worktree indica la cartella dati con `BIOLOOM_DATA_PATH`. `test.sh frontend` esegue eslint, typecheck e vitest senza
+  `MAKPHI_BASE_IMAGE`. La chiave di MODELLER viene da `MODELLER_KEY` oppure da `data/licenses/modeller.key`; da un
+  worktree indica la cartella dati con `MAKPHI_DATA_PATH`. `test.sh frontend` esegue eslint, typecheck e vitest senza
   Docker né `VERSION`; `test.sh lint` (ruff) gira nel container come il backend.
-- **Ambiente virtuale del backend:** `pip install -e ".[dev]"` installa BioLoom in modo modificabile con i limiti minimi
+- **Ambiente virtuale del backend:** `pip install -e ".[dev]"` installa MakPhi in modo modificabile con i limiti minimi
   di `pyproject.toml`; per le stesse versioni dell'immagine e della CI installa prima `pip install -r requirements.lock`.
-  `.venv/` e `bioloom.egg-info/` sono ignorate da git e non entrano nell'impronta del codice, quindi non fanno proporre
+  `.venv/` e `makphi.egg-info/` sono ignorate da git e non entrano nell'impronta del codice, quindi non fanno proporre
   una nuova immagine all'avviatore.
 - **Limite per test:** con pytest-timeout 2.4.0 (dipendenze dev di `pyproject.toml`, immagine di test, CI) un test
   bloccato fallisce dopo 1800 s con «Failed: Timeout (>1800.0s) from pytest-timeout» e il suo stack, invece di lasciare
@@ -121,8 +121,8 @@ sh programma/docker/impronta.sh programma
   ferma con «…: FAILED». Per aggiornarli segui la procedura nei commenti in testa al Dockerfile, poi aggiorna le versioni
   in `THIRD_PARTY_NOTICES.md`.
 - Per provare un'immagine con strumenti nuovi senza toccare quella dell'avviatore:
-  `docker build -f programma/docker/Dockerfile -t bioloom:dev programma` e poi
-  `BIOLOOM_BASE_IMAGE=bioloom:dev programma/scripts/test.sh`. Nelle immagini senza uno strumento (fpocket, APBS,
+  `docker build -f programma/docker/Dockerfile -t makphi:dev programma` e poi
+  `MAKPHI_BASE_IMAGE=makphi:dev programma/scripts/test.sh`. Nelle immagini senza uno strumento (fpocket, APBS,
   OpenMM…) i suoi test vengono saltati con il motivo.
 - **Niente rete nei test:** la fixture `_no_real_network` di `tests/conftest.py`, attiva in ogni test senza il marcatore
   `network`, fa fallire subito ogni connessione verso un host che non è questo computer (httpx con il trasporto vero,
@@ -135,13 +135,13 @@ sh programma/docker/impronta.sh programma
   sistema o si saltano con il motivo ([Architettura → Test](programma/docs/ARCHITETTURA.md#test)).
 - Profilazione dei tempi con MODELLER reale (fuori dalla suite): `programma/scripts/test.sh backend tests/perf_timing.py -s`;
   misure e condizioni in [Architettura → Prestazioni](programma/docs/ARCHITETTURA.md#prestazioni).
-- `python programma/bioloom.py` avvia il server senza Docker, utile solo per lo sviluppo (dati in `data/`).
+- `python programma/makphi.py` avvia il server senza Docker, utile solo per lo sviluppo (dati in `data/`).
 - **Rilascio di una nuova versione:** la versione sta solo in `programma/launcher/VERSION`, letta da avviatori e
   `test.sh`. `bash programma/scripts/versione.sh X.Y.Z` la cambia e allinea le copie letterali per chi non passa di lì
-  (`pyproject.toml`, `bioloom/__init__.py`, `package.json` e `package-lock.json`, l'`ARG` dei due Dockerfile, i
+  (`pyproject.toml`, `makphi/__init__.py`, `package.json` e `package-lock.json`, l'`ARG` dei due Dockerfile, i
   predefiniti di `compose.yml`); senza argomento controlla che coincidano (uscita 1 con le differenze), come
-  `tests/test_version.py` e la CI. Poi `./avvia-bioloom.sh aggiorna` (Windows: `bioloom.ps1 -Azione aggiorna`)
-  costruisce `bioloom:X.Y.Z` e, se QMEAN locale è in uso, `bioloom-qmean:X.Y.Z`; `prepara` fa la copia portatile.
+  `tests/test_version.py` e la CI. Poi `./avvia-makphi.sh aggiorna` (Windows: `makphi.ps1 -Azione aggiorna`)
+  costruisce `makphi:X.Y.Z` e, se QMEAN locale è in uso, `makphi-qmean:X.Y.Z`; `prepara` fa la copia portatile.
 - **Impronta del codice:** `programma/docker/impronta.sh` riassume in un SHA-256 i sorgenti che entrano nell'immagine
   (`backend/`, `frontend/` e `docker/`, senza test, `docker/vendor/`, `docker/qmean/`, file nascosti e generati; i CR non
   contano). La build la salva in `/app/IMPRONTA` e l'avviatore la confronta all'avvio: dopo una modifica a quei file
@@ -156,7 +156,7 @@ sh programma/docker/impronta.sh programma
 
 ## Licenza
 
-BioLoom è software libero con licenza MIT, © 2026 foggy02: testo in [LICENSE](LICENSE). I programmi di terze parti
+MakPhi è software libero con licenza MIT, © 2026 foggy02: testo in [LICENSE](LICENSE). I programmi di terze parti
 contenuti nelle immagini Docker e nell'interfaccia web hanno le loro licenze, elencate con le versioni in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), insieme a dove trovare il sorgente del software GPL e LGPL. MODELLER,
 PROCHECK e ProSA II hanno licenze accademiche personali: le immagini che li contengono non vanno distribuite
