@@ -38,6 +38,7 @@ MakPhi/
 ├── Arresta MakPhi.bat / .command                    arresto
 ├── LEGGIMI.txt                                       istruzioni in breve
 ├── LICENSE, THIRD_PARTY_NOTICES.md                   licenza di MakPhi (MIT) e componenti di terze parti
+├── SECURITY.md                                       come segnalare una vulnerabilità
 ├── Guida/                                            manuale d'uso
 ├── data/                                             i tuoi dati: progetti, risultati, licenze, database
 ├── immagini/                                         immagini Docker della copia portatile (se c'è)
@@ -151,13 +152,14 @@ sh programma/docker/impronta.sh programma
 ## Documentazione tecnica
 
 - [Architettura](programma/docs/ARCHITETTURA.md): container, flusso dei dati, job, motori, API, interfaccia, sicurezza e test.
+- [Sicurezza](SECURITY.md): versioni supportate e come segnalare una vulnerabilità in privato.
 - [Piano di implementazione](programma/docs/PIANO_IMPLEMENTAZIONE.md): le fasi dell'evoluzione della v4, il loro stato e i
   seguiti possibili.
 
 ## Licenza
 
-MakPhi è software libero con licenza MIT, © 2026 foggy02: testo in [LICENSE](LICENSE). I programmi di terze parti
-contenuti nelle immagini Docker e nell'interfaccia web hanno le loro licenze, elencate con le versioni in
+MakPhi è software libero con licenza MIT, © 2026 Francesco Fogagnolo: testo in [LICENSE](LICENSE). I programmi di terze
+parti contenuti nelle immagini Docker e nell'interfaccia web hanno le loro licenze, elencate con le versioni in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), insieme a dove trovare il sorgente del software GPL e LGPL. MODELLER,
 PROCHECK e ProSA II hanno licenze accademiche personali: le immagini che li contengono non vanno distribuite
 ([Guida → Licenze](Guida/6%20-%20Licenze.md)).

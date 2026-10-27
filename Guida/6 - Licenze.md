@@ -4,7 +4,7 @@ Guida di MakPhi: [1. Primo avvio](1%20-%20Primo%20avvio.md) · [2. Funzioni](2%2
 
 ## MakPhi
 
-MakPhi è software libero con licenza **MIT** (© 2026 foggy02, testo in [LICENSE](../LICENSE)): il codice in
+MakPhi è software libero con licenza **MIT** (© 2026 Francesco Fogagnolo, testo in [LICENSE](../LICENSE)): il codice in
 `programma/`, gli avviatori e questa guida si possono usare, copiare, modificare e ridistribuire, purché resti l'avviso di
 copyright e di licenza.
 
