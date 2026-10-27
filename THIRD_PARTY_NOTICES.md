@@ -1,8 +1,8 @@
 # Avvisi di terze parti
 
-MakPhi è © 2026 foggy02 e ha licenza MIT ([LICENSE](LICENSE)): il codice in `programma/` (backend, interfaccia web,
-avviatori, script, Dockerfile e worker di QMEAN in `programma/docker/qmean/`), la guida e gli avviatori nella cartella
-principale.
+MakPhi è © 2026 Francesco Fogagnolo e ha licenza MIT ([LICENSE](LICENSE)): il codice in `programma/` (backend,
+interfaccia web, avviatori, script, Dockerfile e worker di QMEAN in `programma/docker/qmean/`), la guida e gli avviatori
+nella cartella principale.
 
 MakPhi distribuisce anche software di terzi: nelle immagini Docker `makphi` e `makphi-qmean` (costruite
 dall'avviatore o salvate in `immagini/` nella copia portatile) e nell'interfaccia web. Ogni componente resta sotto la
@@ -271,11 +271,11 @@ indicazioni), in particolare:
 
 **Offerta scritta.** Le immagini Docker di MakPhi passano da una persona all'altra solo come file in `immagini/` di
 una copia portatile; chi le costruisce da sé riceve i pacchetti direttamente dagli archivi indicati sopra. Chi dà ad
-altri una copia con le immagini, a cominciare da foggy02 per le copie che distribuisce, offre a chiunque ne faccia
-richiesta, per almeno tre anni dall'ultima volta in cui distribuisce quella versione, il codice sorgente corrispondente
-completo, in forma leggibile da una macchina, del software sotto GPL o LGPL che contiene: gratuitamente da un server,
-oppure su un supporto fisico durevole al solo costo ragionevole del supporto e della spedizione. La richiesta va quindi
-a chi ti ha dato la copia, indicando la versione di MakPhi e l'identificativo dell'immagine
+altri una copia con le immagini, a cominciare da Francesco Fogagnolo per le copie che distribuisce, offre a chiunque ne
+faccia richiesta, per almeno tre anni dall'ultima volta in cui distribuisce quella versione, il codice sorgente
+corrispondente completo, in forma leggibile da una macchina, del software sotto GPL o LGPL che contiene: gratuitamente
+da un server, oppure su un supporto fisico durevole al solo costo ragionevole del supporto e della spedizione. La
+richiesta va quindi a chi ti ha dato la copia, indicando la versione di MakPhi e l'identificativo dell'immagine
 (`docker image inspect --format '{{.Id}}' makphi:<versione>`).
 
 ## 6. Testi delle licenze
