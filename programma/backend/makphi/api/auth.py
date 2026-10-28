@@ -171,8 +171,11 @@ def logout_all(request: Request) -> JSONResponse:
     try:
         cfg.revoke_all()
     except auth.EpochError as exc:
+        # il percorso e l'errore del sistema vanno solo nel log, come per gli errori interni (app.unexpected)
+        print(f"[MakPhi] Sessioni non chiuse: {exc}", flush=True)
         return _error(500, "session_epoch_error", "Sessioni non chiuse: non è stato possibile salvare l'epoca delle "
-                                                  f"sessioni ({exc}). Controlla i permessi della cartella dati.")
+                                                  "sessioni (dettagli nel log di MakPhi). Controlla i permessi della "
+                                                  "cartella dati.")
     resp = JSONResponse({"ok": True})
     for name in (auth.COOKIE, auth.LEGACY_COOKIE):
         resp.delete_cookie(name, path="/")

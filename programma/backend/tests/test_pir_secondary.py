@@ -157,6 +157,18 @@ def test_templates_matched_by_position_when_codes_differ(tmp_path):
     assert tpl["matched_by"] == "position" and tpl["source"] == "dssp"
 
 
+def test_unreadable_template_keeps_the_details_in_the_log(tmp_path, capsys):
+    """Un file del template illeggibile: la voce resta senza struttura e la risposta non riporta percorsi né il testo
+    dell'eccezione (CodeQL py/stack-trace-exposure), che vanno nel log."""
+    broken = tmp_path / "segreto" / "rotto.pdb"
+    broken.parent.mkdir()
+    broken.write_text("ATOM  questo non è un PDB\n", encoding="utf-8")
+    out = pir_secondary.annotate(pir(HUMAN_UB, HUMAN_UB), UBQ_A, lambda tid: broken if tid == "1UBQ" else None)
+    tpl = by_code(out, "1UBQ_A")
+    assert tpl["message"] == "Struttura del template 1UBQ non leggibile (dettagli nel log di MakPhi)."
+    assert tpl["ss"] is None and str(tmp_path) not in str(out)
+    assert "[MakPhi] Struttura del template 1UBQ non leggibile (rotto.pdb):" in capsys.readouterr().out
+
 def test_request_limits(client):
     r = client.post("/api/pir/secondary", json={"content": "x" * 200_001})
     assert r.status_code == 422

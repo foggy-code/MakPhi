@@ -447,6 +447,17 @@ def test_logout_all_revokes_every_session(server, tmp_path):
     assert restarted.verify(restarted.issue())
 
 
+def test_logout_all_failure_does_not_show_the_path(server, monkeypatch, capsys):
+    """Epoca non salvata: 500 con un messaggio senza percorso né errore del sistema, che vanno nel log."""
+    def fail():
+        raise auth.EpochError("/data/segreto/session_epoch: [Errno 13] Permission denied")
+
+    monkeypatch.setattr(server.app.state.auth, "revoke_all", fail)
+    r = server.post("/api/auth/logout-all", headers={"Authorization": f"Bearer {ACCESS}"})
+    assert r.status_code == 500 and r.json()["error"]["code"] == "session_epoch_error"
+    assert "segreto" not in r.text and "Errno" not in r.text and "dettagli nel log" in r.json()["error"]["message"]
+    assert "[MakPhi] Sessioni non chiuse: /data/segreto/session_epoch: [Errno 13]" in capsys.readouterr().out
+
 def test_epoch_zero_keeps_the_sessions_of_previous_versions():
     import hashlib
     import hmac
