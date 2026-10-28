@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "makphi"
-version = "5.0.0"
+version = "5.0.1"
 description = "MakPhi - suite per la modellazione di proteine per omologia"
 license = "MIT"
 requires-python = ">=3.10"

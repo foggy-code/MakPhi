@@ -14,6 +14,22 @@ della cache.
 
 Le versioni fino a 4.2.0 sono ricostruite dalla storia git (21 ottobre 2026): prima non c'era un registro.
 
+## [5.0.1] - 2026-10-28
+
+Prima versione da archiviare su Zenodo con un DOI (metadati in `.zenodo.json` e `CITATION.cff`).
+
+### Sicurezza
+- Messaggi d'errore senza dettagli interni (avvisi CodeQL `py/stack-trace-exposure`): «Esci da tutte le sessioni»,
+  quando l'epoca delle sessioni non si salva, e la struttura secondaria dell'editor PIR, quando il file di un template
+  non si legge, non riportano più percorsi né il testo dell'eccezione. Il dettaglio va nel log di MakPhi.
+- `SECURITY.md`: versioni supportate (solo l'ultima) e segnalazione privata delle vulnerabilità dalla scheda Security
+  di GitHub.
+
+### Cambiato
+- Licenza MIT intestata a Francesco Fogagnolo (prima foggy02), come nei metadati di citazione: `LICENSE`, README,
+  Guida → Licenze e `THIRD_PARTY_NOTICES.md`.
+- Come a ogni versione, la cache dei calcoli riparte (la versione è nella chiave).
+
 ## [5.0.0] - 2026-10-27
 
 ### Cambiato

@@ -2,7 +2,7 @@
 
 import os as _os
 
-__version__ = "5.0.0"
+__version__ = "5.0.1"
 
 # Fino alla 4.4.0 il programma si chiamava BioLoom: le variabili BIOLOOM_* (server.env, .env.locale, container già
 # configurati) valgono come le MAKPHI_*, che hanno la precedenza. Si spostano, non si copiano: un segreto con il nome

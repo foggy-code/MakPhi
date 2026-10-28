@@ -19,7 +19,7 @@ name: makphi
 
 services:
   makphi:
-    image: makphi:${MAKPHI_VERSION:-5.0.0}
+    image: makphi:${MAKPHI_VERSION:-5.0.1}
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -59,7 +59,7 @@ services:
 
   qmean:
     profiles: ["qmean"]
-    image: makphi-qmean:${MAKPHI_VERSION:-5.0.0}
+    image: makphi-qmean:${MAKPHI_VERSION:-5.0.1}
     build:
       context: ../docker/qmean
     platform: linux/amd64

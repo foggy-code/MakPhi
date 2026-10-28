@@ -1,7 +1,7 @@
 # Come citare MakPhi (Citation File Format 1.2.0, https://citation-file-format.github.io).
 # GitHub mostra "Cite this repository" a partire da questo file; Zenodo legge invece .zenodo.json.
 # Al primo rilascio archiviato su Zenodo aggiungere il DOI in "identifiers" (e in "doi").
-# Autore: nome e cognome; l'alias è quello della licenza (LICENSE).
+# Autore: nome e cognome, come in LICENSE; l'alias è il nome usato nella licenza fino alla 5.0.0.
 cff-version: 1.2.0
 message: "Se usi MakPhi in un lavoro scientifico, citalo con questi metadati."
 title: "MakPhi"
@@ -14,8 +14,8 @@ authors:
   - given-names: "Francesco"
     family-names: "Fogagnolo"
     alias: "foggy02"
-version: "5.0.0"
-date-released: "2026-10-27"
+version: "5.0.1"
+date-released: "2026-10-28"
 license: MIT
 repository-code: "https://github.com/foggy-code/MakPhi"
 keywords:
