@@ -254,7 +254,9 @@ def annotate(text: str, templates: list[dict], resolve: Resolver) -> dict:
                 try:
                     residues, ss = structure_data(path)
                 except Exception as exc:  # file illeggibile: la voce resta senza struttura secondaria
-                    item["message"] = f"Struttura del template {tid} non leggibile: {exc}"
+                    # il testo dell'eccezione (percorsi, righe del file) va solo nel log, non nella risposta
+                    print(f"[MakPhi] Struttura del template {tid} non leggibile ({path.name}): {exc}", flush=True)
+                    item["message"] = f"Struttura del template {tid} non leggibile (dettagli nel log di MakPhi)."
                 else:
                     result = template_secondary(e, residues, ss, chains, hetatm)
                     item.update(result, source="dssp", method="DSSP (Kabsch-Sander) sul file del template",
