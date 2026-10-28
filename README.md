@@ -1,5 +1,7 @@
 # MakPhi
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23729820.svg)](https://doi.org/10.5281/zenodo.23729820)
+
 Suite per la **modellazione di proteine per omologia**: dalla sequenza bersaglio al modello 3D validato,
 con MODELLER come motore di costruzione.
 
@@ -155,6 +157,14 @@ sh programma/docker/impronta.sh programma
 - [Sicurezza](SECURITY.md): versioni supportate e come segnalare una vulnerabilità in privato.
 - [Piano di implementazione](programma/docs/PIANO_IMPLEMENTAZIONE.md): le fasi dell'evoluzione della v4, il loro stato e i
   seguiti possibili.
+
+## Come citare MakPhi
+
+MakPhi è archiviato su Zenodo. Per citarlo in generale usa il DOI di concetto
+[10.5281/zenodo.23729820](https://doi.org/10.5281/zenodo.23729820), che porta sempre all'ultima versione; in un
+articolo cita invece la versione che hai usato, con il DOI che Zenodo le assegna (5.0.1:
+[10.5281/zenodo.23729821](https://doi.org/10.5281/zenodo.23729821)). Su GitHub **Cite this repository** dà la
+citazione pronta in APA e BibTeX, da [CITATION.cff](CITATION.cff).
 
 ## Licenza
 

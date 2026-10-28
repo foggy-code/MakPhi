@@ -1,6 +1,7 @@
 # Come citare MakPhi (Citation File Format 1.2.0, https://citation-file-format.github.io).
 # GitHub mostra "Cite this repository" a partire da questo file; Zenodo legge invece .zenodo.json.
-# Al primo rilascio archiviato su Zenodo aggiungere il DOI in "identifiers" (e in "doi").
+# DOI su Zenodo: "doi" è il DOI di concetto (tutte le versioni, risolve sempre all'ultima); in "identifiers" anche
+# quello della versione archiviata. Ogni release su GitHub crea su Zenodo una nuova versione sotto lo stesso concetto.
 # Autore: nome e cognome, come in LICENSE; l'alias è il nome usato nella licenza fino alla 5.0.0.
 cff-version: 1.2.0
 message: "Se usi MakPhi in un lavoro scientifico, citalo con questi metadati."
@@ -17,6 +18,17 @@ authors:
 version: "5.0.1"
 date-released: "2026-10-28"
 license: MIT
+doi: "10.5281/zenodo.23729820"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.23729820"
+    description: "DOI di concetto: tutte le versioni di MakPhi (risolve all'ultima)"
+  - type: doi
+    value: "10.5281/zenodo.23729821"
+    description: "DOI della versione 5.0.1"
+  - type: url
+    value: "https://zenodo.org/records/23729821"
+    description: "Archivio della versione 5.0.1 su Zenodo"
 repository-code: "https://github.com/foggy-code/MakPhi"
 keywords:
   - homology modelling
